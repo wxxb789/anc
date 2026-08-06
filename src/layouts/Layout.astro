@@ -1,0 +1,79 @@
+---
+import '../styles/global.css';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description = 'A static public projection from thoughtscape.' } = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="generator" content={Astro.generator} />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/">thoughtscape</a>
+      <nav aria-label="Primary">
+        <a href="/#notes">Notes</a>
+        <button id="search-toggle" type="button">Search</button>
+      </nav>
+    </header>
+    <dialog id="search-dialog">
+      <form method="dialog"><button aria-label="Close search">Close</button></form>
+      <div id="search"></div>
+    </dialog>
+    <main>
+      <slot />
+    </main>
+    <div id="link-preview" role="tooltip" hidden></div>
+    <script>
+      const preview = document.querySelector('#link-preview');
+      let indexPromise;
+      const loadIndex = () => indexPromise ||= fetch('/content-index.json').then((response) => response.json());
+      document.addEventListener('pointerover', async (event) => {
+        const link = event.target.closest('a[href^="/"]');
+        if (!link || !preview || link.classList.contains('brand')) return;
+        const slug = link.pathname.split('/').filter(Boolean)[0];
+        const data = await loadIndex();
+        const item = data.entries.find((entry) => entry.slug === slug);
+        if (!item) return;
+        const title = document.createElement('strong');
+        const excerpt = document.createElement('p');
+        title.textContent = item.title;
+        excerpt.textContent = item.excerpt;
+        preview.replaceChildren(title, excerpt);
+        preview.hidden = false;
+        const rect = link.getBoundingClientRect();
+        preview.style.left = `${Math.min(rect.left, window.innerWidth - 360)}px`;
+        preview.style.top = `${rect.bottom + 8}px`;
+      });
+      document.addEventListener('pointerout', (event) => {
+        if (event.target.closest('a[href^="/"]') && preview) preview.hidden = true;
+      });
+      document.querySelector('#search-toggle')?.addEventListener('click', async () => {
+        const dialog = document.querySelector('#search-dialog');
+        if (!dialog) return;
+        dialog.showModal();
+        if (!window.PagefindUI) {
+          await new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = '/pagefind/pagefind-ui.js';
+            script.addEventListener('load', resolve, { once: true });
+            script.addEventListener('error', reject, { once: true });
+            document.head.append(script);
+          });
+          new window.PagefindUI({ element: '#search', showSubResults: true });
+        }
+      });
+    </script>
+    <link href="/pagefind/pagefind-ui.css" rel="stylesheet" />
+  </body>
+</html>

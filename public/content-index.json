@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "add-password-to-pfx-windows",
+      "title": "Adding a Password to a PFX Certificate on Windows",
+      "excerpt": "Adding a Password to a PFX Certificate on Windows Introduction A PFX (Personal Information Exchange) file is a container format that stores both a certificate and its associated private key in a single encrypted file. Th"
+    }
+  ]
+}

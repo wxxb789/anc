@@ -1,0 +1,41 @@
+---
+import { marked } from 'marked';
+import sanitizeHtml from 'sanitize-html';
+import Layout from '../layouts/Layout.astro';
+import content from '../data/content.json';
+
+export function getStaticPaths() {
+  return content.entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
+}
+
+const { entry } = Astro.props;
+const html = sanitizeHtml(await marked.parse(entry.markdown), {
+  allowedTags: sanitizeHtml.defaults.allowedTags,
+  allowedAttributes: {
+    a: ['href', 'title'],
+    code: ['class'],
+  },
+  allowedSchemes: ['http', 'https', 'mailto'],
+  allowProtocolRelative: false,
+});
+const bySlug = new Map(content.entries.map((item) => [item.slug, item]));
+---
+
+<Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt}>
+  <article class="prose" data-pagefind-body>
+    <a class="back-home" href="/">← All notes</a>
+    <div set:html={html} />
+  </article>
+
+  {entry.backlinks.length > 0 && (
+    <aside class="backlinks" aria-labelledby="backlinks-title">
+      <h2 id="backlinks-title">Linked from</h2>
+      <ul>
+        {entry.backlinks.map((slug) => {
+          const backlink = bySlug.get(slug);
+          return backlink && <li><a href={`/${slug}/`}>{backlink.title}</a></li>;
+        })}
+      </ul>
+    </aside>
+  )}
+</Layout>

@@ -1,0 +1,31 @@
+---
+import Layout from '../layouts/Layout.astro';
+import content from '../data/content.json';
+---
+
+<Layout title="thoughtscape" description="A curated static projection from a private Obsidian garden.">
+  <section class="hero">
+    <p class="eyebrow">PUBLIC PROJECTION</p>
+    <h1>Notes that earned their way out.</h1>
+    <p>
+      A small, reviewed projection from a private Obsidian garden. The private vault stays private;
+      this site contains only explicitly allowlisted pages.
+    </p>
+  </section>
+
+  <section id="notes" aria-labelledby="notes-title">
+    <div class="section-heading">
+      <h2 id="notes-title">Notes</h2>
+      <span>{content.entries.length} published</span>
+    </div>
+    <div class="note-grid">
+      {content.entries.map((entry) => (
+        <article class="note-card">
+          <h3><a href={`/${entry.slug}/`}>{entry.title}</a></h3>
+          <p>{entry.excerpt}</p>
+          <a class="read-more" href={`/${entry.slug}/`}>Read note →</a>
+        </article>
+      ))}
+    </div>
+  </section>
+</Layout>
