@@ -1,22 +1,18 @@
 ---
-import { marked } from 'marked';
-import sanitizeHtml from 'sanitize-html';
 import Layout from '../layouts/Layout.astro';
 import { entries, getEntry } from '../lib/content.ts';
+import { renderMarkdown } from '../lib/markdown.ts';
 
 export function getStaticPaths() {
   return entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
 }
 
 const { entry } = Astro.props;
-const html = sanitizeHtml(await marked.parse(entry.markdown), {
-  allowedTags: sanitizeHtml.defaults.allowedTags,
-  allowedAttributes: {
-    a: ['href', 'title'],
-    code: ['class'],
-  },
-  allowedSchemes: ['http', 'https', 'mailto'],
-  allowProtocolRelative: false,
+// The slug-to-route mapping is injected rather than assumed, so TK-04 can move
+// notes to /notes/<slug>/ by changing this line alone. Returning undefined for
+// an unpublished slug leaves that href untouched.
+const { html } = await renderMarkdown(entry.markdown, {
+  routeForSlug: (slug) => (getEntry(slug) ? `/${slug}/` : undefined),
 });
 ---
 

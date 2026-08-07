@@ -16,9 +16,12 @@
     "astro": "astro"
   },
   "dependencies": {
+    "@astrojs/prism": "^4.0.2",
     "astro": "^7.1.6",
-    "marked": "^16.3.0",
-    "sanitize-html": "^2.17.0"
+    "github-slugger": "^2.0.0",
+    "prismjs": "^1.30.0",
+    "sanitize-html": "^2.17.0",
+    "satteri": "^0.9.5"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
