@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "first-note",
+      "title": "First Note",
+      "excerpt": "A synthetic note used only by tests.",
+      "markdown": "# First Note\n\nA synthetic note used only by tests.\n\nSee msw/internal-runbook for details.\n",
+      "outgoing": [],
+      "backlinks": []
+    }
+  ]
+}

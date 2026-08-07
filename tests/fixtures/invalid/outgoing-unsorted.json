@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "one-note",
+      "title": "One Note",
+      "excerpt": "Synthetic One Note.",
+      "markdown": "# One Note\n\nSynthetic One Note.\n",
+      "outgoing": [
+        "two-note",
+        "alpha-note"
+      ],
+      "backlinks": []
+    },
+    {
+      "slug": "alpha-note",
+      "title": "Alpha Note",
+      "excerpt": "Synthetic Alpha Note.",
+      "markdown": "# Alpha Note\n\nSynthetic Alpha Note.\n",
+      "outgoing": [],
+      "backlinks": [
+        "one-note"
+      ]
+    },
+    {
+      "slug": "two-note",
+      "title": "Two Note",
+      "excerpt": "Synthetic Two Note.",
+      "markdown": "# Two Note\n\nSynthetic Two Note.\n",
+      "outgoing": [],
+      "backlinks": [
+        "one-note"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "first-note",
+      "title": "First Note",
+      "excerpt": "A synthetic note used only by tests.",
+      "markdown": "# First Note\n\nA synthetic note used only by tests.\n",
+      "outgoing": [
+        "missing-note"
+      ],
+      "backlinks": []
+    }
+  ]
+}

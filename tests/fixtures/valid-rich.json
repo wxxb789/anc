@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "alpha-note",
+      "title": "Alpha Note",
+      "excerpt": "Synthetic alpha note exercising every optional field.",
+      "markdown": "# Alpha Note\n\nLinks to [Beta Note](/beta-note/) and [Gamma Note](/gamma-note/).\n",
+      "outgoing": ["beta-note", "gamma-note"],
+      "backlinks": ["gamma-note"],
+      "public_id": "pub-0001",
+      "created": "2026-01-01",
+      "updated": "2026-08-06T12:00:00Z",
+      "language": "en",
+      "tags": ["gardening", "synthetic"],
+      "collection": "field-notes",
+      "status": "published",
+      "aliases": ["Alpha", "alpha"],
+      "description": "A synthetic description for the alpha note."
+    },
+    {
+      "slug": "beta-note",
+      "title": "Beta 笔记",
+      "excerpt": "Synthetic bilingual note with zh-CN language metadata.",
+      "markdown": "# Beta 笔记\n\n这是一个用于测试的合成笔记。\n",
+      "outgoing": [],
+      "backlinks": ["alpha-note"],
+      "public_id": "pub-0002",
+      "created": "2026-02-02",
+      "updated": "2026-02-03",
+      "language": "zh-CN",
+      "tags": ["synthetic"],
+      "collection": "field-notes",
+      "status": "published",
+      "aliases": ["Beta"],
+      "description": "A synthetic bilingual description."
+    },
+    {
+      "slug": "gamma-note",
+      "title": "Gamma Note",
+      "excerpt": "Synthetic note carrying an allowlisted inline image data URI.",
+      "markdown": "# Gamma Note\n\n![A one-pixel transparent placeholder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=)\n\nSee [Alpha Note](/alpha-note/).\n",
+      "outgoing": ["alpha-note"],
+      "backlinks": ["alpha-note"],
+      "public_id": "pub-0003",
+      "created": "2026-03-03",
+      "updated": "2026-03-04",
+      "language": "en",
+      "tags": [],
+      "collection": "field-notes",
+      "status": "tombstone",
+      "aliases": [],
+      "description": "A synthetic note with an image embed."
+    }
+  ]
+}

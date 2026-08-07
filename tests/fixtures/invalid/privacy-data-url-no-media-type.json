@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "first-note",
+      "title": "First Note",
+      "excerpt": "Synthetic First Note.",
+      "markdown": "# First Note\n\nSynthetic First Note.\n\n<a href=\"data:,<h1>hi</h1>\">click</a>\n",
+      "outgoing": [],
+      "backlinks": []
+    }
+  ]
+}

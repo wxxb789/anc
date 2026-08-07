@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "alpha-note",
+      "title": "Alpha Note",
+      "excerpt": "Synthetic Alpha Note.",
+      "markdown": "# Alpha Note\n\nSynthetic Alpha Note.\n",
+      "outgoing": [
+        "hub-note"
+      ],
+      "backlinks": []
+    },
+    {
+      "slug": "hub-note",
+      "title": "Hub Note",
+      "excerpt": "Synthetic Hub Note.",
+      "markdown": "# Hub Note\n\nSynthetic Hub Note.\n",
+      "outgoing": [],
+      "backlinks": [
+        "alpha-note",
+        "alpha-note"
+      ]
+    }
+  ]
+}

@@ -2,10 +2,10 @@
 import { marked } from 'marked';
 import sanitizeHtml from 'sanitize-html';
 import Layout from '../layouts/Layout.astro';
-import content from '../data/content.json';
+import { entries, getEntry } from '../lib/content.ts';
 
 export function getStaticPaths() {
-  return content.entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
+  return entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
 }
 
 const { entry } = Astro.props;
@@ -18,7 +18,6 @@ const html = sanitizeHtml(await marked.parse(entry.markdown), {
   allowedSchemes: ['http', 'https', 'mailto'],
   allowProtocolRelative: false,
 });
-const bySlug = new Map(content.entries.map((item) => [item.slug, item]));
 ---
 
 <Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt}>
@@ -32,7 +31,7 @@ const bySlug = new Map(content.entries.map((item) => [item.slug, item]));
       <h2 id="backlinks-title">Linked from</h2>
       <ul>
         {entry.backlinks.map((slug) => {
-          const backlink = bySlug.get(slug);
+          const backlink = getEntry(slug);
           return backlink && <li><a href={`/${slug}/`}>{backlink.title}</a></li>;
         })}
       </ul>

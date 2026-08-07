@@ -35,12 +35,17 @@ const { title, description = 'A static public projection from thoughtscape.' } =
     </main>
     <div id="link-preview" role="tooltip" hidden></div>
     <script>
-      const preview = document.querySelector('#link-preview');
-      let indexPromise;
-      const loadIndex = () => indexPromise ||= fetch('/content-index.json').then((response) => response.json());
+      // ponytail: TK-07 replaces this preview with a typed island; TK-06 owns the
+      // search dialog and TK-02 moves both out of this inline block. Kept as-is
+      // here, with only the type narrowing the `check` gate now requires.
+      const preview = document.querySelector<HTMLElement>('#link-preview');
+      type PreviewIndex = { entries: { slug: string; title: string; excerpt: string }[] };
+      let indexPromise: Promise<PreviewIndex> | undefined;
+      const loadIndex = (): Promise<PreviewIndex> =>
+        (indexPromise ||= fetch('/content-index.json').then((response) => response.json() as Promise<PreviewIndex>));
       document.addEventListener('pointerover', async (event) => {
-        const link = event.target.closest('a[href^="/"]');
-        if (!link || !preview || link.classList.contains('brand')) return;
+        const link = (event.target as Element | null)?.closest('a[href^="/"]');
+        if (!(link instanceof HTMLAnchorElement) || !preview || link.classList.contains('brand')) return;
         const slug = link.pathname.split('/').filter(Boolean)[0];
         const data = await loadIndex();
         const item = data.entries.find((entry) => entry.slug === slug);
@@ -56,13 +61,17 @@ const { title, description = 'A static public projection from thoughtscape.' } =
         preview.style.top = `${rect.bottom + 8}px`;
       });
       document.addEventListener('pointerout', (event) => {
-        if (event.target.closest('a[href^="/"]') && preview) preview.hidden = true;
+        if ((event.target as Element | null)?.closest('a[href^="/"]') && preview) preview.hidden = true;
       });
       document.querySelector('#search-toggle')?.addEventListener('click', async () => {
-        const dialog = document.querySelector('#search-dialog');
+        const dialog = document.querySelector<HTMLDialogElement>('#search-dialog');
         if (!dialog) return;
         dialog.showModal();
-        if (!window.PagefindUI) {
+        // Pagefind attaches its UI constructor to `window` when the bundle loads,
+        // so it must be re-read after the await rather than reused from before it.
+        const pagefindUI = () =>
+          (window as typeof window & { PagefindUI?: new (options: unknown) => void }).PagefindUI;
+        if (!pagefindUI()) {
           await new Promise((resolve, reject) => {
             const script = document.createElement('script');
             script.src = '/pagefind/pagefind-ui.js';
@@ -70,7 +79,8 @@ const { title, description = 'A static public projection from thoughtscape.' } =
             script.addEventListener('error', reject, { once: true });
             document.head.append(script);
           });
-          new window.PagefindUI({ element: '#search', showSubResults: true });
+          const PagefindUI = pagefindUI();
+          if (PagefindUI) new PagefindUI({ element: '#search', showSubResults: true });
         }
       });
     </script>

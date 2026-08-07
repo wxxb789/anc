@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "one-note",
+      "title": "One Note",
+      "excerpt": "Synthetic note one.",
+      "markdown": "# One Note\n\nSee [Two Note](/two-note/).\n",
+      "outgoing": [
+        "two-note"
+      ],
+      "backlinks": [],
+      "aliases": [
+        "Shared Alias"
+      ]
+    },
+    {
+      "slug": "two-note",
+      "title": "Two Note",
+      "excerpt": "Synthetic note two.",
+      "markdown": "# Two Note\n\nSynthetic note two.\n",
+      "outgoing": [],
+      "backlinks": [
+        "one-note"
+      ],
+      "aliases": [
+        "Shared Alias"
+      ]
+    }
+  ]
+}
