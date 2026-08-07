@@ -1,0 +1,29 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import FacetIndex from '../../components/FacetIndex.astro';
+import { entries } from '../../lib/content.ts';
+import { collectionFacets, collectionRoute } from '../../lib/routes.ts';
+
+const facets = collectionFacets(entries);
+---
+
+<Layout
+  title="Collections · thoughtscape"
+  description="Curated public collections in the projection."
+>
+  <section aria-labelledby="collections-title">
+    <div class="section-heading">
+      <h1 id="collections-title">Collections</h1>
+      <span>{facets.length} {facets.length === 1 ? 'collection' : 'collections'}</span>
+    </div>
+    <p class="facet-note">
+      Collections are curated for this site. They are chosen for public reading and do not
+      reflect how anything is organized elsewhere.
+    </p>
+    <FacetIndex
+      facets={facets}
+      route={collectionRoute}
+      empty="The current projection carries no collections, so every published note lives in one flat namespace. This page lists each curated collection as soon as the projection includes them."
+    />
+  </section>
+</Layout>

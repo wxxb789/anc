@@ -1,0 +1,45 @@
+---
+/**
+ * A list of published notes, used by every route that shows more than one.
+ *
+ * The heading level is a prop because these lists appear at two depths: under a
+ * section heading on the home page, and directly under the page `h1` on a
+ * facet or recent page. Hardcoding one level would make the other route either
+ * skip a heading level or carry a heading that restates its own title.
+ */
+import type { ContentEntry } from '../lib/content.ts';
+import { noteRoute } from '../lib/routes.ts';
+
+interface Props {
+  entries: readonly ContentEntry[];
+  /** Heading level for each card title, chosen so the page never skips a level. */
+  level?: 2 | 3;
+  /**
+   * Shown instead of the grid when there is nothing to list.
+   *
+   * Only the home page and `/recent/` can actually reach it: a facet page
+   * exists because an entry produced it, so its list is never empty. The
+   * default is deliberately generic rather than each caller passing a message
+   * that cannot be displayed — a string nobody can see is a string nobody
+   * maintains.
+   */
+  empty?: string;
+}
+
+const { entries, level = 3, empty = 'No notes are published yet.' } = Astro.props;
+const Heading = `h${level}` as 'h2' | 'h3';
+---
+
+{entries.length === 0 ? (
+  <p class="empty-state">{empty}</p>
+) : (
+  <div class="note-grid">
+    {entries.map((entry) => (
+      <article class="note-card">
+        <Heading><a href={noteRoute(entry.slug)}>{entry.title}</a></Heading>
+        <p>{entry.excerpt}</p>
+        <a class="read-more" href={noteRoute(entry.slug)}>Read note →</a>
+      </article>
+    ))}
+  </div>
+)}

@@ -1,0 +1,51 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout
+  title="About · thoughtscape"
+  description="What this site is, and what it deliberately leaves out."
+>
+  <article class="prose">
+    <h1>About</h1>
+
+    <p>
+      thoughtscape is a small public reading site. Every page here is a note that was reviewed
+      and explicitly approved for publication, one item at a time.
+    </p>
+
+    <h2>The publication boundary</h2>
+
+    <p>
+      These notes originate in a private knowledge base that is not published and is not part of
+      this site. Publication is not automatic and is never inferred: a note appears here only
+      because it was named on an explicit approval list, and nothing is published by being tagged,
+      by living in a particular place, or by any other convention.
+    </p>
+
+    <p>
+      What crosses the boundary is a generated, sanitized projection: a title, a summary, the note
+      body, and links between notes that are themselves published. A link whose target is not
+      published is not rendered as a link. Nothing about unpublished material — its existence, its
+      titles, its organization, or how much of it there is — is disclosed by this site.
+    </p>
+
+    <p>
+      The projection is regenerated deliberately, and each release is reviewed before it goes out.
+      A note can be withdrawn, and a note's address can change, in which case the old address
+      redirects to the new one.
+    </p>
+
+    <h2>How it is built</h2>
+
+    <p>
+      Every page is generated ahead of time and served as a static file. There is no server-side
+      application, no database behind a page view, and no account system. Reading, navigating,
+      following links, and browsing backlinks all work with JavaScript turned off.
+    </p>
+
+    <p>
+      For what this site does and does not collect, see <a href="/privacy/">Privacy</a>.
+    </p>
+  </article>
+</Layout>

@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import NoteList from '../components/NoteList.astro';
 import { entries } from '../lib/content.ts';
 ---
 
@@ -18,14 +19,6 @@ import { entries } from '../lib/content.ts';
       <h2 id="notes-title">Notes</h2>
       <span>{entries.length} published</span>
     </div>
-    <div class="note-grid">
-      {entries.map((entry) => (
-        <article class="note-card">
-          <h3><a href={`/${entry.slug}/`}>{entry.title}</a></h3>
-          <p>{entry.excerpt}</p>
-          <a class="read-more" href={`/${entry.slug}/`}>Read note →</a>
-        </article>
-      ))}
-    </div>
+    <NoteList entries={entries} empty="No notes are published yet." />
   </section>
 </Layout>

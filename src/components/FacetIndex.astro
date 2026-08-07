@@ -1,0 +1,36 @@
+---
+/**
+ * A tag or collection index: one link per group, or an honest empty state.
+ *
+ * The empty state is the normal case today, not an edge case. The artifact
+ * carries neither `tags` nor `collection`, and the ticket forbids both a 404
+ * and a fabricated grouping — so the page explains that the projection carries
+ * no such field yet, and lights up on its own as soon as one appears.
+ */
+import type { Facet } from '../lib/routes.ts';
+
+interface Props {
+  facets: readonly Facet[];
+  /** Builds the route for one facet key. */
+  route: (key: string) => string;
+  /** Shown in place of the list when the artifact carries no such field. */
+  empty: string;
+}
+
+const { facets, route, empty } = Astro.props;
+---
+
+{facets.length === 0 ? (
+  <p class="empty-state">{empty}</p>
+) : (
+  <ul class="facet-list">
+    {facets.map((facet) => (
+      <li>
+        <a href={route(facet.key)}>{facet.label}</a>
+        {/* The count is text, not a colour or an icon: no information here is
+            carried by colour alone. */}
+        <span class="facet-count">{facet.entries.length} {facet.entries.length === 1 ? 'note' : 'notes'}</span>
+      </li>
+    ))}
+  </ul>
+)}

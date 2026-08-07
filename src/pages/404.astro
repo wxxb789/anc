@@ -1,0 +1,33 @@
+---
+/**
+ * Static 404.
+ *
+ * Astro emits `src/pages/404.astro` as `dist/404.html`, which Cloudflare Pages
+ * serves for any unmatched request. It is a real page in the layout shell, not
+ * a bare message: a reader who lands here still has the full site navigation.
+ *
+ * The routes offered are the site's own fixed routes. Nothing here reports what
+ * was requested — echoing the URL back into the page is how a 404 becomes a
+ * reflected-content sink, and it would tell a visitor nothing they did not type.
+ */
+import Layout from '../layouts/Layout.astro';
+import { SITE_MAP } from '../lib/routes.ts';
+---
+
+<Layout title="Page not found · thoughtscape" description="That page is not part of this site.">
+  <article class="prose">
+    <h1>Page not found</h1>
+
+    <p>
+      That address does not match a published page. It may have been withdrawn, or it may never
+      have existed here — published pages that move keep a permanent redirect, so a page that was
+      once here would have brought you along.
+    </p>
+
+    <h2>Where to go instead</h2>
+
+    <ul>
+      {SITE_MAP.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
+    </ul>
+  </article>
+</Layout>

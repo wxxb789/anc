@@ -1,0 +1,29 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import NoteList from '../../components/NoteList.astro';
+import { entries } from '../../lib/content.ts';
+import { tagFacets } from '../../lib/routes.ts';
+
+export function getStaticPaths() {
+  // No facets means no paths, which is the correct static answer: `/tags/` still
+  // renders its empty state, and any `/tags/<anything>/` request is a 404
+  // because that tag genuinely does not exist.
+  return tagFacets(entries).map((facet) => ({ params: { tag: facet.key }, props: { facet } }));
+}
+
+const { facet } = Astro.props;
+---
+
+<Layout
+  title={`Tag: ${facet.label} · thoughtscape`}
+  description={`Published notes tagged ${facet.label}.`}
+>
+  <section aria-labelledby="tag-title">
+    <div class="section-heading">
+      <h1 id="tag-title">Tag: {facet.label}</h1>
+      <span>{facet.entries.length} {facet.entries.length === 1 ? 'note' : 'notes'}</span>
+    </div>
+    <p class="facet-note"><a href="/tags/">← All tags</a></p>
+    <NoteList entries={facet.entries} level={2} />
+  </section>
+</Layout>

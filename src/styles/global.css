@@ -191,6 +191,15 @@ main:focus:not(:focus-visible) {
   margin: 0;
 }
 
+/* The site map is the guarantee that no route is an orphan, so it lays out as
+   wrapping text links that stay operable at 320 px. */
+.site-map {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
 /* Shown only on paper — the canonical route belongs on a printed page, not on
    a screen where the address bar already carries it. */
 .print-only {
@@ -286,6 +295,43 @@ main:focus:not(:focus-visible) {
 
 .read-more {
   margin-top: auto;
+  font-size: var(--text-sm);
+}
+
+/* ------------------------------------------------- facets and empty states -- */
+
+/*
+ * An empty tag or collection index is the normal state for the current
+ * projection, not an error, so it reads as ordinary prose rather than as a
+ * warning. Nothing here is signalled by colour.
+ */
+.empty-state,
+.facet-note {
+  max-width: var(--measure);
+  margin: var(--space-6) 0 0;
+  color: var(--color-muted);
+}
+
+.facet-list {
+  max-width: var(--measure);
+  margin: var(--space-6) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.facet-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  justify-content: space-between;
+  align-items: baseline;
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-line);
+}
+
+/* Text, not a badge: the count must not be the only non-textual signal. */
+.facet-count {
+  color: var(--color-muted);
   font-size: var(--text-sm);
 }
 
@@ -420,11 +466,12 @@ main:focus:not(:focus-visible) {
 /* --------------------------------------------------------- reader mode -- */
 
 /*
- * Reader mode strips the page to the reading surface: the secondary nav links
+ * Reader mode strips the page to the reading surface: the header's route links
  * go, the header stops following the scroll, and card chrome flattens. The
  * toggles themselves stay — hiding the control that turns the mode off is how
- * a keyboard user gets stranded — and nothing here removes information, so
- * every route remains reachable from the brand link and the article body.
+ * a keyboard user gets stranded — and the footer site map stays too, so every
+ * route this site owns is still one link away and reader mode removes chrome
+ * rather than information.
  */
 :root[data-reader='on'] {
   --measure: 65ch;

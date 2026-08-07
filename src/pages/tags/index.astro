@@ -1,0 +1,22 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import FacetIndex from '../../components/FacetIndex.astro';
+import { entries } from '../../lib/content.ts';
+import { tagFacets, tagRoute } from '../../lib/routes.ts';
+
+const facets = tagFacets(entries);
+---
+
+<Layout title="Tags · thoughtscape" description="Every public tag in the projection.">
+  <section aria-labelledby="tags-title">
+    <div class="section-heading">
+      <h1 id="tags-title">Tags</h1>
+      <span>{facets.length} {facets.length === 1 ? 'tag' : 'tags'}</span>
+    </div>
+    <FacetIndex
+      facets={facets}
+      route={tagRoute}
+      empty="The current projection carries no tags. This page lists every public tag as soon as the projection includes them."
+    />
+  </section>
+</Layout>

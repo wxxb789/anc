@@ -5,6 +5,7 @@ import '../styles/global.css';
 // wrong theme. Importing the URL keeps the source under `src/scripts/` and
 // content-hashed, while the tag stays inline-free and same-origin.
 import themeInit from '../scripts/theme-init.js?url';
+import { PRIMARY_NAV, SITE_MAP } from '../lib/routes.ts';
 
 interface Props {
   title: string;
@@ -38,7 +39,7 @@ const {
     <header class="site-header">
       <a class="brand" href="/">thoughtscape</a>
       <nav class="site-nav" aria-label="Primary">
-        <a href="/#notes">Notes</a>
+        {PRIMARY_NAV.map((item) => <a href={item.href}>{item.label}</a>)}
         <button id="search-toggle" type="button" data-js-only>Search</button>
         <button id="theme-toggle" type="button" data-js-only>Theme: system</button>
         <button id="reader-toggle" type="button" aria-pressed="false" data-js-only>Reader mode</button>
@@ -52,6 +53,13 @@ const {
       <slot />
     </main>
     <footer class="site-footer">
+      {/* Every fixed route is linked from here, on every page, so no route is an
+          orphan. This nav deliberately survives reader mode, which hides the
+          header's secondary links: hiding the only path to a route would make
+          reader mode remove information rather than chrome. */}
+      <nav class="site-map" aria-label="Site map">
+        {SITE_MAP.map((item) => <a href={item.href}>{item.label}</a>)}
+      </nav>
       <p>A reviewed public projection from a private knowledge garden.</p>
       {/* Scope item 10 requires the printed page to carry its canonical URL.
           The absolute origin is configured by TK-08, so this prints the route

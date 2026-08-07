@@ -14,6 +14,8 @@
  * payload, or an unknown slug.
  */
 
+import { noteSlugFromPath } from '../lib/route-path.ts';
+
 /* Astro concatenates these scripts into one bundle. `export {}` makes this file
    a module with its own top-level scope, so TK-06 and TK-07 can each declare
    `root`, `dialog`, or `preview` without colliding with the other's file. */
@@ -29,8 +31,12 @@ const loadIndex = (): Promise<PreviewIndex> =>
 
 document.addEventListener('pointerover', async (event) => {
   const link = (event.target as Element | null)?.closest('a[href^="/"]');
-  if (!(link instanceof HTMLAnchorElement) || !preview || link.classList.contains('brand')) return;
-  const slug = link.pathname.split('/').filter(Boolean)[0];
+  if (!(link instanceof HTMLAnchorElement) || !preview) return;
+  // Only a note route carries a previewable slug. Reading the route through the
+  // shared helper is what keeps this from previewing `/tags/<tag>/` as though
+  // the tag were a note, and it means the route model moves in one place.
+  const slug = noteSlugFromPath(link.pathname);
+  if (slug === undefined) return;
   const data = await loadIndex();
   const item = data.entries.find((entry) => entry.slug === slug);
   if (!item) return;

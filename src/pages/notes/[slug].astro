@@ -1,0 +1,40 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { entries, getEntry } from '../../lib/content.ts';
+import { renderMarkdown } from '../../lib/markdown.ts';
+import { noteRoute } from '../../lib/routes.ts';
+
+export function getStaticPaths() {
+  return entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
+}
+
+const { entry } = Astro.props;
+// The renderer takes this mapping rather than knowing the route shape itself,
+// so `/notes/<slug>/` is defined in exactly one place. Returning undefined for
+// an unpublished slug leaves that href untouched rather than pointing it at a
+// route that does not exist.
+const { html } = await renderMarkdown(entry.markdown, {
+  routeForSlug: (slug) => (getEntry(slug) ? noteRoute(slug) : undefined),
+});
+---
+
+{/* TK-05 owns this page's full anatomy: breadcrumbs, public metadata, table of
+    contents, outgoing links, related notes, and previous/next navigation. */}
+<Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt} lang={entry.language}>
+  <article class="prose" data-pagefind-body>
+    <a class="back-home" href="/">← All notes</a>
+    <div set:html={html} />
+  </article>
+
+  {entry.backlinks.length > 0 && (
+    <aside class="backlinks" aria-labelledby="backlinks-title">
+      <h2 id="backlinks-title">Linked from</h2>
+      <ul>
+        {entry.backlinks.map((slug) => {
+          const backlink = getEntry(slug);
+          return backlink && <li><a href={noteRoute(slug)}>{backlink.title}</a></li>;
+        })}
+      </ul>
+    </aside>
+  )}
+</Layout>

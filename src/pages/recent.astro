@@ -1,0 +1,30 @@
+---
+import Layout from '../layouts/Layout.astro';
+import NoteList from '../components/NoteList.astro';
+import { entries } from '../lib/content.ts';
+import { noteTimestamp, recentFirst } from '../lib/routes.ts';
+
+const ordered = recentFirst(entries);
+// The artifact's date fields are optional. Saying which ordering a reader is
+// actually looking at is the honest alternative to implying a recency the
+// current artifact cannot support.
+const dated = entries.some((entry) => noteTimestamp(entry) !== undefined);
+---
+
+<Layout
+  title="Recent · thoughtscape"
+  description="Published notes in order of when they last changed."
+>
+  <section aria-labelledby="recent-title">
+    <div class="section-heading">
+      <h1 id="recent-title">Recent</h1>
+      <span>{ordered.length} published</span>
+    </div>
+    <p class="facet-note">
+      {dated
+        ? 'Ordered by when each note was last updated, most recent first. Notes the projection carries no date for follow, in alphabetical order by slug.'
+        : 'The current projection carries no publication dates, so notes are listed in alphabetical order by slug. This page will order by update date as soon as the projection includes one.'}
+    </p>
+    <NoteList entries={ordered} level={2} empty="No notes are published yet." />
+  </section>
+</Layout>

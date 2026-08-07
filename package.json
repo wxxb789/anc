@@ -9,9 +9,10 @@
     "dev": "astro dev",
     "sync:content": "python ../thoughtscape/ob-flow/.harness/publish/export.py --target .",
     "validate:content": "node scripts/validate-content.ts",
+    "emit:redirects": "node scripts/emit-redirects.ts",
     "check": "astro check",
     "test": "node --test",
-    "build": "npm run validate:content && astro build && pagefind --site dist",
+    "build": "npm run validate:content && astro build && npm run emit:redirects && pagefind --site dist",
     "preview": "astro preview",
     "astro": "astro"
   },
