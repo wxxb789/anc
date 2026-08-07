@@ -1,0 +1,15 @@
+# The repository is LF-only, and the whole tree was LF before this file existed.
+#
+# Without it, a Windows checkout writes CRLF into every file an editor touches,
+# `core.autocrlf=false` commits the CR as content, and `git diff --check` — which
+# the agent contract requires to pass — reports every added line as trailing
+# whitespace. This normalizes on commit and leaves the working copy alone.
+* text=auto eol=lf
+
+# Binary: never touch.
+*.ico binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.woff binary
+*.woff2 binary

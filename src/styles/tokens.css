@@ -1,0 +1,138 @@
+/*
+ * Design tokens.
+ *
+ * Both palettes are declared once with `light-dark()`, so a token carries its
+ * light and dark value together and `prefers-color-scheme` is honoured natively
+ * with no media query and no script. An explicit user choice overrides it by
+ * setting `color-scheme` on the root element — one property, not a second
+ * palette. The plain block below is the fallback for a browser without
+ * `light-dark()`: it resolves to the light palette, which is readable rather
+ * than unstyled.
+ *
+ * Contrast, measured against WCAG 2.2 (AA text needs 4.5:1, AA large text and
+ * non-text UI need 3:1). `tests/design-tokens.test.ts` recomputes every row
+ * below from the declarations that follow, so a documented number cannot drift
+ * from the palette it describes. Every text-bearing background is covered.
+ *
+ *   token pair                     light    dark
+ *   text on bg                     15.87    16.23
+ *   text on surface                16.56    14.73
+ *   text on surface-alt            14.53    13.62
+ *   muted on bg                     6.41     8.66
+ *   muted on surface                6.69     7.86
+ *   muted on surface-alt            5.87     7.27
+ *   accent on bg                    5.92    11.12
+ *   accent on surface               6.18    10.09
+ *   accent on surface-alt           5.42     9.33
+ *   link on bg                      6.72    10.37
+ *   link on surface                 7.01     9.41
+ *   link on surface-alt             6.16     8.71
+ *   focus on bg                     5.92    11.12
+ *   focus on surface                6.18    10.09
+ *   focus on surface-alt            5.42     9.33
+ *   line-strong on bg               3.98     3.96
+ *   line-strong on surface          4.16     3.59
+ *   line-strong on surface-alt      3.65     3.32
+ *
+ * `--color-line` is deliberately absent: at 1.33:1 light / 1.48:1 dark it is a
+ * decorative divider only, used where the layout already conveys the boundary.
+ * Anything that carries information — a focus ring, a table gridline — uses
+ * `--color-line-strong`.
+ */
+
+:root {
+  /* Fallback palette: light, for browsers without `light-dark()`. */
+  --color-bg: #fbfaf7;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f2f0ea;
+  --color-text: #1b1f24;
+  --color-muted: #535d69;
+  --color-line: #d8dbe0;
+  --color-line-strong: #767d87;
+  --color-accent: #1f6f3c;
+  --color-link: #125e8a;
+  --color-focus: #1f6f3c;
+  --color-shadow: rgb(27 31 36 / 0.14);
+  --color-wash: rgb(31 111 60 / 0.07);
+}
+
+@supports (color: light-dark(#000, #fff)) {
+  :root {
+    color-scheme: light dark;
+
+    --color-bg: light-dark(#fbfaf7, #0d1013);
+    --color-surface: light-dark(#ffffff, #161b21);
+    --color-surface-alt: light-dark(#f2f0ea, #1c222a);
+    --color-text: light-dark(#1b1f24, #e9edf2);
+    --color-muted: light-dark(#535d69, #a4b0be);
+    --color-line: light-dark(#d8dbe0, #2b323c);
+    --color-line-strong: light-dark(#767d87, #69737f);
+    --color-accent: light-dark(#1f6f3c, #8ad884);
+    --color-link: light-dark(#125e8a, #86c8e6);
+    --color-focus: light-dark(#1f6f3c, #8ad884);
+    --color-shadow: light-dark(rgb(27 31 36 / 0.14), rgb(0 0 0 / 0.55));
+    --color-wash: light-dark(rgb(31 111 60 / 0.07), rgb(138 216 132 / 0.06));
+  }
+
+  /*
+   * The explicit user choice. `theme-init.js` sets the attribute before paint.
+   *
+   * Both rules live inside `@supports` deliberately. Outside it there is no
+   * dark palette to switch to, so `color-scheme: dark` alone would darken the
+   * scrollbars and form widgets while every `--color-*` stayed light — a dark
+   * frame around a light page, which is worse than no toggle. In a browser
+   * without `light-dark()` the toggle is inert and the page stays consistently
+   * light.
+   */
+  :root[data-theme='light'] {
+    color-scheme: light;
+  }
+
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+  }
+}
+
+:root {
+  /* Type. A CJK face follows the Latin faces in every stack so mixed zh/en
+     text renders in one visual family instead of a browser default. */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+  --font-mono: ui-monospace, 'Cascadia Code', SFMono-Regular, Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
+
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 1.0625rem;
+  --text-lg: 1.1875rem;
+  --text-xl: clamp(1.35rem, 1.15rem + 1vw, 1.75rem);
+  --text-2xl: clamp(1.6rem, 1.25rem + 1.75vw, 2.25rem);
+  --text-3xl: clamp(2rem, 1.4rem + 3vw, 3.25rem);
+
+  --leading-tight: 1.2;
+  --leading-body: 1.7;
+
+  /* Space */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+
+  --elevation-1: 0 1px 2px var(--color-shadow);
+  --elevation-2: 0 12px 32px var(--color-shadow);
+
+  --motion-fast: 120ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Width. `--measure` keeps prose near 65-80 characters. */
+  --measure: 68ch;
+  --width-page: 68rem;
+  --gutter: clamp(1rem, 4vw, 2rem);
+}

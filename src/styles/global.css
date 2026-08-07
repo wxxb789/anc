@@ -1,46 +1,553 @@
-:root {
-  color-scheme: dark;
-  --bg: #0a0b0d;
-  --panel: #12151a;
-  --text: #edf0f4;
-  --muted: #9ca6b5;
-  --line: #252b35;
-  --accent: #9ee493;
-  --accent-2: #8ecae6;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+@import './tokens.css';
+
+/*
+ * Layout shell and reading surface.
+ *
+ * Everything here is plain CSS with no JavaScript dependency: the theme follows
+ * `prefers-color-scheme` through `light-dark()` in `tokens.css`, and the two
+ * preference toggles only override an attribute that CSS already understands.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
-* { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body { margin: 0; background: radial-gradient(circle at 80% 0%, #17231c 0, transparent 35%), var(--bg); color: var(--text); line-height: 1.7; }
-a { color: var(--accent-2); text-underline-offset: 0.2em; }
-.site-header { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; align-items: center; padding: 1rem max(1.25rem, calc((100vw - 1120px) / 2)); border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(16px); }
-.brand { color: var(--text); font-weight: 800; text-decoration: none; letter-spacing: -0.04em; }
-nav { display: flex; gap: 1rem; align-items: center; }
-nav a, nav button { color: var(--muted); background: none; border: 0; font: inherit; cursor: pointer; text-decoration: none; }
-main { width: min(1120px, calc(100% - 2.5rem)); margin: 0 auto; padding: 5rem 0 7rem; }
-.hero { max-width: 820px; padding: 5rem 0 7rem; }
-.eyebrow { color: var(--accent); font: 700 0.75rem/1 ui-monospace, monospace; letter-spacing: 0.16em; }
-.hero h1 { max-width: 760px; margin: 1rem 0 1.5rem; font-size: clamp(3rem, 8vw, 6.75rem); line-height: 0.95; letter-spacing: -0.065em; }
-.hero > p:last-child { max-width: 650px; color: var(--muted); font-size: 1.15rem; }
-.section-heading { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--line); }
-.section-heading span { color: var(--muted); }
-.note-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
-.note-card { min-height: 220px; padding: 1.5rem; border: 1px solid var(--line); border-radius: 16px; background: linear-gradient(145deg, color-mix(in srgb, var(--panel) 90%, var(--accent) 10%), var(--panel)); }
-.note-card h3 { margin-top: 0; font-size: 1.35rem; line-height: 1.25; }
-.note-card h3 a { color: var(--text); text-decoration: none; }
-.note-card p { color: var(--muted); }
-.read-more { display: inline-block; margin-top: 1rem; }
-.prose { max-width: 760px; margin: 0 auto; }
-.prose h1 { font-size: clamp(2.5rem, 7vw, 5rem); line-height: 1; letter-spacing: -0.055em; }
-.prose h2 { margin-top: 3rem; border-bottom: 1px solid var(--line); }
-.prose pre { overflow-x: auto; padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: #070809; }
-.prose code { font-family: "Cascadia Code", ui-monospace, monospace; }
-.prose blockquote { margin-left: 0; padding-left: 1rem; border-left: 3px solid var(--accent); color: var(--muted); }
-.back-home { display: inline-block; margin-bottom: 3rem; color: var(--muted); }
-.backlinks { max-width: 760px; margin: 5rem auto 0; padding-top: 2rem; border-top: 1px solid var(--line); }
-#link-preview { position: fixed; z-index: 50; width: min(340px, calc(100vw - 2rem)); padding: 1rem; border: 1px solid var(--line); border-radius: 12px; background: #171b21; box-shadow: 0 18px 50px #000a; }
-#link-preview p { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.9rem; }
-#search-dialog { width: min(720px, calc(100% - 2rem)); border: 1px solid var(--line); border-radius: 16px; background: var(--panel); color: var(--text); }
-#search-dialog::backdrop { background: #000a; }
-@media (max-width: 640px) { main { padding-top: 2rem; } .hero { padding: 3rem 0 5rem; } .site-header { padding-inline: 1rem; } }
+html {
+  scroll-behavior: smooth;
+  /* Keeps an in-page anchor target clear of the sticky header. The header
+     wraps to several rows at 320 px, so the mobile-first value allows for
+     that and the wide-viewport override below tightens it. */
+  scroll-padding-top: 9rem;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-body);
+  /* A long unbroken token (a URL, a hash) must wrap rather than widen the page. */
+  overflow-wrap: break-word;
+}
+
+/*
+ * Mixed zh-CN / English line breaking.
+ *
+ * `word-break: normal` keeps English words whole; CJK already breaks between
+ * characters, so nothing extra is needed to wrap Chinese text. `line-break:
+ * strict` stops a line from starting with a CJK closing bracket or ending with
+ * an opening one, which is the visible failure mode in bilingual prose.
+ */
+:where(body) {
+  word-break: normal;
+  line-break: strict;
+}
+
+:is(h1, h2, h3, h4, h5, h6) {
+  line-height: var(--leading-tight);
+  text-wrap: balance;
+}
+
+p,
+li {
+  text-wrap: pretty;
+}
+
+a {
+  color: var(--color-link);
+  text-underline-offset: 0.2em;
+}
+
+/* Focus is never signalled by colour alone: the ring is a shape change too. */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+:is(img, svg, video) {
+  max-width: 100%;
+  height: auto;
+}
+
+.skip-link {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 100;
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: var(--elevation-2);
+  /* Off-screen until focused, rather than `display: none`, so it stays tabbable. */
+  transform: translateY(calc(-100% - var(--space-4)));
+  transition: transform var(--motion-fast) var(--ease);
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+/*
+ * Controls that only work with JavaScript. `theme-init.js` sets `data-js` on
+ * the root before first paint, so they never appear as dead buttons.
+ *
+ * The selector deliberately outranks `.site-nav a, .site-nav button` below: a
+ * bare `[data-js-only]` is (0,1,0) and loses to that rule's (0,1,1), which
+ * would leave these visible with scripting disabled — the failure this rule
+ * exists to prevent. `tests/built-output.test.ts` resolves the cascade.
+ */
+:root:not([data-js='on']) [data-js-only] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- shell -- */
+
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-3) var(--gutter);
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-bg);
+}
+
+.brand {
+  color: var(--color-text);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-decoration: none;
+}
+
+.site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.site-nav a,
+.site-nav button {
+  display: inline-flex;
+  gap: var(--space-1);
+  align-items: center;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.site-nav a:hover,
+.site-nav button:hover {
+  border-color: var(--color-line-strong);
+  color: var(--color-text);
+}
+
+/* Pressed state carries a border and a background, not just a colour shift. */
+.site-nav button[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  background: var(--color-wash);
+  color: var(--color-text);
+}
+
+main {
+  width: min(var(--width-page), 100%);
+  margin: 0 auto;
+  padding: var(--space-12) var(--gutter) var(--space-16);
+}
+
+/* `#main` is focused programmatically by the skip link and carries
+   `tabindex="-1"`, so it is never reached by Tab. Suppress the ring only for
+   that programmatic case; `:focus-visible` keeps it wherever a browser judges
+   the focus worth showing. */
+main:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.site-footer {
+  padding: var(--space-8) var(--gutter);
+  border-top: 1px solid var(--color-line);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.site-footer p {
+  max-width: var(--measure);
+  margin: 0;
+}
+
+/* Shown only on paper — the canonical route belongs on a printed page, not on
+   a screen where the address bar already carries it. */
+.print-only {
+  display: none;
+}
+
+/* ------------------------------------------------------------- surfaces -- */
+
+.hero {
+  max-width: var(--measure);
+  padding-bottom: var(--space-12);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--color-accent);
+  font: 700 var(--text-xs) / 1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  margin: var(--space-4) 0 var(--space-4);
+  font-size: var(--text-3xl);
+  letter-spacing: -0.04em;
+}
+
+.hero > p:last-child {
+  color: var(--color-muted);
+  font-size: var(--text-lg);
+}
+
+.section-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-line);
+}
+
+.section-heading h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+}
+
+.section-heading span {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+/* `minmax(0, …)` rather than a fixed floor: a fixed floor is what pushes a
+   grid past a 320 px viewport. */
+.note-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(18rem, 100%), 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-6);
+}
+
+.note-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-6);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--elevation-1);
+}
+
+.note-card h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.note-card h3 a {
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.note-card h3 a:hover {
+  text-decoration: underline;
+}
+
+.note-card p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.read-more {
+  margin-top: auto;
+  font-size: var(--text-sm);
+}
+
+/* ---------------------------------------------------------------- prose -- */
+
+.prose {
+  max-width: var(--measure);
+  margin-inline: auto;
+  min-width: 0;
+}
+
+.prose h1 {
+  font-size: var(--text-2xl);
+  letter-spacing: -0.03em;
+}
+
+.prose h2 {
+  margin-top: var(--space-12);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-line);
+  font-size: var(--text-xl);
+}
+
+.prose h3 {
+  margin-top: var(--space-8);
+  font-size: var(--text-lg);
+}
+
+/* In-content links keep their underline: the link is not signalled by colour
+   alone. Navigation and card links are distinguished by position and role. */
+.prose a {
+  text-decoration: underline;
+}
+
+.prose pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: var(--space-4);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-alt);
+  font-size: var(--text-sm);
+}
+
+.prose code {
+  font-family: var(--font-mono);
+  font-size: 0.925em;
+}
+
+.prose :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-alt);
+}
+
+.prose blockquote {
+  margin-inline: 0;
+  padding-left: var(--space-4);
+  border-left: 3px solid var(--color-accent);
+  color: var(--color-muted);
+}
+
+/* ponytail: a wide table still needs a scroll container, and a wrapper element
+   is the Markdown pipeline's to emit. TK-03 owns that; styling it here without
+   the wrapper would mean `display: block`, which strips table semantics. */
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.prose :is(th, td) {
+  padding: var(--space-2) var(--space-3);
+  /* `--color-line-strong`, not `--color-line`: a gridline is the only thing
+     separating one cell's data from the next, so it carries information and
+     needs the 3:1 non-text contrast. `--color-line` is for decorative rules
+     where the layout already communicates the boundary. */
+  border: 1px solid var(--color-line-strong);
+  text-align: left;
+}
+
+.back-home {
+  display: inline-block;
+  margin-bottom: var(--space-8);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.backlinks {
+  max-width: var(--measure);
+  margin: var(--space-16) auto 0;
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-line);
+}
+
+.backlinks h2 {
+  margin-top: 0;
+  font-size: var(--text-lg);
+}
+
+/* --------------------------------------------------------- enhancements -- */
+
+#link-preview {
+  position: fixed;
+  z-index: 50;
+  width: min(22rem, calc(100vw - var(--space-4)));
+  padding: var(--space-4);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--elevation-2);
+}
+
+#link-preview p {
+  margin: var(--space-2) 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+#search-dialog {
+  width: min(44rem, calc(100% - var(--space-4)));
+  padding: var(--space-4);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+#search-dialog::backdrop {
+  background: rgb(0 0 0 / 0.55);
+}
+
+/* --------------------------------------------------------- reader mode -- */
+
+/*
+ * Reader mode strips the page to the reading surface: the secondary nav links
+ * go, the header stops following the scroll, and card chrome flattens. The
+ * toggles themselves stay — hiding the control that turns the mode off is how
+ * a keyboard user gets stranded — and nothing here removes information, so
+ * every route remains reachable from the brand link and the article body.
+ */
+:root[data-reader='on'] {
+  --measure: 65ch;
+  --leading-body: 1.85;
+}
+
+:root[data-reader='on'] .site-nav a,
+:root[data-reader='on'] .site-footer p:not(.print-only) {
+  display: none;
+}
+
+:root[data-reader='on'] .site-header {
+  position: static;
+  border-bottom-color: transparent;
+}
+
+:root[data-reader='on'] .note-card {
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* ------------------------------------------------------------ responsive -- */
+
+/*
+ * Mobile-first: the rules above are the 320 px layout — one column, a nav that
+ * wraps rather than scrolls, and no fixed width anywhere.
+ *
+ * ponytail: the nav's five text links wrap to two or three rows at 320 px and
+ * stay fully readable and operable, so no drawer or disclosure is built for
+ * them; a `<details>` around five links is more machinery than the problem.
+ * Side rails are optional per requirements section 16 and there is nothing to
+ * put in one yet — the table of contents, backlinks, and related notes that
+ * would fill it are TK-05's. Desktop therefore ships the centred article with
+ * no rail, and no empty media query pretending otherwise.
+ */
+@media (min-width: 48rem) {
+  main {
+    padding-block: var(--space-16);
+  }
+
+  /* The header is one row once there is width for it. */
+  html {
+    scroll-padding-top: 5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------- print -- */
+
+@media print {
+  /* `:root:root` is (0,2,0), which ties `:root[data-theme='dark']` in
+     tokens.css and wins on order. A plain `:root` here is (0,1,0) and loses,
+     which would print the dark palette — light text on white paper — for
+     anyone who has chosen the dark theme. A media query adds no specificity. */
+  :root:root {
+    color-scheme: light;
+  }
+
+  body {
+    background: #fff;
+    color: #000;
+    font-size: 11pt;
+  }
+
+  .site-header,
+  .skip-link,
+  .back-home,
+  #search-dialog,
+  #link-preview {
+    display: none !important;
+  }
+
+  main {
+    width: auto;
+    max-width: none;
+    padding: 0;
+  }
+
+  .prose,
+  .backlinks {
+    max-width: none;
+  }
+
+  .print-only {
+    display: block;
+  }
+
+  /* ponytail: prints each link's route, since the absolute canonical origin is
+     configured by TK-08. Swap `attr(href)` for the canonical URL there. */
+  .prose a[href]::after,
+  .backlinks a[href]::after {
+    content: ' (' attr(href) ')';
+    font-size: 0.85em;
+    word-break: break-all;
+  }
+
+  .prose a[href^='#']::after {
+    content: '';
+  }
+
+  .prose pre {
+    white-space: pre-wrap;
+  }
+
+  :is(h1, h2, h3) {
+    break-after: avoid;
+  }
+
+  .prose :is(pre, blockquote, table) {
+    break-inside: avoid;
+  }
+}

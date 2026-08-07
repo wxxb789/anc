@@ -25,3 +25,6 @@ pnpm-debug.log*
 
 # agent scratch space (never committed)
 .tmp/
+
+# agent worktrees (harness scratch, never committed)
+.claude/worktrees/

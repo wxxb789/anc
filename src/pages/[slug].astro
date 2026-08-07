@@ -20,7 +20,7 @@ const html = sanitizeHtml(await marked.parse(entry.markdown), {
 });
 ---
 
-<Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt}>
+<Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt} lang={entry.language}>
   <article class="prose" data-pagefind-body>
     <a class="back-home" href="/">← All notes</a>
     <div set:html={html} />
