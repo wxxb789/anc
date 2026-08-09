@@ -398,11 +398,12 @@ main:focus:not(:focus-visible) {
 
 /*
  * Every class `src/lib/markdown.ts` can emit has a rule below, or is named in
- * the "deliberately unstyled" block at the end of this section. The allowlist
- * at `markdown.ts` is the list: `heading-anchor`, `code-block`, `language-*`,
- * `token` and `token-*`, `callout` and `callout-*`, `callout-title`,
- * `contains-task-list`, `task-list-item`, `footnotes`,
- * `data-footnote-backref`, `sr-only`, `math-inline`, `math-display`.
+ * the "deliberately unstyled" block at the end of this section, or — for the
+ * `token-*` map alone — lives in `src/styles/code.css`, which loads only on
+ * pages that carry a code fence. The allowlist at `markdown.ts` is the list:
+ * `heading-anchor`, `code-block`, `language-*`, `token` and `token-*`, `callout`
+ * and `callout-*`, `callout-title`, `contains-task-list`, `task-list-item`,
+ * `footnotes`, `data-footnote-backref`, `sr-only`, `math-inline`, `math-display`.
  *
  * Quartz's thirteen-kind callout vocabulary and its mask-image icon set are
  * deliberately not imported: the corpus has zero callouts, and a colour-per-kind
@@ -485,90 +486,13 @@ main:focus:not(:focus-visible) {
 }
 
 /*
- * Syntax highlighting.
- *
- * Prism's token vocabulary is open-ended and this maps it onto four roles, not
- * onto Prism's own names: keywords and operators, literals (numbers, booleans,
- * constants), strings, and comments. Anything unmapped inherits the body colour,
- * which is a readable default rather than an invisible one — the failure mode
- * of a highlighting theme should be "less colour", never "no text".
- *
- * Colour is never the only signal: comments are italic, keywords are bold. A
- * reader with any colour vision deficiency, or reading a printed page, still
- * sees the structure.
- *
- * Eight of these names are here because TK-11's fixture corpus produced them
- * and the published one-note corpus never had: Python, JavaScript, and
- * PowerShell fences emit `builtin`, `class-name`, `control-flow`, `module`,
- * `arrow`, `function-variable`, `doc-comment`, and `triple-quoted-string`. Each
- * is folded into the role it already belongs to rather than given a fifth
- * colour. Seven of them nest inside an already-mapped token, so only
- * `token-builtin` changed what a reader sees; the rest close the coverage gate
- * on a class that could ship alone the day a grammar emits it that way.
+ * Syntax highlighting is not here. The `token-*` map lives in
+ * `src/styles/code.css`, which `src/pages/notes/[slug].astro` links only when
+ * `RenderedNote.hasCode` is true — owner decision 7, heavy assets load per page.
+ * `.code-block` stays in this file on purpose: a Mermaid fence renders as one
+ * while setting `hasMermaid` rather than `hasCode`, so gating the figure's own
+ * rules would leave a diagram-only page with an unstyled block.
  */
-.token-comment,
-.token-doc-comment,
-.token-prolog,
-.token-doctype,
-.token-cdata {
-  color: var(--color-muted);
-  font-style: italic;
-}
-
-.token-keyword,
-.token-control-flow,
-.token-module,
-.token-operator,
-.token-arrow,
-.token-atrule,
-.token-important,
-.token-selector,
-.token-tag {
-  color: var(--color-syntax-keyword);
-  font-weight: 600;
-}
-
-/*
- * Container tokens, which wrap other tokens rather than marking a leaf: batch's
- * `command` spans a whole command line with `keyword` nested inside it, and
- * `namespace` wraps a qualified name. Colouring one paints everything it
- * contains — `openssl pkcs12 -in original.pfx` came out entirely purple — so
- * they inherit and let the nested token carry the meaning. `inherit` is
- * declared rather than omitted so the intent is visible and the rule exists.
- */
-.token-command,
-.token-namespace {
-  color: inherit;
-}
-
-.token-string,
-.token-triple-quoted-string,
-.token-char,
-.token-attr-value,
-.token-regex {
-  color: var(--color-accent);
-}
-
-.token-number,
-.token-boolean,
-.token-constant,
-.token-symbol,
-.token-property,
-.token-attr-name,
-.token-variable,
-.token-parameter,
-.token-function,
-.token-function-variable,
-.token-builtin,
-.token-class-name {
-  color: var(--color-syntax-literal);
-}
-
-/* Structure, not meaning: punctuation stays body-coloured so it recedes. */
-.token-punctuation,
-.token-entity {
-  color: var(--color-text);
-}
 
 /*
  * A callout. One neutral treatment for every kind: the kind is announced by the
@@ -669,14 +593,20 @@ main:focus:not(:focus-visible) {
  * Deliberately unstyled, with the reason:
  *
  * - `token` — the bare class Prism puts on every token alongside its specific
- *   one. Styling it would set a colour that each rule above then overrides;
- *   inheriting the body colour is the correct unhighlighted default.
+ *   one. A colour here would apply to *every* token, and the built `<head>`
+ *   orders `code.css` before this sheet, so at equal specificity this rule
+ *   would win and repaint the whole stream one colour. Inheriting the body
+ *   colour is both the correct unhighlighted default and the safe one.
  * - `language-*` — the fence language is already carried visually by the block
- *   itself and semantically by `data-code-language`. A label chip is TK-05a's.
+ *   itself and semantically by `data-code-language`.
  * - `callout-*` — the per-kind classes. See the `.callout` note above: every
  *   kind gets one neutral treatment, and the kind is carried by the title text
  *   rather than by a colour. TK-11's fixture ships three of them, so this is
  *   now a deliberate choice observed at scale rather than an untested default.
+ *
+ * This block is the single record, including for the classes `code.css` styles:
+ * `tests/built-output.test.ts` reads it and asserts each name appears, so a
+ * second copy beside those rules would be an unchecked one.
  */
 
 /* ponytail: a wide table still needs a scroll container, and a wrapper element
@@ -697,11 +627,230 @@ main:focus:not(:focus-visible) {
   text-align: left;
 }
 
-.back-home {
-  display: inline-block;
+/* ------------------------------------------------------- note anatomy -- */
+
+/*
+ * Requirements section 9.2's thirteen elements, in the order the page emits
+ * them. Everything here is above or below `.prose` rather than inside it: the
+ * article body is rendered Markdown and its rules are the section above.
+ *
+ * `--measure` on each region, not a shared wrapper, so a region can opt out
+ * when its content is not prose — none does yet, and the day the table of
+ * contents moves into a rail (TK-05c) it stops being a measure-width block
+ * without dragging the header and footer with it.
+ */
+
+.note-header,
+.note-footer {
+  max-width: var(--measure);
+  margin-inline: auto;
+}
+
+.note-header {
   margin-bottom: var(--space-8);
+}
+
+/*
+ * The trail. `<ol>` because the order is the meaning, and the separator is
+ * generated content rather than markup so it is decoration a reader can never
+ * select or a screen reader mistake for a crumb.
+ *
+ * `content: '/' / ''` gives the generated string empty alternative text, so a
+ * screen reader that supports the syntax announces "Home, Notes, <title>"
+ * rather than interleaving "slash". In a browser that does not, the whole
+ * declaration is invalid and the separator simply does not render — the
+ * crumbs are still spaced `<li>` elements in an ordered list, which reads
+ * correctly. That is the safe direction for an unsupported value, and it is why
+ * this is worth using here and not on the table of contents' counters, where
+ * losing the number would cost a sighted reader the depth cue.
+ */
+.breadcrumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
   color: var(--color-muted);
   font-size: var(--text-sm);
+  list-style: none;
+}
+
+.breadcrumbs li + li::before {
+  content: '/' / '';
+  margin-right: var(--space-2);
+  color: var(--color-line-strong);
+}
+
+.breadcrumbs [aria-current='page'] {
+  color: var(--color-text);
+}
+
+.note-title {
+  margin: var(--space-4) 0 0;
+  font-size: var(--text-2xl);
+  letter-spacing: -0.03em;
+}
+
+/*
+ * Public metadata: a description list, because each row genuinely is a term and
+ * its value. The label is text, never an icon alone, so nothing here depends on
+ * recognizing a glyph — and nothing is encoded by colour.
+ */
+.note-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-6);
+  margin: var(--space-4) 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.note-meta > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+
+.note-meta dt {
+  font-weight: 600;
+}
+
+.note-meta dd {
+  margin: 0;
+}
+
+/* A tag list inside a metadata row: links, wrapping, comma-free. */
+.note-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.note-tags a {
+  display: inline-block;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-sm);
+}
+
+/*
+ * The optional summary, when the artifact carries a `description` distinct from
+ * the excerpt. Larger than body text and not italic: an italic run of two lines
+ * is harder to read and says nothing the position does not already say.
+ */
+.note-summary {
+  margin: var(--space-6) 0 0;
+  padding-left: var(--space-4);
+  border-left: 3px solid var(--color-accent);
+  color: var(--color-muted);
+  font-size: var(--text-lg);
+}
+
+/*
+ * The table of contents.
+ *
+ * `<details open>` is the collapse: native, keyboard-operable, announced as a
+ * disclosure, and zero JavaScript. The summary is the only interactive chrome,
+ * and it keeps a real focus ring because `:focus-visible` is global.
+ */
+.toc {
+  max-width: var(--measure);
+  margin: 0 auto var(--space-8);
+  padding: var(--space-4) var(--space-6);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.toc-details > summary {
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+/*
+ * Nested ordered lists, numbered by CSS counters rather than by the browser's
+ * default numbering, so a nested item reads `2.1` and depth is legible from the
+ * number as well as from the indentation — which matters at 320 px, where three
+ * levels of indent would cost more width than the text can spare.
+ *
+ * `list-style: none` removes the browser's own marker, which a screen reader
+ * would otherwise announce alongside this one. The list is still an `<ol>`, so
+ * the position and the count are conveyed by the element, not by the digits:
+ * nothing here is information a reader gets only from the generated content.
+ */
+.toc-list {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-4);
+  counter-reset: toc-item;
+  list-style: none;
+}
+
+.toc-list .toc-list {
+  margin-top: var(--space-1);
+}
+
+.toc-list li {
+  margin-top: var(--space-1);
+  counter-increment: toc-item;
+  font-size: var(--text-sm);
+  text-indent: -1.4em;
+  padding-left: 1.4em;
+}
+
+.toc-list li::before {
+  content: counters(toc-item, '.') '. ';
+  color: var(--color-muted);
+}
+
+/*
+ * `--color-link`, declared rather than inherited. Quartz's unread
+ * table-of-contents links measure 2.04:1 in light and 2.92:1 in dark — both
+ * WCAG AA failures in the default state, on the component it is otherwise best
+ * at. Its failure mode is inheritance: the list is styled as secondary chrome,
+ * so its links take the dimmest colour in the palette. Naming the token here
+ * costs one declaration and is what `tests/design-tokens.test.ts` can actually
+ * check; ours measure 6.72:1 and 10.37:1.
+ */
+.toc-list a {
+  color: var(--color-link);
+  text-decoration: none;
+}
+
+.toc-list a:hover,
+.toc-list a:focus-visible {
+  text-decoration: underline;
+}
+
+/*
+ * The footer: public provenance and the canonical route.
+ *
+ * `.note-canonical` is the on-screen provenance line. The layout's own
+ * `.print-only` paragraph carries the same route for paper, and TK-08 upgrades
+ * both to the absolute canonical URL once `site:` is configured.
+ */
+.note-footer {
+  margin-top: var(--space-16);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-line);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.note-footer p {
+  margin: 0 0 var(--space-2);
+}
+
+.note-canonical {
+  font-family: var(--font-mono);
+  word-break: break-all;
 }
 
 .backlinks {
@@ -837,7 +986,13 @@ main:focus:not(:focus-visible) {
 
   .site-header,
   .skip-link,
-  .back-home,
+  .breadcrumbs,
+  .toc,
+  /* The layout's `.print-only` paragraph already prints this page's route.
+     Printing the on-screen provenance line too would put the same path on the
+     page twice, in two different wordings. TK-08 upgrades both to the absolute
+     canonical URL; whichever survives, it should be one of them. */
+  .note-canonical,
   #search-dialog,
   #link-preview {
     display: none !important;
@@ -850,6 +1005,8 @@ main:focus:not(:focus-visible) {
   }
 
   .prose,
+  .note-header,
+  .note-footer,
   .backlinks {
     max-width: none;
   }
@@ -861,6 +1018,7 @@ main:focus:not(:focus-visible) {
   /* ponytail: prints each link's route, since the absolute canonical origin is
      configured by TK-08. Swap `attr(href)` for the canonical URL there. */
   .prose a[href]::after,
+  .note-header a[href]::after,
   .backlinks a[href]::after {
     content: ' (' attr(href) ')';
     font-size: 0.85em;

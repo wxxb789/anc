@@ -42,8 +42,69 @@ test('renders footnotes with their backreference section', () => {
 
 test('renders task lists as disabled checkboxes, never interactive', () => {
   assert.match(kitchenSink.html, /<ul class="contains-task-list">/);
-  assert.match(kitchenSink.html, /<input type="checkbox" disabled \/> Unchecked item/);
-  assert.match(kitchenSink.html, /<input type="checkbox" disabled checked \/> Checked item/);
+  // Each checkbox is named by its own item's text. A checkbox with no
+  // accessible name is an axe `label` violation at critical impact — announced
+  // as bare state — and a fixed literal would name every checkbox identically
+  // and in English, on a site whose notes may be in either language.
+  assert.match(
+    kitchenSink.html,
+    /<input type="checkbox" disabled aria-label="Unchecked item" \/> Unchecked item/,
+  );
+  assert.match(
+    kitchenSink.html,
+    /<input type="checkbox" disabled aria-label="Checked item" checked \/> Checked item/,
+  );
+});
+
+test('a task checkbox is named by its own item, in every list shape', async () => {
+  // A nested list: the parent's name must be its own text, not its subtree's.
+  // `ctx.textContent` on the `<li>` returns the children's text too, so the
+  // parent was named "Parent task Child A Child B" — the whole subtree read
+  // aloud as one name, and then each child read again.
+  const nested = await renderMarkdown('- [ ] Parent task\n  - [ ] Child A\n  - [x] Child B\n');
+  assert.deepEqual(
+    [...nested.html.matchAll(/aria-label="([^"]*)"/g)].map(([, label]) => label),
+    ['Parent task', 'Child A', 'Child B'],
+  );
+
+  // A *loose* list — a blank line between items — wraps each item's content in
+  // a `<p>`, so the checkbox is not a direct child of the `<li>`. A
+  // direct-children search found nothing and left exactly the unnamed checkbox
+  // this plugin exists to name.
+  const loose = await renderMarkdown('- [ ] First\n\n- [x] Second\n');
+  assert.match(loose.html, /<p><input type="checkbox" disabled aria-label="First" \/>/);
+  assert.match(loose.html, /aria-label="Second" checked/);
+});
+
+test('a task checkbox is named in the document s own language, and boundedly', async () => {
+  const chinese = await renderMarkdown('- [ ] 写文档\n');
+  assert.match(chinese.html, /aria-label="写文档"/, 'the name is not lifted from the item text');
+
+  // Inline markup contributes its text, not its tags, and whitespace collapses:
+  // an `aria-label` is announced as one unbroken run.
+  const rich = await renderMarkdown('- [x] Ship **the** release\n');
+  assert.match(rich.html, /aria-label="Ship the release" checked/);
+
+  // Bounded, so a paragraph-length item is not read out in full before the
+  // reader learns whether it is checked. The full text is still in the item.
+  const long = await renderMarkdown(`- [ ] ${'x'.repeat(400)}\n`);
+  const label = /aria-label="([^"]*)"/.exec(long.html)?.[1];
+  assert.ok(label, 'a long task item produced no accessible name');
+  assert.ok(label.length < 200, `the accessible name is ${label.length} characters long`);
+  assert.ok(label.endsWith('…'), 'a truncated name does not say it was truncated');
+
+  // The bound counts code points. Cutting UTF-16 units splits a surrogate pair
+  // and leaves half a character, which is announced as a replacement glyph.
+  const astral = await renderMarkdown(`- [ ] ${'a'.repeat(119)}😀 tail\n`);
+  assert.match(astral.html, /aria-label="a{119}😀…"/);
+
+  // The bound holds for a raw-HTML input too. By the time the sanitizer parses
+  // the final HTML it cannot tell a label the plugin wrote from one a note
+  // body wrote, so without re-bounding there the body would have an unbounded
+  // attribute channel.
+  const raw = await renderMarkdown(`<input aria-label="${'A'.repeat(5000)}">\n`);
+  const rawLabel = /aria-label="([^"]*)"/.exec(raw.html)?.[1];
+  assert.ok(rawLabel !== undefined && rawLabel.length < 200, 'a raw-HTML input carried an unbounded label');
 });
 
 test('renders callouts with kind and promoted title, leaving plain quotes alone', () => {
@@ -635,6 +696,97 @@ test('sanitization runs after the rewrite, so a rewritten href is re-checked', a
     routeForSlug: () => 'https://example.com/notes/x/',
   });
   assert.match(rendered.html, /href="https:\/\/example\.com\/notes\/x\/#frag"/);
+});
+
+// --- The page title inside the body ------------------------------------------
+
+/**
+ * The exporter writes the note's title into the body as a leading `# Title`,
+ * while requirements section 9.2 puts the title above the article, before the
+ * metadata and the table of contents. `pageTitle` removes that one duplicate,
+ * and does nothing else.
+ *
+ * "Nothing else" is the part worth testing. An earlier version also demoted
+ * every other body `h1` to `h2`, on the reasoning that the page owns the single
+ * first-level heading. It preserved the text and destroyed the structure:
+ * `# Part Two` followed by `## Section` both became `h2`, so the subsection
+ * became a sibling of its own parent in the outline and in the table of
+ * contents. The last two tests below are what pins that shut.
+ */
+test('the body heading that restates the page title is removed', async () => {
+  const rendered = await renderMarkdown('# My Note\n\n## Section\n\nBody.\n', { pageTitle: 'My Note' });
+  assert.doesNotMatch(rendered.html, /<h1/);
+  assert.doesNotMatch(rendered.html, /My Note/);
+  assert.deepEqual(rendered.headings.map((heading) => heading.id), ['section']);
+  // Whitespace differences between the artifact's title field and the body
+  // heading are not a different title.
+  const padded = await renderMarkdown('#   My Note  \n\n## Section\n', { pageTitle: 'My Note' });
+  assert.doesNotMatch(padded.html, /<h1/);
+});
+
+test('the removed heading reserves no id, so a later heading of that name is clean', async () => {
+  // The duplicate is dropped before an id is minted. Reserving one would push a
+  // genuine later heading of the same text to `-1` and move a deep link that
+  // may already be published.
+  const rendered = await renderMarkdown('# My Note\n\n## Intro\n\n## My Note\n', { pageTitle: 'My Note' });
+  assert.deepEqual(rendered.headings.map((heading) => heading.id), ['intro', 'my-note']);
+  assert.match(rendered.html, /<h2 id="my-note">My Note/);
+});
+
+test('a body h1 that is not the title is left exactly as authored', async () => {
+  const rendered = await renderMarkdown('# Something Else\n\n## Section\n', { pageTitle: 'My Note' });
+  assert.match(rendered.html, /<h1 id="something-else">Something Else/);
+  assert.deepEqual(
+    rendered.headings.map((heading) => [heading.depth, heading.id]),
+    [
+      [1, 'something-else'],
+      [2, 'section'],
+    ],
+  );
+});
+
+test('a second h1 further down the body keeps its level and its subtree', async () => {
+  // The regression this exists for: demoting `# Part Two` to `h2` made
+  // `## Section` its sibling rather than its child. The nesting below is the
+  // whole assertion — text alone surviving is not enough.
+  const rendered = await renderMarkdown(
+    '# My Note\n\n## A\n\n# Part Two\n\n## Section\n\n### Deep\n',
+    { pageTitle: 'My Note' },
+  );
+  assert.match(rendered.html, /<h1 id="part-two">Part Two/);
+  assert.deepEqual(rendered.headings.map((heading) => heading.depth), [2, 1, 2, 3]);
+  assert.deepEqual(rendered.toc.map((entry) => entry.id), ['a', 'part-two']);
+  assert.deepEqual(rendered.toc[1]?.children.map((entry) => entry.id), ['section']);
+  assert.deepEqual(rendered.toc[1]?.children[0]?.children.map((entry) => entry.id), ['deep']);
+});
+
+test('every heading in the tree still has an anchor on the page', async () => {
+  // The removal's one real hazard: a heading collected into `headings` but no
+  // longer rendered would put a dangling `href="#…"` in the table of contents.
+  for (const source of [
+    '# My Note\n\n## A\n\n### B\n',
+    '# Other\n\n## A\n\n# My Note\n\n## B\n',
+    '## A\n\n## B\n\n## C\n',
+    '# My Note\n\n## My Note\n\n## A\n',
+  ]) {
+    const rendered = await renderMarkdown(source, { pageTitle: 'My Note' });
+    for (const heading of rendered.headings) {
+      assert.ok(
+        rendered.html.includes(`id="${heading.id}"`),
+        `${JSON.stringify(source)}: heading "${heading.id}" is in the tree with no anchor in the HTML`,
+      );
+    }
+  }
+});
+
+test('without a page title the body is rendered exactly as before', async () => {
+  // Every caller that is not the note page relies on this: the removal must be
+  // unreachable unless the option asks for it.
+  const source = '# My Note\n\n## Section\n\n# Another\n';
+  const rendered = await renderMarkdown(source);
+  assert.match(rendered.html, /<h1 id="my-note">My Note/);
+  assert.match(rendered.html, /<h1 id="another">Another/);
+  assert.deepEqual(rendered.headings.map((heading) => heading.depth), [1, 2, 1]);
 });
 
 // --- Metadata flags -----------------------------------------------------------

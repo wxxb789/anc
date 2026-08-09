@@ -33,6 +33,17 @@ const {
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
     <script is:inline src={themeInit}></script>
+    {/* The one seam a page has into the document head.
+        TK-08 fills it with the canonical link, OG and Twitter metadata, and the
+        feed `<link rel="alternate">`. TK-15 fills it with the math stylesheet
+        and font, gated on `RenderedNote.hasMath`, and the Mermaid assets gated
+        on `.hasMermaid`. `src/pages/notes/[slug].astro` already uses it for the
+        `hasCode` case, so the mechanism is exercised rather than speculative.
+
+        A named slot rather than a widening `Props` interface: a per-ticket prop
+        would make this file the contended one every time a ticket needs a tag
+        in the head, which is the collision the wave plan exists to avoid. */}
+    <slot name="head" />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>

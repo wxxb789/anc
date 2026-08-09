@@ -63,6 +63,30 @@ export interface RenderedNote {
 
 export interface RenderOptions {
   /**
+   * The title the surrounding page renders as its own `<h1>`.
+   *
+   * Requirements section 9.2 puts the title, the public metadata, the summary,
+   * and the table of contents *before* the article content, so the title cannot
+   * live inside the body — and the exporter writes it there anyway, as a leading
+   * `# Title`. Passing it here removes that one duplicate heading, so the page
+   * renders the title once and the document has exactly one `<h1>`.
+   *
+   * **Only the leading heading, and only when its text matches.** Every other
+   * heading is left exactly as authored, including an `h1`. Demoting one was
+   * tried and is wrong: `# Part Two` followed by `## Section` would both become
+   * `h2`, making the subsection a sibling of its own parent in the outline and
+   * in the table of contents — text preserved, structure destroyed, silently.
+   * A body that keeps an `h1` is an artifact shape this anatomy cannot express,
+   * and it fails the "exactly one h1" gate in `tests/built-output.test.ts`
+   * rather than shipping a rearranged outline. Every entry in every corpus opens
+   * with a `# Title` matching its `title` field, so that gate has never fired.
+   *
+   * Omit this and nothing changes: the body keeps every heading it has. That is
+   * what every caller who is not the note page wants, and it is why the removal
+   * cannot affect a rendering that did not ask for it.
+   */
+  pageTitle?: string;
+  /**
    * Maps a published slug to its canonical public route, used to rewrite
    * in-content hrefs of the form `/<slug>/`.
    *
@@ -392,9 +416,17 @@ function rawHtmlIds(html: string): string[] {
  * resolving to the decoy. Reserving each raw id in this slugger *as it is
  * encountered* is what makes generated ids disjoint from authored ones, so the
  * heading gets a free id and the decoy is dropped with nothing to shadow.
+ *
+ * `pageTitle` resolves the one structural conflict between the artifact and
+ * requirements section 9.2: the exporter writes the title into the body as a
+ * leading `# Title`, and the anatomy renders the title itself, above the
+ * article. See {@link RenderOptions.pageTitle}. When it is given, a leading
+ * `h1` whose text matches is removed — and nothing else changes, because every
+ * alternative to removal rearranges an outline the author wrote.
  */
-function headingPlugin(collected: Collected): HastPluginDefinition {
+function headingPlugin(collected: Collected, pageTitle: string | undefined): HastPluginDefinition {
   const slugger = new Slugger();
+  let isFirstHeading = true;
   return {
     name: 'thoughtscape-headings',
     // Raw HTML is visited in document order alongside elements, so an id
@@ -412,6 +444,19 @@ function headingPlugin(collected: Collected): HastPluginDefinition {
       visit(node, ctx) {
         if (typeof node.properties?.['id'] === 'string') return;
         const text = ctx.textContent(node);
+        const wasFirst = isFirstHeading;
+        isFirstHeading = false;
+
+        // The body's own restatement of the title the page already renders.
+        // Removed before an id is minted, so it never enters `headings` and the
+        // table of contents cannot carry an entry whose anchor is not on the
+        // page. Nothing is reserved in the slugger either: a later heading
+        // genuinely titled the same thing gets the clean id.
+        if (pageTitle !== undefined && wasFirst && node.tagName === 'h1' && text.trim() === pageTitle.trim()) {
+          ctx.removeNode(node);
+          return;
+        }
+
         // Text that is only punctuation or invisibles slugs to "", which would
         // give several headings the same empty id and a useless `href="#"`.
         // The fallback is re-slugged rather than used literally so that it is
@@ -570,6 +615,105 @@ function codePlugin(collected: Collected): HastPluginDefinition {
 }
 
 /**
+ * A task-list checkbox is named by the text of its own list item.
+ *
+ * axe reports an unnamed checkbox as a `label` violation at critical impact —
+ * four nodes on the fixture corpus — and it is right: a screen reader
+ * encountering the input alone announces "checkbox, checked" with nothing
+ * saying what is checked.
+ *
+ * The name is lifted from the item's text rather than being a fixed string.
+ * Both alternatives are worse. A literal such as `"Task"` names four checkboxes
+ * identically, so it silences the tool without helping a reader, and it would
+ * be an English chrome string minted in the renderer — outside the components
+ * TK-16's bilingual sweep covers, so a zh-CN note would announce it in English.
+ * The item's own text is content, so it is already in the document's language
+ * and it is already distinct per item.
+ *
+ * The value is bounded and whitespace-collapsed: an `aria-label` is announced
+ * in full with no structure, so a task item carrying a paragraph would be read
+ * as one unbroken run before the reader learns whether it is checked. Past the
+ * bound the name is truncated and the full text still follows in the item
+ * itself, which is where a reader gets it either way.
+ */
+const TASK_LABEL_LIMIT = 120;
+
+/** One line, collapsed and length-bounded, suitable as an `aria-label`. */
+function boundLabel(text: string): string {
+  const collapsed = text.replace(/\s+/g, ' ').trim();
+  // Split on code points, not UTF-16 units: `slice` on a surrogate pair leaves
+  // half a character, which renders as a replacement glyph and is announced as
+  // one. The limit is a readability bound, so counting characters is also the
+  // honest unit for it.
+  const characters = [...collapsed];
+  return characters.length > TASK_LABEL_LIMIT
+    ? `${characters.slice(0, TASK_LABEL_LIMIT).join('')}…`
+    : collapsed;
+}
+
+/**
+ * One task item's own text and its own checkbox, excluding any nested list.
+ *
+ * Both halves have to skip the same subtree, and both are defects otherwise:
+ *
+ * - `ctx.textContent(li)` on a parent item returns its children's text too, so
+ *   `- [ ] Parent` with two sub-tasks names the parent checkbox
+ *   "Parent Child A Child B" — a screen reader reads the whole subtree as the
+ *   parent's name and then reads each child again.
+ * - the checkbox is not always a direct child. A *loose* list — one with a
+ *   blank line between items — wraps each item's content in a `<p>`, so a
+ *   direct-children search finds nothing and the item silently keeps the
+ *   unnamed checkbox this plugin exists to name.
+ *
+ * The walk therefore descends through wrappers and stops at `ul`/`ol`, which is
+ * exactly the boundary between "this item" and "the items under it".
+ */
+function taskItemContent(node: { children?: readonly unknown[] }): {
+  checkbox: { type: string; tagName?: string } | undefined;
+  text: string;
+} {
+  let checkbox: { type: string; tagName?: string } | undefined;
+  let text = '';
+
+  const walk = (children: readonly unknown[]): void => {
+    for (const child of children) {
+      const item = child as { type: string; tagName?: string; value?: string; children?: unknown[] };
+      if (item.type === 'text') {
+        text += item.value ?? '';
+        continue;
+      }
+      if (item.type !== 'element') continue;
+      if (item.tagName === 'ul' || item.tagName === 'ol') continue;
+      if (item.tagName === 'input') {
+        checkbox ??= item;
+        continue;
+      }
+      if (item.children !== undefined) walk(item.children);
+    }
+  };
+  walk(node.children ?? []);
+
+  return { checkbox, text };
+}
+
+function taskListPlugin(): HastPluginDefinition {
+  return {
+    name: 'thoughtscape-task-lists',
+    element: {
+      filter: ['li'],
+      visit(node, ctx) {
+        if (!asClassList(node.properties?.['className']).includes('task-list-item')) return;
+        const { checkbox, text } = taskItemContent(node);
+        if (checkbox === undefined) return;
+        const label = boundLabel(text);
+        if (label === '') return;
+        ctx.setProperty(checkbox as Parameters<typeof ctx.setProperty>[0], 'aria-label', label);
+      },
+    },
+  };
+}
+
+/**
  * Table alignment moves from an inline `style` to `data-align`.
  *
  * satteri emits GFM column alignment as `style="text-align: left"`, which
@@ -675,7 +819,7 @@ const POLICY: sanitizeHtml.IOptions = {
     section: ['class', 'data-footnotes'],
     blockquote: ['class', 'cite', 'data-callout'],
     figure: ['class', 'data-code-language', 'data-diagram'],
-    input: ['type', 'checked', 'disabled'],
+    input: ['type', 'checked', 'disabled', 'aria-label'],
     th: ['colspan', 'rowspan', 'scope', 'data-align'],
     td: ['colspan', 'rowspan', 'data-align'],
     col: ['span'],
@@ -842,14 +986,32 @@ function sanitize(
       // field) instead of relying on the tag allowlist alone. `checked` and
       // `disabled` are boolean attributes, so an empty value emits the bare
       // form; `sanitize-html` treats `hidden` as non-boolean and needs a value.
-      input: (tagName, attribs) => ({
-        tagName,
-        attribs: {
-          type: 'checkbox',
-          disabled: '',
-          ...('checked' in attribs ? { checked: '' } : {}),
-        },
-      }),
+      //
+      // `aria-label` is preserved when `taskListPlugin` set one — it is the
+      // item's own text, and dropping it here would reinstate the axe `label`
+      // violation this shape otherwise causes.
+      //
+      // Re-bounded rather than trusted. Raw HTML in a note body reaches this
+      // transform too, and by the time the final HTML is parsed a label the
+      // plugin wrote is indistinguishable from one a raw `<input>` carried — so
+      // without this, body content has an unbounded attribute channel, which is
+      // the same hazard `calloutPlugin` bounds its `data-callout` against. The
+      // limit is `taskListPlugin`'s own, so the plugin's labels pass through
+      // unchanged and only an over-long one is cut.
+      input: (tagName, attribs) => {
+        const label = attribs['aria-label'];
+        return {
+          tagName,
+          attribs: {
+            type: 'checkbox',
+            disabled: '',
+            ...(typeof label === 'string' && label !== ''
+              ? { 'aria-label': boundLabel(label) }
+              : {}),
+            ...('checked' in attribs ? { checked: '' } : {}),
+          },
+        };
+      },
       // A `<pre>` scrolls horizontally when a line is longer than the measure,
       // and a scrollable region must be reachable by keyboard — axe
       // `scrollable-region-focusable`, WCAG 2.1.1. `tabindex="0"` is the whole
@@ -898,9 +1060,10 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
   const { html } = await markdownToHtml(markdown, {
     features: FEATURES,
     hastPlugins: [
-      headingPlugin(collected),
+      headingPlugin(collected, options.pageTitle),
       calloutPlugin(),
       codePlugin(collected),
+      taskListPlugin(),
       tablePlugin(),
     ],
   });

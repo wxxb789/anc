@@ -5,7 +5,7 @@
  * drift from its values without this test failing.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
@@ -201,9 +201,15 @@ test('no syntax token is distinguished by colour alone', () => {
   // prose to skip, and a keyword, which is structure — carry a second signal in
   // weight or style. Without one, a code block is undifferentiated for a reader
   // with a colour vision deficiency and on a printed page.
+  //
+  // Read from `code.css`, which is where the `token-*` map lives since TK-05a
+  // gated it on `RenderedNote.hasCode`. Both files are concatenated rather than
+  // only the one, so moving a rule back into the global sheet cannot silently
+  // skip this check — the gate follows the declaration, not the filename.
+  const source = readFileSync(new URL('../src/styles/code.css', import.meta.url), 'utf8');
   const global = readFileSync(new URL('../src/styles/global.css', import.meta.url), 'utf8');
   for (const marker of ['token-comment', 'token-keyword']) {
-    const rule = rules(global).find((candidate) => candidate.selector.includes(`.${marker}`));
+    const rule = rules(`${source}\n${global}`).find((candidate) => candidate.selector.includes(`.${marker}`));
     assert.ok(rule, `no rule styles .${marker}`);
     assert.match(
       rule.body,
@@ -255,6 +261,87 @@ test('prose rules do not outrank the markdown classes they contain', () => {
       }
     }
   }
+});
+
+/**
+ * The table of contents does not repeat Quartz's contrast mistake.
+ *
+ * Its own table of contents is the component it is best at, and its unread
+ * links measure 2.04:1 in light and 2.92:1 in dark — both WCAG AA failures in
+ * the *default* state, before a reader has interacted with anything. The
+ * failure mode is inheritance: the list is styled as secondary chrome, so its
+ * links take the dimmest colour in the palette.
+ *
+ * The colour must therefore be **declared**, not inherited — an inherited
+ * colour is exactly how Quartz arrived at 2.04:1, and a gate that tolerated an
+ * absent declaration would have nothing to check. `--color-muted` is the
+ * specific trap: it meets AA as body text, so a ratio check alone would wave it
+ * through, while making a link indistinguishable from the prose around it.
+ */
+test('table-of-contents links declare a link colour, not a dimmed one', () => {
+  const global = readFileSync(new URL('../src/styles/global.css', import.meta.url), 'utf8');
+  const declared = rules(global).filter(appliesByDefault);
+
+  const linkRules = declared.filter(
+    (rule) => /\.toc(?:-list|-details)?\b/.test(rule.selector) && /(?:^|[\s>+~,])a(?:[:.[]|$|\s)/.test(rule.selector),
+  );
+  assert.ok(linkRules.length > 0, 'no rule targets a table-of-contents link, so this gate checks nothing');
+
+  const colored = linkRules.filter((rule) => declaration(rule.body, 'color') !== undefined);
+  assert.ok(
+    colored.length > 0,
+    'no table-of-contents link rule declares a colour, so the links inherit one — ' +
+      'which is exactly how Quartz reaches 2.04:1',
+  );
+
+  for (const rule of colored) {
+    assert.doesNotMatch(
+      declaration(rule.body, 'color')!.value,
+      /--color-muted|--color-line/,
+      `"${rule.selector}" draws a table-of-contents link in a dimmed token — ` +
+        'this is the WCAG failure Quartz ships (2.04:1 light, 2.92:1 dark)',
+    );
+  }
+});
+
+/**
+ * The stylesheet split has exactly one way to fail silently, and this closes it.
+ *
+ * `code.css` loads only on pages with a code fence, and the built `<head>`
+ * orders it *before* the layout's sheet — so an equal-specificity `.token` or
+ * `.token-*` rule in any other stylesheet would win over every rule in
+ * `code.css` and repaint the whole token stream one colour, on every page, with
+ * both files looking individually correct. Keeping every token rule in one file
+ * is what makes the order irrelevant; this asserts it.
+ *
+ * Every sheet in `src/styles/` except `code.css` is checked, not just
+ * `global.css`: `tokens.css` is imported *by* `global.css` and therefore also
+ * loads after `code.css`, so naming one file would leave the other as an
+ * unguarded way in.
+ */
+test('only the conditionally loaded sheet styles syntax tokens', () => {
+  const directory = new URL('../src/styles/', import.meta.url);
+  const sheets = readdirSync(directory).filter((name) => name.endsWith('.css'));
+  assert.ok(sheets.includes('code.css'), 'src/styles/code.css is missing — the split is gone');
+
+  for (const name of sheets) {
+    if (name === 'code.css') continue;
+    for (const rule of rules(readFileSync(new URL(name, directory), 'utf8'))) {
+      assert.doesNotMatch(
+        rule.selector,
+        /\.token(?![\w-])|\.token-/,
+        `${name}: "${rule.selector}" styles a syntax token from a sheet that loads on every page ` +
+          'and after code.css — move it into src/styles/code.css',
+      );
+    }
+  }
+
+  assert.ok(
+    rules(readFileSync(new URL('code.css', directory), 'utf8')).some((rule) =>
+      /\.token-/.test(rule.selector),
+    ),
+    'code.css styles no syntax token, so the split has lost its content',
+  );
 });
 
 test('every named font face is one the reader already has', () => {

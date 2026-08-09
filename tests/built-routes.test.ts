@@ -32,6 +32,7 @@ import {
   noteTimestamp,
   recentFirst,
   renderRedirects,
+  routeKey,
   tagFacets,
   tagRoute,
 } from '../src/lib/routes.ts';
@@ -406,6 +407,324 @@ test('no page this repository authors describes how the private source is organi
     for (const [pattern, what] of forbidden) {
       assert.doesNotMatch(html, pattern, `${page}: discloses ${what} (${pattern})`);
     }
+  }
+});
+
+// --- Page anatomy -------------------------------------------------------------
+
+/**
+ * Every built note page, as `{slug, html}`.
+ *
+ * Fails rather than returning empty: every assertion below is a `for` over this
+ * list, so an artifact with no entries would make all of them pass while
+ * checking nothing. An empty corpus is a legitimate artifact — the tag and
+ * collection indexes have an honest empty state for exactly that — but it is
+ * not a state in which these gates are evidence.
+ */
+function notePages(): { slug: string; html: string }[] {
+  assert.ok(entries.length > 0, 'the artifact has no notes, so no page anatomy can be checked');
+  return entries.map((entry) => ({
+    slug: entry.slug,
+    html: readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8'),
+  }));
+}
+
+/**
+ * Requirements section 9.2 lists thirteen page elements. Five later tickets own
+ * five of them, and this asserts what TK-05a is responsible for rather than the
+ * whole list — a gate that asserted the absent regions would either fail or,
+ * worse, be satisfied by an empty stub.
+ */
+test('every note page carries the anatomy this ticket owns', () => {
+  for (const { slug, html } of notePages()) {
+    assert.match(html, /<nav class="breadcrumbs" aria-label="Breadcrumb">/, `${slug}: no breadcrumbs`);
+    assert.match(html, /<h1 class="note-title">/, `${slug}: no page title`);
+    assert.match(html, /<article class="prose" data-pagefind-body>/, `${slug}: no article body`);
+    assert.match(html, /<footer class="note-footer">/, `${slug}: no provenance footer`);
+    assert.ok(
+      html.includes(`Canonical path: ${noteRoute(slug)}`),
+      `${slug}: the footer does not carry the canonical route`,
+    );
+  }
+});
+
+/**
+ * The title is rendered once, by the page, and the body's own copy of it is
+ * gone.
+ *
+ * The exporter writes the title into the Markdown as a leading `# Title`, so
+ * without the renderer's `pageTitle` handling every note would show its title
+ * twice and carry two `h1` elements — the second of which the heading-order
+ * gate in `built-output.test.ts` would reject. Both halves are checked here
+ * because they are one behaviour: exactly one `h1`, and it is the page's.
+ */
+test('the note title is rendered once, above the article', () => {
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    const headings = [...html.matchAll(/<h1\b[^>]*>/g)];
+    assert.equal(headings.length, 1, `${slug}: has ${headings.length} h1 elements, not 1`);
+    assert.match(headings[0]![0], /class="note-title"/, `${slug}: the h1 is not the page title`);
+
+    const article = /<article\b[^>]*>([\s\S]*?)<\/article>/.exec(html);
+    assert.ok(article, `${slug}: has no article`);
+    assert.doesNotMatch(article[1]!, /<h1\b/, `${slug}: the article body still carries an h1`);
+    assert.ok(
+      html.includes(`<h1 class="note-title">${asRendered(entry.title)}</h1>`),
+      `${slug}: the page title is not the artifact's title`,
+    );
+  }
+});
+
+/**
+ * Breadcrumbs are built from public fields only.
+ *
+ * The trail is `Home / Notes / <collection>? / <title>`, and the last item is
+ * the current page and is not a link. What the assertion is really protecting
+ * is the requirement that a breadcrumb never reflects a private folder name:
+ * every href must be a route the build emitted, which a path fragment could not
+ * be.
+ */
+test('the breadcrumb trail is public routes and the page title, in order', () => {
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    const trail = /<nav class="breadcrumbs"[^>]*>([\s\S]*?)<\/nav>/.exec(html);
+    assert.ok(trail, `${slug}: no breadcrumb nav`);
+
+    const items = [...trail[1]!.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(([, item]) => item!);
+    const expectedDepth = entry.collection === undefined ? 3 : 4;
+    assert.equal(items.length, expectedDepth, `${slug}: trail is ${items.length} deep, expected ${expectedDepth}`);
+
+    // Everything but the last is a link to a route the build emitted.
+    for (const item of items.slice(0, -1)) {
+      const href = /href="([^"]*)"/.exec(item)?.[1];
+      assert.ok(href, `${slug}: a breadcrumb before the last is not a link: ${item}`);
+      const [path] = href.split('#') as [string];
+      assert.ok(ROUTES.includes(path), `${slug}: breadcrumb links "${href}", which is not a built route`);
+    }
+
+    // The last is the current page: named, not linked.
+    const last = items.at(-1)!;
+    assert.doesNotMatch(last, /<a\b/, `${slug}: the current page is linked to itself`);
+    assert.match(last, /aria-current="page"/, `${slug}: the current page is not marked`);
+    assert.ok(last.includes(asRendered(entry.title)), `${slug}: the last crumb is not the title`);
+
+    if (entry.collection !== undefined) {
+      assert.ok(
+        items[2]!.includes(`href="${collectionRoute(entry.collection)}"`),
+        `${slug}: the collection crumb does not link the collection route`,
+      );
+    }
+  }
+});
+
+/**
+ * The public metadata rendered is exactly what the artifact carries.
+ *
+ * Both directions, because both are defects: a field present in the artifact
+ * and missing from the page loses information the projection approved, and a
+ * row rendered for an absent field is fabricated metadata. The published corpus
+ * carries none of these, so this is only evidence under `npm run build:fixture`
+ * — but it runs unconditionally, because "no note has a date" is a correct
+ * result for it, not a skip.
+ */
+test('note metadata renders every field the artifact carries, and no other', () => {
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    const meta = /<dl class="note-meta">([\s\S]*?)<\/dl>/.exec(html)?.[1];
+
+    const expected = [
+      ['Published', entry.created],
+      ['Updated', entry.updated],
+      ['Collection', entry.collection],
+    ] as const;
+    const carriesAny = expected.some(([, value]) => value !== undefined) || (entry.tags?.length ?? 0) > 0;
+    assert.equal(
+      meta !== undefined,
+      carriesAny,
+      `${slug}: metadata block ${meta === undefined ? 'missing' : 'present'} but the entry carries ` +
+        `${carriesAny ? 'fields' : 'none'}`,
+    );
+    if (meta === undefined) continue;
+
+    for (const [label, value] of expected) {
+      assert.equal(
+        meta.includes(`<dt>${label}</dt>`),
+        value !== undefined,
+        `${slug}: "${label}" row does not match the artifact`,
+      );
+    }
+    // A date is machine readable as well as human readable.
+    for (const value of [entry.created, entry.updated]) {
+      if (value === undefined) continue;
+      assert.ok(meta.includes(`datetime="${value}"`), `${slug}: date ${value} has no <time datetime>`);
+    }
+    for (const tag of entry.tags ?? []) {
+      assert.ok(
+        meta.includes(`href="${tagRoute(routeKey(tag))}"`) && meta.includes(asRendered(tag)),
+        `${slug}: tag "${tag}" is not rendered as a link to its facet page`,
+      );
+    }
+  }
+});
+
+/**
+ * The optional summary renders exactly when the artifact carries a
+ * `description`, and carries it verbatim.
+ *
+ * Verbatim is the assertion that matters. An earlier version suppressed the
+ * summary when it matched `excerpt`, on a false premise — the layout receives
+ * `excerpt` as the meta description, not `description`, so the two are never
+ * the same field and a note whose author wrote one sentence into both simply
+ * lost its summary. Without this gate that suppression could return silently.
+ */
+test('the optional summary renders exactly when the artifact carries one', () => {
+  let rendered = 0;
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    const summary = /<p class="note-summary">([\s\S]*?)<\/p>/.exec(html);
+    assert.equal(
+      summary !== null,
+      entry.description !== undefined,
+      `${slug}: summary ${summary === null ? 'missing' : 'present'} but description is ` +
+        `${entry.description === undefined ? 'absent' : 'present'}`,
+    );
+    if (summary === null) continue;
+    rendered += 1;
+    assert.equal(
+      summary[1],
+      asRendered(entry.description!),
+      `${slug}: the rendered summary is not the artifact's description`,
+    );
+  }
+
+  // Only the fixture corpus carries `description`; on the published one-note
+  // artifact the negative case above is the whole check, which is correct
+  // rather than vacuous — but say so rather than implying it was exercised.
+  if (entries.some((entry) => entry.description !== undefined)) {
+    assert.ok(rendered > 0, 'an entry carries a description but no page rendered a summary');
+  }
+});
+
+/**
+ * The table of contents is complete in the HTML, nested, and every entry
+ * resolves.
+ *
+ * "Complete in the HTML" is the load-bearing half: requirements section 5.3
+ * makes reading and navigation work without JavaScript, and this is navigation.
+ * `built-output.test.ts` separately proves every `href="#x"` on every page has a
+ * matching `id`, so a dangling entry fails there; what is proven here is that
+ * the list is the renderer's heading tree rather than a subset of it, and that
+ * the nesting is real markup rather than a flat list with a depth class.
+ */
+test('the table of contents is server-rendered, nested, and complete', async () => {
+  const { renderMarkdown, TOC_MIN_HEADINGS } = await import('../src/lib/markdown.ts');
+
+  let withToc = 0;
+  let nested = 0;
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    const { toc } = await renderMarkdown(entry.markdown, { pageTitle: entry.title });
+    const rendered = /<nav class="toc"[\s\S]*?<\/nav>/.exec(html)?.[0];
+
+    if (toc.length === 0) {
+      assert.equal(rendered, undefined, `${slug}: renders a table of contents below the threshold`);
+      continue;
+    }
+    withToc += 1;
+    assert.ok(rendered, `${slug}: has ${toc.length} root headings but rendered no table of contents`);
+
+    // Collapse is native: a `<details>`, open by default, and no script.
+    assert.match(rendered, /<details class="toc-details" open>/, `${slug}: collapse is not a <details>`);
+
+    const flatten = (items: readonly { id: string; children: readonly unknown[] }[]): string[] =>
+      items.flatMap((item) => [
+        item.id,
+        ...flatten(item.children as readonly { id: string; children: readonly unknown[] }[]),
+      ]);
+    const expected = flatten(toc);
+    const listed = [...rendered.matchAll(/href="#([^"]+)"/g)].map(([, id]) => id!);
+    assert.deepEqual(listed, expected, `${slug}: the table of contents is not the heading tree, in order`);
+
+    // Real nesting, not a flat list with a depth class: a page with a child
+    // heading must emit a list inside a list item.
+    if (toc.some((root) => root.children.length > 0)) {
+      nested += 1;
+      assert.match(
+        rendered,
+        /<ol class="toc-list">[\s\S]*<li>[\s\S]*<ol class="toc-list">/,
+        `${slug}: has nested headings but rendered a flat list`,
+      );
+    }
+  }
+
+  assert.ok(withToc > 0, `no note reached ${TOC_MIN_HEADINGS} headings, so nothing was checked`);
+  assert.ok(nested > 0, 'no note had a nested heading, so the nesting was never exercised');
+});
+
+/**
+ * Owner decision 7, made observable: the syntax-highlighting stylesheet reaches
+ * only the pages that contain a code fence.
+ *
+ * Two independent properties, because the first alone would just restate the
+ * renderer to itself:
+ *
+ * 1. The `<link>` is present exactly when `hasCode` is — the mandated gate.
+ * 2. **Every page carrying `token-*` markup links the stylesheet.** This is the
+ *    one a reader experiences: unlinked token spans render as undifferentiated
+ *    plain text, which is the defect TK-12 fixed and which a gate reading only
+ *    the flag would not see. It is not the converse of (1): `hasCode` is true
+ *    for *any* fence, and a ` ```text `, an unlabelled, or an unknown-language
+ *    fence produces zero tokens, so the two conditions genuinely differ.
+ */
+test('the code stylesheet is linked only by pages that contain a code fence', async () => {
+  const { renderMarkdown } = await import('../src/lib/markdown.ts');
+
+  let gated = 0;
+  let highlighted = 0;
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    const { hasCode } = await renderMarkdown(entry.markdown, { pageTitle: entry.title });
+    const linked = /<link\b[^>]*href="\/_astro\/code\.[^"]*\.css"/.test(html);
+    assert.equal(
+      linked,
+      hasCode,
+      `${slug}: hasCode is ${hasCode} but the code stylesheet is ${linked ? 'linked' : 'absent'}`,
+    );
+
+    if (/class="token[ "]/.test(html)) {
+      highlighted += 1;
+      assert.ok(linked, `${slug}: ships highlighted markup with no stylesheet — it renders as plain text`);
+    }
+    if (hasCode) gated += 1;
+  }
+
+  assert.ok(gated > 0, 'no note contains a code fence, so the gate was never exercised');
+  assert.ok(highlighted > 0, 'no note ships highlighted markup, so the reader-facing half proved nothing');
+  // The negative direction among *note* pages needs a corpus containing a note
+  // with no code, which the published one-note artifact cannot provide — its
+  // single note is a shell guide. Demanded only where it is available, rather
+  // than asserted weakly everywhere. The seven fixed routes give the negative
+  // case on both corpora; that is the test below.
+  if (entries.length > 1) {
+    assert.ok(
+      gated < entries.length,
+      'every note in a multi-note corpus contains code, so the negative case was never exercised',
+    );
+  }
+});
+
+test('no page outside the note route links the code stylesheet', () => {
+  // The conditional link is emitted from the note page only. A layout-level
+  // import would put it on all seven fixed routes, which is the regression this
+  // catches.
+  for (const route of ROUTES) {
+    if (noteSlugFromPath(route) !== undefined) continue;
+    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    assert.doesNotMatch(
+      readFileSync(new URL(page, DIST), 'utf8'),
+      /href="\/_astro\/code\.[^"]*\.css"/,
+      `${page}: links the code stylesheet on a route that renders no code`,
+    );
   }
 });
 

@@ -1,8 +1,42 @@
 ---
+/**
+ * The note page: requirements section 9.2's thirteen-element anatomy.
+ *
+ * Elements 1, 2, and part of 13 come from `Layout.astro` — the skip link, the
+ * header with its search trigger, and the printed canonical route. Everything
+ * else is here, in the order the requirements list them, and every region is
+ * either rendered below or left as a named, empty slot with the ticket that
+ * owns it. **Do not fill a slot from another ticket**: the slot is the contract.
+ *
+ * | § 9.2 element | Where |
+ * | --- | --- |
+ * | 1 skip link | `Layout.astro` |
+ * | 2 header and search trigger | `Layout.astro` |
+ * | 3 breadcrumbs | here |
+ * | 4 title and public metadata | here |
+ * | 5 optional summary | here |
+ * | 6 table of contents | here, via `TableOfContents.astro` |
+ * | 7 sanitized article content | here |
+ * | 8 outgoing public links | slot — TK-05b |
+ * | 9 static backlinks | here (titles only); context snippets are TK-05b |
+ * | 10 related-note fallback | slot — TK-05b |
+ * | 11 local-graph island | slot — TK-17 |
+ * | 12 previous/next or collection navigation | slot — TK-05b |
+ * | 13 footer with provenance and canonical URL | here; the absolute URL is TK-08 |
+ *
+ * Nothing on this page needs JavaScript. The table of contents is server
+ * rendered, the breadcrumbs are static, and the collapse is a `<details>`.
+ */
 import Layout from '../../layouts/Layout.astro';
+import TableOfContents from '../../components/TableOfContents.astro';
 import { entries, getEntry } from '../../lib/content.ts';
 import { renderMarkdown } from '../../lib/markdown.ts';
-import { noteRoute } from '../../lib/routes.ts';
+import { collectionRoute, noteRoute, routeKey, tagRoute } from '../../lib/routes.ts';
+// Loaded as a URL rather than imported, so the stylesheet becomes its own
+// content-hashed asset and the `<link>` below can be emitted conditionally.
+// Importing it would merge it into the layout's sheet and ship it everywhere,
+// which is precisely what owner decision 7 rules out.
+import codeStylesheet from '../../styles/code.css?url';
 
 export function getStaticPaths() {
   return entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
@@ -13,19 +47,155 @@ const { entry } = Astro.props;
 // so `/notes/<slug>/` is defined in exactly one place. Returning undefined for
 // an unpublished slug leaves that href untouched rather than pointing it at a
 // route that does not exist.
-const { html } = await renderMarkdown(entry.markdown, {
+//
+// `pageTitle` is what lets the anatomy put the title above the article: the
+// exporter writes it into the body as a leading `# Title`, and the renderer
+// drops that one duplicate rather than the page rendering it twice. A body that
+// keeps some *other* `h1` is left alone and fails the "exactly one h1" gate,
+// which is the honest outcome — see `RenderOptions.pageTitle`.
+const { html, toc, hasCode } = await renderMarkdown(entry.markdown, {
+  pageTitle: entry.title,
   routeForSlug: (slug) => (getEntry(slug) ? noteRoute(slug) : undefined),
 });
+
+/**
+ * `Home / Notes / <collection> / <title>`, from public fields only.
+ *
+ * `collection` is validated as a flat slug and there is no hierarchy behind it,
+ * so the trail is at most four deep. TK-05c owns the collection tree; when it
+ * lands, this gains ancestors and nothing else changes. The `/#notes` target is
+ * the home page's own listing — requirements section 9.1 defines no `/notes/`
+ * index, and `PRIMARY_NAV` already points there.
+ *
+ * Every segment is a fixed route or an artifact field. Nothing reads a path, so
+ * a breadcrumb can never disclose a private folder name.
+ */
+const collection = entry.collection;
+const breadcrumbs: { label: string; href?: string }[] = [
+  { label: 'Home', href: '/' },
+  { label: 'Notes', href: '/#notes' },
+  ...(collection === undefined ? [] : [{ label: collection, href: collectionRoute(collection) }]),
+  { label: entry.title },
+];
+
+/**
+ * The calendar date a reader sees, from an artifact date.
+ *
+ * The first ten characters, not a parsed and reformatted `Date`. TK-01 has
+ * already validated both fields as ISO 8601, so the prefix *is* the calendar
+ * date exactly as the exporter wrote it — and taking it verbatim avoids the two
+ * ways formatting gets this wrong: a date-only value parsed as UTC midnight and
+ * rendered in the build machine's zone shows the previous day west of
+ * Greenwich, and a locale format would be a chrome string TK-16 then has to
+ * translate. `YYYY-MM-DD` is unambiguous in both of this site's languages.
+ *
+ * The `<time datetime>` attribute carries the full precise value, so nothing
+ * the artifact expressed is lost.
+ */
+function displayDate(value: string): string {
+  return value.slice(0, 10);
+}
+
+const canonicalRoute = noteRoute(entry.slug);
 ---
 
-{/* TK-05 owns this page's full anatomy: breadcrumbs, public metadata, table of
-    contents, outgoing links, related notes, and previous/next navigation. */}
 <Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt} lang={entry.language}>
+  {/*
+    Owner decision 7, the live case. `hasCode` is true only when the body has a
+    code fence, so the `token-*` map reaches only the pages that render one.
+    TK-15 adds the math and Mermaid sheets here behind `hasMath` and
+    `hasMermaid` — one conditional `<link>` each, never a merged sheet: merging
+    all Mermaid diagram-type stylesheets measures 6,354 B gzip against a 972 B
+    median for one type.
+  */}
+  {hasCode && <link slot="head" rel="stylesheet" href={codeStylesheet} />}
+
+  <header class="note-header">
+    {/* § 9.2.3 — the trail. Public fields only; never a private folder name. */}
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+      <ol>
+        {breadcrumbs.map((crumb) => (
+          <li>
+            {crumb.href === undefined ? (
+              <span aria-current="page">{crumb.label}</span>
+            ) : (
+              <a href={crumb.href}>{crumb.label}</a>
+            )}
+          </li>
+        ))}
+      </ol>
+    </nav>
+
+    {/* § 9.2.4 — the title, and the public metadata the artifact actually
+        carries. Every row below is optional in the contract, so each is
+        conditional: a note with none of them renders a title and nothing else,
+        which is the published corpus today. */}
+    <h1 class="note-title">{entry.title}</h1>
+
+    {(entry.created !== undefined ||
+      entry.updated !== undefined ||
+      collection !== undefined ||
+      (entry.tags?.length ?? 0) > 0) && (
+      <dl class="note-meta">
+        {entry.created !== undefined && (
+          <div>
+            <dt>Published</dt>
+            <dd><time datetime={entry.created}>{displayDate(entry.created)}</time></dd>
+          </div>
+        )}
+        {entry.updated !== undefined && (
+          <div>
+            <dt>Updated</dt>
+            <dd><time datetime={entry.updated}>{displayDate(entry.updated)}</time></dd>
+          </div>
+        )}
+        {collection !== undefined && (
+          <div>
+            <dt>Collection</dt>
+            <dd><a href={collectionRoute(collection)}>{collection}</a></dd>
+          </div>
+        )}
+        {entry.tags !== undefined && entry.tags.length > 0 && (
+          <div>
+            <dt>Tags</dt>
+            <dd>
+              <ul class="note-tags">
+                {entry.tags.map((tag) => (
+                  <li><a href={tagRoute(routeKey(tag))}>{tag}</a></li>
+                ))}
+              </ul>
+            </dd>
+          </div>
+        )}
+      </dl>
+    )}
+
+    {/* § 9.2.5 — the optional summary.
+        `description` verbatim, with no comparison against `excerpt`: the two
+        are separate artifact fields, the excerpt is never rendered on this page
+        (it is the `<meta name="description">` and the card body elsewhere), and
+        a note whose author wrote the same sentence into both still asked for a
+        summary. Suppressing on equality was tried and was a product decision
+        this ticket has no reason to make. */}
+    {entry.description !== undefined && <p class="note-summary">{entry.description}</p>}
+  </header>
+
+  {/* § 9.2.6 — the table of contents, on pages above `TOC_MIN_HEADINGS`. The
+      renderer returns an empty `toc` below the threshold, so the threshold
+      lives in one place and this is only the rendering decision. */}
+  {toc.length > 0 && <TableOfContents entries={toc} isRoot />}
+
+  {/* § 9.2.7 — the sanitized article body. */}
   <article class="prose" data-pagefind-body>
-    <a class="back-home" href="/">← All notes</a>
     <div set:html={html} />
   </article>
 
+  {/* § 9.2.8 — outgoing public links. TK-05b owns this: `entry.outgoing` is the
+      edge set, and the ticket decides the empty state and the sort order. */}
+
+  {/* § 9.2.9 — static backlinks. Titles and routes only. The bounded context
+      snippet, the explicit empty state, and the large-backlink treatment are
+      TK-05b's; nothing here pre-decides them. */}
   {entry.backlinks.length > 0 && (
     <aside class="backlinks" aria-labelledby="backlinks-title">
       <h2 id="backlinks-title">Linked from</h2>
@@ -37,4 +207,25 @@ const { html } = await renderMarkdown(entry.markdown, {
       </ul>
     </aside>
   )}
+
+  {/* § 9.2.10 — the related-note fallback list. TK-05b owns the derivation rule
+      and must state it on the page or in documentation. */}
+
+  {/* § 9.2.11 — the local-graph neighborhood. TK-17 owns it, as build-time
+      inline SVG with real `<a>` elements plus the equivalent list section 17
+      requires. TK-21's interactive layer must not be stubbed in here. */}
+
+  {/* § 9.2.12 — previous/next or collection navigation. TK-05b owns it. */}
+
+  {/* § 9.2.13 — the footer: public provenance and the canonical route. */}
+  <footer class="note-footer">
+    <p>
+      A reviewed public projection. This page was published because it was named on an
+      explicit approval list, and it carries only what that projection includes.
+    </p>
+    {/* The route, not the absolute URL: `site:` is unconfigured, so an origin
+        here would be invented. TK-08 configures it and upgrades this line and
+        the layout's printed one together. */}
+    <p class="note-canonical">Canonical path: {canonicalRoute}</p>
+  </footer>
 </Layout>

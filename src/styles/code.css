@@ -1,0 +1,121 @@
+/*
+ * Syntax highlighting, loaded only by pages that contain a code fence.
+ *
+ * Split out of `global.css` rather than merged into it because owner decision 7
+ * makes every heavy asset load per page and per invocation, and `token-*` is the
+ * first asset that qualifies: it is the largest single block of rendered-Markdown
+ * CSS and it is dead weight on the many notes with no code in them.
+ * `RenderedNote.hasCode` is the gate, and `src/pages/notes/[slug].astro` emits
+ * the `<link>` only when it is true. TK-15 adds the math and Mermaid sheets
+ * behind `hasMath` and `hasMermaid` through the same mechanism.
+ *
+ * Only the `token-*` map moved. `.code-block` stays in `global.css`: a Mermaid
+ * fence also renders as `figure.code-block` while setting `hasMermaid` rather
+ * than `hasCode`, so gating the figure's own rules on `hasCode` would ship an
+ * unstyled block on a diagram-only page. Nothing emits a `token-*` span except
+ * the highlighter, which never runs for Mermaid or math, so this file's gate is
+ * exact.
+ *
+ * Every colour is a token declared in `tokens.css`, which the global stylesheet
+ * has already loaded by the time this one applies. `tests/design-tokens.test.ts`
+ * measures both syntax hues on all three backgrounds in both themes.
+ */
+
+/*
+ * Prism's token vocabulary is open-ended and this maps it onto four roles, not
+ * onto Prism's own names: keywords and operators, literals (numbers, booleans,
+ * constants), strings, and comments. Anything unmapped inherits the body colour,
+ * which is a readable default rather than an invisible one — the failure mode
+ * of a highlighting theme should be "less colour", never "no text".
+ *
+ * Colour is never the only signal: comments are italic, keywords are bold. A
+ * reader with any colour vision deficiency, or reading a printed page, still
+ * sees the structure.
+ *
+ * Eight of these names are here because TK-11's fixture corpus produced them
+ * and the published one-note corpus never had: Python, JavaScript, and
+ * PowerShell fences emit `builtin`, `class-name`, `control-flow`, `module`,
+ * `arrow`, `function-variable`, `doc-comment`, and `triple-quoted-string`. Each
+ * is folded into the role it already belongs to rather than given a fifth
+ * colour. Seven of them nest inside an already-mapped token, so only
+ * `token-builtin` changed what a reader sees; the rest close the coverage gate
+ * on a class that could ship alone the day a grammar emits it that way.
+ */
+.token-comment,
+.token-doc-comment,
+.token-prolog,
+.token-doctype,
+.token-cdata {
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.token-keyword,
+.token-control-flow,
+.token-module,
+.token-operator,
+.token-arrow,
+.token-atrule,
+.token-important,
+.token-selector,
+.token-tag {
+  color: var(--color-syntax-keyword);
+  font-weight: 600;
+}
+
+/*
+ * Container tokens, which wrap other tokens rather than marking a leaf: batch's
+ * `command` spans a whole command line with `keyword` nested inside it, and
+ * `namespace` wraps a qualified name. Colouring one paints everything it
+ * contains — `openssl pkcs12 -in original.pfx` came out entirely purple — so
+ * they inherit and let the nested token carry the meaning. `inherit` is
+ * declared rather than omitted so the intent is visible and the rule exists.
+ */
+.token-command,
+.token-namespace {
+  color: inherit;
+}
+
+.token-string,
+.token-triple-quoted-string,
+.token-char,
+.token-attr-value,
+.token-regex {
+  color: var(--color-accent);
+}
+
+.token-number,
+.token-boolean,
+.token-constant,
+.token-symbol,
+.token-property,
+.token-attr-name,
+.token-variable,
+.token-parameter,
+.token-function,
+.token-function-variable,
+.token-builtin,
+.token-class-name {
+  color: var(--color-syntax-literal);
+}
+
+/* Structure, not meaning: punctuation stays body-coloured so it recedes. */
+.token-punctuation,
+.token-entity {
+  color: var(--color-text);
+}
+
+/*
+ * Deliberately unstyled classes are recorded once, in `global.css`'s
+ * "deliberately unstyled" block, which is the list `tests/built-output.test.ts`
+ * reads and asserts against. Restating it here would be a second copy that gate
+ * does not check, and therefore a copy free to drift.
+ *
+ * One thing does belong here, because it is a property of the split rather than
+ * of either file: **no rule in `global.css` may style `.token` or any
+ * `token-*`.** The built `<head>` currently orders this sheet *before* the
+ * layout's, so an equal-specificity rule there would win over every rule above
+ * and repaint the whole token stream in one colour. Nothing styles them there
+ * today, so the order is not load-bearing — but it is the one way this split
+ * could fail silently, and it is why the classes stay together in one file.
+ */

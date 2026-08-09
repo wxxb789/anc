@@ -14,7 +14,7 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "npm run validate:content && astro build && npm run emit:redirects && pagefind --site dist --exclude-selectors \".heading-anchor,.back-home\"",
+    "build": "npm run validate:content && astro build && npm run emit:redirects && pagefind --site dist --exclude-selectors \".heading-anchor\"",
     "build:fixture": "node scripts/build-fixture.ts",
     "preview": "astro preview",
     "astro": "astro"

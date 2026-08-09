@@ -1,0 +1,62 @@
+---
+/**
+ * The article's headings, as a real nested list.
+ *
+ * Three properties are load-bearing, and each is a decision the parity plan's
+ * L4 records against Quartz:
+ *
+ * 1. **Nested `<ol>`, not a flat list with a `depth-N` class.** The nesting is
+ *    the structure, so a screen reader announces "list, 3 items, item 2, list,
+ *    2 items" rather than reading eleven siblings and leaving the reader to
+ *    infer the hierarchy from indentation they cannot see.
+ * 2. **Complete in the server-rendered HTML.** Requirements section 5.3 makes
+ *    reading and navigation work without JavaScript, and a table of contents is
+ *    navigation. Nothing here is hydrated; there is no client script at all.
+ * 3. **Collapse costs zero JavaScript.** `<details>`/`<summary>` is the native
+ *    disclosure widget: keyboard-operable, announced correctly, and `open` by
+ *    default so a reader who never interacts sees the whole list.
+ *
+ * Recursion is `Astro.self`, which renders at build time — the nesting is real
+ * markup by the time the page is written, not a component boundary a browser
+ * has to resolve.
+ *
+ * Quartz's own table of contents is the component worth studying, but its
+ * contrast is not: its unread links measure 2.04:1 in light and 2.92:1 in dark,
+ * both WCAG AA failures in the default state. Ours uses `--color-link`, which
+ * `tests/design-tokens.test.ts` proves at 6.72:1 and 10.37:1.
+ */
+import type { TocEntry } from '../lib/markdown.ts';
+
+interface Props {
+  entries: readonly TocEntry[];
+  /**
+   * Set on the outermost list only. Nested lists are rendered by `Astro.self`
+   * with it absent, which is what keeps the `<details>` shell and the labelled
+   * `<nav>` from being emitted once per level.
+   */
+  isRoot?: boolean;
+}
+
+const { entries, isRoot = false } = Astro.props;
+---
+
+{isRoot ? (
+  <nav class="toc" aria-labelledby="toc-title">
+    {/* `open` so the list is visible by default and the disclosure is an
+        affordance to *close* it. A reader who never touches it loses nothing,
+        and with JavaScript disabled the element still opens and closes. */}
+    <details class="toc-details" open>
+      <summary id="toc-title">On this page</summary>
+      <Astro.self entries={entries} />
+    </details>
+  </nav>
+) : (
+  <ol class="toc-list">
+    {entries.map((entry) => (
+      <li>
+        <a href={`#${entry.id}`}>{entry.text}</a>
+        {entry.children.length > 0 && <Astro.self entries={entry.children} />}
+      </li>
+    ))}
+  </ol>
+)}

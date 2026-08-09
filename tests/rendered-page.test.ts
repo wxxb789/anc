@@ -475,6 +475,91 @@ test('JavaScript-only controls are hidden when scripting is unavailable', async 
 }, 120_000);
 
 /**
+ * The table of contents works with JavaScript disabled.
+ *
+ * Requirements section 5.3 makes core reading and navigation work without
+ * scripting, and a table of contents is navigation, not an enhancement. The
+ * static assertions in `built-routes.test.ts` prove the list is in the HTML;
+ * what they cannot prove is that it is *visible and operable* once the cascade
+ * has run with no scripting — a `<details>` whose summary is `display: none`,
+ * or a collapse that only opens on click, would satisfy every markup check and
+ * still leave the reader with nothing.
+ *
+ * Measured on the widest and narrowest viewports, because the layout could
+ * plausibly move the table of contents into a rail at one of them and not the
+ * other (TK-05c), and a rail hidden below a breakpoint is the classic way this
+ * regresses.
+ */
+test('the table of contents is visible and operable with scripting disabled', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let checked = 0;
+    for (const width of CASCADE_WIDTHS_PX) {
+      await page.setViewportSize({ width, height: VIEWPORT_HEIGHT_PX });
+      for (const route of routes.filter((candidate) => candidate.startsWith('/notes/'))) {
+        await visit(page, route);
+        const toc = await page.evaluate(() => {
+          const nav = document.querySelector<HTMLElement>('nav.toc');
+          if (nav === null) return undefined;
+          const details = nav.querySelector('details');
+          const summary = nav.querySelector<HTMLElement>('summary');
+          const links = [...nav.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')];
+          return {
+            navDisplay: getComputedStyle(nav).display,
+            isOpen: details?.open ?? false,
+            summaryDisplay: summary === null ? 'missing' : getComputedStyle(summary).display,
+            // A link a reader cannot see is a link a reader cannot follow.
+            visibleLinks: links.filter((link) => link.getBoundingClientRect().height > 0).length,
+            linkCount: links.length,
+            // Every entry must reach a real element on this page.
+            // `getElementById`, not `querySelector`: a heading of "2024 Review"
+            // slugs to `2024-review`, and `querySelector('#2024-review')`
+            // throws a `SyntaxError` because that is not a valid CSS
+            // identifier. The link works fine in a browser; only the gate would
+            // break, and it would break as an opaque crash rather than a
+            // failed assertion.
+            resolved: links.filter(
+              (link) => document.getElementById(link.getAttribute('href')!.slice(1)) !== null,
+            ).length,
+            nestedLists: nav.querySelectorAll('ol ol').length,
+          };
+        });
+        if (toc === undefined) continue;
+
+        checked += 1;
+        assert.notEqual(toc.navDisplay, 'none', `${route} at ${width}px: the table of contents is hidden`);
+        assert.equal(toc.isOpen, true, `${route} at ${width}px: the disclosure starts closed`);
+        assert.notEqual(
+          toc.summaryDisplay,
+          'none',
+          `${route} at ${width}px: the disclosure control is hidden, so a closed list could never reopen`,
+        );
+        assert.ok(toc.linkCount > 0, `${route} at ${width}px: the table of contents has no links`);
+        assert.equal(
+          toc.visibleLinks,
+          toc.linkCount,
+          `${route} at ${width}px: ${toc.linkCount - toc.visibleLinks} entries render at zero height`,
+        );
+        assert.equal(
+          toc.resolved,
+          toc.linkCount,
+          `${route} at ${width}px: an entry points at a heading that is not on the page`,
+        );
+      }
+    }
+    assert.ok(checked > 0, 'no note page rendered a table of contents, so nothing was measured');
+  } finally {
+    await browserContext.close();
+  }
+}, 180_000);
+
+/**
  * The controls *are* offered once scripting is available.
  *
  * The pairing matters as much as either half: a stylesheet that hid the controls
