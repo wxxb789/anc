@@ -288,7 +288,7 @@ test('every class in the rendered article is styled or deliberately not', () => 
   const UNSTYLED: Readonly<Record<string, string>> = {
     token: 'the bare Prism class; each specific token class carries the colour',
     'language-*': 'the fence language is carried by data-code-language',
-    'callout-*': 'zero callouts in the corpus, so there is nothing to differentiate',
+    'callout-*': 'every kind gets one neutral treatment; the title text carries the kind',
   };
 
   const stylesheets = STYLESHEETS.map(read).join('\n');

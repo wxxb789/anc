@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  FIELD_LIMITS,
+  MAX_ENTRIES,
   RESERVED_SLUGS,
   SCHEMA_VERSION,
   ContentValidationError,
@@ -481,5 +483,146 @@ test('sorted-array checking compares elements, not a joined string', () => {
 test('non-object artifacts are rejected without throwing a TypeError', () => {
   for (const value of [null, undefined, 42, 'content', [], true]) {
     assert.throws(() => validateArtifact(value), ContentValidationError);
+  }
+});
+
+// --- Field bounds -------------------------------------------------------------
+
+/** One valid entry with `overrides` applied, for probing a single limit. */
+function probe(overrides: Record<string, unknown>): unknown {
+  return {
+    version: 1,
+    entries: [
+      {
+        slug: 'probe-note',
+        title: 'Probe',
+        excerpt: '',
+        markdown: '# Probe\n',
+        outgoing: [],
+        backlinks: [],
+        ...overrides,
+      },
+    ],
+  };
+}
+
+test('every bounded string field states its limit and rejects one character over it', () => {
+  // Derived from the exported limits rather than restated, so a limit that
+  // changes cannot leave this test asserting a number nobody enforces, and a
+  // newly bounded field is covered the moment it is added.
+  for (const [field, max] of Object.entries(FIELD_LIMITS.strings)) {
+    const error = expectRejection(() => validateArtifact(probe({ [field]: 'x'.repeat(max + 1) })));
+    assert.ok(
+      error.issues.some(
+        (issue) => issue.includes(`.${field}:`) && issue.includes(String(max)) && issue.includes('limit'),
+      ),
+      `${field}: an over-length value was not rejected with its stated limit:\n${error.issues.join('\n')}`,
+    );
+  }
+});
+
+test('a string field exactly at its limit is accepted', () => {
+  // A bound that rejects its own boundary is an off-by-one nobody notices until
+  // it rejects real content. Only `language` is exempt: a 35-character run of
+  // `x` is not a BCP 47 tag, so it fails a shape rule rather than the bound.
+  // `slug` and `collection` admit a long run of `x`, so both are checked.
+  for (const [field, max] of Object.entries(FIELD_LIMITS.strings)) {
+    if (field === 'language') continue;
+    assert.doesNotThrow(
+      () => validateArtifact(probe({ [field]: 'x'.repeat(max) })),
+      `${field}: a value of exactly ${max} characters was rejected`,
+    );
+  }
+});
+
+test('a runaway markdown body is a contract error, not a slow build', () => {
+  const max = FIELD_LIMITS.strings['markdown']!;
+  const error = expectRejection(() => validateArtifact(probe({ markdown: 'x'.repeat(3_000_000) })));
+  assert.ok(
+    error.issues.some((issue) => issue.includes('.markdown:') && issue.includes(String(max))),
+    `a 3 MB body was accepted:\n${error.issues.join('\n')}`,
+  );
+});
+
+test('a tag list long enough to bury the site in routes is rejected', () => {
+  // Every tag is a public route, so an unbounded tag list is an unbounded page
+  // count on a single note.
+  const max = FIELD_LIMITS.arrays['tags']!.items;
+  const error = expectRejection(() =>
+    validateArtifact(probe({ tags: Array.from({ length: 5000 }, (_, index) => `tag-${index}`) })),
+  );
+  assert.ok(
+    error.issues.some((issue) => issue.includes('.tags:') && issue.includes(String(max))),
+    `5,000 tags were accepted:\n${error.issues.join('\n')}`,
+  );
+});
+
+test('a corpus larger than the entry ceiling fails before the build runs', () => {
+  // The bound is checked at validation time, which is the first thing the build
+  // chain runs, so an oversized artifact never reaches `astro build`.
+  const entry = (index: number) => ({
+    slug: `note-${index}`,
+    title: `Note ${index}`,
+    excerpt: '',
+    markdown: 'x',
+    outgoing: [],
+    backlinks: [],
+  });
+
+  const error = expectRejection(() =>
+    validateArtifact({ version: 1, entries: Array.from({ length: MAX_ENTRIES + 1 }, (_, i) => entry(i)) }),
+  );
+  assert.ok(
+    error.issues.some((issue) => issue.includes('entries:') && issue.includes(String(MAX_ENTRIES))),
+    `an oversized corpus was accepted:\n${error.issues.slice(0, 3).join('\n')}`,
+  );
+
+  // The bound must stay under Cloudflare Pages' ceiling of 2,000 static
+  // redirect rules at the two-rules-per-entry shape TK-04 used, which is the
+  // headroom `MAX_ENTRIES` was chosen for. `REDIRECT_RULES` is a hand-written
+  // literal today (TK-12), so nothing derives rules from the corpus and the
+  // ceiling is not currently binding — this is the assertion that has to keep
+  // holding if a stranded URL ever makes them derived again.
+  assert.ok(
+    MAX_ENTRIES * 2 <= 2000,
+    `${MAX_ENTRIES} entries would emit ${MAX_ENTRIES * 2} rules, over the host's 2,000 rule ceiling`,
+  );
+
+  // And it must not reject a corpus the site is expected to serve.
+  assert.doesNotThrow(() =>
+    validateArtifact({ version: 1, entries: Array.from({ length: MAX_ENTRIES }, (_, i) => entry(i)) }),
+  );
+});
+
+test('every bounded array states its limit for both count and member length', () => {
+  for (const [field, { items, itemChars }] of Object.entries(FIELD_LIMITS.arrays)) {
+    const tooMany = Array.from({ length: items + 1 }, (_, index) => `member-${index}`);
+    const error = expectRejection(() => validateArtifact(probe({ [field]: tooMany })));
+    assert.ok(
+      error.issues.some((issue) => issue.includes(`.${field}:`) && issue.includes(String(items))),
+      `${field}: an over-long array was not rejected with its stated limit`,
+    );
+
+    // `outgoing` and `backlinks` bound only their count: each member must
+    // already resolve to a published slug, so member length is bounded
+    // transitively by the slug ceiling.
+    if (itemChars === undefined) continue;
+    const tooLong = expectRejection(() =>
+      validateArtifact(probe({ [field]: ['x'.repeat(itemChars + 1)] })),
+    );
+    assert.ok(
+      tooLong.issues.some((issue) => issue.includes(`.${field}[0]:`) && issue.includes(String(itemChars))),
+      `${field}: an over-long member was not rejected with its stated limit`,
+    );
+  }
+});
+
+test('the shipped artifact and the fixture corpus are both inside every bound', () => {
+  // A bound is wrong if the corpus it exists to admit exceeds it.
+  for (const name of ['../src/data/content.json', './fixtures/valid-corpus.json']) {
+    assert.doesNotThrow(
+      () => validateArtifact(load(new URL(name, import.meta.url)), name),
+      `${name} violates a field bound`,
+    );
   }
 });

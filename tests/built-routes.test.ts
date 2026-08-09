@@ -17,7 +17,8 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { entries } from '../src/lib/content.ts';
+import { entries, getEntry } from '../src/lib/content.ts';
+import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import {
   FIXED_ROUTES,
@@ -25,8 +26,11 @@ import {
   SITE_MAP,
   collectionFacets,
   collectionRoute,
+  isRouteKey,
   noteRoute,
   noteSlugFromPath,
+  noteTimestamp,
+  recentFirst,
   renderRedirects,
   tagFacets,
   tagRoute,
@@ -103,19 +107,87 @@ test('a static 404 is emitted for the host to serve', () => {
   assert.ok(exists(new URL('404.html', DIST)), 'dist/404.html is missing');
 });
 
+test('the served content index describes the corpus the site was built from', () => {
+  // `public/` is copied verbatim, so a build from a different artifact than the
+  // one that generated `public/content-index.json` serves an index describing a
+  // corpus that is not on the site — and every hover preview silently finds
+  // nothing, with no error anywhere. The first fixture build did exactly that:
+  // one index entry alongside thirty-two note pages.
+  const served = JSON.parse(readFileSync(new URL('content-index.json', DIST), 'utf8')) as {
+    entries: { slug: string; title: string; excerpt: string }[];
+  };
+  assert.deepEqual(
+    served.entries,
+    entries.map(({ slug, title, excerpt }) => ({ slug, title, excerpt })),
+    'dist/content-index.json is not the projection of the artifact this site was built from',
+  );
+});
+
+/**
+ * Every public route segment is drawn from the route vocabulary.
+ *
+ * This enumerates what the build actually wrote to disk rather than what the
+ * model would produce, because the two are only the same while nothing writes a
+ * path by another route. Tag keys are the reason it exists: they are the one
+ * segment derived from free artifact text rather than from a validated slug, and
+ * before TK-11 the only rejected key was the empty string — so a tag of
+ * `🌱 seedling` published `/tags/-seedling/` and `---` published `/tags/---/`.
+ *
+ * Non-ASCII is deliberately allowed. `/tags/笔记/` is a correct public URL for a
+ * corpus with Chinese tags, and requiring ASCII would mean percent-encoding
+ * every CJK tag route into something unreadable.
+ */
+test('no public route contains a character outside the slug vocabulary', () => {
+  const segments = new Set(
+    ROUTES.flatMap((route) => route.replace(/\.html$/, '').split('/')).filter((part) => part !== ''),
+  );
+  assert.ok(segments.size > 0, 'no route segment was inspected');
+
+  for (const segment of segments) {
+    assert.ok(
+      isRouteKey(segment),
+      `built route segment "${segment}" is not an addressable public route segment`,
+    );
+  }
+});
+
+/**
+ * The same property, stated over the bytes of a URL rather than its characters.
+ *
+ * `isRouteKey` admits any letter, which is right for `/tags/笔记/` and would
+ * still admit a segment that is invisible, whitespace-bearing, or reserved by
+ * URL syntax. These are the characters that would make a route ambiguous or
+ * unlinkable regardless of script.
+ */
+test('no public route segment carries a character that breaks a URL', () => {
+  const FORBIDDEN = /[\s?#\[\]@!$&'()*+,;=%\\<>"^`{|}]/;
+  for (const route of ROUTES) {
+    assert.doesNotMatch(route, FORBIDDEN, `built route "${route}" carries a URL-unsafe character`);
+    // A path that changes when a browser normalizes it is a path that resolves
+    // somewhere other than where the build wrote it.
+    assert.equal(
+      new URL(route, 'https://example.invalid').pathname,
+      encodeURI(route),
+      `built route "${route}" is not stable under URL normalization`,
+    );
+  }
+});
+
 test('the emitted redirect map matches the route model exactly', () => {
   const file = new URL('_redirects', DIST);
   assert.ok(exists(file), 'dist/_redirects is missing — the build step did not run');
 
   // The version stamp is recomputed from the artifact bytes rather than read
   // out of the file, so a map generated from a different artifact than the one
-  // `dist/` was built from fails here instead of shipping.
+  // `dist/` was built from fails here instead of shipping. The bytes come from
+  // whichever artifact this build selected, so a fixture build compares against
+  // the fixture rather than against the published corpus.
   //
   // Deliberately hashed here rather than through `contentVersion()`, which the
   // two scripts share: a gate that computes the expected value with the same
   // function the subject used cannot see that function go wrong. This is the
   // one place a second, independent implementation earns its keep.
-  const source = readFileSync(new URL('../src/data/content.json', import.meta.url), 'utf8');
+  const source = readArtifact();
   const content = `sha256:${createHash('sha256').update(source).digest('hex')}`;
 
   assert.equal(
@@ -220,6 +292,22 @@ test('every page links every fixed route, so no route is an orphan', () => {
   }
 });
 
+/**
+ * A label as it appears in built HTML.
+ *
+ * Comparing a raw artifact label against the page is wrong the moment a label
+ * contains a character Astro escapes: `Ops & SRE` renders as `Ops &amp; SRE`, so
+ * the naive `includes` reported the facet missing from a page that lists it.
+ * The check passed until now only because no label had ever contained an
+ * ampersand — the corpus carried no tags at all.
+ */
+function asRendered(label: string): string {
+  return label
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
 test('the tag and collection indexes render an honest empty state, never a 404', () => {
   for (const [route, marker] of [
     ['tags', 'carries no tags'],
@@ -233,7 +321,10 @@ test('the tag and collection indexes render an honest empty state, never a 404',
     } else {
       assert.match(html, /class="facet-list"/, `/${route}/ has facets but rendered no list`);
       for (const facet of facets) {
-        assert.ok(html.includes(facet.label), `/${route}/ omits the facet "${facet.label}"`);
+        assert.ok(
+          html.includes(asRendered(facet.label)),
+          `/${route}/ omits the facet "${facet.label}"`,
+        );
       }
     }
   }
@@ -311,5 +402,150 @@ test('no page this repository authors describes how the private source is organi
     for (const [pattern, what] of forbidden) {
       assert.doesNotMatch(html, pattern, `${page}: discloses ${what} (${pattern})`);
     }
+  }
+});
+
+// --- Multi-entry surfaces -----------------------------------------------------
+
+/**
+ * The corpus this build ran against carries more than one of everything.
+ *
+ * The assertions below are only evidence on such a corpus: a grid of one card
+ * is not a grid, and an ordering of one note is not an ordering. On the
+ * published one-note artifact they are skipped with a message naming the
+ * command that runs them; under `npm run build:fixture` they all run, and every
+ * layout claim in this repository is finally falsifiable.
+ *
+ * Skipping rather than asserting a weaker property is deliberate, and it is a
+ * real limitation: on the default `npm run build && npm test` path these five
+ * gates do not execute, so the evidence exists only when someone runs the
+ * fixture build. Making them mandatory needs a `verify` script or CI, which is
+ * TK-14's. What is avoided in the meantime is the worse option — a gate that
+ * passes on one entry and therefore proves nothing while looking green.
+ */
+const MULTI_ENTRY =
+  entries.length > 1 &&
+  tagFacets(entries).length > 1 &&
+  collectionFacets(entries).length > 1 &&
+  entries.some((entry) => entry.backlinks.length > 1);
+
+const multiEntry = { skip: MULTI_ENTRY ? false : 'corpus has one entry — run `npm run build:fixture`' };
+
+test('the note grid renders one card per entry, with more than one', multiEntry, () => {
+  const html = readFileSync(new URL('index.html', DIST), 'utf8');
+  const cards = html.match(/<article class="note-card">/g) ?? [];
+  assert.equal(cards.length, entries.length, 'the home grid does not carry one card per published note');
+  assert.ok(cards.length > 1, 'a grid of one card proves nothing about a grid');
+  assert.match(html, /class="note-grid"/, 'the grid container is missing');
+  assert.doesNotMatch(html, /class="empty-state"/, 'a populated corpus rendered the empty state');
+
+  for (const entry of entries) {
+    assert.ok(
+      html.includes(`href="${noteRoute(entry.slug)}"`),
+      `the home grid omits "${entry.slug}"`,
+    );
+  }
+});
+
+test('the backlinks aside renders every incoming link, and only those', multiEntry, () => {
+  const hub = [...entries].sort((a, b) => b.backlinks.length - a.backlinks.length)[0]!;
+  assert.ok(hub.backlinks.length > 1, 'no entry has more than one backlink to check');
+
+  const html = readFileSync(new URL(`notes/${hub.slug}/index.html`, DIST), 'utf8');
+  const aside = /<aside class="backlinks"[\s\S]*?<\/aside>/.exec(html);
+  assert.ok(aside, `${hub.slug}: has ${hub.backlinks.length} backlinks but rendered no aside`);
+
+  const linked = [...aside[0].matchAll(/href="\/notes\/([^/"]+)\//g)].map(([, slug]) => slug!);
+  assert.deepEqual(
+    [...linked].sort(),
+    [...hub.backlinks].sort(),
+    'the aside is not the exact backlink set',
+  );
+
+  // An orphan must render no aside at all rather than an empty heading.
+  const orphan = entries.find((entry) => entry.backlinks.length === 0);
+  assert.ok(orphan, 'the corpus has no orphan to check the empty case against');
+  assert.doesNotMatch(
+    readFileSync(new URL(`notes/${orphan.slug}/index.html`, DIST), 'utf8'),
+    /<aside class="backlinks"/,
+    `${orphan.slug}: has no backlinks but rendered the aside anyway`,
+  );
+});
+
+test('every tag and collection page lists exactly its own notes', multiEntry, () => {
+  for (const [facets, route] of [
+    [tagFacets(entries), tagRoute],
+    [collectionFacets(entries), collectionRoute],
+  ] as const) {
+    assert.ok(facets.length > 1, 'one facet proves nothing about facet pages');
+
+    for (const facet of facets) {
+      const html = readFileSync(new URL(`${route(facet.key).slice(1)}index.html`, DIST), 'utf8');
+      const listed = [...html.matchAll(/<article class="note-card">[\s\S]*?href="\/notes\/([^/"]+)\//g)].map(
+        ([, slug]) => slug!,
+      );
+      assert.deepEqual(
+        listed,
+        facet.entries.map((entry) => entry.slug),
+        `${route(facet.key)}: does not list exactly its own notes, in order`,
+      );
+    }
+
+    // At least one facet must be genuinely shared, or "lists its own notes" is
+    // satisfied by every page listing everything.
+    assert.ok(
+      facets.some((facet) => facet.entries.length > 1),
+      'no facet groups more than one note',
+    );
+    assert.ok(
+      facets.some((facet) => facet.entries.length < entries.length),
+      'every facet contains the whole corpus — grouping is not being exercised',
+    );
+  }
+});
+
+test('/recent/ renders in the model s order, most recently updated first', multiEntry, () => {
+  const html = readFileSync(new URL('recent/index.html', DIST), 'utf8');
+  const rendered = [...html.matchAll(/<article class="note-card">[\s\S]*?href="\/notes\/([^/"]+)\//g)].map(
+    ([, slug]) => slug!,
+  );
+  const expected = recentFirst(entries).map((entry) => entry.slug);
+
+  assert.deepEqual(rendered, expected, '/recent/ is not in the order the route model computes');
+  assert.ok(rendered.length > 1, 'an ordering of one note is not an ordering');
+
+  // The order must be non-alphabetical, or "sorted by date" is indistinguishable
+  // from the undated fallback and the assertion above proves nothing.
+  assert.notDeepEqual(rendered, [...rendered].sort(), '/recent/ is in slug order, so dates were not applied');
+
+  // Dated notes precede undated ones, and the undated tail is in slug order.
+  const undatedAt = expected.findIndex((slug) => noteTimestamp(getEntry(slug)!) === undefined);
+  assert.ok(undatedAt > 0, 'the corpus has no dated/undated boundary to check');
+  const tail = expected.slice(undatedAt);
+  assert.ok(tail.length > 1, 'the undated tail has nothing to order');
+  assert.deepEqual(tail, [...tail].sort(), 'undated notes are not in slug order');
+  for (const slug of expected.slice(0, undatedAt)) {
+    assert.notEqual(noteTimestamp(getEntry(slug)!), undefined, 'an undated note sorted above a dated one');
+  }
+});
+
+test('both document languages reach the built pages', multiEntry, () => {
+  // The artifact carries `language` per document and the layout threads it, so
+  // a mixed corpus must produce more than one `<html lang>` across the site.
+  const langs = new Set(
+    entries.map((entry) => {
+      const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+      return /<html[^>]*\slang="([^"]+)"/.exec(html)?.[1];
+    }),
+  );
+  assert.ok(langs.size > 1, `every note page declared the same language: ${[...langs].join(', ')}`);
+  for (const entry of entries) {
+    if (entry.language === undefined) continue;
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    assert.match(
+      html,
+      new RegExp(`<html[^>]*\\slang="${entry.language}"`),
+      `${entry.slug}: does not declare its own language`,
+    );
   }
 });

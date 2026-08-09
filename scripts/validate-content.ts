@@ -12,15 +12,28 @@
  * written and now permanently incomplete, which `npm run preview` serves
  * happily. Running those computations against the same artifact first means the
  * failure happens while `dist/` is still the last known good build.
+ *
+ * A fixture build (`CONTENT_ARTIFACT=…`, i.e. `npm run build:fixture`) reads
+ * that artifact instead, as does a caller passing a candidate path. The
+ * index-projection check is skipped there and only there:
+ * `public/content-index.json` is the projection of the *published* artifact,
+ * and comparing it against a fixture would fail for the one reason that is not
+ * a defect. Every other gate still runs, and the skip is announced rather than
+ * silent.
  */
 
 import { readFileSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { validateArtifact, ContentValidationError, type ContentArtifact } from '../src/lib/schema.ts';
+import { ContentValidationError, type ContentArtifact } from '../src/lib/schema.ts';
 import { REDIRECT_RULES, collectionFacets, renderRedirects, tagFacets } from '../src/lib/routes.ts';
+import {
+  ARTIFACT_PATH,
+  isPublishedArtifact,
+  loadArtifact,
+  readArtifact,
+} from '../src/lib/artifact-source.ts';
 
-const CONTENT = new URL('../src/data/content.json', import.meta.url);
 const INDEX = new URL('../public/content-index.json', import.meta.url);
 
 function readJson(url: URL): unknown {
@@ -91,19 +104,29 @@ export function checkDerivedRoutes(artifact: ContentArtifact, version: string): 
 }
 
 /**
- * @param artifactPath Artifact to validate. Defaults to the real one; a caller
- *   passes a path so it can gate a candidate artifact without writing over
- *   `src/data/content.json`, which is exporter-owned generated content. The
- *   index projection is always compared against the real published index.
+ * @param artifactPath Artifact to validate, repository-relative. Defaults to
+ *   whichever one this build selected — `src/data/content.json` unless
+ *   `CONTENT_ARTIFACT` names another. A caller passes a path so it can gate a
+ *   candidate artifact without writing over `src/data/content.json`, which is
+ *   exporter-owned generated content. The index projection is compared only
+ *   when the artifact under test *is* the published one, since the index is its
+ *   projection and nothing else's.
  */
-function main(artifactPath: URL = CONTENT): number {
+function main(artifactPath: string = ARTIFACT_PATH): number {
   try {
-    const source = readFileSync(artifactPath, 'utf8');
-    const artifact = validateArtifact(JSON.parse(source), 'src/data/content.json');
-    const issues = checkIndexProjection(readJson(INDEX), artifact);
-    if (issues.length > 0) throw new ContentValidationError('public/content-index.json', issues);
-    checkDerivedRoutes(artifact, contentVersion(source));
-    console.log(`content ok: version=${artifact.version} entries=${artifact.entries.length}`);
+    const artifact = loadArtifact(artifactPath);
+    const published = isPublishedArtifact(artifactPath);
+    if (published) {
+      const issues = checkIndexProjection(readJson(INDEX), artifact);
+      if (issues.length > 0) throw new ContentValidationError('public/content-index.json', issues);
+    }
+    checkDerivedRoutes(artifact, contentVersion(readArtifact(artifactPath)));
+    console.log(
+      `content ok: version=${artifact.version} entries=${artifact.entries.length}` +
+        (published
+          ? ''
+          : ` source=${artifactPath} (not the published artifact; the content-index projection check does not apply)`),
+    );
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
@@ -111,7 +134,4 @@ function main(artifactPath: URL = CONTENT): number {
   }
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const argument = process.argv[2];
-  process.exit(main(argument === undefined ? CONTENT : pathToFileURL(argument)));
-}
+if (process.argv[1] === fileURLToPath(import.meta.url)) process.exit(main(process.argv[2]));

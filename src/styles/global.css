@@ -496,8 +496,18 @@ main:focus:not(:focus-visible) {
  * Colour is never the only signal: comments are italic, keywords are bold. A
  * reader with any colour vision deficiency, or reading a printed page, still
  * sees the structure.
+ *
+ * Eight of these names are here because TK-11's fixture corpus produced them
+ * and the published one-note corpus never had: Python, JavaScript, and
+ * PowerShell fences emit `builtin`, `class-name`, `control-flow`, `module`,
+ * `arrow`, `function-variable`, `doc-comment`, and `triple-quoted-string`. Each
+ * is folded into the role it already belongs to rather than given a fifth
+ * colour. Seven of them nest inside an already-mapped token, so only
+ * `token-builtin` changed what a reader sees; the rest close the coverage gate
+ * on a class that could ship alone the day a grammar emits it that way.
  */
 .token-comment,
+.token-doc-comment,
 .token-prolog,
 .token-doctype,
 .token-cdata {
@@ -506,7 +516,10 @@ main:focus:not(:focus-visible) {
 }
 
 .token-keyword,
+.token-control-flow,
+.token-module,
 .token-operator,
+.token-arrow,
 .token-atrule,
 .token-important,
 .token-selector,
@@ -529,6 +542,7 @@ main:focus:not(:focus-visible) {
 }
 
 .token-string,
+.token-triple-quoted-string,
 .token-char,
 .token-attr-value,
 .token-regex {
@@ -543,7 +557,10 @@ main:focus:not(:focus-visible) {
 .token-attr-name,
 .token-variable,
 .token-parameter,
-.token-function {
+.token-function,
+.token-function-variable,
+.token-builtin,
+.token-class-name {
   color: var(--color-syntax-literal);
 }
 
@@ -554,10 +571,15 @@ main:focus:not(:focus-visible) {
 }
 
 /*
- * A callout. One neutral treatment, since the corpus has zero of them: the kind
- * is announced by the title text the renderer promotes to `<strong>`, not by a
- * colour a reader has to have learned. `data-callout` is on the element for a
- * later ticket that has real callouts to differentiate.
+ * A callout. One neutral treatment for every kind: the kind is announced by the
+ * title text the renderer promotes to `<strong>`, not by a colour a reader has
+ * to have learned. `data-callout` is on the element for a later ticket that
+ * decides whether differentiating them is worth a second visual vocabulary.
+ *
+ * The published corpus has none; TK-11's fixture has `note`, `tip`, and
+ * `warning`, which is what makes this rule observable at all. That does not
+ * change the treatment — it is what confirms the neutral one reads correctly
+ * when three kinds sit on one page.
  *
  * `.prose .callout`, not a bare `.callout`: a callout *is* a `<blockquote>`, and
  * `.prose blockquote` (0,1,1) would otherwise win and paint it muted-on-muted.
@@ -651,8 +673,10 @@ main:focus:not(:focus-visible) {
  *   inheriting the body colour is the correct unhighlighted default.
  * - `language-*` — the fence language is already carried visually by the block
  *   itself and semantically by `data-code-language`. A label chip is TK-05a's.
- * - `callout-*` — the per-kind classes. See the `.callout` note above: zero
- *   callouts in the corpus, so there is nothing to differentiate yet.
+ * - `callout-*` — the per-kind classes. See the `.callout` note above: every
+ *   kind gets one neutral treatment, and the kind is carried by the title text
+ *   rather than by a colour. TK-11's fixture ships three of them, so this is
+ *   now a deliberate choice observed at scale rather than an untested default.
  */
 
 /* ponytail: a wide table still needs a scroll container, and a wrapper element

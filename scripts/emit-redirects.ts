@@ -17,25 +17,31 @@
  * place in the build chain.
  */
 
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { SCHEMA_VERSION, validateArtifact } from '../src/lib/schema.ts';
+import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import { REDIRECT_RULES, renderRedirects } from '../src/lib/routes.ts';
+import { loadArtifact, readArtifact } from '../src/lib/artifact-source.ts';
 import { contentVersion } from './validate-content.ts';
 
-const CONTENT = new URL('../src/data/content.json', import.meta.url);
 const OUTPUT = new URL('../dist/_redirects', import.meta.url);
 
 function main(): number {
   try {
     // Re-validated rather than imported through `src/lib/content.ts`: the
     // accessor is written for the Astro build, and reading the artifact here
-    // keeps this script runnable on its own.
-    const source = readFileSync(CONTENT, 'utf8');
-    validateArtifact(JSON.parse(source), 'src/data/content.json');
+    // keeps this script runnable on its own. It reads whichever artifact the
+    // build read, so a fixture build's redirect map describes the fixture.
+    //
+    // The validated result is discarded: the rule set is a literal, so nothing
+    // emitted here is derived from the entries. The call is the validation.
+    loadArtifact();
     writeFileSync(
       OUTPUT,
-      renderRedirects(REDIRECT_RULES, { schema: SCHEMA_VERSION, content: contentVersion(source) }),
+      renderRedirects(REDIRECT_RULES, {
+        schema: SCHEMA_VERSION,
+        content: contentVersion(readArtifact()),
+      }),
       'utf8',
     );
     console.log(

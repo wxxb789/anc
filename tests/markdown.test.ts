@@ -715,15 +715,42 @@ test('the shipped artifact renders clean of residue markers', async () => {
 
 test('every fence in the shipped artifact resolves to a real grammar', async () => {
   const { entries } = await import('../src/lib/content.ts');
-  for (const entry of entries) {
-    const { html } = await renderMarkdown(entry.markdown, { routeForSlug });
+
+  /** Fences in one body that were expected to highlight and did not. */
+  const unhighlighted = async (markdown: string): Promise<string[]> => {
+    const { html } = await renderMarkdown(markdown, { routeForSlug });
+    const missed: string[] = [];
     for (const figure of html.match(/<figure class="code-block"[^>]*>[\s\S]*?<\/figure>/g) ?? []) {
       if (/data-diagram="mermaid"/.test(figure)) continue;
-      assert.match(
-        figure,
-        /class="token /,
-        `a code block fell back to unhighlighted source: ${figure.slice(0, 160)}`,
-      );
+      // `plaintext` is the one language with no grammar by design: it is
+      // `codePlugin`'s fallback for an unlabelled fence. `text` is here too
+      // because `LANGUAGE_ALIASES` maps it to `plaintext` inside `highlight()`
+      // while `data-code-language` keeps the raw fence label — so a ```text
+      // fence has no grammar either, and keying only on `plaintext` would fail
+      // the day a note used it. There is nothing to tokenize in any of these,
+      // so requiring a token would fail on any corpus that contains one. What
+      // this gate exists for is a *labelled* fence whose language silently has
+      // no grammar, leaving the reader plain text where highlighting was meant.
+      // The control below proves the exemption did not disarm that.
+      if (/data-code-language="(?:plaintext|text)"/.test(figure)) continue;
+      if (!/class="token /.test(figure)) missed.push(figure.slice(0, 160));
     }
+    return missed;
+  };
+
+  // Positive control: a labelled fence with no grammar must still be reported,
+  // or the `plaintext` exemption has quietly turned this gate off.
+  assert.equal(
+    (await unhighlighted('```nosuchlanguage\nx = 1\n```\n')).length,
+    1,
+    'the gate no longer detects a labelled fence with no grammar',
+  );
+
+  for (const entry of entries) {
+    assert.deepEqual(
+      await unhighlighted(entry.markdown),
+      [],
+      `entry "${entry.slug}" has a code block that fell back to unhighlighted source`,
+    );
   }
 });
