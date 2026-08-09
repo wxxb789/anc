@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test, type TestContext } from 'vitest';
 
 import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
@@ -160,6 +160,10 @@ test('no public route contains a character outside the slug vocabulary', () => {
  * unlinkable regardless of script.
  */
 test('no public route segment carries a character that breaks a URL', () => {
+  // The `\[` is redundant inside a character class, but this is a reviewed
+  // privacy gate and the escape is behaviour-identical; unescaping it is a
+  // formatting change, which is TK-20's.
+  // oxlint-disable-next-line no-useless-escape
   const FORBIDDEN = /[\s?#\[\]@!$&'()*+,;=%\\<>"^`{|}]/;
   for (const route of ROUTES) {
     assert.doesNotMatch(route, FORBIDDEN, `built route "${route}" carries a URL-unsafe character`);
@@ -429,9 +433,18 @@ const MULTI_ENTRY =
   collectionFacets(entries).length > 1 &&
   entries.some((entry) => entry.backlinks.length > 1);
 
-const multiEntry = { skip: MULTI_ENTRY ? false : 'corpus has one entry — run `npm run build:fixture`' };
+/**
+ * Skip with the reason attached, rather than with Vitest's boolean `skip`
+ * option, which would report these five as skipped without saying why. The
+ * dynamic form is what carries the message naming the command that runs them —
+ * the same message `node --test` printed before the migration.
+ */
+function requireMultiEntry(context: TestContext): void {
+  context.skip(!MULTI_ENTRY, 'corpus has one entry — run `npm run build:fixture`');
+}
 
-test('the note grid renders one card per entry, with more than one', multiEntry, () => {
+test('the note grid renders one card per entry, with more than one', (context) => {
+  requireMultiEntry(context);
   const html = readFileSync(new URL('index.html', DIST), 'utf8');
   const cards = html.match(/<article class="note-card">/g) ?? [];
   assert.equal(cards.length, entries.length, 'the home grid does not carry one card per published note');
@@ -447,7 +460,8 @@ test('the note grid renders one card per entry, with more than one', multiEntry,
   }
 });
 
-test('the backlinks aside renders every incoming link, and only those', multiEntry, () => {
+test('the backlinks aside renders every incoming link, and only those', (context) => {
+  requireMultiEntry(context);
   const hub = [...entries].sort((a, b) => b.backlinks.length - a.backlinks.length)[0]!;
   assert.ok(hub.backlinks.length > 1, 'no entry has more than one backlink to check');
 
@@ -472,7 +486,8 @@ test('the backlinks aside renders every incoming link, and only those', multiEnt
   );
 });
 
-test('every tag and collection page lists exactly its own notes', multiEntry, () => {
+test('every tag and collection page lists exactly its own notes', (context) => {
+  requireMultiEntry(context);
   for (const [facets, route] of [
     [tagFacets(entries), tagRoute],
     [collectionFacets(entries), collectionRoute],
@@ -504,7 +519,8 @@ test('every tag and collection page lists exactly its own notes', multiEntry, ()
   }
 });
 
-test('/recent/ renders in the model s order, most recently updated first', multiEntry, () => {
+test('/recent/ renders in the model s order, most recently updated first', (context) => {
+  requireMultiEntry(context);
   const html = readFileSync(new URL('recent/index.html', DIST), 'utf8');
   const rendered = [...html.matchAll(/<article class="note-card">[\s\S]*?href="\/notes\/([^/"]+)\//g)].map(
     ([, slug]) => slug!,
@@ -529,7 +545,8 @@ test('/recent/ renders in the model s order, most recently updated first', multi
   }
 });
 
-test('both document languages reach the built pages', multiEntry, () => {
+test('both document languages reach the built pages', (context) => {
+  requireMultiEntry(context);
   // The artifact carries `language` per document and the layout threads it, so
   // a mixed corpus must produce more than one `<html lang>` across the site.
   const langs = new Set(

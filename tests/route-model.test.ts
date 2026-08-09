@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 
 import { RESERVED_SLUGS, validateArtifact, type ContentEntry } from '../src/lib/schema.ts';
 import {

@@ -1,21 +1,19 @@
 /**
  * Adversarial tests for the gate parsers.
  *
- * The parsers in `css-cascade.ts` decide whether the CSP and no-JavaScript
- * gates pass, so a wrong answer there is a gate that silently misses a real
- * defect. Every case below is an evasion an `xhigh` review actually landed
+ * The parsers in `css-cascade.ts` decide whether the CSP gate and the source
+ * cascade gates pass, so a wrong answer there is a gate that silently misses a
+ * real defect. Every case below is an evasion an `xhigh` review actually landed
  * against an earlier version of these parsers, kept as a regression.
  */
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 
 import {
   appliesByDefault,
   declaration,
   excludesDefaultScreen,
-  fixedWidthOver,
-  minWidthFloor,
   rules,
   specificity,
   splitSelectorList,
@@ -28,49 +26,14 @@ function tuple(selector: string): string {
   return specificity(selector).join(',');
 }
 
-test('a value that commits to a width wider than the limit is measured', () => {
-  const over = (value: string) => fixedWidthOver(value, 320) !== undefined;
-
-  // A fixed length in any absolute or root-relative unit.
-  for (const value of ['400px', '400pt', '30rem', '50ch', '10cm', '5in']) {
-    assert.ok(over(value), `${value} is wider than 320px and must be measured`);
-  }
-  // `max()` returns at least its largest argument; a `calc()` that adds to a
-  // percentage is the classic overflow bug. Neither is flexible for containing
-  // a `%`, which is what an earlier version of this check assumed.
-  assert.ok(over('max(400px, 10%)'));
-  assert.ok(over('calc(100% + 400px)'));
-  assert.ok(over('calc(400px + 2rem)'));
-});
-
-test('a value that can shrink below the limit is not measured', () => {
-  const over = (value: string) => fixedWidthOver(value, 320) !== undefined;
-
-  for (const value of [
-    '400px',
-    '100%',
-    'auto',
-    'min(400px, 100%)',
-    'clamp(1rem, 50%, 400px)',
-    'calc(100% - 400px)',
-    'calc(100vw - 400px)',
-    'var(--width-page)',
-    'fit-content',
-    '320px',
-    '20rem',
-  ]) {
-    if (value === '400px') continue; // The control: this one must be measured.
-    assert.equal(over(value), false, `${value} cannot force overflow and must be skipped`);
-  }
-  assert.ok(over('400px'), 'the control case must still be measured');
-});
-
-test('a min-width condition reports its floor in pixels', () => {
-  assert.equal(minWidthFloor('@media (min-width: 48rem)'), 768);
-  assert.equal(minWidthFloor('@media (width >= 320px)'), 320);
-  assert.equal(minWidthFloor('@media print'), 0);
-  assert.equal(minWidthFloor('@supports (display: grid)'), 0);
-});
+/*
+ * Deliberately absent: the three cases covering `fixedWidthOver` and
+ * `minWidthFloor` — which value commits to a width over the limit, which can
+ * shrink below it, and what floor a `min-width` condition imposes. Both
+ * functions are gone; their only consumer was the syntactic 320 px gate, which
+ * `tests/rendered-page.test.ts` replaced with a real layout measurement.
+ * Keeping their tests would assert the behaviour of code nothing calls.
+ */
 
 test('a "}" inside a string does not end a rule early', () => {
   // A quote-blind `indexOf('}')` ends the rule inside the string, and the rest

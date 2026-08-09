@@ -7,29 +7,17 @@
  * skipping when `dist/` is absent, because a security gate that quietly
  * disappears is worse than one that is inconvenient.
  *
- * The parsers live in `css-cascade.ts` and carry their own adversarial tests in
- * `css-cascade.test.ts`.
+ * The HTML tag scanners live in `support/css-cascade.ts` and carry their own
+ * adversarial tests beside them.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 
-import {
-  appliesByDefault,
-  declaration,
-  fixedWidthOver,
-  minWidthFloor,
-  rawStartTags,
-  rules,
-  specificity,
-  splitSelectorList,
-  startTags,
-  wins,
-  type Rule,
-} from './css-cascade.ts';
+import { rawStartTags, startTags } from './support/css-cascade.ts';
 
 const DIST = new URL('../dist/', import.meta.url);
 
@@ -209,61 +197,17 @@ test('heading order never skips a level', () => {
   }
 });
 
-/**
- * A guard against the declaration shape that causes horizontal overflow: a
- * fixed length, wider than the narrowest supported viewport, in a property that
- * contributes to a box's outer width.
+/*
+ * Deliberately absent: the syntactic 320 px width scan.
  *
- * A value that can shrink below its stated length — `min()`, `clamp()`, a
- * percentage, `auto` — cannot force overflow and is skipped. `max()` and
- * `calc()` are deliberately *not* skipped: `max(400px, 10%)` returns at least
- * 400 px, and `calc(100% + 400px)` is the classic overflow bug.
- *
- * ponytail: this is a syntactic check over the stylesheet, not a rendered one.
- * It proves no rule *commits* to an over-wide box; it does not measure a laid
- * out page, so it cannot see overflow caused by content, by a box-model
- * property (`padding`, `margin`, `left`), by a fixed grid track outside
- * `minmax()`, or by a combination of rules. A rendered check needs a browser,
- * which TK-09 owns. Rules that cannot apply at 320 px on screen — those inside
- * a print block, or behind a `min-width` query above 320 px — are skipped.
+ * It proved no CSS rule *committed* to an over-wide box, which was the best
+ * TK-02 could do without a browser and which its own report named the weakest
+ * evidence in that ticket. `tests/rendered-page.test.ts` now lays out every
+ * built route at 320 px and measures it, so the same property is checked
+ * against what a reader actually gets — including the overflow this scan could
+ * never see: caused by content, by a box-model property, or by a combination of
+ * rules. Owner decision D3.
  */
-test('no stylesheet commits to a width that cannot fit 320 px', () => {
-  const NARROWEST_PX = 320;
-  const PROPERTIES = ['width', 'min-width', 'inline-size', 'min-inline-size', 'flex-basis'];
-
-  /** Applies at 320 px on screen: not print-only, no `min-width` above 320 px. */
-  const reachableAt320 = (rule: Rule) =>
-    appliesByDefault(rule) &&
-    !rule.conditions.some((condition) => minWidthFloor(condition) > NARROWEST_PX);
-
-  for (const file of STYLESHEETS) {
-    for (const rule of rules(read(file)).filter(reachableAt320)) {
-      for (const property of PROPERTIES) {
-        const declared = declaration(rule.body, property);
-        if (!declared) continue;
-        const px = fixedWidthOver(declared.value, NARROWEST_PX);
-        assert.equal(
-          px,
-          undefined,
-          `${file}: "${rule.selector}" sets ${property}: ${declared.value} (${px}px), ` +
-            `which cannot fit a ${NARROWEST_PX}px viewport`,
-        );
-      }
-
-      // `minmax(360px, 1fr)` is the grid form of the same mistake: the floor is
-      // a hard minimum, so an auto-fit track wider than the viewport overflows.
-      for (const [, floor] of rule.body.matchAll(/minmax\(\s*([^,)]+)/gi)) {
-        const px = fixedWidthOver(floor!, NARROWEST_PX);
-        assert.equal(
-          px,
-          undefined,
-          `${file}: "${rule.selector}" has a grid track floor of ${floor!.trim()} (${px}px), ` +
-            `which cannot fit a ${NARROWEST_PX}px viewport`,
-        );
-      }
-    }
-  }
-});
 
 /**
  * Every class the rendered article carries is styled, or is named as
@@ -278,8 +222,8 @@ test('no stylesheet commits to a width that cannot fit 320 px', () => {
  *
  * This is deliberately *not* the rejected proposal from the parity plan's §7.3,
  * which would have extracted every class `markdown.ts` *can* emit and become a
- * fourth consumer of `tests/css-cascade.ts`'s hand-written parser. It reads
- * what shipped and does one substring check per class.
+ * fourth consumer of `tests/support/css-cascade.ts`'s hand-written parser. It
+ * reads what shipped and does one substring check per class.
  */
 test('every class in the rendered article is styled or deliberately not', () => {
   // Named, with the reason, in the "deliberately unstyled" block of
@@ -372,113 +316,15 @@ test('no page requests a search asset before the reader opens search', () => {
   }
 });
 
-/** One control marked `data-js-only` in the built pages, as a selector sees it. */
-type Control = { tag: string; id: string | undefined; classes: Set<string> };
-
-/** Read from the output rather than assumed, so the check follows the markup. */
-function jsOnlyControls(): Control[] {
-  const controls: Control[] = [];
-  for (const file of PAGES) {
-    // `rawStartTags` rather than a `[^>]*` pattern: a `>` inside an attribute
-    // value would otherwise truncate the tag and drop the control silently.
-    // Raw, not blanked — the id and class values are what identify the control.
-    for (const tag of rawStartTags(read(file))) {
-      if (!/\bdata-js-only\b/.test(tag)) continue;
-      controls.push({
-        tag: /^<([a-z]+)/i.exec(tag)![1]!.toLowerCase(),
-        id: /\bid="([^"]*)"/.exec(tag)?.[1],
-        classes: new Set(/\bclass="([^"]*)"/.exec(tag)?.[1]?.split(/\s+/).filter(Boolean) ?? []),
-      });
-    }
-  }
-  return controls;
-}
-
-/**
- * Whether a selector's subject — its rightmost compound, the element it
- * actually styles — could match one of those controls. `.site-nav button` can;
- * `.site-nav` cannot, because it styles the container, not the button.
+/*
+ * Deliberately absent: the cascade-resolving no-JavaScript gate.
  *
- * Pseudo-class arguments are stripped before the compound is read. Leaving them
- * in makes `button:not(.x)` look like it requires class `x`, so no control
- * matches and the rule is skipped — a competing rule waved through, which is
- * the direction that hides a real defect.
+ * It reimplemented CSS specificity, `!important`, document order, and media
+ * query applicability in order to decide whether a competing rule beat the
+ * `[data-js-only]` hiding rule. That was the right call without a browser, and
+ * it caught a real defect. It is now `tests/rendered-page.test.ts`, which loads
+ * each page with scripting disabled and reads the computed style — the
+ * cascade's own verdict, produced by the implementation that ships rather than
+ * by a reimplementation of it. Both directions are checked there: hidden
+ * without scripting, offered with it. Owner decision D3.
  */
-function targetsControl(selector: string, controls: readonly Control[]): boolean {
-  const subject = selector.trim().split(/[\s>+~]+/).pop() ?? '';
-  if (subject === '') return false;
-  const bare = subject.replace(/:[\w-]+\([^()]*(?:\([^()]*\)[^()]*)*\)/g, '');
-  const type = /^([a-z][\w-]*)/i.exec(bare)?.[1]?.toLowerCase();
-  const id = /#([\w-]+)/.exec(bare)?.[1];
-  const classes = bare.match(/\.[\w-]+/g)?.map((name) => name.slice(1)) ?? [];
-  return controls.some(
-    (control) =>
-      (type === undefined || type === control.tag) &&
-      (id === undefined || id === control.id) &&
-      classes.every((name) => control.classes.has(name)),
-  );
-}
-
-/**
- * The JavaScript-only controls must not render when scripting is unavailable —
- * otherwise a keyboard user meets three buttons that silently do nothing.
- *
- * This resolves the actual cascade rather than asserting a selector string: the
- * bug it catches is a *competing* rule winning over the hiding rule, which a
- * pattern match over the hiding rule alone cannot see. It caught exactly that
- * during implementation, when `[data-js-only]` (0,1,0) lost to `.site-nav
- * button` (0,1,1).
- */
-test('JavaScript-only controls are hidden when scripting is unavailable', () => {
-  const controls = jsOnlyControls();
-  assert.ok(controls.length > 0, 'no [data-js-only] control was emitted to check');
-
-  // Self-check: the gate can only judge a competing rule if it can identify the
-  // controls that rule would match. A control whose id or class was lost during
-  // parsing silently narrows what the gate examines, so prove each one is
-  // reachable by its own most specific selector before trusting the verdict.
-  for (const control of controls) {
-    const own = `${control.tag}${control.id ? `#${control.id}` : ''}${[...control.classes].map((name) => `.${name}`).join('')}`;
-    assert.ok(
-      targetsControl(own, controls),
-      `the gate cannot recognize its own control "${own}" — control parsing is broken`,
-    );
-  }
-
-  for (const file of STYLESHEETS) {
-    const displayRules = rules(read(file))
-      .filter(appliesByDefault)
-      .flatMap((rule) => {
-        const display = declaration(rule.body, 'display');
-        if (!display) return [];
-        return splitSelectorList(rule.selector).map((selector) => ({
-          selector,
-          value: display.value,
-          important: display.important,
-          specificity: specificity(selector),
-          order: rule.order,
-        }));
-      });
-
-    // A hiding rule must apply in the no-scripting state, so one that requires
-    // `[data-js='on']` outside a `:not()` does not count toward hiding.
-    const hiding = displayRules.filter(
-      (rule) =>
-        rule.selector.includes('[data-js-only]') &&
-        rule.value === 'none' &&
-        !/\[data-js=/.test(rule.selector.replace(/:not\([^()]*\)/g, '')),
-    );
-    assert.ok(hiding.length > 0, `${file}: nothing hides [data-js-only] without scripting`);
-    const strongest = hiding.reduce((best, current) => (wins(current, best) ? current : best));
-
-    for (const rule of displayRules) {
-      if (rule.value === 'none' || !targetsControl(rule.selector, controls)) continue;
-      assert.ok(
-        !wins(rule, strongest),
-        `${file}: "${rule.selector}" {display: ${rule.value}${rule.important ? ' !important' : ''}} ` +
-          `(${rule.specificity}) wins over the [data-js-only] hiding rule "${strongest.selector}" ` +
-          `(${strongest.specificity}), so a JavaScript-only control stays visible without scripting`,
-      );
-    }
-  }
-});

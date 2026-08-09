@@ -1,10 +1,17 @@
 /**
  * Parsers for the built stylesheet and HTML.
  *
- * These back the CSP and no-JavaScript gates in `built-output.test.ts`, so they
- * are a security-relevant surface in their own right and carry their own
- * adversarial tests in `css-cascade.test.ts` — the same treatment TK-01 gave the
- * privacy scanner. Not a `.test.ts` file, so `node --test` does not run it.
+ * Two remaining consumers, both checking something a browser cannot answer:
+ * `built-output.test.ts` scans built HTML for constructs the CSP forbids, and
+ * `design-tokens.test.ts` resolves the *source* cascade for markdown classes
+ * the one-note corpus never emits, so no rendered page carries them. The gates
+ * a browser can answer directly — the 320 px viewport and the no-JavaScript
+ * controls — moved to `rendered-page.test.ts` under owner decision D3.
+ *
+ * These are a security-relevant surface in their own right and carry their own
+ * adversarial tests beside them, the same treatment TK-01 gave the privacy
+ * scanner. It lives in `tests/support/` rather than `tests/` because it is a
+ * module, not a suite.
  *
  * Every parser is deliberately biased toward a false FAIL over a false PASS: a
  * noisy gate is fixed in a minute, a gate that silently misses a real defect is
@@ -309,62 +316,13 @@ export function declaration(body: string, property: string): { value: string; im
 /**
  * CSS lengths that resolve to a fixed number of pixels.
  *
- * `ch` and `ex` vary by font, so they use a conservative lower bound: a wider
- * font makes the real box wider, never narrower, so under-estimating here can
- * only miss a defect at the margin rather than invent one.
+ * Deliberately absent: `fixedWidthOver` and `minWidthFloor`, which measured
+ * whether a declared length could overflow a 320 px viewport. Their only
+ * consumer was the syntactic 320 px gate, now replaced by a rendered
+ * measurement in `tests/rendered-page.test.ts` — a real layout at 320 px sees
+ * every overflow these could see and the ones they structurally could not.
+ * Keeping them would leave a tested-but-unused parser to rot.
  */
-const UNIT_PX: Readonly<Record<string, number>> = {
-  px: 1,
-  pt: 96 / 72,
-  pc: 16,
-  in: 96,
-  cm: 96 / 2.54,
-  mm: 96 / 25.4,
-  q: 96 / 101.6,
-  rem: 16,
-  em: 16,
-  ch: 8,
-  ex: 8,
-};
-
-/** A value that can resolve narrower than any fixed length it names. */
-const SHRINKABLE =
-  /min\(|clamp\(|%|auto|inherit|initial|unset|revert|fit-content|min-content|100vw|var\(/;
-
-/** A `calc()` whose only fixed terms are subtracted, so it cannot exceed its base. */
-const ONLY_SUBTRACTS = /[\w%)]\s+-\s+[\d.]/;
-
-/**
- * The widest fixed length a value commits to, or undefined when it can shrink
- * below `limit`.
- *
- * `max()` returns at least its largest argument, and `calc()` that adds to a
- * percentage is the classic overflow bug, so both are measured by their widest
- * fixed term rather than dismissed as flexible for containing a `%`.
- */
-export function fixedWidthOver(value: string, limit: number): number | undefined {
-  const text = value.trim();
-  const forcesWidth = /^max\(/i.test(text) || (/^calc\(/i.test(text) && !ONLY_SUBTRACTS.test(text));
-  if (!forcesWidth && SHRINKABLE.test(text)) return undefined;
-
-  const terms = forcesWidth ? (text.match(/[\d.]+[a-z]+/gi) ?? []) : [text];
-  let widest: number | undefined;
-  for (const term of terms) {
-    const length = /^(-?[\d.]+)([a-z]+)$/i.exec(term.trim());
-    const factor = length && UNIT_PX[length[2]!.toLowerCase()];
-    if (!factor) continue;
-    const px = Number(length[1]) * factor;
-    if (px > limit && (widest === undefined || px > widest)) widest = px;
-  }
-  return widest;
-}
-
-/** The `min-width` floor an at-rule condition imposes, in pixels. */
-export function minWidthFloor(condition: string): number {
-  const query = /(?:min-width|width\s*>=)\s*:?\s*([\d.]+)([a-z]+)/i.exec(condition);
-  if (!query) return 0;
-  return Number(query[1]) * (UNIT_PX[query[2]!.toLowerCase()] ?? 1);
-}
 
 /**
  * Every start tag in the document, verbatim.

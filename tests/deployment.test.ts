@@ -22,7 +22,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 
 const SOURCE = new URL('../public/_headers', import.meta.url);
 const BUILT = new URL('../dist/_headers', import.meta.url);
@@ -222,9 +222,9 @@ test('the content gate fails on a poisoned artifact before the build runs', () =
    * The candidate is a temporary file, never `src/data/content.json`. Poisoning
    * the real artifact in place would leave exporter-owned generated content
    * corrupted if the run were interrupted — a `finally` does not survive SIGINT
-   * — and `node --test` runs test files concurrently, so a sibling file reading
-   * the artifact inside the poisoned window would fail for no reason it could
-   * explain.
+   * — and Vitest, like `node --test` before it, runs test files in parallel
+   * workers, so a sibling file reading the artifact inside the poisoned window
+   * would fail for no reason it could explain.
    */
   const gate = (candidate?: string) => {
     const result = spawnSync(process.execPath, [gateScript, ...(candidate ? [candidate] : [])], {

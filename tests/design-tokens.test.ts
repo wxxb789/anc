@@ -7,9 +7,9 @@
 
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 
-import { appliesByDefault, declaration, rules, specificity, splitSelectorList, wins } from './css-cascade.ts';
+import { appliesByDefault, declaration, rules, specificity, splitSelectorList, wins } from './support/css-cascade.ts';
 
 const TOKENS = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
 

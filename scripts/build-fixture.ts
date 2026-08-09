@@ -93,9 +93,9 @@ function main(): number {
 
   writeFixtureIndex();
 
-  const testStatus = runStep('node', ['--test'], env);
+  const testStatus = runStep('npx', ['vitest', 'run'], env);
   if (testStatus !== 0) {
-    console.error(`\nnode --test failed with status ${testStatus}`);
+    console.error(`\nvitest run failed with status ${testStatus}`);
     // Still restore the published build: leaving a fixture `dist/` behind makes
     // the next ordinary `npm test` fail for a second, unrelated reason.
     restorePublishedBuild();

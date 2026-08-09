@@ -11,7 +11,9 @@
     "validate:content": "node scripts/validate-content.ts",
     "emit:redirects": "node scripts/emit-redirects.ts",
     "check": "astro check",
-    "test": "node --test",
+    "lint": "oxlint",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "npm run validate:content && astro build && npm run emit:redirects && pagefind --site dist --exclude-selectors \".heading-anchor,.back-home\"",
     "build:fixture": "node scripts/build-fixture.ts",
     "preview": "astro preview",
@@ -29,7 +31,10 @@
     "@astrojs/check": "^0.9.10",
     "@types/node": "^26.1.2",
     "@types/sanitize-html": "^2.16.1",
+    "oxlint": "^1.77.0",
     "pagefind": "^1.4.0",
-    "typescript": "^5.9.3"
+    "playwright": "^1.62.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }
