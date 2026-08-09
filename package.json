@@ -13,6 +13,7 @@
     "check": "astro check",
     "test": "node --test",
     "build": "npm run validate:content && astro build && npm run emit:redirects && pagefind --site dist",
+    "build:fixture": "node scripts/build-fixture.ts",
     "preview": "astro preview",
     "astro": "astro"
   },

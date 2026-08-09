@@ -50,8 +50,18 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   'wasm',
 ]);
 
-/** Lowercase `[a-z0-9-]`, no leading or trailing hyphen. */
-const SLUG = /^[a-z0-9]+(?:-+[a-z0-9]+)*$/;
+/**
+ * Lowercase `[a-z0-9-]`, no leading, trailing, or doubled hyphen.
+ *
+ * The doubled-hyphen rule exists because a slug and a collection are used
+ * *verbatim* as public route segments, and `src/lib/routes.ts` rejects a
+ * doubled separator in any route key — a tag of `Ops & SRE` slugs to `ops--sre`
+ * and is collapsed to `ops-sre` before it is addressable. Admitting `a--b` here
+ * while routing refuses it would let a schema-valid artifact fail the build at
+ * a later stage, which is the one failure mode this contract exists to prevent.
+ * The two rules are asserted to agree in `tests/route-model.test.ts`.
+ */
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** ISO 8601 calendar date, optionally with a time and explicit offset. */
 const DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 /** BCP 47 shape, e.g. `en`, `zh-CN`, `zh-Hans-CN`. */
@@ -81,6 +91,102 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
   ...REQUIRED_ARRAYS,
   ...OPTIONAL_FIELDS,
 ]);
+
+/**
+ * Size ceilings, stated per field.
+ *
+ * Without these the contract bounds nothing: a 3 MB `markdown` body and 5,000
+ * tags both pass, and 5,000 tags on one entry is 5,000 public routes. A limit
+ * that fails validation is a message naming the field; the same input without
+ * one is a build that either takes minutes or emits a route map the host
+ * rejects.
+ *
+ * Lengths are counted in UTF-16 code units, which is what `String.length`
+ * returns. The number is a size ceiling, not a grapheme count, so counting
+ * astral characters as two is the honest direction: an emoji really does cost
+ * twice a Latin letter to store and to serve.
+ *
+ * Each ceiling is set an order of magnitude above anything the corpus plausibly
+ * produces, so it catches a runaway exporter rather than constraining an author.
+ */
+const STRING_LIMITS: Partial<Record<keyof ContentEntry, number>> = {
+  // A path segment, and part of every redirect rule; Cloudflare caps a rule
+  // line at 1,000 characters and a rule carries the slug twice.
+  slug: 128,
+  // A `<title>`, a card heading, and a search result. Search engines truncate a
+  // title well below this.
+  title: 300,
+  // The `<meta name="description">`, the card body, and the hover preview.
+  excerpt: 1000,
+  description: 1000,
+  // Requirements section 18 warns above 250 KB of uncompressed article HTML,
+  // and rendering Markdown only adds markup, so the source is bounded below it.
+  markdown: 200_000,
+  // An opaque public identifier, not prose.
+  public_id: 128,
+  // BCP 47 language tags are capped at 35 characters by the registry itself.
+  language: 35,
+  collection: 128,
+};
+
+/** Array ceilings: how many members, and how long each member may be. */
+const ARRAY_LIMITS: Partial<Record<keyof ContentEntry, { items: number; itemChars?: number }>> = {
+  // Every tag is a public route, so an unbounded tag list is an unbounded page
+  // count. A note carrying more than this is a classification failure, not a
+  // note. (The redirect ceiling is a separate limit on the *corpus*; see
+  // `MAX_ENTRIES`.)
+  tags: { items: 50, itemChars: 128 },
+  // Every alias is a link-resolution key.
+  aliases: { items: 50, itemChars: 300 },
+  // Each member must already resolve to a published slug, so member length is
+  // bounded transitively by the slug ceiling; only the count needs one.
+  outgoing: { items: 500 },
+  backlinks: { items: 500 },
+};
+
+/** Size ceilings for a field, exposed so a consumer can state the same number. */
+export const FIELD_LIMITS = { strings: STRING_LIMITS, arrays: ARRAY_LIMITS } as const;
+
+/**
+ * How many entries one artifact may carry.
+ *
+ * The binding constraint is the redirect map, not the page count: every entry
+ * emits two permanent rules, against Cloudflare's documented ceiling of 2,000
+ * static rules. `renderRedirects` already throws past that — but it throws
+ * *after* `astro build` has written a full `dist/`, so the failure arrives
+ * having already spent the build. Failing here means the ceiling is checked
+ * before anything is generated, and the message names the artifact.
+ *
+ * 900 rather than 1,000, so that the redirect ceiling stays reachable if a
+ * later ticket adds a third rule shape per note.
+ */
+export const MAX_ENTRIES = 900;
+
+function checkLimits(value: Record<string, unknown>, label: string, issues: string[]): void {
+  for (const [field, max] of Object.entries(STRING_LIMITS)) {
+    const item = value[field];
+    if (typeof item === 'string' && item.length > max) {
+      issues.push(`${label}.${field}: is ${item.length} characters, over the ${max} character limit`);
+    }
+  }
+
+  for (const [field, { items, itemChars }] of Object.entries(ARRAY_LIMITS)) {
+    const list = value[field];
+    if (!Array.isArray(list)) continue;
+    if (list.length > items) {
+      issues.push(`${label}.${field}: has ${list.length} entries, over the limit of ${items}`);
+    }
+    if (itemChars === undefined) continue;
+    for (const [position, member] of list.entries()) {
+      if (typeof member === 'string' && member.length > itemChars) {
+        issues.push(
+          `${label}.${field}[${position}]: is ${member.length} characters, ` +
+            `over the ${itemChars} character limit`,
+        );
+      }
+    }
+  }
+}
 
 type Rule = readonly [RegExp, string];
 
@@ -342,6 +448,16 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
     }
   }
 
+  // Size before content, and an oversized entry stops here: a 3 MB body is
+  // rejected on its length rather than scanned four times over first, which is
+  // what makes "a contract error, not a slow build" true rather than
+  // aspirational. Only a *size* issue short-circuits — an entry with an unknown
+  // field or a bad slug is still privacy-scanned, so no violation goes
+  // unreported for an entry that would otherwise have been merely malformed.
+  const beforeLimits = issues.length;
+  checkLimits(value, label, issues);
+  if (issues.length !== beforeLimits) return undefined;
+
   checkPrivacy(value, label, issues);
 
   return issues.length === before ? (value as unknown as ContentEntry) : undefined;
@@ -413,7 +529,12 @@ export function validateArtifact(data: unknown, source = 'content artifact'): Co
 
   const rawEntries = data['entries'];
   if (!Array.isArray(rawEntries)) issues.push('entries: must be an array');
-  else {
+  else if (rawEntries.length > MAX_ENTRIES) {
+    issues.push(
+      `entries: has ${rawEntries.length} entries, over the limit of ${MAX_ENTRIES} ` +
+        '(each entry emits two redirect rules against a host ceiling of 2,000)',
+    );
+  } else {
     const valid: ContentEntry[] = [];
     for (const [index, entry] of rawEntries.entries()) {
       const checked = checkEntry(entry, index, issues);

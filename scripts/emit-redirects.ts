@@ -12,26 +12,26 @@
  * place in the build chain.
  */
 
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { SCHEMA_VERSION, validateArtifact } from '../src/lib/schema.ts';
+import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import { redirectRules, renderRedirects } from '../src/lib/routes.ts';
+import { loadArtifact, readArtifact } from '../src/lib/artifact-source.ts';
 
-const CONTENT = new URL('../src/data/content.json', import.meta.url);
 const OUTPUT = new URL('../dist/_redirects', import.meta.url);
 
 function main(): number {
   try {
     // Re-validated rather than imported through `src/lib/content.ts`: the
     // accessor is written for the Astro build, and reading the artifact here
-    // keeps this script runnable on its own.
-    const source = readFileSync(CONTENT, 'utf8');
-    const { entries } = validateArtifact(JSON.parse(source), 'src/data/content.json');
+    // keeps this script runnable on its own. It reads whichever artifact the
+    // build read, so a fixture build's redirect map describes the fixture.
+    const { entries } = loadArtifact();
     // A hash of the artifact bytes, so the emitted map can be tied back to the
     // exact input it was generated from (requirements section 20). The artifact
     // is already public, so its digest discloses nothing further.
-    const contentVersion = `sha256:${createHash('sha256').update(source).digest('hex')}`;
+    const contentVersion = `sha256:${createHash('sha256').update(readArtifact()).digest('hex')}`;
     const rules = redirectRules(entries);
     writeFileSync(
       OUTPUT,

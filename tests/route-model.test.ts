@@ -20,6 +20,7 @@ import {
   TAGS_SEGMENT,
   collectionFacets,
   collectionRoute,
+  isRouteKey,
   legacyNoteRoute,
   noteRoute,
   noteSlugFromPath,
@@ -27,6 +28,7 @@ import {
   recentFirst,
   redirectRules,
   renderRedirects,
+  routeKey,
   tagFacets,
   tagRoute,
 } from '../src/lib/routes.ts';
@@ -190,6 +192,148 @@ test('a tag with no URL-safe characters fails rather than routing to nothing', (
     () => tagFacets([entry('a-note', { tags: ['...'] })]),
     /has no URL-safe route key/,
   );
+});
+
+// --- Route key vocabulary -----------------------------------------------------
+
+test('a tag key never carries a leading, trailing, or doubled separator', () => {
+  // `github-slugger` strips emoji and punctuation without closing the gap they
+  // leave, so every one of these was an emittable public URL before TK-11:
+  // `/tags/-seedling/`, `/tags/seedling-/`, `/tags/ops--sre/`, `/tags/---/`.
+  for (const [label, expected] of [
+    ['🌱 seedling', 'seedling'],
+    ['seedling 🌱', 'seedling'],
+    ['Ops & SRE', 'ops-sre'],
+    ['设计 · Design', '设计-design'],
+    ['⚠️ warning', 'warning'],
+    ['  spaced  ', 'spaced'],
+    ['dev👨‍💻ops', 'devops'],
+  ] as const) {
+    assert.equal(routeKey(label), expected, `wrong key for ${JSON.stringify(label)}`);
+    const [facet] = tagFacets([entry('a-note', { tags: [label] })]);
+    assert.equal(facet?.key, expected);
+    assert.equal(facet?.label, label, 'the artifact spelling survives on the page');
+  }
+});
+
+test('a label that reduces to nothing addressable fails the build', () => {
+  // There is no answer to invent here, so the build stops rather than emitting
+  // an empty or invisible route segment.
+  for (const label of ['---', '...', '½', '   ', '—', '①']) {
+    assert.throws(
+      () => tagFacets([entry('a-note', { tags: [label] })]),
+      /has no URL-safe route key/,
+      `${JSON.stringify(label)} was accepted as a route key`,
+    );
+  }
+});
+
+test('the emoji variation selector never survives into a route key', () => {
+  // U+FE0F is a nonspacing MARK, not a format character, so a `\p{M}`-based
+  // vocabulary admits it and `⚠️ warning` keys a route whose first character is
+  // invisible. Two tags differing only by it would also be two indistinguishable
+  // public URLs.
+  const key = routeKey('⚠️ warning');
+  assert.equal(key, 'warning');
+  assert.doesNotMatch(key, /\p{Default_Ignorable_Code_Point}/u);
+  assert.ok(isRouteKey(key));
+});
+
+test('a route key stays a pure function of its own label', () => {
+  // The property that rules out a disambiguating numeric suffix: cleaning must
+  // not read the corpus, or an existing tag's URL moves when another is added.
+  const alone = tagFacets([entry('a-note', { tags: ['🌱 seedling'] })]);
+  const crowded = tagFacets([
+    entry('a-note', { tags: ['🌱 seedling'] }),
+    entry('b-note', { tags: ['aardvark', 'seedling notes', 'zebra'] }),
+  ]);
+  assert.equal(crowded.find((facet) => facet.label === '🌱 seedling')?.key, alone[0]!.key);
+  assert.equal(alone[0]!.key, routeKey('🌱 seedling'));
+});
+
+test('two spellings of the same accented label produce one route key', () => {
+  // `café` typed with a precomposed é and with a combining accent are the same
+  // word. Two keys would be two indistinguishable public URLs — and, since keys
+  // become directory names, a pair that collides on a normalizing filesystem
+  // and not on a case-sensitive one, so the build would differ by platform.
+  // Built from escapes rather than written literally: an editor, a formatter, or
+  // git itself may normalize a source file, which would silently turn the two
+  // spellings into one string and leave this test asserting nothing.
+  const composed = 'café';
+  const decomposed = 'café';
+  assert.notEqual(composed, decomposed, 'the two spellings must differ as strings');
+  assert.equal(routeKey(composed), routeKey(decomposed));
+
+  const facets = tagFacets([
+    entry('a-note', { tags: [composed] }),
+    entry('b-note', { tags: [decomposed] }),
+  ]);
+  assert.equal(facets.length, 1, 'the two spellings produced two facets');
+  assert.deepEqual(facets[0]!.entries.map((item) => item.slug), ['a-note', 'b-note']);
+});
+
+test('non-Latin scripts keep a readable route key rather than being encoded', () => {
+  for (const label of ['笔记', '开发笔记', 'हिन्दी', 'tiếng việt', 'café', 'Ελληνικά', '한국어']) {
+    const key = routeKey(label);
+    assert.ok(isRouteKey(key), `${JSON.stringify(label)} produced an unusable key ${JSON.stringify(key)}`);
+    // Stable under URL normalization, so the built path resolves where it was
+    // written rather than somewhere a browser reinterprets it to.
+    const route = tagRoute(key);
+    assert.equal(new URL(route, 'https://example.invalid').pathname, encodeURI(route));
+  }
+});
+
+test('a tag-key collision names both labels and says the fix is the exporter s', () => {
+  // Unfixable from this repository: the exporter authors tag text. The message
+  // has to say so, or the failure gets patched in the wrong place.
+  assert.throws(
+    () => tagFacets([entry('a-note', { tags: ['C++'] }), entry('b-note', { tags: ['C#'] })]),
+    (error: Error) => {
+      assert.match(error.message, /"C\+\+"/, 'the first label is not named');
+      assert.match(error.message, /"C#"/, 'the second label is not named');
+      assert.match(error.message, /both route to \/tags\/c\//, 'the colliding route is not named');
+      assert.match(error.message, /exporter/i, 'the message does not say where the fix belongs');
+      return true;
+    },
+  );
+});
+
+test('an unroutable label also says the fix is the exporter s', () => {
+  assert.throws(
+    () => tagFacets([entry('a-note', { tags: ['---'] })]),
+    (error: Error) => {
+      assert.match(error.message, /"---"/, 'the label is not named');
+      assert.match(error.message, /exporter/i, 'the message does not say where the fix belongs');
+      return true;
+    },
+  );
+});
+
+test('the slug contract and the route vocabulary agree', () => {
+  // These are two rules over the same strings: a slug and a collection are used
+  // verbatim as public route segments. If the contract admits a shape routing
+  // refuses, a schema-valid artifact fails the build at a later stage — which is
+  // exactly the failure the contract exists to prevent. `deep--dive` was such a
+  // shape until the doubled hyphen was removed from `SLUG`.
+  const valid = (slug: string) =>
+    validateArtifact({ version: 1, entries: [entry(slug)] }) !== undefined;
+
+  for (const slug of ['a', 'a-b', 'deep-dive', 'note-2026', '2026-notes']) {
+    assert.ok(valid(slug), `"${slug}" is a valid slug`);
+    assert.ok(isRouteKey(slug), `the contract admits "${slug}" but routing cannot address it`);
+  }
+
+  for (const slug of ['deep--dive', '-lead', 'trail-', 'Upper', 'has space', 'a/b', '']) {
+    assert.throws(
+      () => validateArtifact({ version: 1, entries: [entry(slug)] }),
+      `the contract admits "${slug}", which routing rejects`,
+    );
+  }
+
+  // A collection is its own route key with no cleaning step, so the same has to
+  // hold for it or `collectionFacets` throws on a valid artifact.
+  assert.throws(() => validateArtifact({ version: 1, entries: [entry('a-note', { collection: 'a--b' })] }));
+  assert.doesNotThrow(() => collectionFacets([entry('a-note', { collection: 'field-notes' })]));
 });
 
 test('CJK tags produce a usable route key', () => {

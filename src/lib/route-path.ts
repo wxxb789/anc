@@ -23,7 +23,7 @@ export function noteRoute(slug: string): string {
  * route is not treated as one. The trailing slash is optional because a browser
  * may present either form before the host's own normalization runs.
  */
-const NOTE_PATH = new RegExp(`^/${NOTES_SEGMENT}/([a-z0-9]+(?:-+[a-z0-9]+)*)/?$`);
+const NOTE_PATH = new RegExp(`^/${NOTES_SEGMENT}/([a-z0-9]+(?:-[a-z0-9]+)*)/?$`);
 
 /** The slug in a `/notes/<slug>/` path, or `undefined` for any other path. */
 export function noteSlugFromPath(pathname: string): string | undefined {

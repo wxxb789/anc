@@ -1,0 +1,706 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "slug": "garden-index",
+      "title": "How This Garden Is Put Together",
+      "excerpt": "The entry point for the whole projection. What this site is, how a note reaches it, and the handful of things the build refuses to publish no matter who asks.",
+      "markdown": "# How This Garden Is Put Together\n\nMost of what follows is one idea applied repeatedly: a published site should be a\n*projection* of a private garden, never a mirror of it. A mirror inherits every\nmistake in the original. A projection is chosen.\n\n## What reaches this page\n\nThree things have to happen before a note appears here, and each of them can fail\nloudly.\n\n1. Someone adds it to an allowlist by hand.\n2. An exporter reads that allowlist and writes one artifact file.\n3. This repository validates the artifact and refuses to build if anything is off.\n\nStep three is the one worth arguing about. It would be easier to warn and carry on.\nWarnings are read by the person who already knew.\n\n## What never reaches it\n\nAnything not named in the allowlist, including every attachment, every draft, and\nevery note that merely happens to be linked from a published one.\n\n## Where to go next\n\nThe [content contract](/content-contract/) is the honest starting point.\n",
+      "outgoing": [
+        "backlink-invariant",
+        "content-contract",
+        "csp-posture",
+        "design-tokens",
+        "long-form-essay",
+        "markdown-pipeline",
+        "route-model",
+        "search-notes",
+        "static-first",
+        "zh-jian-jie"
+      ],
+      "backlinks": [],
+      "public_id": "pub-0001",
+      "created": "2025-11-02",
+      "updated": "2026-08-01T09:15:00Z",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "🌱 seedling",
+        "gardening"
+      ],
+      "collection": "garden-log",
+      "aliases": [
+        "Garden Index",
+        "Start Here"
+      ],
+      "description": "The entry point: what this site is, how a note gets here, and what the build refuses to publish."
+    },
+    {
+      "slug": "content-contract",
+      "title": "The Content Contract",
+      "excerpt": "One schema for the whole artifact, validated before anything renders. Unknown fields are rejected rather than ignored, so a future export change is a build failure and not a quiet leak.",
+      "markdown": "# The Content Contract\n\nThe artifact is a single JSON file. Every field it may carry is declared, and\nanything undeclared is a violation rather than a curiosity.\n\n## Why unknown fields are rejected\n\nAn ignored field is a field nobody reviewed. If the exporter starts emitting\n`source_path` next spring, the choice is between a build that fails today and a\ndirectory layout published quietly forever.\n\n## What is required, and what is not\n\nSix fields are required. Nine are optional, and the site degrades rather than\nguessing when they are absent — a note with no date is not given one.\n\n| Field | Required | Notes |\n| --- | :--- | ---: |\n| `slug` | yes | Lowercase, hyphenated, and never a reserved segment |\n| `title` | yes | Rendered as the page heading |\n| `excerpt` | yes | May be empty, never absent |\n| `markdown` | yes | The body, bounded in size |\n| `tags` | no | Each becomes a public route |\n| `collection` | no | Validated as a slug |\n\nSee also [the privacy boundary](/privacy-boundary/) and\n[the backlink invariant](/backlink-invariant/).\n",
+      "outgoing": [
+        "backlink-invariant",
+        "privacy-boundary"
+      ],
+      "backlinks": [
+        "alias-heavy",
+        "backlink-invariant",
+        "deterministic-builds",
+        "garden-index",
+        "long-form-essay",
+        "markdown-pipeline",
+        "privacy-boundary",
+        "route-model",
+        "zh-jian-jie"
+      ],
+      "public_id": "pub-0002",
+      "created": "2025-11-04",
+      "updated": "2026-07-22",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "gardening"
+      ],
+      "collection": "engineering",
+      "description": "One schema, validated at build time, that a malformed export cannot get past."
+    },
+    {
+      "slug": "privacy-boundary",
+      "title": "Failing Closed at the Boundary",
+      "excerpt": "A privacy rule that fails open is decoration. Nothing enters this repository that was not named in the manifest, and the check runs over every string an entry can reach.",
+      "markdown": "# Failing Closed at the Boundary\n\nA boundary is only worth having if the failure mode is refusal.\n\n> [!warning] The interesting failure is the quiet one\n> A scanner that misses a marker is a bug. A scanner that finds one and logs it is\n> a policy decision nobody made on purpose.\n\n## Normalizations\n\nThe scan runs against four forms of every string, because a browser will resolve\nthings a naive comparison will not: the raw text, the entity-decoded text, the text\nwith invisible characters removed, and the text with the characters a URL parser\ndiscards removed.\n\nThat last one is why a scheme split across a tab is still caught.\n\n## What it costs\n\nFalse positives. Prose that wraps between two particular words is rejected, and the\nalternative is a scan that can be defeated by a line break.\n\nRelated: [the content contract](/content-contract/), [CSP posture](/csp-posture/).\n",
+      "outgoing": [
+        "content-contract",
+        "csp-posture"
+      ],
+      "backlinks": [
+        "content-contract",
+        "long-form-essay"
+      ],
+      "public_id": "pub-0003",
+      "created": "2025-11-09",
+      "updated": "2026-06-30",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "security"
+      ],
+      "collection": "engineering"
+    },
+    {
+      "slug": "backlink-invariant",
+      "title": "Backlinks as an Exact Inverse",
+      "excerpt": "Most link graphs record an edge whether or not the target exists. This one proves that every backlink is the exact inverse of an outgoing link, across the whole corpus, or fails.",
+      "markdown": "# Backlinks as an Exact Inverse\n\nThe usual approach records an edge when it sees one and hopes the target exists.\nMeasured on a well-known garden of 122 pages, one in seven edges pointed at nothing.\n\n## The check\n\nFor each entry, collect the set of entries naming it, and compare that set to the\nentry's own backlink array. Not a subset — an equality.\n\n## Why totality is affordable here\n\nBecause the corpus is bounded. A whole-vault crawler cannot afford this check; a\ncurated projection can afford it easily, and the guarantee is worth stating out loud.\n\nSee [deterministic builds](/deterministic-builds/).\n",
+      "outgoing": [
+        "content-contract",
+        "deterministic-builds"
+      ],
+      "backlinks": [
+        "content-contract",
+        "garden-index",
+        "route-model"
+      ],
+      "public_id": "pub-0004",
+      "created": "2025-11-14",
+      "updated": "2026-05-18T22:40:00+08:00",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "gardening"
+      ],
+      "collection": "engineering",
+      "aliases": [
+        "Edge Symmetry"
+      ]
+    },
+    {
+      "slug": "route-model",
+      "title": "Routes That Do Not Move",
+      "excerpt": "A route key is a pure function of one label. Nothing disambiguates by position or by corpus size, so publishing a new tag can never move an existing public URL.",
+      "markdown": "# Routes That Do Not Move\n\nThe property worth protecting is stability, not prettiness.\n\n## The rule\n\nA note's route derives from its slug. A tag's route derives from that one tag's\ntext. Neither derives from what else happens to exist.\n\n## What that rules out\n\nNumeric suffixes. If two labels collapse to the same key, appending `-2` to the\nsecond one makes an existing tag's public URL depend on publication order — the\nURL moves when an unrelated note is published. Failing the build is the smaller\nharm, and the message names both labels.\n\nRelated: [the content contract](/content-contract/), [backlinks](/backlink-invariant/).\n",
+      "outgoing": [
+        "backlink-invariant",
+        "content-contract"
+      ],
+      "backlinks": [
+        "garden-index"
+      ],
+      "public_id": "pub-0005",
+      "created": "2025-11-20",
+      "updated": "2026-07-02",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "gardening"
+      ],
+      "collection": "engineering"
+    },
+    {
+      "slug": "markdown-pipeline",
+      "title": "Sanitize Last, Always",
+      "excerpt": "Highlighting, callouts, anchors, and link rewriting all happen before sanitization, and sanitization is the single exit. Nothing a transform emits can skip the allowlist.",
+      "markdown": "# Sanitize Last, Always\n\nOrdering is the whole design. Sanitization is not a step in the pipeline; it is the\ndoor out of it.\n\n## Why order matters\n\nA rewrite that runs *after* the allowlist can introduce anything it likes. A rewrite\nthat runs before it is checked like everything else, including a route returned by\nan injected mapping the renderer does not control.\n\n## Determinism\n\nIdentical input must produce byte-identical output. That sounds obvious until a\nsyntax highlighter with a process-wide grammar registry renders the same fence two\ndifferent ways depending on which page was built first.\n\n```javascript\n/** Settle the registry once, before any render reads it. */\nconst ready = load(modifiers);\nexport const render = async (source) => {\n  await ready;\n  return highlight(source);\n};\n```\n\nMore: [code recipes](/code-heavy-shell-recipes/), [math and diagrams](/math-and-diagrams/).\n",
+      "outgoing": [
+        "code-heavy-shell-recipes",
+        "content-contract",
+        "math-and-diagrams"
+      ],
+      "backlinks": [
+        "callouts-and-lists",
+        "code-heavy-shell-recipes",
+        "footnotes-and-citations",
+        "garden-index",
+        "image-embed-demo",
+        "math-and-diagrams"
+      ],
+      "public_id": "pub-0006",
+      "created": "2025-12-01",
+      "updated": "2026-07-11",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "Node.js"
+      ],
+      "collection": "engineering",
+      "description": "Every transform runs before the allowlist, and the allowlist is the only exit."
+    },
+    {
+      "slug": "code-heavy-shell-recipes",
+      "title": "Shell Recipes Worth Keeping",
+      "excerpt": "A page that is mostly code fences, in several languages, kept because the alternative is looking each one up again every six months.",
+      "markdown": "# Shell Recipes Worth Keeping\n\nNothing here is clever. Everything here has been looked up more than twice.\n\n## Finding what is big\n\n```bash\ndu -h --max-depth=1 . | sort -h | tail -20\n```\n\n## Reading a JSON field without a parser in the loop\n\n```bash\nnode -e 'const d=require(\"./package.json\");console.log(d.version)'\n```\n\n## Batch, because it still comes up\n\n```cmd\nfor %%f in (*.txt) do echo %%~nf\n```\n\n## PowerShell, quoted carefully\n\n```powershell\nGet-ChildItem -Recurse -Filter *.log |\n  Where-Object { $_.Length -gt 1mb } |\n  Select-Object FullName, Length\n```\n\n## A fence with no language\n\n```\nthis one is deliberately unlabelled\nit still gets the same shell\n```\n\n## A fence labelled as prose\n\n```text\nneither does this one have a grammar\nit is text, and that is the whole point\n```\n\n## Python\n\n```python\ndef excerpt(text: str, limit: int = 200) -> str:\n    \"\"\"Truncate on a word boundary, which is harder than it looks.\"\"\"\n    if len(text) <= limit:\n        return text\n    return text[:text.rindex(\" \", 0, limit)] + \"...\"\n```\n\nBack to [the pipeline](/markdown-pipeline/).\n",
+      "outgoing": [
+        "markdown-pipeline"
+      ],
+      "backlinks": [
+        "markdown-pipeline"
+      ],
+      "public_id": "pub-0007",
+      "created": "2025-12-06",
+      "updated": "2026-08-03",
+      "language": "en",
+      "tags": [
+        "Node.js",
+        "Ops & SRE",
+        "windows"
+      ],
+      "collection": "reference",
+      "aliases": [
+        "Shell Recipes"
+      ]
+    },
+    {
+      "slug": "table-heavy-comparison",
+      "title": "Four Approaches, Compared Honestly",
+      "excerpt": "Mostly tables, with column alignment that has to survive sanitization. A comparison is only useful if the losing column is filled in as carefully as the winning one.",
+      "markdown": "# Four Approaches, Compared Honestly\n\nA comparison table is a trap: it rewards whoever wrote it. These columns were\nfilled in worst-case-first on purpose.\n\n## Rendering strategies\n\n| Strategy | Client cost | Works without scripting | Notes |\n| :--- | ---: | :---: | :--- |\n| Static HTML | 0 KB | yes | Everything below is a deviation from this |\n| Progressive enhancement | 1-5 KB | yes | The default worth defending |\n| Hydrated islands | 15-40 KB | partly | Earns its place at genuine interactivity |\n| Full client render | 90 KB+ | no | Buys a routing model nobody asked for |\n\n## Where the bytes actually go\n\n| Asset | Raw | Compressed | Loaded |\n| :--- | ---: | ---: | :--- |\n| Document | 12.4 KB | 3.2 KB | always |\n| Stylesheet | 11.9 KB | 2.8 KB | always |\n| Theme script | 1.6 KB | 0.6 KB | always, blocking |\n| Search bundle | 118 KB | 30 KB | on request |\n\n## What the table cannot show\n\nWhether the numbers hold on a real device, on a real network, for a real reader.\nThey are measurements of a build, not of an experience.\n\nRelated: [performance budget](/performance-budget/), [design tokens](/design-tokens/).\n",
+      "outgoing": [
+        "design-tokens",
+        "performance-budget"
+      ],
+      "backlinks": [],
+      "public_id": "pub-0008",
+      "created": "2025-12-12",
+      "updated": "2026-04-09",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "Ops & SRE"
+      ],
+      "collection": "reference"
+    },
+    {
+      "slug": "math-and-diagrams",
+      "title": "Notation That Has Not Landed Yet",
+      "excerpt": "Math and diagrams currently render as their own source, which is the honest downgrade: readable, inert, and obviously unfinished rather than subtly broken.",
+      "markdown": "# Notation That Has Not Landed Yet\n\nBoth of these render as plain source today. That is a downgrade, recorded as one.\n\n## Why the downgrade is the right default\n\nA diagram renderer that needs to evaluate strings at runtime buys a picture at the\ncost of the entire script policy. Source is worse than a picture and much better\nthan a relaxed policy.\n\n## Display math\n\n$$\n\\sum_{i=1}^{n} w_i x_i \\geq \\theta\n$$\n\nAnd a second one, because one is never representative:\n\n$$\nP(\\text{leak}) = 1 - \\prod_{g \\in G} (1 - p_g)\n$$\n\n## A diagram\n\n```mermaid\ngraph TD\n  A[Private vault] -->|allowlist| B[Exporter]\n  B --> C[Artifact]\n  C -->|validate| D{Valid?}\n  D -->|no| E[Build fails]\n  D -->|yes| F[Static site]\n```\n\n## A second diagram\n\n```mermaid\nsequenceDiagram\n  Reader->>Site: request a note\n  Site-->>Reader: static HTML\n  Reader->>Site: open search\n  Site-->>Reader: index chunk\n```\n\nBack to [the pipeline](/markdown-pipeline/), or\n[the no-JavaScript baseline](/no-javascript/).\n",
+      "outgoing": [
+        "markdown-pipeline",
+        "no-javascript"
+      ],
+      "backlinks": [
+        "markdown-pipeline"
+      ],
+      "public_id": "pub-0009",
+      "created": "2025-12-18",
+      "updated": "2026-03-15",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "Node.js"
+      ],
+      "collection": "reference"
+    },
+    {
+      "slug": "callouts-and-lists",
+      "title": "🌿 Callouts, Checklists & Other Furniture",
+      "excerpt": "The small structural pieces a note accumulates: admonitions, task lists, nested lists, and definition-style prose that all have to survive an explicit allowlist.",
+      "markdown": "# 🌿 Callouts, Checklists & Other Furniture\n\nFurniture is what a page is mostly made of, and it is what breaks first.\n\n## Admonitions\n\n> [!note] The marker is stripped\n> What survives is a labelled blockquote and an attribute, so styling never has to\n> parse prose.\n\n> [!warning] Kinds are bounded\n> The kind is lowercased and length-limited, because body content must not be able\n> to use an attribute as an unbounded channel.\n\n> [!tip]\n> A callout with no title keeps only its kind.\n\n## Checklists\n\n- [x] Validate before rendering\n- [x] Reject unknown fields\n- [ ] Style everything the pipeline emits\n- [ ] Measure a rendered page rather than a stylesheet\n\n## Nesting\n\n1. First\n   - a nested unordered item\n   - another, with `inline code`\n2. Second\n   1. and a nested ordered item\n3. Third\n\n## Emphasis worth keeping\n\nOrdinary **bold**, ordinary *italic*, ~~struck through~~, and a\n[link back to the pipeline](/markdown-pipeline/).\n",
+      "outgoing": [
+        "markdown-pipeline"
+      ],
+      "backlinks": [],
+      "created": "2026-01-05",
+      "updated": "2026-05-02",
+      "language": "en",
+      "tags": [
+        "Field Notes"
+      ],
+      "collection": "reference"
+    },
+    {
+      "slug": "footnotes-and-citations",
+      "title": "Footnotes Without a Bibliography",
+      "excerpt": "Footnotes are the one piece of academic apparatus worth keeping in a garden: they let a sentence stay short without losing the qualification that makes it true.",
+      "markdown": "# Footnotes Without a Bibliography\n\nA footnote is a way of keeping a sentence short without lying.[^short]\n\n## When they earn their place\n\nWhen the qualification is genuinely secondary.[^secondary] When it is not, the\nqualification belongs in the sentence, and moving it to the bottom of the page is\na way of hiding it.\n\n## When they do not\n\nA citation pile is not evidence. Four references to the same claim are one\nreference and three decorations.\n\n[^short]: The alternative is a sentence with three subordinate clauses, which\n    nobody finishes reading.\n\n[^secondary]: This is itself a marginal case, which is the joke.\n\nRelated: [the pipeline](/markdown-pipeline/), [the long essay](/long-form-essay/).\n",
+      "outgoing": [
+        "long-form-essay",
+        "markdown-pipeline"
+      ],
+      "backlinks": [],
+      "created": "2026-01-11",
+      "language": "en",
+      "tags": [
+        "Field Notes"
+      ],
+      "collection": "reference"
+    },
+    {
+      "slug": "image-embed-demo",
+      "title": "One Inline Image, Deliberately",
+      "excerpt": "A single inline raster image, encoded in the document, because the asset pipeline deliberately does not exist yet and an absent one is better than a half-built one.",
+      "markdown": "# One Inline Image, Deliberately\n\nThere is no asset pipeline here. That is a decision, not an omission.\n\n## The one exception\n\nA base64 raster image inline in the document, restricted to a short list of raster\ntypes. Vector images are excluded because a vector image can carry a script.\n\n![A one-pixel transparent placeholder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=)\n\n## Why not just copy the attachments\n\nBecause \"copy everything that is not a note\" is how a private garden publishes the\nphotographs attached to its drafts.\n\nBack to [the pipeline](/markdown-pipeline/).\n",
+      "outgoing": [
+        "markdown-pipeline"
+      ],
+      "backlinks": [],
+      "created": "2026-01-16",
+      "updated": "2026-02-01",
+      "language": "en",
+      "tags": [
+        "Field Notes"
+      ],
+      "collection": "reference"
+    },
+    {
+      "slug": "design-tokens",
+      "title": "A Palette Declared Once",
+      "excerpt": "Both palettes are declared in one place and switched by one property, so dark mode works before any script runs and keeps working if none ever does.",
+      "markdown": "# A Palette Declared Once\n\nTheming is where a site quietly decides whether it works without scripting.\n\n## The mechanism\n\nBoth palettes are declared together and selected by a single property. The reader's\noperating system preference is honoured with no script at all; an explicit override\nis a small blocking script whose only job is to set one attribute.\n\n## What this avoids\n\nThe common alternative reads a stored preference in client code and sets an\nattribute from it. With scripting unavailable, that produces a light-mode-only site\nand no way to say so.\n\nRelated: [accessibility](/accessibility-baseline/), [no JavaScript](/no-javascript/).\n",
+      "outgoing": [
+        "accessibility-baseline",
+        "no-javascript"
+      ],
+      "backlinks": [
+        "accessibility-baseline",
+        "garden-index",
+        "table-heavy-comparison",
+        "zh-she-ji-bi-ji"
+      ],
+      "public_id": "pub-0010",
+      "created": "2026-01-20",
+      "updated": "2026-06-12",
+      "language": "en",
+      "tags": [
+        "设计 · Design",
+        "Field Notes"
+      ],
+      "collection": "engineering"
+    },
+    {
+      "slug": "accessibility-baseline",
+      "title": "The Baseline Is Not a Checklist",
+      "excerpt": "Landmarks, a skip link, visible focus, honest heading order, and no information carried by colour alone. Everything else is downstream of getting these right.",
+      "markdown": "# The Baseline Is Not a Checklist\n\nAn accessibility checklist is a way of scoring well without helping anyone.\n\n## What is actually load-bearing\n\n- One `h1`, and a heading order that never skips a level\n- A skip link that lands on a real landmark\n- Focus that is visible without hunting for it\n- No meaning carried by colour alone — a count is text, not a shade\n\n## The gate that catches regressions\n\nAsserting a selector exists proves nothing; a competing rule can win. What has to\nbe checked is the resolved cascade, which is more work and is the only version that\ncatches the real bug.\n\nMore: [design tokens](/design-tokens/).\n",
+      "outgoing": [
+        "design-tokens"
+      ],
+      "backlinks": [
+        "design-tokens",
+        "no-javascript"
+      ],
+      "created": "2026-01-26",
+      "updated": "2026-06-20",
+      "language": "en",
+      "tags": [
+        "设计 · Design",
+        "Field Notes"
+      ],
+      "collection": "engineering"
+    },
+    {
+      "slug": "no-javascript",
+      "title": "What Still Works With Scripting Off",
+      "excerpt": "Reading, navigating, following a link, and switching theme all work with scripting unavailable. Everything that does not is hidden rather than left as a dead control.",
+      "markdown": "# What Still Works With Scripting Off\n\nThe test is not whether the page loads. It is whether a control that cannot work is\nstill sitting there inviting a click.\n\n## Works\n\nReading. Every internal link. Heading anchors. Theme, via the operating system\npreference. Print, with the canonical route on the page.\n\n## Hidden, on purpose\n\nSearch, the theme override, and reader mode are marked as script-only and hidden\nwhen scripting is unavailable. A keyboard user meeting three buttons that silently\ndo nothing is worse than three buttons that are not there.\n\nRelated: [static first](/static-first/), [accessibility](/accessibility-baseline/).\n",
+      "outgoing": [
+        "accessibility-baseline",
+        "static-first"
+      ],
+      "backlinks": [
+        "csp-posture",
+        "design-tokens",
+        "math-and-diagrams",
+        "static-first"
+      ],
+      "public_id": "pub-0011",
+      "created": "2026-02-02",
+      "updated": "2026-07-19",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "gardening"
+      ],
+      "collection": "garden-log",
+      "aliases": [
+        "No JS"
+      ]
+    },
+    {
+      "slug": "static-first",
+      "title": "Static Until Something Measurable Breaks",
+      "excerpt": "Every stateful service is deferred until a static approach has actually failed at something measurable. Most of them never get their moment, which is the point.",
+      "markdown": "# Static Until Something Measurable Breaks\n\n\"We might need a database\" is not a measurement.\n\n## The rule\n\nA runtime service is added after a static approach has failed at something specific\nand observable, and the failure is written down first. The order matters: writing\nthe failure down afterwards produces a justification, not a measurement.\n\n## What this has already saved\n\nAn analytics integration, a comment system, and a query API, none of which had a\nstated failure behind them.\n\nRelated: [no JavaScript](/no-javascript/), [budgets](/performance-budget/).\n",
+      "outgoing": [
+        "no-javascript",
+        "performance-budget"
+      ],
+      "backlinks": [
+        "garden-index",
+        "long-form-essay",
+        "no-javascript",
+        "performance-budget"
+      ],
+      "public_id": "pub-0012",
+      "created": "2026-02-08",
+      "updated": "2026-07-25",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "Ops & SRE"
+      ],
+      "collection": "garden-log"
+    },
+    {
+      "slug": "performance-budget",
+      "title": "Budgets Are Gates or They Are Decoration",
+      "excerpt": "A budget nobody enforces is a wish. The useful assertions are binary: not \"small enough\" but \"zero bytes requested before the reader asked for anything\".",
+      "markdown": "# Budgets Are Gates or They Are Decoration\n\nA threshold with no failing build behind it is a number in a document.\n\n## The assertions worth having\n\nNot \"the stylesheet is small enough\", which invites arguing about the number. The\nbinary ones:\n\n- Zero search bytes requested before the reader opens search\n- Zero preview bytes requested before a reader hovers anything\n- Every script same-origin, no exceptions\n\n## The ones worth skipping\n\nRatchets set comfortably above the current measurement. They pass forever and\ndescribe nothing.\n\nBack to [static first](/static-first/).\n",
+      "outgoing": [
+        "static-first"
+      ],
+      "backlinks": [
+        "search-notes",
+        "static-first",
+        "table-heavy-comparison"
+      ],
+      "public_id": "pub-0013",
+      "created": "2026-02-14",
+      "updated": "2026-08-04T07:05:00Z",
+      "language": "en",
+      "tags": [
+        "Ops & SRE",
+        "Field Notes"
+      ],
+      "collection": "garden-log"
+    },
+    {
+      "slug": "csp-posture",
+      "title": "A Policy You Can Actually Reach",
+      "excerpt": "A strict script policy is worth nothing if the architecture cannot satisfy it. This one can, and a test over the built output fails the moment something inline appears.",
+      "markdown": "# A Policy You Can Actually Reach\n\nMost sites cannot adopt a strict script policy, and the reason is always the same:\nsomething in the framework emits an inline script on every page.\n\n## What makes it reachable here\n\nNothing inline is emitted at all. Asset inlining is pinned off as a security\ncontrol rather than a size preference, and the test that fails if it moves is named\nin the configuration comment.\n\n## The gap that took longest to notice\n\nThe policy was strict enough to block the search engine's own module, which meant\nsearch had never run under the shipped policy. A policy that blocks your own\nfeatures is still a real policy; it is just not a finished one.\n\nRelated: [no JavaScript](/no-javascript/), [search](/search-notes/).\n",
+      "outgoing": [
+        "no-javascript",
+        "search-notes"
+      ],
+      "backlinks": [
+        "garden-index",
+        "privacy-boundary",
+        "search-notes"
+      ],
+      "public_id": "pub-0014",
+      "created": "2026-02-20",
+      "updated": "2026-07-30",
+      "language": "en",
+      "tags": [
+        "security",
+        "Ops & SRE"
+      ],
+      "collection": "engineering",
+      "description": "A strict policy is only meaningful if the site can be built to satisfy it."
+    },
+    {
+      "slug": "search-notes",
+      "title": "Search That Ships Nothing Until Asked",
+      "excerpt": "The index is built from published output, so it cannot contain what was never published. Nothing is fetched until a reader actually opens the dialog.",
+      "markdown": "# Search That Ships Nothing Until Asked\n\nThe best property of this search is structural rather than clever: it indexes the\nbuilt output, so it cannot contain a page that was never built.\n\n## Sharding\n\nThe index is split, so opening search fetches a small entry file and one chunk\nrather than the whole corpus. The common alternative ships every page's full text\nto every reader before the first keystroke.\n\n## The bilingual question\n\nIndexes partition by document language automatically, which is convenient and\nintroduces a subtle failure: a query from a page in one language may not reach\ndocuments in the other unless the indexes are explicitly merged.\n\nRelated: [CSP posture](/csp-posture/), [budgets](/performance-budget/).\n",
+      "outgoing": [
+        "csp-posture",
+        "performance-budget"
+      ],
+      "backlinks": [
+        "csp-posture",
+        "garden-index"
+      ],
+      "created": "2026-02-26",
+      "updated": "2026-06-05",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "Ops & SRE"
+      ],
+      "collection": "engineering"
+    },
+    {
+      "slug": "deterministic-builds",
+      "title": "Same Input, Same Bytes",
+      "excerpt": "If the same artifact can produce two different sites, no comparison between builds means anything, and every diff review becomes an exercise in ignoring noise.",
+      "markdown": "# Same Input, Same Bytes\n\nDeterminism is not an aesthetic preference. Without it, a diff between two builds\ncannot distinguish a content change from a build artifact.\n\n## Where it usually breaks\n\nTimestamps. Random identifiers. Iteration over an unordered map. And the subtle\none: a shared registry mutated lazily, so output depends on which page was rendered\nfirst.\n\n## How it is kept\n\nOrdering is explicit everywhere a set is turned into a list, the slug generator is\nper-document rather than global, and shared registries are settled once before the\nfirst render.\n\nBack to [the contract](/content-contract/).\n",
+      "outgoing": [
+        "content-contract"
+      ],
+      "backlinks": [
+        "backlink-invariant",
+        "long-form-essay",
+        "zh-gong-ju-lian"
+      ],
+      "public_id": "pub-0015",
+      "created": "2026-03-04",
+      "updated": "2026-05-27",
+      "language": "en",
+      "tags": [
+        "Ops & SRE",
+        "Node.js"
+      ],
+      "collection": "engineering"
+    },
+    {
+      "slug": "long-form-essay",
+      "title": "On Publishing Less Than You Know",
+      "excerpt": "The long argument for publishing a subset. A mirror inherits every mistake in the original; a projection inherits only what someone chose to defend in public.",
+      "markdown": "# On Publishing Less Than You Know\n\nThere is a particular kind of regret that comes from publishing a note you had not\nfinished thinking. It is not embarrassment exactly. It is the discovery that the\nhalf-formed version is now the version other people have, and that correcting it\ncosts more attention than writing it did.\n\n## The mirror and the projection\n\nThe dominant model for a public knowledge garden is the mirror. Point a tool at a\nfolder, publish what it finds, exclude what you remember to exclude. It is easy to\nset up and it is wrong in an interesting way: the default is publication, and every\nprotection is a subtraction from that default.\n\nSubtraction defaults fail in one direction. The failures are not evenly\ndistributed between \"published something private\" and \"withheld something public\" —\nthey are almost entirely the first kind, because that is what a default does.\n\nA projection inverts it. Nothing is published unless it was named. The failure mode\nbecomes \"forgot to publish something\", which is recoverable at any time by anyone,\nand which nobody has ever been harmed by.\n\n### The objection\n\nThe obvious objection is friction. Naming each note is work, and work that scales\nwith the corpus is work you will eventually stop doing.\n\nThis is true and it is the strongest argument against the whole approach. The\nanswer is not that the friction is small. It is that the friction is *at the right\nmoment*: it happens when you are deciding to publish, which is exactly when a\ndecision should be expensive.\n\n### The second objection\n\nThe second objection is that it makes the garden less useful as a garden. Half the\nvalue of publishing notes is the accidental connection — the reader who finds two\nof your pages and sees something you did not.\n\nThis is also true, and the honest response is that it is a real cost, partially\npaid. A curated subset has fewer accidents in it. What it has instead is a set of\nconnections that were checked, which is a different good rather than a larger\namount of the same one.\n\n## What the boundary actually buys\n\n### One: withdrawal that withdraws\n\nRemoving a note from the manifest removes it from the artifact, from the built\nsite, and from the search index. There is nothing left to serve. Compare the usual\n\"unlisted\" flag, which removes a page from the index while continuing to serve it\nto anyone holding the URL — and while continuing to record every *other* page's\nlinks pointing at it, so the withdrawn title is inferrable from its neighbours.\n\n### Two: an answer to \"what is public\"\n\nThe question \"what does this site publish?\" has an exact answer, in a file, that a\nbuild gate proves is complete. Very few sites can answer it at all. Most can only\nanswer \"what does this site currently link to\", which is a different question with\na shorter answer.\n\n### Three: relationships that are checked\n\nBecause the corpus is bounded, every edge in it can be verified against every other\nedge on every build. This is unaffordable on a whole vault and nearly free on a\nprojection. The result is a guarantee — no dangling edges — rather than a hope.\n\n## What it costs\n\n### Latency\n\nA note that deserves publishing waits until someone says so. In practice this is\ndays, sometimes weeks. For a garden whose value is accumulated rather than\nimmediate, days are not expensive. For a news site they would be fatal, which is a\nreason to notice that this design is for one kind of site and not the other.\n\n### The exporter is a single point of failure\n\nEverything depends on one program reading one manifest correctly. It is small,\nwhich helps, and it is reviewed, which helps more. It is also the piece with the\nfewest tests, which is where the next real problem will come from.\n\n### The temptation to relax\n\nThe steady pressure is toward \"publish by default, exclude carefully\". It arrives\ndisguised as convenience and it arrives every time the manifest is edited.\n\n## What I would tell someone starting\n\nStart with the projection even if the corpus is five notes. The model is nearly\nimpossible to retrofit: once a site has published by default for a year, nobody\nknows what is out there, and finding out means reading everything.\n\nStart the failure behaviour strict, too. A build that refuses is annoying exactly\nonce per defect. A build that warns is annoying never, and it publishes the defect.\n\n## Where this connects\n\nThe mechanics are in [the content contract](/content-contract/) and\n[the privacy boundary](/privacy-boundary/). The reason it stays cheap is\n[static first](/static-first/). The reason it stays reviewable is\n[deterministic builds](/deterministic-builds/).\n",
+      "outgoing": [
+        "content-contract",
+        "deterministic-builds",
+        "privacy-boundary",
+        "static-first"
+      ],
+      "backlinks": [
+        "footnotes-and-citations",
+        "garden-index"
+      ],
+      "public_id": "pub-0016",
+      "created": "2026-03-10",
+      "updated": "2026-08-06T18:30:00+08:00",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "🌱 seedling",
+        "gardening"
+      ],
+      "collection": "garden-log",
+      "aliases": [
+        "Publishing Less",
+        "On Publishing Less"
+      ],
+      "description": "The long one: why a public garden should be a projection rather than a mirror, and what that costs."
+    },
+    {
+      "slug": "zh-jian-jie",
+      "title": "这个花园是怎么搭起来的",
+      "excerpt": "这个站点是什么、一则笔记如何抵达这里，以及构建过程无论如何都拒绝发布的那些东西。整体只有一个想法：公开的站点应当是私有花园的投影，而不是它的镜像。",
+      "markdown": "# 这个花园是怎么搭起来的\n\n下面写的内容大多是同一个想法的反复应用：公开的站点应当是私有花园的**投影**，而不是它的镜像。\n\n镜像会继承原件里的每一个错误，而投影是被挑选出来的。\n\n## 一则笔记如何到达这里\n\n在一则笔记出现在这里之前，必须发生三件事，而每一件都可能明确地失败。\n\n1. 有人手动把它加入允许发布的清单。\n2. 导出程序读取该清单，写出一个产物文件。\n3. 本仓库校验该产物；只要有任何不对，构建就直接失败。\n\n值得争论的是第三步。警告并继续会更省事，但警告只会被本来就知道的人读到。\n\n## 永远不会到达这里的内容\n\n任何没有被清单点名的东西，包括全部附件、全部草稿，以及仅仅因为被某则已发布笔记链接到的笔记。\n\n## 接下来读什么\n\n[工具链](/zh-gong-ju-lian/)记录了构建过程本身，[设计笔记](/zh-she-ji-bi-ji/)记录了排版决定，\n[内容契约](/content-contract/)是英文那一侧的起点。\n",
+      "outgoing": [
+        "content-contract",
+        "zh-gong-ju-lian",
+        "zh-she-ji-bi-ji"
+      ],
+      "backlinks": [
+        "garden-index",
+        "zh-gong-ju-lian",
+        "zh-she-ji-bi-ji"
+      ],
+      "public_id": "pub-0017",
+      "created": "2026-03-16",
+      "updated": "2026-07-28",
+      "language": "zh-CN",
+      "tags": [
+        "笔记",
+        "开发笔记",
+        "🌱 seedling"
+      ],
+      "collection": "garden-log",
+      "aliases": [
+        "简介"
+      ],
+      "description": "这个站点是什么、一则笔记如何抵达这里，以及构建过程拒绝发布的那些东西。"
+    },
+    {
+      "slug": "zh-gong-ju-lian",
+      "title": "工具链笔记：可复现的构建",
+      "excerpt": "如果同一份产物可以产生两个不同的站点，那么任何构建之间的比较都失去意义，每一次差异审查都会变成忽略噪声的练习。",
+      "markdown": "# 工具链笔记：可复现的构建\n\n可复现不是一种审美偏好。没有它，两次构建之间的差异就无法区分内容改动与构建噪声。\n\n## 通常在哪里出问题\n\n时间戳、随机标识符、对无序集合的遍历。还有一个更隐蔽的：被惰性修改的全局注册表，\n于是输出取决于哪一页先被渲染。\n\n## 一个例子\n\n```bash\nnode --run build && git diff --stat -- dist\n```\n\n如果第二次构建产生了差异，那么问题不在内容里。\n\n## 相关\n\n[简介](/zh-jian-jie/)、[deterministic builds](/deterministic-builds/)。\n",
+      "outgoing": [
+        "deterministic-builds",
+        "zh-jian-jie"
+      ],
+      "backlinks": [
+        "zh-jian-jie"
+      ],
+      "public_id": "pub-0018",
+      "created": "2026-03-22",
+      "updated": "2026-06-18",
+      "language": "zh-CN",
+      "tags": [
+        "开发笔记",
+        "笔记",
+        "Node.js"
+      ],
+      "collection": "engineering"
+    },
+    {
+      "slug": "zh-she-ji-bi-ji",
+      "title": "设计笔记：中英混排",
+      "excerpt": "中英混排的排版问题几乎全部出现在细节里：行高、标点、断行，以及一个只在其中一种语言下才看得出来的字号。",
+      "markdown": "# 设计笔记：中英混排\n\n中英混排的问题几乎全都藏在细节里。\n\n## 行高\n\n按拉丁文字调好的行高，在中文段落里通常偏紧。中文没有 ascender 和 descender 造成的\n视觉留白，所以同样的数值看起来更密。\n\n## 标点\n\n全角标点自带空白。把它当作普通字符来处理，段首就会出现一个说不清来历的缩进。\n\n## 断行\n\n长的英文技术词汇在窄屏上会撑破容器，而中文几乎可以在任何位置断开。这两种行为需要\n不同的处理方式。\n\n| 项目 | 中文 | 英文 |\n| :--- | :---: | ---: |\n| 断行位置 | 几乎任意 | 词边界 |\n| 标点留白 | 自带 | 需要 |\n| 默认行高 | 偏紧 | 合适 |\n\n## 相关\n\n[design tokens](/design-tokens/)、[简介](/zh-jian-jie/)。\n",
+      "outgoing": [
+        "design-tokens",
+        "zh-jian-jie"
+      ],
+      "backlinks": [
+        "zh-jian-jie"
+      ],
+      "created": "2026-03-28",
+      "updated": "2026-05-09",
+      "language": "zh-CN",
+      "tags": [
+        "设计 · Design",
+        "笔记"
+      ],
+      "collection": "garden-log"
+    },
+    {
+      "slug": "orphan-three-zh",
+      "title": "一则没有任何链接的笔记 🌱",
+      "excerpt": "这则笔记既没有指向别处的链接，也没有任何链接指向它。它存在是为了证明孤立的页面依然能被正确地渲染和索引。",
+      "markdown": "# 一则没有任何链接的笔记 🌱\n\n这则笔记既不链接到任何其他笔记，也没有任何笔记链接到它。\n\n## 为什么保留它\n\n孤立页面是最容易在实现里被遗漏的情况。列表、索引和搜索都必须照常处理它，\n而\"没有反向链接\"应当渲染成什么都没有，而不是一个空标题。\n\n## 它仍然应该具备的东西\n\n标题、正文、可用的路由，以及在搜索结果里出现的能力。\n",
+      "outgoing": [],
+      "backlinks": [],
+      "created": "2026-04-02",
+      "language": "zh-CN",
+      "tags": [
+        "笔记"
+      ]
+    },
+    {
+      "slug": "orphan-one",
+      "title": "A Note Nobody Links To",
+      "excerpt": "No outgoing links and no incoming ones. It exists because isolated pages are the case implementations forget, and every listing surface has to handle it unremarkably.",
+      "markdown": "# A Note Nobody Links To\n\nThis note links to nothing and nothing links to it.\n\n## Why keep it\n\nAn isolated page is the case an implementation forgets. Every listing, index, and\nsearch surface has to handle it without comment, and an empty relationship section\nshould render as nothing rather than as an empty heading.\n\n## What it still needs\n\nA title, a body, a working route, and a place in search.\n",
+      "outgoing": [],
+      "backlinks": [],
+      "created": "2026-04-06",
+      "updated": "2026-04-06",
+      "language": "en",
+      "tags": [
+        "gardening"
+      ],
+      "collection": "garden-log"
+    },
+    {
+      "slug": "orphan-two",
+      "title": "Another Unlinked Note, With a Tag",
+      "excerpt": "Unlinked, but tagged, and tagged with a spelling that differs only by case from another note. Two spellings of one tag are one tag, not two pages saying the same thing.",
+      "markdown": "# Another Unlinked Note, With a Tag\n\nUnlinked, but not untagged.\n\n## The case question\n\nThis note's tag differs from another note's only by capitalization. Splitting them\nwould publish two pages saying the same thing; failing the build would be unfixable\nfrom here, because the exporter owns the text.\n\nSo they merge, and the surviving spelling is chosen by a rule that does not depend\non which note happened to be exported first.\n",
+      "outgoing": [],
+      "backlinks": [],
+      "created": "2026-04-10",
+      "language": "en",
+      "tags": [
+        "Gardening",
+        "windows"
+      ]
+    },
+    {
+      "slug": "withdrawn-note",
+      "title": "A Withdrawn Note",
+      "excerpt": "Marked withdrawn. It carries no edges in either direction, which is the only shape a withdrawal can currently take without contradicting the backlink invariant.",
+      "markdown": "# A Withdrawn Note\n\nThis note is marked as withdrawn.\n\n## The shape of a withdrawal\n\nIt carries no edges in either direction. That is not a stylistic choice: the\nbacklink invariant requires backlinks to be the exact inverse of outgoing links,\nso a withdrawn note that another live note still links to cannot be expressed at\nall — which is exactly the case where withdrawal matters most.\n\n## What that means\n\nThe current answer for a note somebody still links to is removal from the manifest\nrather than a tombstone, and the open problem is written down rather than papered\nover.\n",
+      "outgoing": [],
+      "backlinks": [],
+      "public_id": "pub-0019",
+      "created": "2026-01-02",
+      "updated": "2026-04-14",
+      "language": "en",
+      "status": "tombstone"
+    },
+    {
+      "slug": "alias-heavy",
+      "title": "A Note Under Several Names",
+      "excerpt": "Four aliases, none of which is a route. An alias resolves a link written under an older name; it does not create a second page saying the same thing.",
+      "markdown": "# A Note Under Several Names\n\nAn alias is a resolution key, not a second address.\n\n## What an alias does\n\nIt lets a link written under an older name resolve to this note. It does not\npublish a second page, which would be duplicate content under two URLs and a\nwithdrawal problem the day either is removed.\n\n## What the contract enforces\n\nNo two notes may claim the same alias, and no alias may collide with another\nnote's slug. Both are corpus-level checks, so they fail with both names in the\nmessage.\n\nRelated: [the content contract](/content-contract/).\n",
+      "outgoing": [
+        "content-contract"
+      ],
+      "backlinks": [],
+      "public_id": "pub-0020",
+      "created": "2026-04-18",
+      "updated": "2026-04-20",
+      "language": "en",
+      "tags": [
+        "Field Notes",
+        "gardening"
+      ],
+      "collection": "reference",
+      "aliases": [
+        "Several Names",
+        "Many Names",
+        "别名笔记",
+        "AKA"
+      ],
+      "description": "Aliases are link-resolution keys, not routes."
+    },
+    {
+      "slug": "undated-note-a",
+      "title": "An Undated Note",
+      "excerpt": "The projection carries no date for this note. Undated notes follow every dated one in a documented, stable order rather than being given an invented timestamp.",
+      "markdown": "# An Undated Note\n\nThe projection carries no date for this note, and none is invented for it.\n\n## The ordering rule\n\nUndated notes follow every dated note, in ascending slug order. Slug is unique, so\nthe result is a total order and two builds of the same artifact produce the same\npage.\n\n## Why not just use the file's modification time\n\nBecause that is a fact about a filesystem, not about the note. It changes when a\nfile is copied and it is wrong the first time the garden is restored from a backup.\n",
+      "outgoing": [],
+      "backlinks": [
+        "undated-note-b"
+      ],
+      "language": "en",
+      "tags": [
+        "gardening"
+      ],
+      "collection": "garden-log"
+    },
+    {
+      "slug": "undated-note-b",
+      "title": "A Second Undated Note",
+      "excerpt": "A second note with no dates, so that the undated ordering is exercised with more than one member and a stable tiebreak actually has to do something.",
+      "markdown": "# A Second Undated Note\n\nA second undated note, so the undated tail of the ordering has more than one\nmember and the tiebreak has something to do.\n\n## Related\n\n[The first undated note](/undated-note-a/).\n",
+      "outgoing": [
+        "undated-note-a"
+      ],
+      "backlinks": [],
+      "language": "en",
+      "tags": [
+        "gardening",
+        "Field Notes"
+      ],
+      "collection": "garden-log"
+    },
+    {
+      "slug": "minimal-note",
+      "title": "Only the Required Fields",
+      "excerpt": "",
+      "markdown": "# Only the Required Fields\n\nThis note carries the six required fields and nothing else: no dates, no tags, no\ncollection, no language, no aliases, and an empty excerpt.\n\n## Why it is here\n\nBecause every optional field has to be genuinely optional. A page that renders only\nwhen the metadata is complete is a page that will break the first time the exporter\nomits something.\n\n## What should happen\n\nIt should appear in every listing, order itself among the undated notes, and render\nwithout an empty metadata row where its dates would have been.\n",
+      "outgoing": [],
+      "backlinks": []
+    }
+  ]
+}

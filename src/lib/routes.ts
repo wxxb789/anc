@@ -50,6 +50,111 @@ export function collectionRoute(key: string): string {
   return `/${COLLECTIONS_SEGMENT}/${key}/`;
 }
 
+/**
+ * The vocabulary a public route key may use.
+ *
+ * Wider than the `[a-z0-9-]` slug shape TK-01 enforces, because a tag is free
+ * text in any script: `笔记`, `हिन्दी`, and `tiếng việt` must all produce a
+ * readable key. Combining marks are admitted for exactly that reason — Devanagari
+ * vowel signs and Vietnamese tone marks are `\p{M}`, and excluding them would
+ * reject those languages outright.
+ *
+ * What it excludes is what a public route segment must never carry: a leading or
+ * trailing hyphen, a doubled hyphen, and anything that is not a letter, digit,
+ * mark, or underscore.
+ *
+ * Underscore is a word character here, not a separator, so it is neither
+ * trimmed nor collapsed: `snake_case_tag` and `_ops_` are readable keys a
+ * reader would recognize, and `github-slugger` preserves them from the label
+ * rather than manufacturing them from punctuation. The hyphen rules exist
+ * because a hyphen is what the slugger *substitutes* for stripped characters,
+ * which is how a gap becomes a separator nobody wrote.
+ */
+const ROUTE_KEY = /^[\p{L}\p{N}\p{M}_]+(?:-[\p{L}\p{N}\p{M}_]+)*$/u;
+
+/**
+ * At least one visible letter or digit. A key of only combining marks satisfies
+ * {@link ROUTE_KEY} but is an invisible public URL.
+ */
+const ROUTE_KEY_SUBSTANCE = /[\p{L}\p{N}]/u;
+
+/**
+ * Characters a renderer draws as nothing: the emoji variation selector U+FE0F,
+ * the zero-width joiner, soft hyphens, and the bidi controls.
+ *
+ * U+FE0F is why this is a separate rule rather than a clause of
+ * {@link ROUTE_KEY}: it is a *nonspacing mark*, so `\p{M}` admits it, and
+ * `⚠️ warning` would otherwise key a route whose first character is invisible.
+ */
+const INVISIBLE_IN_KEY = /\p{Default_Ignorable_Code_Point}/gu;
+
+/** Whether a string is usable, as-is, as a public route segment. */
+export function isRouteKey(key: string): boolean {
+  return ROUTE_KEY.test(key) && ROUTE_KEY_SUBSTANCE.test(key);
+}
+
+/**
+ * A label's public route key: slugified, then cleaned into the route vocabulary.
+ *
+ * `github-slugger` strips emoji and most punctuation *without* closing the gap
+ * they leave, so `🌱 seedling` becomes `-seedling`, `seedling 🌱` becomes
+ * `seedling-`, and `Ops & SRE` becomes `ops--sre` — a leading, a trailing, and a
+ * doubled separator, all of which were emittable public URLs. A tag of `---`
+ * survived whole and routed to `/tags/---/`.
+ *
+ * Cleaning rather than rejecting, because an emoji tag is ordinary in a digital
+ * garden and `🌱 seedling` has one obvious, readable answer. What matters is not
+ * that the key is unaltered but that it stays a **pure function of this one
+ * label**: nothing here reads another tag, a position, or a corpus size, so
+ * publishing a new tag can never move an existing tag's URL. That is the same
+ * property that rules out a numeric disambiguating suffix.
+ *
+ * Unicode is normalized to NFC first, so a label typed with a combining accent
+ * and one typed with the precomposed character produce the same key rather than
+ * two indistinguishable public URLs. That is also a build-correctness matter:
+ * these keys become directory names, and macOS normalizes filenames, so the two
+ * forms would collide on disk on one platform and not on another.
+ *
+ * When cleaning leaves nothing addressable — `---`, `...`, `½` — there is no
+ * answer to invent, and {@link facets} fails the build.
+ */
+export function routeKey(label: string): string {
+  return slugify(label.normalize('NFC'))
+    .normalize('NFC')
+    .replace(INVISIBLE_IN_KEY, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+/**
+ * Whether two labels are spellings of the same thing rather than a collision.
+ *
+ * Compared after the same normalizations {@link routeKey} applies, because the
+ * two questions have to agree: if `café` and `café` produce one key, they
+ * must also count as one label, or the merge that key implies becomes a build
+ * failure the exporter cannot fix — the two are indistinguishable on screen.
+ *
+ * Case folding is what makes `Gardening` and `gardening` one tag. It is
+ * `toLowerCase`, which is ASCII-shaped: `straße` and `STRASSE` stay separate.
+ * They also produce different keys, so the outcome is two pages rather than a
+ * wrong merge — the safe direction.
+ */
+function sameLabel(a: string, b: string): boolean {
+  return a.normalize('NFC').toLowerCase() === b.normalize('NFC').toLowerCase();
+}
+
+/**
+ * Said by both facet failures, because neither has a fix available here.
+ *
+ * The exporter authors tag text, and this repository never edits the artifact
+ * by hand, so the only remedy is to change the label at the source. Saying so
+ * in the message is the difference between a build failure someone can act on
+ * and one they will try to patch in the wrong repository.
+ */
+const EXPORTER_OWNS_LABELS =
+  'The label is authored by the exporter, so the fix belongs there: rename it in the ' +
+  'private vault and re-export. Do not edit the generated artifact by hand.';
+
 /** A tag or collection, with the notes that carry it. */
 export interface Facet {
   /** URL-safe route key. Stable for a given label. */
@@ -80,6 +185,10 @@ function byTitleThenSlug(a: ContentEntry, b: ContentEntry): number {
  * alternative — disambiguating with a numeric suffix — would make an existing
  * tag's public URL depend on what other tags exist, which breaks the stable
  * identity requirement. Failing names both labels so the exporter can fix it.
+ *
+ * Both failures name {@link EXPORTER_OWNS_LABELS}, because neither is fixable
+ * from this repository: the exporter authors the tag text, so the only remedy
+ * is to change it there and re-export.
  */
 function facets(
   entries: readonly ContentEntry[],
@@ -92,23 +201,29 @@ function facets(
   for (const entry of entries) {
     for (const label of labelsOf(entry)) {
       const key = keyOf(label);
-      if (key === '') {
-        throw new Error(`${what} ${JSON.stringify(label)} has no URL-safe route key under ${base}`);
+      if (!isRouteKey(key)) {
+        throw new Error(
+          `${what} ${JSON.stringify(label)} has no URL-safe route key under ${base}: ` +
+            `it reduces to ${JSON.stringify(key)}, which is not an addressable public route segment. ` +
+            EXPORTER_OWNS_LABELS,
+        );
       }
       const existing = groups.get(key);
       if (existing === undefined) {
         groups.set(key, { key, label, entries: [entry] });
         continue;
       }
-      if (existing.label.toLowerCase() !== label.toLowerCase()) {
+      if (sameLabel(existing.label, label)) {
+        // The smallest label wins, so which spelling survives does not depend on
+        // the order entries appear in the artifact.
+        if (label < existing.label) existing.label = label;
+      } else {
         throw new Error(
           `${what}s ${JSON.stringify(existing.label)} and ${JSON.stringify(label)} ` +
-            `both route to ${base}${key}/`,
+            `both route to ${base}${key}/. ` +
+            EXPORTER_OWNS_LABELS,
         );
       }
-      // The smallest label wins, so which spelling survives does not depend on
-      // the order entries appear in the artifact.
-      if (label < existing.label) existing.label = label;
       // One entry carrying two spellings of the same tag (`Gardening` and
       // `gardening`) is one note on that page, not two. TK-01's duplicate check
       // compares exact strings, so it admits the pair; the case merge is what
@@ -132,7 +247,7 @@ function facets(
  * unreadable and awkward as a filename in static output.
  */
 export function tagFacets(entries: readonly ContentEntry[]): Facet[] {
-  return facets(entries, (entry) => entry.tags ?? [], slugify, 'tag', `/${TAGS_SEGMENT}/`);
+  return facets(entries, (entry) => entry.tags ?? [], routeKey, 'tag', `/${TAGS_SEGMENT}/`);
 }
 
 /** Collection facets. TK-01 already validates `collection` as a slug, so it is its own key. */
