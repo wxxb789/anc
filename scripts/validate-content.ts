@@ -9,11 +9,11 @@
  * Everything downstream of `astro build` that can *throw* is exercised here
  * too. The build is a `&&` chain — validate, build, emit redirects, index with
  * Pagefind — so a throw in a later link leaves a `dist/` that is already
- * written and now permanently incomplete, which `npm run preview` serves
+ * written and now permanently incomplete, which `pnpm run preview` serves
  * happily. Running those computations against the same artifact first means the
  * failure happens while `dist/` is still the last known good build.
  *
- * A fixture build (`CONTENT_ARTIFACT=…`, i.e. `npm run build:fixture`) reads
+ * A fixture build (`CONTENT_ARTIFACT=…`, i.e. `pnpm run build:fixture`) reads
  * that artifact instead, as does a caller passing a candidate path. The
  * index-projection check is skipped there and only there:
  * `public/content-index.json` is the projection of the *published* artifact,
@@ -83,7 +83,7 @@ export function contentVersion(source: string): string {
  * lands on a half-written directory. `renderRedirects` runs later still, in a
  * separate `&&` link after `astro build` has finished writing — and if it
  * throws, the chain stops before `pagefind --site dist` ever runs, leaving a
- * `dist/` with no search index that `npm run preview` serves happily.
+ * `dist/` with no search index that `pnpm run preview` serves happily.
  *
  * Running all three here moves every one of those failures ahead of the first
  * write, so a bad artifact leaves the previous good build intact.

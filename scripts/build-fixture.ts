@@ -2,12 +2,15 @@
  * Builds the site from the fixture corpus and runs every gate against it.
  *
  * Why a script rather than an inline environment variable in `package.json`:
- * npm runs scripts through `cmd.exe` on Windows, where `VAR=value command` is
- * not assignment, and the alternative is a dependency whose whole job is one
- * line of `process.env`. This is that line.
+ * `VAR=value command` is not assignment in `cmd.exe`, which is what runs a
+ * script on Windows. pnpm can paper over that with `shellEmulator`, but that
+ * setting changes how *every* script in the manifest is interpreted, which is a
+ * much larger blast radius than the one line of `process.env` it would save —
+ * and it would not shorten this file, which orchestrates four build steps, the
+ * test run, and the restore below rather than setting one variable.
  *
  * Why it runs the tests too: TK-11's acceptance criterion is that
- * `npm run build:fixture` produces a full site from the fixture corpus **and
+ * `pnpm run build:fixture` produces a full site from the fixture corpus **and
  * every existing gate passes against it**. The gates read the artifact through
  * `src/lib/artifact-source.ts`, so they must see the same `CONTENT_ARTIFACT`
  * the build saw. Running them here is what makes that impossible to get wrong —
@@ -17,7 +20,7 @@
  *
  * Why it rebuilds the published site at the end: the gates over `dist/` read
  * whichever artifact `CONTENT_ARTIFACT` names, so a fixture `dist/` left in
- * place makes the *next* bare `npm run build`-less `npm test` fail six gates
+ * place makes the *next* bare `pnpm run build`-less `pnpm test` fail six gates
  * for no reason a reader could diagnose. Leaving the tree in the state the
  * default commands expect is worth the extra build.
  */
@@ -33,9 +36,9 @@ const FIXTURE_ARTIFACT = 'tests/fixtures/valid-corpus.json';
 /** The published build chain, in order. The test suite runs after it. */
 const STEPS: readonly (readonly [string, ...string[]])[] = [
   ['node', 'scripts/validate-content.ts'],
-  ['npx', 'astro', 'build'],
+  ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/emit-redirects.ts'],
-  ['npx', 'pagefind', '--site', 'dist'],
+  ['pnpm', 'exec', 'pagefind', '--site', 'dist'],
 ];
 
 /** Run one step with the fixture artifact selected; returns its exit status. */
@@ -43,8 +46,11 @@ function runStep(command: string, args: readonly string[], env: NodeJS.ProcessEn
   const result = spawnSync(command, [...args], {
     stdio: 'inherit',
     env,
-    // `npx`, `pagefind`, and `npm` are shell wrappers on Windows and cannot be
-    // executed directly, so a shell is required there and only there.
+    // `pnpm` resolves to a `.CMD` shim under Corepack and under some installers,
+    // and a `.CMD` cannot be executed directly by `CreateProcess`. It happens to
+    // be a real `.exe` on this machine, so the shell is not always needed — but
+    // which one a contributor has is not this script's to know, and the `node`
+    // steps are unaffected either way.
     //
     // Node deprecates `shell: true` with an args array (DEP0190) because the
     // arguments are concatenated rather than escaped. That is a real hazard for
@@ -93,11 +99,11 @@ function main(): number {
 
   writeFixtureIndex();
 
-  const testStatus = runStep('npx', ['vitest', 'run'], env);
+  const testStatus = runStep('pnpm', ['exec', 'vitest', 'run'], env);
   if (testStatus !== 0) {
     console.error(`\nvitest run failed with status ${testStatus}`);
     // Still restore the published build: leaving a fixture `dist/` behind makes
-    // the next ordinary `npm test` fail for a second, unrelated reason.
+    // the next ordinary `pnpm test` fail for a second, unrelated reason.
     restorePublishedBuild();
     return testStatus;
   }
@@ -110,8 +116,8 @@ function main(): number {
 /** Leave `dist/` describing the published artifact, as every other command expects. */
 function restorePublishedBuild(): void {
   console.log('\nrestoring the published build in dist/');
-  const status = runStep('npm', ['run', 'build'], { ...process.env, CONTENT_ARTIFACT: undefined });
-  if (status !== 0) console.error('could not restore the published build — run `npm run build`');
+  const status = runStep('pnpm', ['run', 'build'], { ...process.env, CONTENT_ARTIFACT: undefined });
+  if (status !== 0) console.error('could not restore the published build — run `pnpm run build`');
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) process.exit(main());

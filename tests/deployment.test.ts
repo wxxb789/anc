@@ -1,7 +1,8 @@
 /**
- * The two files that configure the host rather than the site: `public/_headers`
- * and `.nvmrc`. Neither is exercised by a build, and until TK-12 neither was
- * covered by a test — `grep -rn "_headers" tests/ scripts/` returned nothing.
+ * The files that configure the host and the toolchain rather than the site:
+ * `public/_headers`, `.nvmrc`, and the shape of the installed tree. None is
+ * exercised by a build, and until TK-12 none was covered by a test — `grep -rn
+ * "_headers" tests/ scripts/` returned nothing.
  *
  * `_headers` is six lines, and it is the only place the site's security posture
  * is written down. It is also the file that silently broke search:
@@ -16,7 +17,7 @@
  * explicit `! Header-Name`.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -142,7 +143,7 @@ test('the WebAssembly relaxation is still load-bearing', () => {
   try {
     pagefind = readFileSync(new URL('../dist/pagefind/pagefind.js', import.meta.url), 'utf8');
   } catch {
-    return assert.fail('dist/pagefind/pagefind.js is missing — run `npm run build` before `npm test`');
+    return assert.fail('dist/pagefind/pagefind.js is missing — run `pnpm run build` before `pnpm test`');
   }
   assert.match(
     pagefind,
@@ -158,15 +159,15 @@ test('the built site serves the same headers as the source declares', () => {
   try {
     built = readFileSync(BUILT, 'utf8');
   } catch {
-    return assert.fail('dist/_headers is missing — run `npm run build` before `npm test`');
+    return assert.fail('dist/_headers is missing — run `pnpm run build` before `pnpm test`');
   }
   assert.equal(built, TEXT);
 });
 
 /**
- * `.nvmrc` is what a build host and `nvm use` read; `engines` is what npm
- * warns on. Neither is enforced on Cloudflare Pages, so the only thing keeping
- * them from drifting apart is this.
+ * `.nvmrc` is what a build host and `nvm use` read; `engines` is what the
+ * package manager warns on. Neither is enforced on Cloudflare Pages, so the
+ * only thing keeping them from drifting apart is this.
  */
 test('the pinned Node version satisfies the declared engine floor', () => {
   const nvmrc = readFileSync(new URL('../.nvmrc', import.meta.url), 'utf8').trim();
@@ -195,7 +196,7 @@ test('the pinned Node version satisfies the declared engine floor', () => {
  *
  * `build` is a `&&` chain: validate, `astro build`, emit redirects, index with
  * Pagefind. A throw in any link after the first leaves a `dist/` that is already
- * written and now permanently incomplete — and `npm run preview` serves it
+ * written and now permanently incomplete — and `pnpm run preview` serves it
  * happily. The worst shape was concrete: `emit:redirects` throwing meant
  * `pagefind --site dist` never ran, so every page shipped a render-blocking
  * `<link>` to a `/pagefind/` stylesheet that did not exist.
@@ -216,7 +217,7 @@ test('the content gate fails on a poisoned artifact before the build runs', () =
   ) as { entries: { tags?: string[] }[] };
 
   /**
-   * Run the gate exactly as `npm run build`'s first link runs it, against a
+   * Run the gate exactly as `pnpm run build`'s first link runs it, against a
    * candidate artifact.
    *
    * The candidate is a temporary file, never `src/data/content.json`. Poisoning
@@ -255,4 +256,73 @@ test('the content gate fails on a poisoned artifact before the build runs', () =
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+/**
+ * The symlinked layout is the reason this repository uses pnpm, so it is worth
+ * one gate rather than one sentence in `AGENTS.md`.
+ *
+ * npm's flat `node_modules` hoists every transitive package to the top level,
+ * where a bare `import` finds it — so a module can depend on a package nobody
+ * declared and the build keeps working until the dependency that dragged it in
+ * changes. TK-03 hit exactly that class of problem and had to promote
+ * `satteri`, `github-slugger`, `prismjs`, and `@astrojs/prism` from transitive
+ * to direct. pnpm links only declared packages into the root `node_modules`,
+ * which turns that from a convention into a resolution error.
+ *
+ * This reads the root directory rather than attempting a resolution. Node's
+ * lookup for a bare specifier does continue past this directory — into ancestor
+ * `node_modules`, `NODE_PATH`, and the home-directory fallbacks — but none of
+ * those is what hoisting populates. Every route back to a flat tree ends with
+ * extra entries here: `public-hoist-pattern` (which `shamefully-hoist` is
+ * defined as, with the pattern `*`), `node-linker=hoisted`, and a stray
+ * `npm install` in a tree that no longer has a `package-lock.json`. Comparing
+ * this directory against the manifest catches all of them.
+ *
+ * Two earlier attempts are worth not repeating. Probing with `require.resolve`
+ * *inside* a test measures Vitest rather than the build: Vitest puts
+ * `node_modules/.pnpm/node_modules` on `NODE_PATH` for its workers, so every
+ * package in the store resolves. Deriving candidate names from the `.pnpm`
+ * store instead needs the peer suffix parsed off
+ * (`vite@8.2.0_@types+node@26.1.2_…`), and a name parsed wrong becomes a name
+ * that cannot resolve — which is a silent pass, the one failure mode a gate
+ * must not have.
+ */
+test('only declared packages are installed at the root of node_modules', () => {
+  const root = new URL('../', import.meta.url);
+  const manifest = JSON.parse(readFileSync(new URL('package.json', root), 'utf8')) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+  };
+  // All three kinds are linked into the root: `node_modules/.modules.yaml`
+  // records `included: {dependencies, devDependencies, optionalDependencies}`.
+  // Omitting any of them would fail this gate on a package the manifest declares.
+  const declared = [
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+    ...Object.keys(manifest.optionalDependencies ?? {}),
+  ].sort();
+
+  // Dot-entries are never importable specifiers: `.bin`, `.pnpm`, and
+  // `.modules.yaml` belong to pnpm, `.astro` and `.vite` are build caches. A
+  // `@scope` directory holds the package one level further down; npm names are
+  // never nested deeper than that.
+  const modules = fileURLToPath(new URL('node_modules', root));
+  const installed = readdirSync(modules)
+    .filter((entry) => !entry.startsWith('.'))
+    .flatMap((entry) =>
+      entry.startsWith('@')
+        ? readdirSync(join(modules, entry)).map((scoped) => `${entry}/${scoped}`)
+        : [entry],
+    )
+    .sort();
+
+  assert.deepEqual(
+    installed,
+    declared,
+    'the root of node_modules does not match package.json. Extra entries mean the flat layout ' +
+      'is back, so an undeclared import would resolve here and fail on another machine; missing ' +
+      'entries mean the install is incomplete — run `pnpm install`',
+  );
 });

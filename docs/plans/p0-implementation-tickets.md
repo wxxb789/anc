@@ -43,9 +43,9 @@ defaults. This backlog adopts them:
 
 Every ticket is complete only when all of the following hold:
 
-1. `npm run build` passes from a clean tree.
-2. `npm run check` (type checking) passes.
-3. The ticket's own tests pass under `npm test`.
+1. `pnpm run build` passes from a clean tree.
+2. `pnpm run check` (type checking) passes.
+3. The ticket's own tests pass under `pnpm test`.
 4. `git diff --check` passes.
 5. Built output contains no `msw/`, no unresolved `[[wikilink]]`, no absolute local
    path, and no private-vault path fragment.
@@ -88,7 +88,7 @@ build successfully. There is no test runner.
    `language`, `tags`, `collection`, `status`, `aliases`, `description`.
    Unknown fields must be rejected rather than silently passed through, so that a
    future exporter change is a loud failure instead of a privacy risk.
-2. Validate at build time. An invalid artifact must fail `npm run build` with a
+2. Validate at build time. An invalid artifact must fail `pnpm run build` with a
    message naming the offending entry and field.
 3. Enforce artifact invariants:
    - slug uniqueness;
@@ -108,8 +108,8 @@ build successfully. There is no test runner.
    a valid rich artifact using every optional field, and one fixture per rejected
    invariant. Fixtures are synthetic; never copy private content.
 7. Add a test runner. Use the Node built-in test runner (`node --test`); do not add
-   a test framework dependency. Wire `npm test`.
-8. Add `npm run check` for type checking, and make `npm run build` depend on
+   a test framework dependency. Wire `pnpm test`.
+8. Add `pnpm run check` for type checking, and make `pnpm run build` depend on
    validation.
 
 **Acceptance criteria.**
@@ -425,7 +425,7 @@ verification, no budget enforcement, and no build manifest.
 4. Build manifest: emit a reviewable summary listing routes, artifact hashes, asset
    sizes, content version, and the commit identifier. The manifest must contain no
    private values.
-5. Consolidate the full gate into one `npm run verify` entry point that runs
+5. Consolidate the full gate into one `pnpm run verify` entry point that runs
    validation, type checking, tests, build, and every scan above.
 6. Accessibility: run whatever automated check is achievable without a heavyweight
    browser dependency, and document precisely which WCAG 2.2 AA checks remain
@@ -433,7 +433,7 @@ verification, no budget enforcement, and no build manifest.
 
 **Acceptance criteria.**
 
-- `npm run verify` passes from a clean tree and fails when a seeded violation is
+- `pnpm run verify` passes from a clean tree and fails when a seeded violation is
   introduced, proven by a test for each scanner rule.
 - Measured performance values are recorded and within budget.
 - The build manifest is generated and reviewed for privacy.

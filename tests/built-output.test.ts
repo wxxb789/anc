@@ -3,7 +3,7 @@
  *
  * These cannot be made against the source: the CSP requirement is about what
  * Astro *emits*, and the layout shell is only assembled at build time. Run
- * `npm run build` before `npm test`; the suite fails loudly rather than
+ * `pnpm run build` before `pnpm test`; the suite fails loudly rather than
  * skipping when `dist/` is absent, because a security gate that quietly
  * disappears is worse than one that is inconvenient.
  *
@@ -35,7 +35,7 @@ function builtFiles(extension: string): string[] {
   try {
     return walk(DIST, extension);
   } catch {
-    return assert.fail(`dist/ is missing or unreadable — run \`npm run build\` before \`npm test\``);
+    return assert.fail(`dist/ is missing or unreadable — run \`pnpm run build\` before \`pnpm test\``);
   }
 }
 

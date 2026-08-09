@@ -1,0 +1,14 @@
+# pnpm settings. Build approval lives here rather than in `package.json`: pnpm 11
+# reads every setting except auth and registry from this file.
+#
+# `esbuild: false` denies its postinstall. That script downloads nothing — it
+# copies the platform binary that `@esbuild/win32-x64` already ships as an
+# ordinary optional dependency, and `transformSync` was verified to work with
+# the script denied. npm blocked the same script, so denying it keeps the
+# migration like-for-like instead of granting the tree a privilege it never had.
+#
+# A package listed in neither direction is treated as unreviewed and fails the
+# install, which is the point: a new dependency cannot begin running install
+# scripts unnoticed.
+allowBuilds:
+  esbuild: false

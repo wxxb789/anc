@@ -2,7 +2,7 @@
  * Which artifact file this build reads.
  *
  * The default is the exporter-generated `src/data/content.json`. Setting
- * `CONTENT_ARTIFACT` to another path — `npm run build:fixture` does exactly
+ * `CONTENT_ARTIFACT` to another path — `pnpm run build:fixture` does exactly
  * that — builds the whole site from a different artifact without touching the
  * generated one, which the agent contract forbids editing by hand.
  *
@@ -13,7 +13,7 @@
  * The path is resolved against `process.cwd()` rather than against
  * `import.meta.url`, and that is load-bearing: Astro bundles this module into
  * `dist/.prerender/`, so `import.meta.url` points inside the build output at
- * the moment the pages actually read it. `npm` runs every script with the
+ * the moment the pages actually read it. `pnpm` runs every script with the
  * working directory set to the directory holding `package.json`, and Astro
  * resolves its own project root the same way — so cwd is the one anchor all
  * three consumers agree on.

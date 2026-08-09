@@ -16,16 +16,18 @@ Build a static, privacy-preserving public projection from an explicit allowlist 
 ## Workflow
 
 ```bash
-npm run sync:content   # local-only: read allowlist from the sibling private vault
-npm run build          # Astro static build + Pagefind
-npm run preview        # local verification
+pnpm run sync:content   # local-only: read allowlist from the sibling private vault
+pnpm run build          # Astro static build + Pagefind
+pnpm run preview        # local verification
 ```
+
+pnpm is the only supported package manager; `packageManager` in `package.json` pins the version. Its symlinked `node_modules` is a boundary, not a preference: a module that imports a package absent from `package.json` fails to resolve rather than silently borrowing it from a transitive dependency.
 
 Cloudflare Pages builds this repository only and never receives access to the private vault.
 
 ## Verification
 
-- `npm run build` passes.
+- `pnpm run build` passes.
 - Generated routes and `content-index.json` are readable.
 - No horizontal overflow, browser console error, or broken internal link.
 - Search opens and indexes published pages.

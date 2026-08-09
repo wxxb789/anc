@@ -7,7 +7,7 @@
  * in-content link points at a route that does not exist, and that the emitted
  * redirect map matches the artifact rather than a stale committed copy.
  *
- * Run `npm run build` before `npm test`; the suite fails loudly rather than
+ * Run `pnpm run build` before `pnpm test`; the suite fails loudly rather than
  * skipping when `dist/` is absent.
  */
 
@@ -65,7 +65,7 @@ function builtRoutes(): string[] {
       else if (name.endsWith('.html')) found.push(`/${prefix}${name}`);
     }
   };
-  if (!exists(DIST)) assert.fail('dist/ is missing — run `npm run build` before `npm test`');
+  if (!exists(DIST)) assert.fail('dist/ is missing — run `pnpm run build` before `pnpm test`');
   walk(DIST, '');
   return found.sort();
 }
@@ -523,7 +523,7 @@ test('the breadcrumb trail is public routes and the page title, in order', () =>
  * Both directions, because both are defects: a field present in the artifact
  * and missing from the page loses information the projection approved, and a
  * row rendered for an absent field is fabricated metadata. The published corpus
- * carries none of these, so this is only evidence under `npm run build:fixture`
+ * carries none of these, so this is only evidence under `pnpm run build:fixture`
  * — but it runs unconditionally, because "no note has a date" is a correct
  * result for it, not a skip.
  */
@@ -736,11 +736,11 @@ test('no page outside the note route links the code stylesheet', () => {
  * The assertions below are only evidence on such a corpus: a grid of one card
  * is not a grid, and an ordering of one note is not an ordering. On the
  * published one-note artifact they are skipped with a message naming the
- * command that runs them; under `npm run build:fixture` they all run, and every
+ * command that runs them; under `pnpm run build:fixture` they all run, and every
  * layout claim in this repository is finally falsifiable.
  *
  * Skipping rather than asserting a weaker property is deliberate, and it is a
- * real limitation: on the default `npm run build && npm test` path these five
+ * real limitation: on the default `pnpm run build && pnpm test` path these five
  * gates do not execute, so the evidence exists only when someone runs the
  * fixture build. Making them mandatory needs a `verify` script or CI, which is
  * TK-14's. What is avoided in the meantime is the worse option — a gate that
@@ -759,7 +759,7 @@ const MULTI_ENTRY =
  * the same message `node --test` printed before the migration.
  */
 function requireMultiEntry(context: TestContext): void {
-  context.skip(!MULTI_ENTRY, 'corpus has one entry — run `npm run build:fixture`');
+  context.skip(!MULTI_ENTRY, 'corpus has one entry — run `pnpm run build:fixture`');
 }
 
 test('the note grid renders one card per entry, with more than one', (context) => {

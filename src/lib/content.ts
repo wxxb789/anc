@@ -6,7 +6,7 @@
  * `schema.ts`. A malformed artifact throws at module evaluation, which fails
  * `astro build` with a message naming the offending entry and field.
  *
- * Which file is read is `artifact-source.ts`'s decision, so `npm run
+ * Which file is read is `artifact-source.ts`'s decision, so `pnpm run
  * build:fixture` can build the whole site from a fixture corpus without
  * touching the generated artifact. The file is read rather than imported: a
  * static `import ... with { type: 'json' }` names one path at parse time, which

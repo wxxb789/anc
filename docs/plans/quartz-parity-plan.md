@@ -78,7 +78,7 @@ Every Quartz v5 capability in the 36-entry inventory, against what this reposito
 | Private pages — filters and `ignorePatterns` | opt-out `draft:`/opt-in `publish:` frontmatter plus a globby ignore list, fail-open on assets | **built (TK-01)** — allowlist manifest outside the repo, exporter-produced artifact, and privacy invariants enforced at `src/lib/schema.ts:95` | we win |
 | Private pages — `unlisted` | one frontmatter boolean that eight independent plugins each promise to honour | **gap** — `status` accepts only `published`/`tombstone` (`src/lib/schema.ts:23`); no published-but-unlisted state exists | we lose |
 | Private pages — encrypted pages | AES-256-GCM ciphertext of the rendered HTML shipped to the CDN, decrypted in the browser | **skipped** — requirements §8.3 defers it, and it needs inline script plus `innerHTML` | skipped by design |
-| Docker support | two-stage Dockerfile running `quartz build --serve`, documented as dev-only | **skipped** — `npm run preview` is one command; a pinned sync-time image for the diagram toolchain is a separate question | skipped by design |
+| Docker support | two-stage Dockerfile running `quartz build --serve`, documented as dev-only | **skipped** — `pnpm run preview` is one command; a pinned sync-time image for the diagram toolchain is a separate question | skipped by design |
 | Roam Research compatibility | `findAndReplace` over mdast emitting raw HTML nodes, including YouTube iframes | **skipped** — one source vault, one exporter; raw HTML would not survive the TK-03 allowlist anyway | skipped by design |
 | OxHugo compatibility | seven `String.replaceAll` passes over raw source, and turns on `rehype-raw` pipeline-wide | **skipped** — same, and enabling `rehype-raw` is the inverse of our explicit allowlist | skipped by design |
 | Page frames + layout-by-YAML DSL | `frameRegistry` Map, three frame modules, per-component slotting in `quartz.config.yaml`, frame CSS emitted inline | **skipped** — Astro layouts and slots are the registry, typechecked, at zero cost | skipped by design |
@@ -151,7 +151,7 @@ collected in §4.2.
 | L6 | **No canonical URLs, OG/Twitter metadata, RSS, or sitemap** | Quartz emits all four, plus rasterized OG images via satori + sharp | `dist/` has no `sitemap*`, no `rss*`, zero `rel="canonical"`, zero `og:title`. `astro.config.mjs` has no `site:` | TK-08. Decide the OG-image question explicitly: satori + sharp is a native dependency this project has otherwise avoided, and it collides with the browser-harness decision in L10 |
 | L7 | **Hover previews are broken by construction** | Quartz's popover is better engineered on three axes: `@floating-ui/dom` positioning with `inline`/`shift`/`flip`, a per-pathname cache, `window.addCleanup` teardown, and a real 185-line regression test | `src/scripts/link-preview.ts:28` does `indexPromise ||= fetch(...).then(...)` with no `.catch` — one failed fetch permanently poisons previews for the page's lifetime. `:32` fires on every `pointerover` with no hover-intent delay | `.catch` that clears `indexPromise`, a 100–150 ms intent delay, and `focus`/`blur` alongside pointer events — the last is two lines and Quartz does not do it at all. Keep our lookup-by-slug shape (`:41`); it is strictly better than Quartz's fetch-whatever-the-anchor-points-at, which has zero `unlisted` check |
 | L8 | **Chrome is monolingual** | Quartz ships 31 locales with a compile-checked contract: `locales/definition.ts` declares `Translation`, each locale ends `as const satisfies Translation`, so a missing key is a build error. Function-valued strings handle interpolation with no ICU runtime | `src/layouts/Layout.astro:17` hardcodes `NAV_LANGUAGE = 'en'`. Hard constraint 6 requires bilingual zh-CN/English with per-document language metadata. The artifact schema already has `language` (`src/lib/schema.ts:70`) and `Layout.astro:14,28` already threads it to `<html lang>` | Steal the `as const satisfies Translation` shape with two locales. Resolve chrome **per document**, which is where we beat them — see §5 |
-| L9 | **First deploy will fail** | Quartz gates the Node version at `bootstrap-cli.mjs:3` with an actionable message | No `.nvmrc`; `package.json:15` runs bare `node scripts/validate-content.ts` and `engines` is advisory on Cloudflare Pages. `src/styles/tokens.css:99` names `Inter` with no `@font-face` and no font file anywhere outside `node_modules`. `package.json:15` chains `astro build && emit:redirects && pagefind --site dist`, so a `renderRedirects` throw ships a `dist/` with no `/pagefind/` while `Layout.astro:76` still emits a render-blocking `<link>` to `/pagefind/pagefind-ui.css` — a 404 stylesheet on every page, which `npm run preview` serves happily | `.nvmrc`; delete `Inter,`; call `tagFacets`/`collectionFacets`/`renderRedirects` from `scripts/validate-content.ts` so the three throws happen before `astro build` touches `dist/` |
+| L9 | **First deploy will fail** | Quartz gates the Node version at `bootstrap-cli.mjs:3` with an actionable message | No `.nvmrc`; `package.json:15` runs bare `node scripts/validate-content.ts` and `engines` is advisory on Cloudflare Pages. `src/styles/tokens.css:99` names `Inter` with no `@font-face` and no font file anywhere outside `node_modules`. `package.json:15` chains `astro build && emit:redirects && pagefind --site dist`, so a `renderRedirects` throw ships a `dist/` with no `/pagefind/` while `Layout.astro:76` still emits a render-blocking `<link>` to `/pagefind/pagefind-ui.css` — a 404 stylesheet on every page, which `pnpm run preview` serves happily | `.nvmrc`; delete `Inter,`; call `tagFacets`/`collectionFacets`/`renderRedirects` from `scripts/validate-content.ts` so the three throws happen before `astro build` touches `dist/` |
 | L10 | **No CI, and no ticket creates one** | Quartz runs `.github/workflows/ci.yaml` on three operating systems | Every gate here — the CSP tests, the residue scan, the contract validation — is only as strong as someone remembering to run it. For a repository whose central claim is that privacy is an artifact property, an unenforced gate is the headline risk. The repo has no remote URL, so a workflow file is not yet actionable | Append `node --test` to `build` today: measured 3.0 s wall, 210 pass. That makes every privacy and CSP gate mandatory on the host instead of opt-in, and needs no remote |
 | L11 | **26% of first-paint transfer is a stylesheet for a dialog most readers never open** | — | `src/layouts/Layout.astro:76` unconditionally links `/pagefind/pagefind-ui.css`: 14,482 raw / 2,599 gz on all 7 routes. Article first paint is 10,119 gz total (3,195 html + 2,751 css + 1,574 js + 2,599 pagefind css). Separately, `src/scripts/search-dialog.ts:33-37` injects the **deprecated** Default UI, 119,987 raw / 30,211 gz, when `pagefind-modular-ui.js` at 14,634 / 4,244 gz is already in `dist/` | Delete one line for 26%. Switch to the modular UI for 7× on the search payload. Note `pagefind-highlight.js:1029-1034` creates a `<style>` element with `innerText` and `addStyles` defaults true — pass `addStyles: false` and ship our own `.pagefind__highlight` rule, or it is a CSP violation storm |
 | L12 | **Onboarding and configuration do not exist** | `npx quartz create` is a genuinely good `@clack/prompts` wizard with four templates, and `quartz-plugins.schema.json` (345 lines) wired via a `# yaml-language-server: $schema=` header gives editor autocomplete without running anything | Mostly notional: one user, one deployment target, no config file. Recording it so nobody mistakes its absence for a win | Nothing now. If a config file ever appears, ship the JSON Schema header with it — that idea is worth stealing outright |
@@ -389,7 +389,7 @@ this waits, more code is written against an artifact shape nobody has seen.
 
 **Acceptance criteria.**
 
-- `npm run build:fixture` produces a full site from the fixture corpus and every existing
+- `pnpm run build:fixture` produces a full site from the fixture corpus and every existing
   gate passes against it.
 - Grid, backlinks, tag pages, collection pages, and `/recent/` ordering each render with
   more than one entry, asserted by test.
@@ -495,8 +495,8 @@ that ticket.
 
 **Acceptance criteria.**
 
-- `npm test` runs under Vitest with all tests passing and no count regression.
-- `npm run lint` runs Oxlint and passes, or reports only findings recorded as deliberate.
+- `pnpm test` runs under Vitest with all tests passing and no count regression.
+- `pnpm run lint` runs Oxlint and passes, or reports only findings recorded as deliberate.
 - The browser-harness decision is written down with its reason, and the 320 px check
   either measures a rendered page or documents why it still does not.
 
@@ -514,7 +514,7 @@ no remote, so a workflow file alone would not run.
 
 **Scope.**
 
-1. Make the gates mandatory on the host today, independent of any remote: `npm run verify`
+1. Make the gates mandatory on the host today, independent of any remote: `pnpm run verify`
    must run validation, lint, type check, tests, build, and the residue scan, and the
    release path must run it rather than relying on discipline.
 2. Add the CI workflow file so it takes effect the moment a remote exists. Pin the Node
@@ -523,7 +523,7 @@ no remote, so a workflow file alone would not run.
 
 **Acceptance criteria.**
 
-- `npm run verify` passes from a clean tree and fails on a seeded violation of each gate.
+- `pnpm run verify` passes from a clean tree and fails on a seeded violation of each gate.
 - The workflow file is syntactically valid and its steps mirror `verify` exactly, so the
   two cannot drift.
 - A documented statement of which gates run where, and what is still manual.
@@ -954,7 +954,7 @@ any feature on the list.
 | `tests/css-cascade.ts`, 397 lines of hand-written CSS parsing, with three dependent test files | Its own TK-02 report recommends **replacing** it with a rendered check rather than deepening it, after round two found five parser bugs that had silently disarmed real gates. Three rejected proposals (F24's class gate, F3's budgets, F6's transformer switch) each wanted to add a fourth consumer. | C3, C5, C6 |
 | `src/lib/route-path.ts` — a 31-line module with its own docstring, existing solely so `link-preview.ts` does not drag `SITE_MAP` into the browser bundle | The split is currently justified (Rolldown could not drop the array literal) but serves a feature with **zero** in-prose note links to preview. Keep it only as long as `link-preview.ts` ships; it is one file, not a module boundary worth defending. | C6 |
 | `copy-code` button markup (`src/lib/markdown.ts:437-441`, forced `hidden` at `:708`) plus its `button` entries in `allowedTags`/`allowedAttributes`/`allowedClasses` | 8 buttons per article, zero CSS, zero handler, ~672 raw bytes, and it corrupts every indexed code block. Pure deletion. | C3, C5, C6, C8; verified (A5) |
-| The unconditional `<link href="/pagefind/pagefind-ui.css">` at `src/layouts/Layout.astro:76` | 2,599 B gz on all 7 routes for a dialog most readers never open — 26% of the measured 10,119 gz first paint. A worse failure mode also hides here: if `emit:redirects` throws, `&&` stops the chain, `pagefind --site dist` never runs, and every page ships a 404ing render-blocking stylesheet that `npm run preview` serves happily. | all six; verified (A1, A11) |
+| The unconditional `<link href="/pagefind/pagefind-ui.css">` at `src/layouts/Layout.astro:76` | 2,599 B gz on all 7 routes for a dialog most readers never open — 26% of the measured 10,119 gz first paint. A worse failure mode also hides here: if `emit:redirects` throws, `&&` stops the chain, `pagefind --site dist` never runs, and every page ships a 404ing render-blocking stylesheet that `pnpm run preview` serves happily. | all six; verified (A1, A11) |
 | `RenderedNote.toc` / `.headings` / `.hasCode` / `.hasMath` / `.hasMermaid` — computed every render, zero consumers across `src/pages`, `src/components`, `src/layouts`, `src/scripts` | **Do not delete.** C6 lists these as dead weight; owner decision 7 makes them the per-page lazy-load gate. Wire them up in TK-05, do not remove them. | C6 named it; owner decision 7 overrides |
 
 ---

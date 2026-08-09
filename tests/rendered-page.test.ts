@@ -24,9 +24,9 @@
  * parsed out of that file rather than restated, so the measurement happens under
  * the policy the site deploys.
  *
- * Playwright's browser binary is a large download and `npm install` does not
+ * Playwright's browser binary is a large download and `pnpm install` does not
  * fetch it. When it is absent these tests skip with the command that installs
- * it, so a fresh clone still gets a green `npm test` rather than a failure it
+ * it, so a fresh clone still gets a green `pnpm test` rather than a failure it
  * cannot act on. Only that one case skips: any other launch failure is a real
  * fault and fails loudly, because a gate that turns itself off on an error it
  * cannot explain is worse than no gate.
@@ -175,7 +175,7 @@ function builtRoutes(): string[] {
 async function launch(): Promise<{ browser: Browser } | { unavailable: string }> {
   const { chromium } = await import('playwright');
 
-  const install = 'run `npx playwright install chromium` to run the rendered gates';
+  const install = 'run `pnpm exec playwright install chromium` to run the rendered gates';
   let executable: string;
   try {
     executable = chromium.executablePath();
@@ -198,7 +198,7 @@ beforeAll(async () => {
   try {
     statSync(DIST);
   } catch {
-    assert.fail('dist/ is missing or unreadable — run `npm run build` before `npm test`');
+    assert.fail('dist/ is missing or unreadable — run `pnpm run build` before `pnpm test`');
   }
   routes = builtRoutes();
   assert.ok(routes.length > 0, 'the build produced no pages to render');
@@ -267,8 +267,8 @@ async function visit(page: Page, route: string): Promise<void> {
  * `display: block` instead would strip the table's semantics. TK-02 recorded
  * that deferral as a `ponytail:` note in `src/styles/global.css`. This gate
  * found it the first time a corpus with wide tables was rendered — the
- * published one-note corpus has none, so `npm test` never sees it and only
- * `npm run build:fixture` does.
+ * published one-note corpus has none, so `pnpm test` never sees it and only
+ * `pnpm run build:fixture` does.
  *
  * Each entry names the element whose subtree may overflow, not just the route,
  * so an unrelated defect on the same page still fails: a wide `<table>` reports
