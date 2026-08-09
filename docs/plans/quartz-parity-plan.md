@@ -269,6 +269,7 @@ Two structural facts drive the order:
 | TK-09 | Privacy, security, and performance gates | all above | P0 | 4 |
 | TK-18 | Measured benchmark against Quartz v5 | TK-09 | P0 | 4 |
 | TK-10 | ADRs and deferred-scope documentation | all above | P0 | 4 |
+| TK-21 | Interactive graph via SQLite WASM | TK-17, TK-09 | P1 | 5 |
 | TK-19 | Exporter contract evolution and escalation path | — | P1 | any |
 | TK-20 | Oxfmt | TK-13 | P1 | isolated |
 
@@ -282,6 +283,7 @@ both rewrite `Layout.astro` are not parallel however independent their logic.
 | 2 | TK-05a, TK-05b, TK-06, TK-08, TK-14 | TK-05a owns `src/components/Toc.astro` and the article shell; TK-05b owns the relationship components; TK-06 owns `src/scripts/search-dialog.ts` and the Pagefind build flags; TK-08 owns `src/pages/rss.xml.ts`, `sitemap`, and the `<head>` block; TK-14 owns `.github/`. All five touch `src/pages/notes/[slug].astro` or `Layout.astro` in small, non-overlapping regions — assign each a named region in its ticket, or serialize 05a before the rest. |
 | 3 | TK-15, TK-05c, TK-07, TK-16, TK-17 | TK-15 owns `src/lib/markdown.ts` math and diagram paths plus `src/scripts/mermaid.ts`; TK-05c owns the rail components; TK-07 owns `src/scripts/link-preview.ts`; TK-16 owns `src/lib/i18n.ts` and every chrome string; TK-17 owns `src/pages/graph.astro` and `src/lib/graph.ts`. TK-16 edits strings inside components TK-05c creates — **serialize TK-16 after TK-05c**. |
 | 4 | TK-09, then TK-18, then TK-10 | Strictly serial. Gates must see the finished surface; the benchmark needs the gates' numbers; the ADRs record what the other two found. |
+| 5 | TK-21 alone | Phase 2. It enhances TK-17's static baseline and must not start before TK-09 has established the budget gates it has to pass. |
 
 TK-20 (Oxfmt) is deliberately outside every wave. It rewrites every file in the
 repository, so it lands as its own commit against a clean tree, touching nothing else.
@@ -614,8 +616,9 @@ the clearest content for the "more feature rich" goal.
    required by requirements §17.
 4. Respect `prefers-reduced-motion`; no force-simulation animation is required for a
    static layout.
-5. Keep the per-page cost near 2 KB. An interactive canvas island remains Phase 2 and must
-   not be stubbed in here.
+5. Keep the per-page cost near 2 KB. The interactive layer is TK-21 and must not be stubbed
+   in here — this ticket ships the baseline that TK-21 enhances and that survives when
+   TK-21's enhancement fails.
 
 **Acceptance criteria.**
 
@@ -624,6 +627,68 @@ the clearest content for the "more feature rich" goal.
 - Keyboard traversal reaches every node in a documented order.
 - The rendered graph's edges match the artifact's edge set exactly, proven by a test.
 - Per-page byte cost is measured and recorded.
+
+---
+
+#### TK-21 — Interactive graph via SQLite WASM
+
+**Requirements:** sections 12.1, 12.2, 12.3, 12.4, 13.2, 13.3, 17, 19.3, 20; owner decisions
+on graph architecture
+
+**Problem.** TK-17's static SVG answers "what is one hop from here" — a query the build can
+answer over a bounded corpus. It cannot answer multi-hop traversal, relationship filtering
+("notes cited by both A and B"), or arbitrary graph queries: those combinatorially explode
+at build time. That is the genuine case for a client-side database, and it is the only one.
+
+**Two things this ticket must not do.** It must not move backlinks or the one-hop
+neighborhood into a query — those are build-time static HTML today
+(`src/pages/notes/[slug].astro:28-38`), which is what requirements §13.1 and §12.3 require
+and what Quartz already does correctly. Moving them would cost roughly 900 KB of WebAssembly,
+require `wasm-unsafe-eval`, and make them invisible without JavaScript. And it must not
+introduce D1 or any runtime data service: D1 is permanently rejected, not deferred, because
+a browser calling it directly needs client-side credentials and a binding needs Worker
+runtime code.
+
+**Scope.**
+
+1. **Generate the graph artifact at build time** using Node 24's built-in `node:sqlite` —
+   verified available, zero new dependencies. This is a build step, not a server: the build
+   host runs Node and the deployed runtime stays fully static. Schema semantics are
+   normative per requirements §12.2 — immutable node identity, typed edges, public-only
+   context, deterministic ordering, foreign-key integrity, indexed incoming and outgoing
+   queries.
+2. **Emit a content-addressed artifact set**: `public/data/graph.<hash>.sqlite`,
+   `graph-manifest.json` carrying schema version, content version, byte size, sha256, and
+   node and edge counts, plus a bounded JSON adjacency fallback.
+3. **Load only on explicit user intent.** No fetch during normal article reading. The
+   manifest is fetched when a graph feature is invoked; the database follows only if the
+   schema and content versions validate.
+4. **Query in a dedicated Web Worker**, read-only, using bound parameters and fixed query
+   templates. Return structured-clone-safe objects. Idle the worker after a bounded period.
+5. **Degrade to TK-17's static layer** on any failure — WASM unsupported, fetch failed,
+   schema mismatch, worker timeout. The static graph is always present in the HTML, so
+   degradation is the absence of an enhancement, never a blank region.
+6. **CSP.** SQLite WASM needs `wasm-unsafe-eval` in `script-src`. That is not
+   `unsafe-eval` and permits no string-to-code evaluation. TK-12 already adds it for
+   Pagefind, so this ticket adds no new relaxation — verify that and state it.
+7. **Budgets** per requirements §12.4: manifest under 10 KB, database warning at 2 MB
+   compressed transfer and hard limit at 5 MB, p95 local-neighborhood query under 50 ms
+   after worker readiness, and no effect on Largest Contentful Paint.
+8. Client library: `@sqlite.org/sqlite-wasm` (3.53.0-build1) or `sql.js` (1.14.1). Pin it,
+   and record which and why.
+
+**Acceptance criteria.**
+
+- Zero graph bytes are requested on an article page until the reader invokes a graph
+  feature, proven by a test over the built HTML and the module graph.
+- With JavaScript disabled, with WASM blocked, and with the database request failing, the
+  page still shows TK-17's static graph and every node still links.
+- Database content is deterministic for identical input, `PRAGMA integrity_check` returns
+  `ok`, and the foreign-key check is empty.
+- The JSON fallback returns results identical to the SQLite query for every fixture.
+- Manifest hash and byte size match the served asset.
+- Query templates use bound parameters; a test asserts no string-concatenated SQL.
+- Measured transfer and p95 query latency are recorded against the §12.4 budgets.
 
 ---
 
@@ -910,3 +975,29 @@ without it means shipping against the requirements document.
 
 **Recommendation:** P0, scheduled in wave 3. If the launch date binds, the honest move is to
 amend §9.1 rather than quietly omit the route.
+
+### D6 — Settled: the relationship store
+
+Recorded here because it closes requirements §12.5, DR-4, and DR-5, and because the wrong
+version of it keeps resurfacing.
+
+**D1 is permanently rejected, not deferred.** A browser calling D1 directly would need
+client-side credentials, and a D1 binding needs Worker or Pages runtime code — both
+contradict the static-first principle. Requirements §12.5's escalation path and DR-5 are
+closed as "will not happen"; TK-10 records this.
+
+**The graph ships in two layers.** TK-17 renders a build-time static SVG baseline with real
+`<a>` elements, crawlable and keyboard-navigable and working with JavaScript disabled.
+TK-21 adds an optional SQLite-WASM layer for the queries the build cannot precompute —
+multi-hop traversal and relationship filtering — loaded lazily on explicit intent and
+degrading to the baseline on any failure.
+
+**Backlinks stay build-time static HTML** and must not move into a query. They are already
+correct at `src/pages/notes/[slug].astro:28-38`, which is what requirements §13.1 and §12.3
+specify and what Quartz also does. Moving them would cost roughly 900 KB of WebAssembly,
+require `wasm-unsafe-eval`, and make them invisible without JavaScript — a regression on a
+capability where we are already at parity.
+
+**The `.db` artifact is generated at build time with Node 24's built-in `node:sqlite`** —
+verified available, zero new dependencies. This is a build step, not a server: the build
+host runs Node and the deployed runtime stays fully static.
