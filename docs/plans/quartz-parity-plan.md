@@ -253,19 +253,19 @@ Two structural facts drive the order:
 
 | ID | Title | Depends on | Priority | Wave |
 | --- | --- | --- | --- | --- |
-| TK-11 | Realistic multi-note fixture corpus | — | P0 | 1 |
-| TK-12 | Shipped-output defect sweep | — | P0 | 1 |
+| TK-11 | Realistic multi-note fixture corpus | — | P0 | done |
+| TK-12 | Shipped-output defect sweep | — | P0 | done |
 | TK-13 | Toolchain migration — Vitest, Oxlint | — | P0 | 1 |
-| TK-14 | CI enforcement | TK-13 | P0 | 2 |
-| TK-05a | Page anatomy and table of contents | TK-11, TK-12 | P0 | 2 |
-| TK-05b | Static relationship surfaces | TK-11, TK-12 | P0 | 2 |
-| TK-06 | Search — make it work, then make it good | TK-12 | P0 | 2 |
-| TK-08 | Canonical metadata, feeds, sitemap, social cards | TK-11 | P0 | 2 |
-| TK-15 | Math and diagrams — Temml and dual-mode Mermaid | TK-05a | P0 | 3 |
-| TK-05c | Collection rails and explorer | TK-05a, TK-05b | P0 | 3 |
-| TK-07 | Hover and focus previews | TK-05b | P0 | 3 |
-| TK-16 | Bilingual chrome | TK-05a | P0 | 3 |
-| TK-17 | Static graph route | TK-05b | P0 | 3 |
+| TK-14 | CI enforcement | TK-13 | P0 | 2b |
+| TK-05a | Page anatomy and table of contents | TK-11, TK-12 | P0 | 2a |
+| TK-05b | Static relationship surfaces | TK-05a | P0 | 2b |
+| TK-06 | Search — make it work, then make it good | TK-05a | P0 | 3a |
+| TK-08 | Canonical metadata, feeds, sitemap, social cards | TK-05a | P0 | 2b |
+| TK-15 | Math and diagrams — Temml and dual-mode Mermaid | TK-05a | P0 | 3a |
+| TK-05c | Collection rails and explorer | TK-05a, TK-05b | P0 | 3b |
+| TK-07 | Hover and focus previews | TK-05b | P0 | 3a |
+| TK-16 | Bilingual chrome | TK-05a, TK-05c | P0 | 3b |
+| TK-17 | Static graph route | TK-05b | P0 | 3b |
 | TK-09 | Privacy, security, and performance gates | all above | P0 | 4 |
 | TK-18 | Measured benchmark against Quartz v5 | TK-09 | P0 | 4 |
 | TK-10 | ADRs and deferred-scope documentation | all above | P0 | 4 |
@@ -273,15 +273,34 @@ Two structural facts drive the order:
 | TK-19 | Exporter contract evolution and escalation path | — | P1 | any |
 | TK-20 | Oxfmt | TK-13 | P1 | isolated |
 
+TK-11 and TK-12 landed as `855b06b`: 254 tests, article first paint down from 10,119 to
+8,284 B gzip, and search running under the shipped CSP for the first time.
+
 **Parallelism.** Tickets in the same wave have no dependency between them *and* no
 overlapping file ownership. The second condition is the binding one — two tickets that
 both rewrite `Layout.astro` are not parallel however independent their logic.
 
+**Revised after wave 1, which proved the point the hard way.** TK-11 and TK-12 were
+dispatched in parallel on the reasoning that their logic was independent. It was; their
+files were not. A fixture corpus inevitably reaches validation, routing, and the build
+scripts, so the fence could not be drawn cleanly and five files conflicted. The merge was
+worth doing — it surfaced two defects that existed only in the combined tree, including a
+test file that auto-merged cleanly and did not compile — but the conflict was avoidable
+orchestration cost, not a discovery. **Group by which files a ticket writes, never by
+whether its logic is separable.**
+
+The second correction is `src/pages/notes/[slug].astro`. It is 39 lines, and five tickets
+in the original wave 2 all needed to edit its centre. Splitting a file that small into
+"named regions" is a fiction. One ticket establishes the shape and the rest fill slots it
+defines.
+
 | Wave | Runs together | Why they do not collide |
 | --- | --- | --- |
-| 1 | TK-11, TK-12, TK-13 | TK-11 writes only `tests/fixtures/`; TK-12 writes `src/lib/markdown.ts`, `src/layouts/Layout.astro`, `public/_headers`; TK-13 writes `package.json` and test files. TK-12 and TK-13 both touch `package.json` — **serialize those two on that file**: TK-12 lands first, TK-13 rebases. |
-| 2 | TK-05a, TK-05b, TK-06, TK-08, TK-14 | TK-05a owns `src/components/Toc.astro` and the article shell; TK-05b owns the relationship components; TK-06 owns `src/scripts/search-dialog.ts` and the Pagefind build flags; TK-08 owns `src/pages/rss.xml.ts`, `sitemap`, and the `<head>` block; TK-14 owns `.github/`. All five touch `src/pages/notes/[slug].astro` or `Layout.astro` in small, non-overlapping regions — assign each a named region in its ticket, or serialize 05a before the rest. |
-| 3 | TK-15, TK-05c, TK-07, TK-16, TK-17 | TK-15 owns `src/lib/markdown.ts` math and diagram paths plus `src/scripts/mermaid.ts`; TK-05c owns the rail components; TK-07 owns `src/scripts/link-preview.ts`; TK-16 owns `src/lib/i18n.ts` and every chrome string; TK-17 owns `src/pages/graph.astro` and `src/lib/graph.ts`. TK-16 edits strings inside components TK-05c creates — **serialize TK-16 after TK-05c**. |
+| 1 | ~~TK-11, TK-12, TK-13~~ — **completed as TK-12, then TK-11 merged into it, then TK-13 alone** | Recorded as run, not as planned. TK-11 and TK-12 should have been serialized. |
+| 2a | **TK-05a alone** | It establishes the article page shape and the `<head>` slots every later ticket fills. Running anything beside it means contending for a 39-line file. Serializing one ticket buys four conflict-free ones. |
+| 2b | TK-05b, TK-08, TK-14 | TK-05b fills the relationship region TK-05a leaves; TK-08 fills the `<head>` slot TK-05a leaves and otherwise owns `src/pages/rss.xml.ts` and the sitemap emitter; TK-14 owns `.github/` and the `verify` script. The only shared file is `package.json` — **TK-14 lands its script last**. |
+| 3a | TK-06, TK-07, TK-15 | TK-06 owns `src/scripts/search-dialog.ts` and the Pagefind build flags; TK-07 owns `src/scripts/link-preview.ts`; TK-15 owns the math and diagram paths in `src/lib/markdown.ts` plus `src/scripts/mermaid.ts`. Disjoint. All three consume TK-05a's slots without redefining them. |
+| 3b | TK-05c, then TK-16, then TK-17 | TK-05c creates the rail components; TK-16 rewrites every chrome string **inside components TK-05c and TK-05a created**, so it cannot precede them; TK-17 adds `src/pages/graph.astro` and `src/lib/graph.ts` and touches the article page's neighborhood slot. Serial. |
 | 4 | TK-09, then TK-18, then TK-10 | Strictly serial. Gates must see the finished surface; the benchmark needs the gates' numbers; the ADRs record what the other two found. |
 | 5 | TK-21 alone | Phase 2. It enhances TK-17's static baseline and must not start before TK-09 has established the budget gates it has to pass. |
 
