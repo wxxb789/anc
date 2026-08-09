@@ -272,6 +272,7 @@ Two structural facts drive the order:
 | TK-21 | Interactive graph via SQLite WASM | TK-17, TK-09 | P1 | 5 |
 | TK-19 | Exporter contract evolution and escalation path | — | P1 | any |
 | TK-20 | Oxfmt | TK-13 | P1 | isolated |
+| TK-22 | Migrate from npm to pnpm | TK-13 | P1 | isolated |
 
 TK-11 and TK-12 landed as `855b06b`: 254 tests, article first paint down from 10,119 to
 8,284 B gzip, and search running under the shipped CSP for the first time.
@@ -786,6 +787,57 @@ CRLF made `git diff --check` fail on 948 lines.
 
 **Acceptance criteria.** Formatting is a no-op on a second run; the full gate passes; the
 commit contains no logic change.
+
+---
+
+#### TK-22 — Migrate from npm to pnpm
+
+**Requirements:** owner decision on the toolchain
+
+**Problem.** The repository installs with npm, whose flat `node_modules` lets a module
+import a package that is not declared in `package.json`. This project has already been
+bitten by the class of problem that prevents: TK-03 deliberately promoted `satteri`,
+`github-slugger`, `prismjs`, and `@astrojs/prism` from transitive to direct dependencies,
+recording that "leaving them implicit would make the build depend on Astro's private
+dependency tree". Three source files still import from packages of that kind
+(`satteri`, `github-slugger`, `sanitize-html`), and today nothing structurally prevents a
+fourth import of something undeclared.
+
+pnpm's symlinked store makes an undeclared package unresolvable rather than merely
+discouraged. **Install speed is not the justification** — 246 packages installed rarely, on
+a static site deployed to a CDN, is not where pnpm's performance story pays. The
+justification is that an undeclared dependency becomes a loud failure, which is the same
+bias every other boundary in this repository takes.
+
+**Scope.**
+
+1. Migrate to pnpm: generate `pnpm-lock.yaml`, delete `package-lock.json`, and remove the
+   npm-only `node_modules` before reinstalling so no flat-layout residue survives.
+2. Add `packageManager` to `package.json` so the version is pinned and Corepack can honour
+   it.
+3. Verify Astro's integrations resolve under a symlinked layout. Historically some have
+   needed `public-hoist-pattern` or `shamefully-hoist` in `.npmrc`. **Determine this
+   empirically** rather than pre-emptively adding a hoist rule — a blanket
+   `shamefully-hoist` would recreate the flat layout and discard the entire reason for the
+   migration. If a hoist pattern is genuinely required, scope it to the narrowest pattern
+   that works and record why.
+4. Update every command in `AGENTS.md`, `README.md`, and any script or document that
+   invokes npm.
+5. Confirm the Cloudflare Pages build works from `pnpm-lock.yaml`. A lockfile the host
+   cannot consume is worse than the one it replaces.
+6. Land as a single commit against a clean tree, touching nothing else — same discipline as
+   TK-20. A package-manager migration mixed into a feature diff is unreviewable.
+
+**Acceptance criteria.**
+
+- `pnpm install` from a clean checkout produces a working tree; `pnpm test`, `pnpm lint`,
+  `pnpm run check`, `pnpm run build`, and `pnpm run build:fixture` all pass with the same
+  results as before the migration, including the test count.
+- `package-lock.json` is gone and `pnpm-lock.yaml` is committed.
+- No `shamefully-hoist`. Any `public-hoist-pattern` entry names the package that needs it
+  and why.
+- An import of an undeclared package fails to resolve, proven by a seeded attempt.
+- Every documented command uses pnpm.
 
 ---
 
