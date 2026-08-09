@@ -58,7 +58,7 @@ function load(element: HTMLLinkElement | HTMLScriptElement): Promise<void> {
 if (trigger && dialog) {
   const target = document.querySelector<HTMLElement>('#search');
   let loading: Promise<void> | undefined;
-  let mounted = false;
+  let isMounted = false;
 
   /**
    * Start the fetch and return its promise.
@@ -86,7 +86,7 @@ if (trigger && dialog) {
 
   trigger.addEventListener('click', async () => {
     dialog.showModal();
-    if (mounted || !target) return;
+    if (isMounted || !target) return;
 
     try {
       loading ??= fetchBundle();
@@ -96,7 +96,7 @@ if (trigger && dialog) {
       // second would clear the first's DOM and construct a second UI into the
       // same element. The check before the await is the cheap path; this one is
       // the correct one.
-      if (mounted) return;
+      if (isMounted) return;
       // Pagefind attaches its constructor to `window` when the bundle loads, so
       // it is read after the await rather than before it.
       const PagefindUI = (window as typeof window & { PagefindUI?: new (options: unknown) => void })
@@ -105,7 +105,7 @@ if (trigger && dialog) {
       // Set before constructing rather than after: if the constructor itself
       // throws, the catch resets it, so a genuine failure still retries while a
       // concurrent resume cannot slip past.
-      mounted = true;
+      isMounted = true;
       // Clear first: a failure message from an earlier attempt would otherwise
       // sit above the search input for the rest of the page's life.
       target.textContent = '';
@@ -117,7 +117,7 @@ if (trigger && dialog) {
       // "no results", "still loading", and "index failed to load"; this is the
       // honest minimum until then.
       loading = undefined;
-      mounted = false;
+      isMounted = false;
       target.textContent = 'Search is unavailable right now. Please try again.';
     }
   });
