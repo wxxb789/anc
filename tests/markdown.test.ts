@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import Slugger from 'github-slugger';
 import { TOC_MIN_HEADINGS, defaultRouteForSlug, renderMarkdown, type TocEntry } from '../src/lib/markdown.ts';
 
 const FIXTURES = new URL('./fixtures/markdown/', import.meta.url);
@@ -59,30 +60,29 @@ test('renders callouts with kind and promoted title, leaving plain quotes alone'
 test('highlights code fences at build time with class-only markup', () => {
   assert.match(
     kitchenSink.html,
-    /<figure class="code-block" data-code-language="js"><pre><code class="language-js">/,
+    /<figure class="code-block" data-code-language="js"><pre tabindex="0"><code class="language-js">/,
   );
   assert.match(kitchenSink.html, /<span class="token token-keyword">const<\/span>/);
   // Shiki-style inline colors would need `style-src 'unsafe-inline'`.
   assert.doesNotMatch(kitchenSink.html, /style="color/);
 });
 
-test('every code block carries a copy affordance that is inert without JavaScript', () => {
+test('a code block is a bare figure with no dead controls', () => {
   // Three fences: js, mermaid, and the unlabelled one. Math is not a code block.
   const figures = kitchenSink.html.match(/<figure class="code-block"[^>]*>/g) ?? [];
   assert.equal(figures.length, 3, `expected one figure per fence, got ${figures.length}`);
-  const buttons = kitchenSink.html.match(/<button[^>]*>/g) ?? [];
-  assert.equal(buttons.length, figures.length, 'every code block needs exactly one copy button');
-  for (const button of buttons) {
-    assert.match(button, /type="button"/, `copy button must not default to submit: ${button}`);
-    assert.match(button, /hidden/, `copy button must ship hidden: ${button}`);
-    assert.match(button, /data-copy-code/, `copy button needs its hook: ${button}`);
-  }
+  // TK-03 shipped a `hidden` copy button with no handler and no CSS, which
+  // welded the word `Copy` onto every indexed code block. TK-05a may bring one
+  // back in the same commit as its handler and its styling.
+  assert.doesNotMatch(kitchenSink.html, /<button/i, 'a control with no handler is dead markup');
+  assert.doesNotMatch(kitchenSink.html, /data-copy-code/);
+  assert.doesNotMatch(kitchenSink.html, />Copy</);
 });
 
-test('an unlabelled fence is still a copyable code block', () => {
+test('an unlabelled fence is still a code block', () => {
   assert.match(
     kitchenSink.html,
-    /<figure class="code-block" data-code-language="plaintext"><pre><code class="language-plaintext">plain fence with no language<\/code><\/pre>/,
+    /<figure class="code-block" data-code-language="plaintext"><pre tabindex="0"><code class="language-plaintext">plain fence with no language<\/code><\/pre>/,
   );
 });
 
@@ -137,14 +137,14 @@ test('inline marks and external links survive', () => {
 test('Mermaid downgrades to escaped plain source, never a runtime renderer', () => {
   assert.match(
     kitchenSink.html,
-    /<figure class="code-block" data-code-language="mermaid" data-diagram="mermaid"><pre><code class="language-mermaid">graph TD; A--&gt;B;<\/code><\/pre>/,
+    /<figure class="code-block" data-code-language="mermaid" data-diagram="mermaid"><pre tabindex="0"><code class="language-mermaid">graph TD; A--&gt;B;<\/code><\/pre>/,
   );
   assert.equal(kitchenSink.hasMermaid, true);
   assert.doesNotMatch(kitchenSink.html, /<script/i);
 });
 
 test('math downgrades to plain source and single dollars stay literal', () => {
-  assert.match(kitchenSink.html, /<pre><code class="language-math math-display">E = mc\^2<\/code><\/pre>/);
+  assert.match(kitchenSink.html, /<pre tabindex="0"><code class="language-math math-display">E = mc\^2<\/code><\/pre>/);
   assert.equal(kitchenSink.hasMath, true);
   assert.match(kitchenSink.html, /\$5 to \$10/, 'currency must not be parsed as inline math');
   // Math is not a code block: no copy button, no highlighting shell.
@@ -230,10 +230,18 @@ test('form controls are neutralized into inert checkboxes', () => {
   }
 });
 
-test('a raw-HTML button cannot act as a submit control', () => {
-  for (const button of hostile.html.match(/<button[^>]*>/g) ?? []) {
-    assert.match(button, /type="button"/, `button kept submit semantics: ${button}`);
-  }
+test('a raw-HTML button does not survive as a control', async () => {
+  // `button` is not in the tag allowlist: nothing this pipeline emits is one,
+  // and a control a note body cannot wire to anything is a dead affordance.
+  // The hostile fixture's button sits inside a `<form>`, which `nonTextTags`
+  // discards whole, so a standalone one is rendered to see the element rule on
+  // its own — its label survives as text.
+  assert.doesNotMatch(hostile.html, /<button/i);
+
+  const rendered = await renderMarkdown('<button type="submit" onclick="x()">Send</button>\n');
+  assert.doesNotMatch(rendered.html, /<button/i);
+  assert.doesNotMatch(rendered.html, /\sonclick=/i);
+  assert.ok(rendered.html.includes('Send'), 'the label should survive as text');
 });
 
 test('only pipeline-emitted classes survive', async () => {
@@ -280,6 +288,35 @@ test('body content cannot mint an element id', async () => {
   assert.match(kitchenSink.html, /id="prose-and-inline-marks"/);
   assert.match(kitchenSink.html, /id="user-content-fn-src"/);
   assert.match(kitchenSink.html, /id="footnote-label"/);
+});
+
+test('no allowed tag can carry a body-authored id to the page', async () => {
+  // The id channel is closed by `allowedAttributes`, not by the `'*'` transform
+  // — which only consumes *generated* ids, and only on tags granted an `id`.
+  // This walks every tag the allowlist admits so that distinction stays true:
+  // if a future ticket grants `id` to another tag, this fails rather than
+  // quietly handing body content a page-global name.
+  const HOOKS = ['search-toggle', 'search-dialog', 'main', 'link-preview', 'theme-toggle'];
+  const TAGS = [
+    'p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'strong', 'b', 'em', 'i', 'u', 'del', 's', 'ins', 'mark', 'sup', 'sub',
+    'abbr', 'small', 'span', 'q', 'cite', 'kbd', 'samp', 'var', 'time',
+    'bdi', 'bdo', 'wbr', 'ruby', 'rt', 'rp', 'dfn',
+    'ul', 'ol', 'li', 'dl', 'dt', 'dd',
+    'blockquote', 'pre', 'code', 'figure', 'figcaption', 'section', 'div',
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
+    'a', 'img', 'input',
+  ];
+
+  for (const tag of TAGS) {
+    for (const hook of HOOKS) {
+      const { html } = await renderMarkdown(`<${tag} id="${hook}">x</${tag}>\n`);
+      assert.ok(
+        !html.includes(`id="${hook}"`),
+        `<${tag}> carried a body-authored id to the page: ${html.trim()}`,
+      );
+    }
+  }
 });
 
 test('comments and doctype do not survive', async () => {
@@ -357,6 +394,147 @@ test('an unsluggable heading does not steal the id of a real one', async () => {
     assert.equal(new Set(ids).size, ids.length, `duplicate ids for ${JSON.stringify(source)}: ${ids.join(', ')}`);
     for (const id of ids) {
       assert.equal((rendered.html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length, 1);
+    }
+  }
+});
+
+test('a raw-HTML id cannot shadow a heading anchor that follows it', async () => {
+  // The defect this closes: ids were deduplicated at sanitize time, so a raw
+  // `<a id="introduction">` before `## Introduction` consumed the generated id
+  // and the heading's own `id` was dropped — leaving `href="#introduction"`
+  // pointing at the decoy, and taking the future table of contents entry and
+  // the Pagefind anchor with it. Reserving the raw id at generation time makes
+  // the heading pick a free one instead.
+  //
+  // Every quoting form an HTML parser accepts, plus character references,
+  // because a decoy only has to survive the parser, not the author. The named
+  // ones are the interesting case: `_` and `-` are slug characters and both
+  // have named references, so a decoder handling only `&#…;` reads
+  // `foo&lowbar;bar` literally, reserves the wrong string, and lets the decoy
+  // keep the heading's anchor.
+  for (const [decoy, heading] of [
+    ['<a id="introduction">decoy</a>', 'Introduction'],
+    ["<a id='introduction'>decoy</a>", 'Introduction'],
+    ['<a id=introduction>decoy</a>', 'Introduction'],
+    ['<a id = "introduction">decoy</a>', 'Introduction'],
+    ['<a ID="introduction">decoy</a>', 'Introduction'],
+    ['<a id="&#105;ntroduction">decoy</a>', 'Introduction'],
+    ['<a id="&#x69;ntroduction">decoy</a>', 'Introduction'],
+    ['<a id="foo&lowbar;bar">decoy</a>', 'Foo_Bar'],
+    ['<a id="foo&UnderBar;bar">decoy</a>', 'Foo_Bar'],
+    ['<ul><li id="introduction">decoy</li></ul>', 'Introduction'],
+    ['<h2 id="introduction">decoy</h2>', 'Introduction'],
+  ] as const) {
+    const rendered = await renderMarkdown(`${decoy}\n\n## ${heading}\n`);
+    const anchor = rendered.headings[0]?.id;
+    const taken = new Slugger().slug(heading);
+    assert.ok(anchor, `no heading was collected for ${decoy}`);
+    assert.notEqual(anchor, taken, `the decoy kept the heading's id: ${decoy}`);
+    assert.match(
+      rendered.html,
+      new RegExp(`<h2 id="${anchor}">${heading}<a class="heading-anchor" href="#${anchor}"`),
+      `the heading lost its own anchor: ${rendered.html}`,
+    );
+    // The decoy itself is still dropped — it just no longer has anything to
+    // shadow. Its text stays, so the reader loses nothing.
+    assert.ok(rendered.html.includes('decoy'), `the decoy's text was discarded: ${decoy}`);
+    assert.doesNotMatch(rendered.html, new RegExp(`id="${taken}"`), `the decoy id survived: ${decoy}`);
+  }
+});
+
+test('text that is not an id does not move a heading anchor', async () => {
+  // The other direction, and the more damaging one: over-reserving silently
+  // renames a *published* deep link.
+  //
+  // Two families. A regex for `\bid\s*=` fires inside an HTML comment, inside
+  // `data-id=`, and inside a `title` value. And an id that a browser parses but
+  // that this pipeline can never ship — on a tag the allowlist grants no `id`,
+  // or inside a subtree `nonTextTags` discards whole — has nothing to shadow, so
+  // reserving it costs a real heading its anchor for no gain.
+  for (const noise of [
+    '<!-- id="introduction" -->',
+    '<div data-id="introduction">x</div>',
+    '<a title="id=introduction" href="https://example.com/">x</a>',
+    '<p>The text id="introduction" written as prose.</p>',
+    '<a id="">x</a>',
+    '<div id="introduction">x</div>',
+    '<span id="introduction">x</span>',
+    '<section id="introduction">x</section>',
+    '<form><a id="introduction">x</a></form>',
+  ]) {
+    const rendered = await renderMarkdown(`${noise}\n\n## Introduction\n`);
+    assert.equal(
+      rendered.headings[0]?.id,
+      'introduction',
+      `"${noise}" moved the heading's anchor away from #introduction`,
+    );
+    assert.match(rendered.html, /<h2 id="introduction">/, `heading lost its id after: ${noise}`);
+  }
+
+  // And an empty raw id must not consume the slugger's empty-slug fallback,
+  // which would leave an unsluggable heading with `id="-1"` instead of
+  // `section`.
+  const fallback = await renderMarkdown('<a id="">x</a>\n\n## ...\n');
+  assert.equal(fallback.headings[0]?.id, 'section');
+});
+
+test('every preformatted block is reachable by keyboard', async () => {
+  // A `<pre>` scrolls horizontally when a line exceeds the measure, and axe
+  // flags a scrollable region with no keyboard access (`scrollable-region-focusable`,
+  // WCAG 2.1.1) — it was four serious violations on the single published note.
+  // Every `pre` gets it, not only the highlighted fences: math blocks skip the
+  // code plugin entirely, and a raw-HTML one scrolls just the same.
+  const rendered = await renderMarkdown(
+    '```js\nconst a = 1;\n```\n\n$$\nx\n$$\n\n<pre tabindex="5">raw</pre>\n',
+  );
+  const blocks = rendered.html.match(/<pre[^>]*>/g) ?? [];
+  assert.equal(blocks.length, 3, `expected three pre elements, got ${blocks.length}`);
+  for (const block of blocks) {
+    // Pinned to 0, not merely present: a raw `tabindex="5"` would put the block
+    // ahead of the page's own controls in tab order.
+    assert.match(block, /^<pre tabindex="0"(?: |>)/, `pre is not keyboard reachable: ${block}`);
+  }
+});
+
+test('a raw-HTML id cannot steal a generated footnote id', async () => {
+  // Heading anchors are safe by construction — they are minted after the raw
+  // node is seen. Footnote ids are not: `sanitize()` recognizes them by *shape*
+  // (`footnote-label`, `user-content-fn-*`), so whichever element carried one
+  // first was handed it. A decoy took `footnote-label`, left the real
+  // `<h2 class="sr-only">` without an id, and pointed the reference's
+  // `aria-describedby` at the decoy — a screen reader then announces the decoy
+  // as the footnote section's name.
+  for (const id of ['footnote-label', 'user-content-fn-a', 'user-content-fnref-a']) {
+    const { html } = await renderMarkdown(`<a id="${id}">decoy</a>\n\ntext[^a]\n\n[^a]: note\n`);
+
+    // The decoy loses its id but keeps its text.
+    assert.match(html, /<p><a>decoy<\/a><\/p>/, `the decoy kept an id or lost its text: ${html}`);
+    // Exactly one element answers to the id, and it is the generated one.
+    assert.equal((html.match(new RegExp(`id="${id}"`, 'g')) ?? []).length, 1, `id="${id}" is not unique`);
+
+    // And no footnote link dangles — the failure mode of denying the string
+    // outright rather than denying one claim on it.
+    const ids = [...html.matchAll(/\sid="([^"]*)"/g)].map(([, value]) => value!);
+    for (const [, target] of html.matchAll(/\shref="#([^"]*)"/g)) {
+      assert.ok(ids.includes(target!), `href="#${target}" dangles after denying ${id}`);
+    }
+  }
+});
+
+test('no rendered document contains a duplicate id or a dangling fragment link', async () => {
+  // The invariant the built-output gate asserts over `dist/`, proven here
+  // against the constructs that can break it.
+  for (const source of [
+    fixture('kitchen-sink.md'),
+    fixture('hostile.md'),
+    '<a id="a">x</a>\n\n## A\n\n## A\n\n<span id="a-1">y</span>\n\n## A\n',
+    'text[^n]\n\n## Notes\n\n[^n]: a footnote\n',
+  ]) {
+    const { html } = await renderMarkdown(source, { routeForSlug });
+    const ids = [...html.matchAll(/\sid="([^"]*)"/g)].map(([, id]) => id!);
+    assert.equal(new Set(ids).size, ids.length, `duplicate id in: ${ids.join(', ')}`);
+    for (const [, target] of html.matchAll(/\shref="#([^"]*)"/g)) {
+      assert.ok(ids.includes(target!), `href="#${target}" has no matching id`);
     }
   }
 });

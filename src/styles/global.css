@@ -394,6 +394,267 @@ main:focus:not(:focus-visible) {
   color: var(--color-muted);
 }
 
+/* --------------------------------------------------- rendered markdown -- */
+
+/*
+ * Every class `src/lib/markdown.ts` can emit has a rule below, or is named in
+ * the "deliberately unstyled" block at the end of this section. The allowlist
+ * at `markdown.ts` is the list: `heading-anchor`, `code-block`, `language-*`,
+ * `token` and `token-*`, `callout` and `callout-*`, `callout-title`,
+ * `contains-task-list`, `task-list-item`, `footnotes`,
+ * `data-footnote-backref`, `sr-only`, `math-inline`, `math-display`.
+ *
+ * Quartz's thirteen-kind callout vocabulary and its mask-image icon set are
+ * deliberately not imported: the corpus has zero callouts, and a colour-per-kind
+ * table is thirteen decisions for a construct nobody has written yet. One
+ * neutral callout treatment carries the label, which is the part that means
+ * something.
+ */
+
+/*
+ * The one live accessibility bug in this section. satteri emits
+ * `<h2 class="sr-only" id="footnote-label">Footnotes</h2>` and, with no rule for
+ * it, that heading rendered as a full-size visible heading above the footnote
+ * list — a piece of generated scaffolding presented to the reader as content.
+ *
+ * The clip-path recipe rather than `display: none` or `visibility: hidden`,
+ * because those remove the element from the accessibility tree too, which is
+ * the opposite of what a screen-reader-only heading is for.
+ */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/*
+ * The heading anchor: a `#` that appears on hover or focus.
+ *
+ * Hidden until then rather than always visible, because fifteen of them down an
+ * article is visual noise — but `opacity`, not `display: none`, so the link
+ * stays in the tab order and in the accessibility tree. It carries its own
+ * `aria-label` from the renderer, so its `#` is decoration a screen reader never
+ * has to read as a heading's name.
+ *
+ * `.prose .heading-anchor`, not a bare `.heading-anchor`: `.prose a` is (0,1,1)
+ * and sets `text-decoration: underline` on every in-content link, so a (0,1,0)
+ * rule loses and the `#` ships underlined. The same trap TK-02 documented for
+ * `[data-js-only]` against `.site-nav button`.
+ */
+.prose .heading-anchor {
+  margin-left: var(--space-2);
+  color: var(--color-muted);
+  font-weight: 400;
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--ease);
+}
+
+:is(h1, h2, h3, h4, h5, h6):hover > .heading-anchor,
+.heading-anchor:focus-visible {
+  opacity: 1;
+}
+
+/* Touch and keyboard have no hover, so the anchor is simply always there. */
+@media (hover: none) {
+  .heading-anchor {
+    opacity: 1;
+  }
+}
+
+/*
+ * A fenced code block. `<figure>` carries a UA `margin-inline: 40px` that would
+ * indent every code block away from the prose, so the margin is set explicitly.
+ * `min-width: 0` stops the figure from being sized by its widest line — the
+ * classic way a code block widens the whole page — leaving `.prose pre`'s own
+ * `overflow-x: auto` to do the scrolling.
+ */
+.code-block {
+  margin: var(--space-6) 0;
+  min-width: 0;
+}
+
+.code-block > pre {
+  margin: 0;
+}
+
+/*
+ * Syntax highlighting.
+ *
+ * Prism's token vocabulary is open-ended and this maps it onto four roles, not
+ * onto Prism's own names: keywords and operators, literals (numbers, booleans,
+ * constants), strings, and comments. Anything unmapped inherits the body colour,
+ * which is a readable default rather than an invisible one — the failure mode
+ * of a highlighting theme should be "less colour", never "no text".
+ *
+ * Colour is never the only signal: comments are italic, keywords are bold. A
+ * reader with any colour vision deficiency, or reading a printed page, still
+ * sees the structure.
+ */
+.token-comment,
+.token-prolog,
+.token-doctype,
+.token-cdata {
+  color: var(--color-muted);
+  font-style: italic;
+}
+
+.token-keyword,
+.token-operator,
+.token-atrule,
+.token-important,
+.token-selector,
+.token-tag {
+  color: var(--color-syntax-keyword);
+  font-weight: 600;
+}
+
+/*
+ * Container tokens, which wrap other tokens rather than marking a leaf: batch's
+ * `command` spans a whole command line with `keyword` nested inside it, and
+ * `namespace` wraps a qualified name. Colouring one paints everything it
+ * contains — `openssl pkcs12 -in original.pfx` came out entirely purple — so
+ * they inherit and let the nested token carry the meaning. `inherit` is
+ * declared rather than omitted so the intent is visible and the rule exists.
+ */
+.token-command,
+.token-namespace {
+  color: inherit;
+}
+
+.token-string,
+.token-char,
+.token-attr-value,
+.token-regex {
+  color: var(--color-accent);
+}
+
+.token-number,
+.token-boolean,
+.token-constant,
+.token-symbol,
+.token-property,
+.token-attr-name,
+.token-variable,
+.token-parameter,
+.token-function {
+  color: var(--color-syntax-literal);
+}
+
+/* Structure, not meaning: punctuation stays body-coloured so it recedes. */
+.token-punctuation,
+.token-entity {
+  color: var(--color-text);
+}
+
+/*
+ * A callout. One neutral treatment, since the corpus has zero of them: the kind
+ * is announced by the title text the renderer promotes to `<strong>`, not by a
+ * colour a reader has to have learned. `data-callout` is on the element for a
+ * later ticket that has real callouts to differentiate.
+ *
+ * `.prose .callout`, not a bare `.callout`: a callout *is* a `<blockquote>`, and
+ * `.prose blockquote` (0,1,1) would otherwise win and paint it muted-on-muted.
+ */
+.prose .callout {
+  margin: var(--space-6) 0;
+  padding: var(--space-4);
+  border-left: 3px solid var(--color-accent);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+}
+
+.callout > :first-child {
+  margin-top: 0;
+}
+
+.callout > :last-child {
+  margin-bottom: 0;
+}
+
+.callout-title {
+  display: block;
+  color: var(--color-accent);
+}
+
+/*
+ * Task lists. The checkboxes are `disabled` by the renderer — they are printed
+ * state, not controls — so the list loses its bullet and the box sits in the
+ * margin rather than indenting the text away from every other list.
+ */
+.contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.task-list-item {
+  padding-left: 1.6em;
+  text-indent: -1.6em;
+}
+
+.task-list-item > input[type='checkbox'] {
+  width: 1em;
+  height: 1em;
+  margin-right: 0.6em;
+  text-indent: 0;
+  vertical-align: -0.1em;
+}
+
+/* Footnotes: a smaller, separated block at the end of the article. */
+.footnotes {
+  margin-top: var(--space-12);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-line);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+.footnotes li:target {
+  background: var(--color-wash);
+}
+
+/* The `↩` back-reference is a link, so it gets the link treatment and a target
+   large enough to hit — the glyph alone is well under the 24 px minimum.
+   Scoped to `.prose` for the same specificity reason as `.heading-anchor`. */
+.prose .data-footnote-backref {
+  display: inline-block;
+  min-width: 1.5em;
+  text-align: center;
+  text-decoration: none;
+}
+
+/*
+ * Math renders as escaped plain source until TK-15 (Temml). Until then it is
+ * marked as code rather than left as unstyled body text, so a reader sees an
+ * expression that has visibly *not* been typeset rather than a mangled
+ * sentence. `math-display` is a block, `math-inline` stays in the line.
+ */
+.math-inline,
+.math-display {
+  color: var(--color-syntax-literal);
+  font-family: var(--font-mono);
+  font-size: 0.925em;
+}
+
+/*
+ * Deliberately unstyled, with the reason:
+ *
+ * - `token` — the bare class Prism puts on every token alongside its specific
+ *   one. Styling it would set a colour that each rule above then overrides;
+ *   inheriting the body colour is the correct unhighlighted default.
+ * - `language-*` — the fence language is already carried visually by the block
+ *   itself and semantically by `data-code-language`. A label chip is TK-05a's.
+ * - `callout-*` — the per-kind classes. See the `.callout` note above: zero
+ *   callouts in the corpus, so there is nothing to differentiate yet.
+ */
+
 /* ponytail: a wide table still needs a scroll container, and a wrapper element
    is the Markdown pipeline's to emit. TK-03 owns that; styling it here without
    the wrapper would mean `display: block`, which strips table semantics. */

@@ -30,9 +30,19 @@
  *   focus on bg                     5.92    11.12
  *   focus on surface                6.18    10.09
  *   focus on surface-alt            5.42     9.33
+ *   syntax-keyword on bg            7.07     9.55
+ *   syntax-keyword on surface       7.38     8.67
+ *   syntax-keyword on surface-alt   6.48     8.01
+ *   syntax-literal on bg            6.97    10.23
+ *   syntax-literal on surface       7.28     9.28
+ *   syntax-literal on surface-alt   6.38     8.58
  *   line-strong on bg               3.98     3.96
  *   line-strong on surface          4.16     3.59
  *   line-strong on surface-alt      3.65     3.32
+ *
+ * The two `syntax-*` pairs are measured on all three backgrounds even though
+ * code only ever sits on `surface-alt`: a token that meets AA on the tightest
+ * of the three cannot fail if a later ticket moves the code block.
  *
  * `--color-line` is deliberately absent: at 1.33:1 light / 1.48:1 dark it is a
  * decorative divider only, used where the layout already conveys the boundary.
@@ -54,6 +64,8 @@
   --color-focus: #1f6f3c;
   --color-shadow: rgb(27 31 36 / 0.14);
   --color-wash: rgb(31 111 60 / 0.07);
+  --color-syntax-keyword: #6b3fa0;
+  --color-syntax-literal: #8f3f10;
 }
 
 @supports (color: light-dark(#000, #fff)) {
@@ -72,6 +84,17 @@
     --color-focus: light-dark(#1f6f3c, #8ad884);
     --color-shadow: light-dark(rgb(27 31 36 / 0.14), rgb(0 0 0 / 0.55));
     --color-wash: light-dark(rgb(31 111 60 / 0.07), rgb(138 216 132 / 0.06));
+
+    /*
+     * Syntax highlighting reuses the palette wherever it can — comments are
+     * `muted`, strings are `accent`, punctuation is `text` — and adds exactly
+     * two hues, because four distinguishable colours is what a Prism token
+     * stream actually needs and the existing three cannot separate a keyword
+     * from a string. Every highlighted token is also distinguished by weight or
+     * style, never by colour alone (WCAG 1.4.1).
+     */
+    --color-syntax-keyword: light-dark(#6b3fa0, #cfa8f0);
+    --color-syntax-literal: light-dark(#8f3f10, #efb08c);
   }
 
   /*
@@ -94,9 +117,14 @@
 }
 
 :root {
-  /* Type. A CJK face follows the Latin faces in every stack so mixed zh/en
-     text renders in one visual family instead of a browser default. */
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+  /* Type. Every face here is one the reader's own system provides: no webfont
+     ships, so there is no font request, no FOUT, and no `font-src` beyond
+     `'self'` to justify. A CJK face follows the Latin faces in every stack so
+     mixed zh/en text renders in one visual family instead of a browser default.
+     `Inter` was named here until TK-12 with no `@font-face` and no font file
+     anywhere in the repository — it resolved to nothing on almost every
+     machine. Naming a face means shipping it. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
   --font-mono: ui-monospace, 'Cascadia Code', SFMono-Regular, Menlo, Consolas, 'Noto Sans Mono CJK SC', monospace;
 

@@ -34,14 +34,6 @@ export const TAGS_SEGMENT = 'tags';
 /** The top-level segment collection pages live under. Reserved by TK-01. */
 export const COLLECTIONS_SEGMENT = 'collections';
 
-/**
- * The route notes were published at before TK-04. Kept as the redirect source
- * so an already-shared URL keeps working; see {@link redirectRules}.
- */
-export function legacyNoteRoute(slug: string): string {
-  return `/${slug}/`;
-}
-
 export function tagRoute(key: string): string {
   return `/${TAGS_SEGMENT}/${key}/`;
 }
@@ -188,7 +180,7 @@ export function recentFirst(entries: readonly ContentEntry[]): ContentEntry[] {
   });
 }
 
-/** One permanent redirect from a legacy note path to its canonical route. */
+/** One permanent redirect from an old public path to its current route. */
 export interface Redirect {
   from: string;
   to: string;
@@ -196,39 +188,28 @@ export interface Redirect {
 }
 
 /**
- * A permanent redirect for every published slug, sorted by source.
+ * Every public path this site has stranded, and where it goes now.
  *
- * Both `/<slug>/` and `/<slug>` are emitted. Cloudflare Pages compares a rule
- * source against the request path, and its documented trailing-slash behavior
- * covers its own `.html` normalization rather than user rules — so the
- * slash-less form of an already-shared URL is not guaranteed to reach the
- * slash form's rule. Two literal rules cost one line each and remove the
- * question; the alternative is discovering it against production.
+ * **Empty, and that is the correct state.** TK-04 generated a pair of rules per
+ * note migrating `/<slug>/` to `/notes/<slug>/`, but `/<slug>/` was never
+ * publicly served: it was introduced at `3831ad0` and superseded at `04f8d9c`,
+ * entirely within unpushed history, with no `site:` configured and no canonical
+ * URL ever emitted. Redirecting from a URL nobody could hold is two rules per
+ * note of pure cost, and it took a rule limit, a cycle walk, and forty lines of
+ * comment with it. TK-12 deleted the rules and kept the mechanism.
  *
- * Cycles are impossible by construction rather than by check: every target
- * begins `/notes/`, and no source can, because a slug cannot contain `/`. The
- * test walks the emitted map anyway, so a future change to either route shape
- * fails loudly instead of shipping a redirect loop.
+ * A rename that genuinely orphans a public URL adds its rule here. Owner
+ * decision 3 — renames are delete-and-recreate, old URLs may 404 — means that
+ * may never happen, which is why this is a literal rather than a derivation.
+ *
+ * ponytail: the deleted machinery included a `REDIRECT_LIMIT = 2000` guard for
+ * Cloudflare Pages' rule ceiling, which existed because the old rules were
+ * *derived* — two per note, so a large corpus could cross it without anyone
+ * writing a line. A hand-written literal cannot: reaching 2,000 entries here
+ * means typing 2,000 entries. Reinstate the check if rules ever become derived
+ * again.
  */
-export function redirectRules(entries: readonly ContentEntry[]): Redirect[] {
-  return entries
-    .flatMap((entry) => {
-      const to = noteRoute(entry.slug);
-      const slashed = legacyNoteRoute(entry.slug);
-      return [
-        { from: slashed, to, status: 301 as const },
-        { from: slashed.slice(0, -1), to, status: 301 as const },
-      ];
-    })
-    .sort((a, b) => (a.from < b.from ? -1 : 1));
-}
-
-/**
- * Cloudflare Pages' documented ceiling: 2,000 static plus 100 dynamic rules.
- * Past it the host rejects the file rather than truncating quietly, so the
- * build fails first, naming the count.
- */
-export const REDIRECT_LIMIT = 2000;
+export const REDIRECT_RULES: readonly Redirect[] = [];
 
 /**
  * The rules as a Cloudflare Pages `_redirects` file.
@@ -249,14 +230,8 @@ export function renderRedirects(
   rules: readonly Redirect[],
   version: { schema: number; content: string },
 ): string {
-  if (rules.length > REDIRECT_LIMIT) {
-    throw new Error(
-      `${rules.length} redirect rules exceeds the Cloudflare Pages limit of ${REDIRECT_LIMIT}`,
-    );
-  }
   return [
     '# Generated from the content artifact at build time. Do not edit by hand.',
-    '# Legacy /<slug>/ paths move permanently to the canonical /notes/<slug>/ route.',
     `# schema_version: ${version.schema}`,
     `# content_version: ${version.content}`,
     ...rules.map((rule) => `${rule.from} ${rule.to} ${rule.status}`),

@@ -133,6 +133,43 @@ test('every page declares a language', () => {
   }
 });
 
+/**
+ * A duplicate id makes every deep link into the page ambiguous: the browser
+ * scrolls to the first match, which may not be the one the anchor was written
+ * for. It is also the shape TK-05a's table of contents and Pagefind's own
+ * result anchors both depend on being unique.
+ *
+ * The pairing matters as much as either half. Unique ids alone permit a
+ * `href="#x"` pointing at nothing; resolvable fragments alone permit two
+ * elements answering to the same name.
+ */
+test('no page contains a duplicate id, and every fragment link resolves', () => {
+  for (const file of PAGES) {
+    // Raw, not blanked: the attribute *values* are what this gate reads.
+    const tags = [...rawStartTags(read(file))];
+    const ids = tags.flatMap((tag) => {
+      const id = /\sid="([^"]*)"/.exec(tag)?.[1];
+      return id === undefined ? [] : [id];
+    });
+    assert.ok(ids.length > 0, `${file}: no element carries an id`);
+
+    const seen = new Set<string>();
+    for (const id of ids) {
+      assert.ok(!seen.has(id), `${file}: duplicate id="${id}"`);
+      seen.add(id);
+    }
+
+    for (const tag of tags) {
+      if (!/^<a\b/i.test(tag)) continue;
+      const target = /\shref="#([^"]*)"/.exec(tag)?.[1];
+      // `href="#"` is a link to the top of the document, which is valid and
+      // needs no target.
+      if (target === undefined || target === '') continue;
+      assert.ok(seen.has(target), `${file}: href="#${target}" resolves to no element on the page`);
+    }
+  }
+});
+
 test('every page carries its canonical route for print', () => {
   // Scope item 10: a printed page must carry its canonical URL. The absolute
   // origin is TK-08's; the route is what this ticket can honestly emit.
@@ -228,14 +265,111 @@ test('no stylesheet commits to a width that cannot fit 320 px', () => {
   }
 });
 
+/**
+ * Every class the rendered article carries is styled, or is named as
+ * deliberately unstyled with a reason.
+ *
+ * The gate reads the built pages rather than the renderer's allowlist, which
+ * is the direction that cannot go stale: a class only has to be styled once it
+ * actually ships. Nine classes were shipping unstyled before TK-12 —
+ * twenty-one `token-*` spans, fifteen `heading-anchor`, eight `code-block` on
+ * the single published note, so syntax highlighting rendered as undifferentiated
+ * plain text and `sr-only` rendered as a visible heading.
+ *
+ * This is deliberately *not* the rejected proposal from the parity plan's §7.3,
+ * which would have extracted every class `markdown.ts` *can* emit and become a
+ * fourth consumer of `tests/css-cascade.ts`'s hand-written parser. It reads
+ * what shipped and does one substring check per class.
+ */
+test('every class in the rendered article is styled or deliberately not', () => {
+  // Named, with the reason, in the "deliberately unstyled" block of
+  // `src/styles/global.css`. Repeated here so the two cannot silently diverge:
+  // the stylesheet is asserted to name each of them.
+  const UNSTYLED: Readonly<Record<string, string>> = {
+    token: 'the bare Prism class; each specific token class carries the colour',
+    'language-*': 'the fence language is carried by data-code-language',
+    'callout-*': 'zero callouts in the corpus, so there is nothing to differentiate',
+  };
+
+  const stylesheets = STYLESHEETS.map(read).join('\n');
+  const globalSource = readFileSync(new URL('../src/styles/global.css', import.meta.url), 'utf8');
+  for (const name of Object.keys(UNSTYLED)) {
+    assert.ok(
+      globalSource.includes(name),
+      `global.css does not record why "${name}" is unstyled — this gate's exemption list has drifted`,
+    );
+  }
+
+  // Only the article body: page chrome is TK-02's and is styled by definition.
+  const articles = PAGES.flatMap((file) => {
+    const article = /<article\b[^>]*>([\s\S]*?)<\/article>/i.exec(read(file));
+    return article ? [{ file, html: article[1]! }] : [];
+  });
+  assert.ok(articles.length > 0, 'no article was found to check');
+
+  const exempt = (name: string) =>
+    Object.keys(UNSTYLED).some((pattern) =>
+      pattern.endsWith('*') ? name.startsWith(pattern.slice(0, -1)) : name === pattern,
+    );
+
+  for (const { file, html } of articles) {
+    for (const tag of rawStartTags(html)) {
+      for (const name of /\sclass="([^"]*)"/.exec(tag)?.[1]?.split(/\s+/) ?? []) {
+        if (name === '' || exempt(name)) continue;
+        // The trailing boundary matters: a bare `includes('.code')` would be
+        // satisfied by the `.code-block` rule and wave through an unstyled
+        // `code` class. A class selector ends at anything that is not a name
+        // character.
+        assert.match(
+          stylesheets,
+          new RegExp(`\\.${name.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`),
+          `${file}: class "${name}" ships with no CSS rule and is not recorded as deliberately unstyled`,
+        );
+      }
+    }
+  }
+});
+
+/*
+ * Deliberately absent: a test that gunzips a `.pf_fragment` and asserts the
+ * search index carries no page chrome. The parity plan's §7.3 rejects exactly
+ * that ("no allowlist widening, no decompression test") in favour of the
+ * `--exclude-selectors` flag in `package.json`'s build script, which is what
+ * ships. A decompression test would re-add the machinery the flag replaced, and
+ * it would test Pagefind rather than this repository. The index was verified by
+ * hand once after the flag landed: title clean, 15/15 anchors clean, zero
+ * occurrences of `Copy` or `← All notes`.
+ */
+
 test('the built stylesheet stays inside the initial-CSS budget', () => {
   // Requirements section 18 budgets initial CSS at 40 KB gzip, so the
   // comparison must be against gzipped bytes. TK-09 owns the enforced gate and
-  // the full initial-CSS accounting (Pagefind's stylesheet is loaded on every
-  // page today; making that lazy is TK-06's). This keeps the design system
-  // honest about its own contribution while it is being built.
+  // the full initial-CSS accounting. This keeps the design system honest about
+  // its own contribution while it is being built.
   const bytes = STYLESHEETS.reduce((total, file) => total + gzipSync(readFileSync(file)).length, 0);
   assert.ok(bytes < 40 * 1024, `built CSS is ${bytes} bytes gzipped, over the 40 KB budget`);
+});
+
+/**
+ * No search byte is requested before the reader asks for search.
+ *
+ * This is the one budget assertion that is binary rather than a threshold, and
+ * the one Quartz structurally cannot pass — it loads its search bundle
+ * `afterDOMLoaded` on every page. Until TK-12 it was false here too, for a
+ * different reason: `Layout.astro` linked `/pagefind/pagefind-ui.css`
+ * unconditionally, 2,599 B gzip on every route for a dialog most readers never
+ * open. The stylesheet now loads with the bundle it styles, on first open.
+ */
+test('no page requests a search asset before the reader opens search', () => {
+  for (const file of PAGES) {
+    for (const tag of rawStartTags(read(file))) {
+      const url = /\s(?:href|src)="([^"]*)"/.exec(tag)?.[1];
+      assert.ok(
+        url === undefined || !url.includes('/pagefind/'),
+        `${file}: requests a search asset on first paint: ${tag}`,
+      );
+    }
+  }
 });
 
 /** One control marked `data-js-only` in the built pages, as a selector sees it. */

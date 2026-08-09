@@ -15,17 +15,15 @@ import {
   FIXED_ROUTES,
   NOTES_SEGMENT,
   PRIMARY_NAV,
-  REDIRECT_LIMIT,
+  REDIRECT_RULES,
   SITE_MAP,
   TAGS_SEGMENT,
   collectionFacets,
   collectionRoute,
-  legacyNoteRoute,
   noteRoute,
   noteSlugFromPath,
   noteTimestamp,
   recentFirst,
-  redirectRules,
   renderRedirects,
   tagFacets,
   tagRoute,
@@ -48,7 +46,6 @@ function entry(slug: string, overrides: Partial<ContentEntry> = {}): ContentEntr
 
 test('a note route is a pure function of its slug', () => {
   assert.equal(noteRoute('first-note'), '/notes/first-note/');
-  assert.equal(legacyNoteRoute('first-note'), '/first-note/');
   assert.equal(tagRoute('gardening'), '/tags/gardening/');
   assert.equal(collectionRoute('field-notes'), '/collections/field-notes/');
 });
@@ -295,62 +292,39 @@ test('an unparseable date is treated as undated, not as NaN', () => {
 /** The version stamp shape the emitter supplies; irrelevant to rule content. */
 const VERSION = { schema: 1, content: 'sha256:0000' };
 
-test('every published slug gets a permanent redirect in both path forms', () => {
-  const entries = [entry('b-note'), entry('a-note')];
-  const rules = redirectRules(entries);
+/** A rule shape to render, since the live map has none. See `REDIRECT_RULES`. */
+const SAMPLE: readonly { from: string; to: string; status: 301 }[] = [
+  { from: '/a-note/', to: noteRoute('a-note'), status: 301 },
+  { from: '/b-note', to: noteRoute('b-note'), status: 301 },
+];
 
-  // Both `/a-note/` and `/a-note` — Cloudflare compares the rule source against
-  // the request path, and its documented trailing-slash handling covers its own
-  // `.html` normalization, not user rules.
-  assert.equal(rules.length, entries.length * 2);
-  assert.deepEqual(rules.map((rule) => rule.from), ['/a-note', '/a-note/', '/b-note', '/b-note/']);
-  for (const rule of rules) {
-    assert.equal(rule.status, 301, 'a slug change must not be a temporary redirect');
-    assert.equal(rule.to, noteRoute(rule.from.replaceAll('/', '')));
-  }
-});
-
-test('the redirect map is acyclic and has no repeated source', () => {
-  // Acyclic by construction — no target can be a source, because a slug cannot
-  // contain a slash — but walked here so a future route change fails loudly
-  // rather than shipping a loop.
-  const rules = redirectRules(['a-note', 'b-note', 'c-note'].map((slug) => entry(slug)));
-  const targets = new Map(rules.map((rule) => [rule.from, rule.to]));
-  assert.equal(targets.size, rules.length, 'two rules share a source path');
-
-  for (const rule of rules) {
-    const seen = new Set([rule.from]);
-    let current: string | undefined = rule.to;
-    while (current !== undefined && targets.has(current)) {
-      assert.ok(!seen.has(current), `redirect cycle reached through ${rule.from}`);
-      seen.add(current);
-      current = targets.get(current);
-    }
-  }
-});
-
-test('no redirect source can collide with a route the site owns', () => {
-  // This matters because Cloudflare Pages applies a redirect even when a static
-  // asset matches the request: a rule at `/recent/` would shadow the recent
-  // index outright. Nothing in `redirectRules` prevents that — a note slugged
-  // `recent` would emit exactly such a rule. What prevents it is TK-01, which
-  // refuses the slug, and this is the seam where those two modules meet.
+test('the site strands no public path, so it emits no redirect', () => {
+  // TK-04 emitted two rules per note migrating `/<slug>/` to `/notes/<slug>/`.
+  // That URL shape was never publicly served — introduced at `3831ad0`,
+  // superseded at `04f8d9c`, entirely within unpushed history — so every rule
+  // redirected from a URL nobody could hold. TK-12 deleted them.
   //
-  // So the invariant proven here is the conjunction: for every fixed route,
-  // the slug that would shadow it is rejected by validation, AND redirect
-  // sources for slugs that DO validate never land on a fixed route.
+  // This is the assertion that keeps them deleted: a rule reappears only
+  // alongside a real stranded URL, and whoever adds one has to update this test
+  // and say which URL it is.
+  assert.deepEqual(REDIRECT_RULES, []);
+});
+
+test('no redirect source may collide with a route the site owns', () => {
+  // Cloudflare Pages applies a redirect even when a static asset matches the
+  // request, so a rule at `/recent/` would shadow the recent index outright.
+  // Two things must hold for that to be impossible. First, a note slugged
+  // `recent` must never validate — TK-01 refuses it, and this is the seam where
+  // the two modules meet. Second, no rule that does ship may name a fixed route
+  // as its source.
   const shadowing = FIXED_ROUTES.map((route) => route.replaceAll('/', '')).filter((slug) => slug !== '');
   assert.ok(shadowing.length > 0);
 
   for (const slug of shadowing) {
-    assert.ok(
-      redirectRules([entry(slug)]).some((rule) => FIXED_ROUTES.includes(rule.from)),
-      `"${slug}" was expected to shadow a fixed route, so validation must reject it`,
-    );
     assert.throws(
       () => validateArtifact({ version: 1, entries: [entry(slug)] }),
       /collides with reserved route segment/,
-      `a note slugged "${slug}" would emit a redirect over the site's own route`,
+      `a note slugged "${slug}" could shadow the site's own route`,
     );
   }
 
@@ -363,25 +337,48 @@ test('no redirect source can collide with a route the site owns', () => {
     );
   }
 
-  // And a slug that validates emits nothing over a site route.
-  for (const rule of redirectRules([entry('a-note'), entry('recent-thoughts')])) {
+  for (const rule of REDIRECT_RULES) {
     assert.ok(!FIXED_ROUTES.includes(rule.from), `redirect source ${rule.from} shadows a site route`);
   }
 });
 
-test('an empty corpus produces a valid, rule-free redirect file', () => {
-  const text = renderRedirects(redirectRules([]), VERSION);
+test('the rule set is acyclic and names each source once', () => {
+  // Vacuous while `REDIRECT_RULES` is empty, and kept for exactly that reason:
+  // the deleted machinery derived two rules per note and carried a cycle walk
+  // to prove they could not loop. The rules are hand-written now, which makes a
+  // loop *easier* to introduce, not harder — nothing computes the targets, so
+  // nothing guarantees a target is not also a source. This is the assertion the
+  // first hand-written rule has to pass.
+  const targets = new Map(REDIRECT_RULES.map((rule) => [rule.from, rule.to]));
+  assert.equal(targets.size, REDIRECT_RULES.length, 'two rules share a source path');
+
+  for (const rule of REDIRECT_RULES) {
+    assert.equal(rule.status, 301, 'a stranded URL must not move temporarily');
+    const seen = new Set([rule.from]);
+    let current: string | undefined = rule.to;
+    while (current !== undefined && targets.has(current)) {
+      assert.ok(!seen.has(current), `redirect cycle reached through ${rule.from}`);
+      seen.add(current);
+      current = targets.get(current);
+    }
+  }
+});
+
+test('an empty rule set produces a valid, rule-free redirect file', () => {
+  const text = renderRedirects([], VERSION);
   assert.equal(text.split('\n').filter((line) => line !== '' && !line.startsWith('#')).length, 0);
   assert.ok(text.endsWith('\n'), 'the file must end with a newline');
 });
 
 test('the rendered file matches the Cloudflare _redirects grammar', () => {
-  const rules = redirectRules(['a-note', 'b-note'].map((slug) => entry(slug)));
-  const lines = renderRedirects(rules, VERSION).split('\n');
+  // Rendered against a sample rule set rather than the live one, which is
+  // empty: the grammar is what the first real rule will be emitted into, so it
+  // must stay proven while there is nothing to emit.
+  const lines = renderRedirects(SAMPLE, VERSION).split('\n');
 
   assert.equal(lines.at(-1), '', 'the file must end with a newline');
   const body = lines.filter((line) => line !== '' && !line.startsWith('#'));
-  assert.equal(body.length, rules.length);
+  assert.equal(body.length, SAMPLE.length);
 
   for (const line of body) {
     // `[source] [destination] [code]`, absolute paths, permanent status.
@@ -394,24 +391,8 @@ test('the rendered file matches the Cloudflare _redirects grammar', () => {
 test('the file records the schema and content version it was generated from', () => {
   // Requirements section 20: every artifact records `schema_version` and
   // `content_version`. Without them a deployed map cannot be tied back to the
-  // artifact that produced it.
-  const text = renderRedirects(redirectRules([entry('a-note')]), {
-    schema: 1,
-    content: 'sha256:abc123',
-  });
+  // artifact that produced it. This is why the file ships at all today.
+  const text = renderRedirects(REDIRECT_RULES, { schema: 1, content: 'sha256:abc123' });
   assert.match(text, /^# schema_version: 1$/m);
   assert.match(text, /^# content_version: sha256:abc123$/m);
-});
-
-test('a corpus past the Cloudflare rule limit fails the build', () => {
-  // Two rules per note, so the limit is reached at half as many notes. Failing
-  // here names the count; the host would otherwise reject the whole file.
-  const overflowing = Array.from({ length: REDIRECT_LIMIT }, (_, index) => entry(`note-${index}`));
-  assert.throws(
-    () => renderRedirects(redirectRules(overflowing), VERSION),
-    /exceeds the Cloudflare Pages limit of 2000/,
-  );
-
-  const withinLimit = overflowing.slice(0, REDIRECT_LIMIT / 2);
-  assert.doesNotThrow(() => renderRedirects(redirectRules(withinLimit), VERSION));
 });

@@ -21,12 +21,12 @@ import { entries } from '../src/lib/content.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import {
   FIXED_ROUTES,
+  REDIRECT_RULES,
   SITE_MAP,
   collectionFacets,
   collectionRoute,
   noteRoute,
   noteSlugFromPath,
-  redirectRules,
   renderRedirects,
   tagFacets,
   tagRoute,
@@ -90,11 +90,12 @@ test('every published note is served from its canonical route', () => {
   }
 });
 
-test('no note is still served from its legacy path', () => {
-  // The legacy path must be a redirect, not a second copy of the page: two
-  // live copies of one note is a duplicate-content and a withdrawal problem.
+test('no note is served from a path other than its canonical route', () => {
+  // The pre-TK-04 `/<slug>/` path must not be a second live copy of the note:
+  // two live copies of one note is a duplicate-content and a withdrawal
+  // problem. It is not a redirect either — see `REDIRECT_RULES`.
   for (const entry of entries) {
-    assert.ok(!ROUTES.includes(`/${entry.slug}/`), `note "${entry.slug}" is still served at its legacy path`);
+    assert.ok(!ROUTES.includes(`/${entry.slug}/`), `note "${entry.slug}" is served at a second path`);
   }
 });
 
@@ -102,24 +103,31 @@ test('a static 404 is emitted for the host to serve', () => {
   assert.ok(exists(new URL('404.html', DIST)), 'dist/404.html is missing');
 });
 
-test('the emitted redirect map matches the artifact exactly', () => {
+test('the emitted redirect map matches the route model exactly', () => {
   const file = new URL('_redirects', DIST);
   assert.ok(exists(file), 'dist/_redirects is missing — the build step did not run');
 
   // The version stamp is recomputed from the artifact bytes rather than read
   // out of the file, so a map generated from a different artifact than the one
   // `dist/` was built from fails here instead of shipping.
+  //
+  // Deliberately hashed here rather than through `contentVersion()`, which the
+  // two scripts share: a gate that computes the expected value with the same
+  // function the subject used cannot see that function go wrong. This is the
+  // one place a second, independent implementation earns its keep.
   const source = readFileSync(new URL('../src/data/content.json', import.meta.url), 'utf8');
   const content = `sha256:${createHash('sha256').update(source).digest('hex')}`;
 
   assert.equal(
     readFileSync(file, 'utf8'),
-    renderRedirects(redirectRules(entries), { schema: SCHEMA_VERSION, content }),
+    renderRedirects(REDIRECT_RULES, { schema: SCHEMA_VERSION, content }),
   );
 });
 
 test('every redirect target is a route the build actually emitted', () => {
-  for (const rule of redirectRules(entries)) {
+  // Vacuous while `REDIRECT_RULES` is empty, which is the current and correct
+  // state. It is the assertion that has to hold the first time a rule appears.
+  for (const rule of REDIRECT_RULES) {
     assert.ok(ROUTES.includes(rule.to), `redirect ${rule.from} points at ${rule.to}, which was not built`);
     assert.ok(!ROUTES.includes(rule.from), `redirect source ${rule.from} is also a live page`);
   }
@@ -157,15 +165,19 @@ test('every internal link resolves to a built route', () => {
   }
 });
 
-test('no in-content link still points at a legacy note path', () => {
+test('no in-content link points at a bare /<slug>/ path', () => {
   // Vacuous on a corpus whose entries have no outgoing links, which is the
   // artifact as it stands. It is kept because it is the assertion that matters
   // once the corpus grows; `renderMarkdown` is exercised directly below so the
   // rewrite itself is proven either way.
-  const legacy = new Set(entries.map((entry) => `/${entry.slug}/`));
+  //
+  // This matters more since TK-12 removed the `/<slug>/` redirect pair: such a
+  // link is now a 404, not a hop. The gate above ("every internal link resolves
+  // to a built route") would also catch it; this one names the cause.
+  const bare = new Set(entries.map((entry) => `/${entry.slug}/`));
   for (const { file, href } of internalLinks()) {
     const [path] = href.split('#') as [string];
-    assert.ok(!legacy.has(path), `${file}: link to "${href}" uses the legacy note path`);
+    assert.ok(!bare.has(path), `${file}: link to "${href}" skips the /notes/ segment`);
   }
 });
 

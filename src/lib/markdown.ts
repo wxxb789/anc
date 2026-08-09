@@ -272,9 +272,109 @@ async function highlight(code: string, language: string): Promise<string> {
 
 interface Collected {
   headings: Heading[];
+  /**
+   * Every `id` written as raw HTML in the body, counted by value.
+   *
+   * Collected so `sanitize()` can *deny* them, not merely so `headingPlugin`
+   * can avoid them. Avoiding is enough for heading anchors, whose ids are minted
+   * after the raw node is seen — but not for satteri's generated footnote ids
+   * (`footnote-label`, `user-content-fn-*`), which are recognized by shape at
+   * sanitize time and so would be handed to whichever element claimed them
+   * first. A raw `<a id="footnote-label">` before a footnote took the id, left
+   * the real `<h2 class="sr-only">` without one, and pointed the reference's
+   * `aria-describedby` at the decoy.
+   *
+   * Counted rather than a set because a decoy and the genuine element share the
+   * id string: denying the string outright would strip the footnote's own id too
+   * and leave `href="#user-content-fn-a"` dangling.
+   */
+  rawIds: Map<string, number>;
   hasCode: boolean;
   hasMath: boolean;
   hasMermaid: boolean;
+}
+
+/**
+ * The tags `POLICY` grants an `id`, and therefore the only tags on which a
+ * raw-HTML id can survive to the page. Derived from the allowlist rather than
+ * restated, so the two cannot disagree.
+ *
+ * A function, not a `const`: `POLICY` is declared further down the module, so an
+ * eagerly evaluated binding here reads it inside its temporal dead zone and the
+ * module throws on import. Computed once on first call and cached — every render
+ * hits this per raw node.
+ */
+let idBearingTags: ReadonlySet<string> | undefined;
+
+function isIdBearing(tagName: string): boolean {
+  idBearingTags ??= new Set(
+    Object.entries(POLICY.allowedAttributes ?? {})
+      .filter(([, allowed]) => (allowed as readonly unknown[]).includes('id'))
+      .map(([tag]) => tag),
+  );
+  return idBearingTags.has(tagName);
+}
+
+/**
+ * Every `id` in a fragment of raw HTML that could actually reach the page.
+ *
+ * Parsed rather than pattern-matched. A regex over the raw text gets this wrong
+ * in both directions, and both directions are defects:
+ *
+ * - It *misses* ids. An attribute value is entity-decoded before it becomes an
+ *   id, and `_` — a slug character — has named references (`&lowbar;`,
+ *   `&UnderBar;`). `<a id="foo&lowbar;bar">` is the id `foo_bar`, and a decoder
+ *   that handles only numeric references reads it as the literal
+ *   `foo&lowbar;bar`, reserves the wrong string, and lets the decoy take
+ *   `## Foo_Bar`'s anchor — exactly the defect this exists to close.
+ * - It *over-matches*. `\bid\s*=` fires inside an HTML comment, inside
+ *   `data-id=`, and inside a `title="id=x"` value, so text that never renders
+ *   would push a real heading from `#introduction` to `#introduction-1` and
+ *   silently move a published deep link.
+ *
+ * `sanitize-html` is already this module's parser and its allowlist, so using it
+ * here costs no dependency and cannot disagree with the sanitizer about what an
+ * id *is*. But parsing alone is still too generous, because the question here is
+ * not "is this an id" — it is "can this id shadow a heading anchor", and only an
+ * id that survives `sanitize()` can. So the same two filters the real pass
+ * applies are applied here:
+ *
+ * - `nonTextTags` from `POLICY`, so an id inside a discarded subtree written as
+ *   one raw block (`<form><a id="x">y</a></form>`) reserves nothing. Passed
+ *   explicitly because the library's default list is a different, shorter one.
+ * - {@link isIdBearing}, so `<div id="introduction">` — which ships as a `div`
+ *   with its id dropped — cannot push `## Introduction` to `#introduction-1`.
+ *
+ * An empty `id=""` is skipped: a browser treats it as no id at all, and
+ * reserving `''` would consume the slugger's empty-slug fallback and leave a
+ * punctuation-only heading with `id="-1"` instead of `section`.
+ *
+ * ponytail: satteri delivers raw HTML as *per-tag fragments* when the block
+ * spans lines — `<xmp>`, `<a id="x">`, `</a>`, `</xmp>` are four separate raw
+ * nodes — so a nested container's context is not visible here and `nonTextTags`
+ * cannot see it. The residue is one shape: an `<a id>`, `<li id>`, or heading id
+ * nested inside a discarded container across several lines still reserves its
+ * slug, so a heading of the same text gets `-1`. That is a *conservative* miss —
+ * it can cost a heading its preferred anchor, never let a decoy steal one — and
+ * closing it means tracking open tags across raw nodes, which is a second HTML
+ * parser for a construct no published note contains. Revisit if a real note
+ * ever writes one.
+ */
+function rawHtmlIds(html: string): string[] {
+  const ids: string[] = [];
+  sanitizeHtml(html, {
+    allowedTags: [],
+    allowedAttributes: {},
+    nonTextTags: POLICY.nonTextTags,
+    transformTags: {
+      '*': (tagName, attribs) => {
+        const id = attribs['id'];
+        if (typeof id === 'string' && id !== '' && isIdBearing(tagName)) ids.push(id);
+        return { tagName, attribs };
+      },
+    },
+  });
+  return ids;
 }
 
 /**
@@ -283,11 +383,30 @@ interface Collected {
  * Headings that already carry an id are generated structure (satteri's footnote
  * label), not authored content: they keep their id and stay out of the heading
  * tree.
+ *
+ * Raw HTML in the body reaches the tree as opaque `raw` nodes that the element
+ * visitor never sees, and `sanitize()` drops every id it did not generate. That
+ * drop happens too late on its own: a raw `<a id="introduction">` written before
+ * `## Introduction` would already have claimed the heading's anchor, leaving the
+ * deep link, the future table of contents entry, and the Pagefind anchor all
+ * resolving to the decoy. Reserving each raw id in this slugger *as it is
+ * encountered* is what makes generated ids disjoint from authored ones, so the
+ * heading gets a free id and the decoy is dropped with nothing to shadow.
  */
 function headingPlugin(collected: Collected): HastPluginDefinition {
   const slugger = new Slugger();
   return {
     name: 'thoughtscape-headings',
+    // Raw HTML is visited in document order alongside elements, so an id
+    // written before a heading is reserved before that heading is slugged.
+    // `slug()` registers the value whether or not it was already taken, which
+    // is exactly the reservation wanted here.
+    raw(node) {
+      for (const id of rawHtmlIds(node.value)) {
+        collected.rawIds.set(id, (collected.rawIds.get(id) ?? 0) + 1);
+        slugger.slug(id);
+      }
+    },
     element: {
       filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
       visit(node, ctx) {
@@ -381,17 +500,17 @@ function calloutPlugin(): HastPluginDefinition {
 }
 
 /**
- * Code fences become `figure > pre > code` with build-time highlighting and a
- * copy affordance.
+ * Code fences become `figure > pre > code` with build-time highlighting.
  *
- * The button ships `hidden` and does nothing on its own: with the target CSP
- * there is no inline handler to attach, so an external module (TK-02's script
- * scope) unhides and wires it. Shipping it hidden keeps the no-JavaScript page
- * free of a dead control.
+ * No copy button. TK-03 emitted one `hidden`, for a handler that was never
+ * written: it had no CSS and no script, and the word `Copy` was welded into
+ * every code block Pagefind indexed. TK-12 deleted it. TK-05a may reintroduce
+ * it in the same commit as its handler and its styling — the point at which it
+ * stops being dead code.
  *
  * Math reaches this visitor too — satteri renders `$$…$$` as
  * `pre > code.language-math` with no fence language — and is skipped so it stays
- * plain, escaped source rather than acquiring a copy button for an equation.
+ * plain, escaped source rather than acquiring a highlighting shell.
  */
 function codePlugin(collected: Collected): HastPluginDefinition {
   return {
@@ -433,12 +552,6 @@ function codePlugin(collected: Collected): HastPluginDefinition {
                     children: [{ type: 'raw', value: await highlight(source, language) }],
                   },
                 ],
-              },
-              {
-                type: 'element',
-                tagName: 'button',
-                properties: { className: ['copy-code'], 'data-copy-code': '' },
-                children: [{ type: 'text', value: 'Copy' }],
               },
             ],
           };
@@ -515,7 +628,7 @@ const POLICY: sanitizeHtml.IOptions = {
   /**
    * satteri and this module's own plugins emit only: `a blockquote code del em
    * h1`–`h6 hr img input li ol p pre section strong sup table tbody td th thead
-   * tr ul`, plus `figure`, `button`, and `span` from the code-block transform.
+   * tr ul`, plus `figure` and `span` from the code-block transform.
    *
    * The remainder are reachable only through raw HTML in a note body. They are
    * kept because requirements 15.1 promises a "safe HTML subset", and because a
@@ -524,6 +637,11 @@ const POLICY: sanitizeHtml.IOptions = {
    * unbroken tokens section 16 calls out, `kbd`/`samp`/`var` for technical
    * prose. Every one of them is inert: none is granted an attribute below
    * beyond the few named there, so none can carry a URL, a handler, or a style.
+   *
+   * `button` is deliberately absent. Nothing this pipeline emits is a button,
+   * and a note body has no use for a control that cannot be wired to anything:
+   * the reader would meet a dead affordance. A raw-HTML `<button>` keeps its
+   * text and loses the element.
    */
   allowedTags: [
     'p', 'br', 'hr',
@@ -534,7 +652,7 @@ const POLICY: sanitizeHtml.IOptions = {
     'ul', 'ol', 'li', 'dl', 'dt', 'dd',
     'blockquote', 'pre', 'code', 'figure', 'figcaption', 'section', 'div',
     'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption', 'colgroup', 'col',
-    'a', 'img', 'input', 'button',
+    'a', 'img', 'input',
   ],
   allowedAttributes: {
     a: [
@@ -549,6 +667,7 @@ const POLICY: sanitizeHtml.IOptions = {
     h5: ['id'],
     h6: ['id'],
     code: ['class'],
+    pre: ['tabindex'],
     span: ['class'],
     li: ['id', 'class'],
     ul: ['class'],
@@ -556,7 +675,6 @@ const POLICY: sanitizeHtml.IOptions = {
     section: ['class', 'data-footnotes'],
     blockquote: ['class', 'cite', 'data-callout'],
     figure: ['class', 'data-code-language', 'data-diagram'],
-    button: ['type', 'class', 'hidden', 'aria-label', 'data-copy-code'],
     input: ['type', 'checked', 'disabled'],
     th: ['colspan', 'rowspan', 'scope', 'data-align'],
     td: ['colspan', 'rowspan', 'data-align'],
@@ -590,7 +708,6 @@ const POLICY: sanitizeHtml.IOptions = {
     section: ['footnotes'],
     blockquote: ['callout', 'callout-*'],
     figure: ['code-block'],
-    button: ['copy-code'],
     strong: ['callout-title'],
   },
   allowedSchemes: ['http', 'https', 'mailto'],
@@ -627,13 +744,16 @@ function sanitize(
   html: string,
   routeForSlug: (slug: string) => string | undefined,
   generatedIds: ReadonlySet<string>,
+  rawIds: ReadonlyMap<string, number>,
 ): string {
-  // Raw HTML reaches the hast tree as an opaque `raw` node, so a
-  // `<h2 id="introduction">` written by hand never passes through the slugger
-  // and never gets deduplicated. Consuming each id on first use is what keeps
-  // it from shadowing the real heading's anchor.
+  // Each generated id survives exactly once. `headingPlugin` has already made
+  // the generated set disjoint from every raw-HTML id, so this no longer
+  // arbitrates a collision — it only stops a raw duplicate of a generated id
+  // (`&#105;ntroduction` for `introduction`, say) from being emitted twice.
   const unusedIds = new Set(generatedIds);
   const usedFootnoteIds = new Set<string>();
+  // One deny token per raw-HTML claim on that id; see the note below.
+  const denials = new Map(rawIds);
 
   return sanitizeHtml(html, {
     ...POLICY,
@@ -641,15 +761,44 @@ function sanitize(
       // Element ids are page-global names, and the layout owns hooks such as
       // `#search-toggle`. Only ids this pipeline generated survive, and each
       // survives exactly once: the heading anchors collected during rendering,
-      // and satteri's own footnote ids. Everything else is dropped. This runs
-      // on every tag, so no future `id` grant can reopen the channel.
+      // and satteri's own footnote ids.
+      //
+      // Restricted to tags the allowlist actually grants an `id`. On every other
+      // tag the id is already dropped by `allowedAttributes` a moment later —
+      // `tests/markdown.test.ts` proves that across every allowed tag — so this
+      // is not the control that closes the channel, and running it there did
+      // real harm: a raw `<div id="introduction">` consumed `introduction` from
+      // `unusedIds` before the real heading was reached, and the heading shipped
+      // with no id and an anchor pointing nowhere. `headingPlugin` reserves
+      // against this same predicate, so the two passes agree on which ids exist.
+      //
+      // Raw-HTML claims are denied first, and by *count* rather than by
+      // membership. Heading anchors need no such help — they are minted after
+      // the raw node is seen, so they never collide — but satteri's footnote ids
+      // are recognized by *shape*, so a raw `<a id="footnote-label">` would be
+      // handed the id simply for appearing first, leaving the real footnote
+      // heading without one and pointing the reference's `aria-describedby` at
+      // the decoy. A count rather than a set because the raw claim and the
+      // genuine element share the id string: denying the string outright would
+      // take the id from the footnote too and leave `href="#user-content-fn-a"`
+      // dangling. Spending one token per raw claim denies exactly the decoys.
+      //
+      // ponytail: document order decides which occurrence spends a token, so an
+      // interleaving of decoy, real element, decoy would deny the real one. That
+      // needs a note to write two raw ids straddling a generated one; the corpus
+      // has zero raw ids and zero footnotes, and the bias is toward dropping an
+      // id rather than granting a decoy. Revisit if raw HTML ever appears.
       '*': (tagName, attribs) => {
         const id = attribs['id'];
-        if (id !== undefined) {
-          if (unusedIds.delete(id)) return { tagName, attribs };
-          if (FOOTNOTE_ID.test(id) && !usedFootnoteIds.has(id)) {
-            usedFootnoteIds.add(id);
-            return { tagName, attribs };
+        if (id !== undefined && isIdBearing(tagName)) {
+          const owed = denials.get(id) ?? 0;
+          if (owed > 0) denials.set(id, owed - 1);
+          else {
+            if (unusedIds.delete(id)) return { tagName, attribs };
+            if (FOOTNOTE_ID.test(id) && !usedFootnoteIds.has(id)) {
+              usedFootnoteIds.add(id);
+              return { tagName, attribs };
+            }
           }
           const { id: _dropped, ...rest } = attribs;
           return { tagName, attribs: rest };
@@ -701,14 +850,18 @@ function sanitize(
           ...('checked' in attribs ? { checked: '' } : {}),
         },
       }),
-      // A raw-HTML `<button>` defaults to type="submit"; pin it so it can never
-      // act as one. `hidden` is forced rather than set upstream because
-      // `sanitize-html` treats it as non-boolean and drops a valueless
-      // `hidden`, and because a raw-HTML button must be inert too.
-      button: (tagName, attribs) => ({
-        tagName,
-        attribs: { ...attribs, type: 'button', hidden: 'hidden' },
-      }),
+      // A `<pre>` scrolls horizontally when a line is longer than the measure,
+      // and a scrollable region must be reachable by keyboard — axe
+      // `scrollable-region-focusable`, WCAG 2.1.1. `tabindex="0"` is the whole
+      // fix: the browser then scrolls it with the arrow keys. No `role`, because
+      // `<pre>` already conveys preformatted text, and no `aria-label`, which
+      // would make a screen reader announce a name for every fence.
+      //
+      // Forced here rather than set in `codePlugin` so it reaches *every* `pre`:
+      // the highlighted code fences, the math blocks the code plugin skips, and
+      // any raw-HTML one. Forcing also pins the value — a raw `tabindex="5"`
+      // would otherwise hijack the document's tab order.
+      pre: (tagName, attribs) => ({ tagName, attribs: { ...attribs, tabindex: '0' } }),
     },
   });
 }
@@ -734,7 +887,13 @@ function buildToc(headings: readonly Heading[]): TocEntry[] {
  */
 export async function renderMarkdown(markdown: string, options: RenderOptions = {}): Promise<RenderedNote> {
   const routeForSlug = options.routeForSlug ?? defaultRouteForSlug;
-  const collected: Collected = { headings: [], hasCode: false, hasMath: false, hasMermaid: false };
+  const collected: Collected = {
+    headings: [],
+    rawIds: new Map(),
+    hasCode: false,
+    hasMath: false,
+    hasMermaid: false,
+  };
 
   const { html } = await markdownToHtml(markdown, {
     features: FEATURES,
@@ -747,7 +906,12 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
   });
 
   return {
-    html: sanitize(html, routeForSlug, new Set(collected.headings.map((heading) => heading.id))),
+    html: sanitize(
+      html,
+      routeForSlug,
+      new Set(collected.headings.map((heading) => heading.id)),
+      collected.rawIds,
+    ),
     headings: collected.headings,
     toc: collected.headings.length >= TOC_MIN_HEADINGS ? buildToc(collected.headings) : [],
     hasCode: collected.hasCode,

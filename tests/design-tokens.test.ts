@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { rules } from './css-cascade.ts';
+import { appliesByDefault, declaration, rules, specificity, splitSelectorList, wins } from './css-cascade.ts';
 
 const TOKENS = readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8');
 
@@ -65,6 +65,14 @@ const TEXT_PAIRS = [
   ['link', 'bg'],
   ['link', 'surface'],
   ['link', 'surface-alt'],
+  // Syntax tokens sit on `surface-alt` in practice; all three are covered so a
+  // later ticket moving the code block cannot silently drop one below AA.
+  ['syntax-keyword', 'bg'],
+  ['syntax-keyword', 'surface'],
+  ['syntax-keyword', 'surface-alt'],
+  ['syntax-literal', 'bg'],
+  ['syntax-literal', 'surface'],
+  ['syntax-literal', 'surface-alt'],
 ] as const;
 
 /** Non-text UI: the focus ring and any border that carries information. */
@@ -79,7 +87,10 @@ const NON_TEXT_PAIRS = [
 
 test('both palettes are fully declared', () => {
   for (const [theme, colors] of THEMES) {
-    for (const name of ['bg', 'surface', 'surface-alt', 'text', 'muted', 'line', 'line-strong', 'accent', 'link', 'focus']) {
+    for (const name of [
+      'bg', 'surface', 'surface-alt', 'text', 'muted', 'line', 'line-strong', 'accent', 'link',
+      'focus', 'syntax-keyword', 'syntax-literal',
+    ]) {
       assert.ok(colors[name], `${theme}: --color-${name} must be declared as a light-dark() pair`);
     }
   }
@@ -181,6 +192,104 @@ test('the low-contrast divider token is never used to carry information', () => 
       !/(?:^|[\s>+~,])(?:th|td)\b/.test(rule.selector) && !/focus/.test(rule.selector),
       `"${rule.selector}" draws an informational edge with the decorative --color-line`,
     );
+  }
+});
+
+test('no syntax token is distinguished by colour alone', () => {
+  // WCAG 1.4.1. Colour is the primary channel for highlighting, so the two roles
+  // a reader most needs to separate from ordinary code — a comment, which is
+  // prose to skip, and a keyword, which is structure — carry a second signal in
+  // weight or style. Without one, a code block is undifferentiated for a reader
+  // with a colour vision deficiency and on a printed page.
+  const global = readFileSync(new URL('../src/styles/global.css', import.meta.url), 'utf8');
+  for (const marker of ['token-comment', 'token-keyword']) {
+    const rule = rules(global).find((candidate) => candidate.selector.includes(`.${marker}`));
+    assert.ok(rule, `no rule styles .${marker}`);
+    assert.match(
+      rule.body,
+      /font-(?:weight|style):/,
+      `.${marker} is distinguished by colour alone; add a weight or style`,
+    );
+  }
+});
+
+test('prose rules do not outrank the markdown classes they contain', () => {
+  // The trap TK-02 documented for `[data-js-only]` losing to `.site-nav button`,
+  // in a second place: `.prose a` and `.prose blockquote` are (0,1,1), so a bare
+  // `.heading-anchor` or `.callout` rule at (0,1,0) loses and the declaration
+  // silently does nothing. It shipped that way — the heading anchor's `#` was
+  // underlined by `.prose a` — and a rule that exists but never applies is worse
+  // than a missing one, because the coverage gate counts it as styled.
+  const global = readFileSync(new URL('../src/styles/global.css', import.meta.url), 'utf8');
+  const declared = rules(global).filter(appliesByDefault);
+
+  for (const [marker, property, container] of [
+    ['heading-anchor', 'text-decoration', '.prose a'],
+    ['data-footnote-backref', 'text-decoration', '.prose a'],
+    ['callout', 'color', '.prose blockquote'],
+  ] as const) {
+    const contender = declared.find(
+      (rule) => rule.selector.includes(`.${marker}`) && declaration(rule.body, property),
+    );
+    assert.ok(contender, `no rule sets ${property} on .${marker}`);
+    const loser = {
+      specificity: specificity(contender.selector),
+      important: declaration(contender.body, property)!.important,
+      order: contender.order,
+    };
+
+    for (const rule of declared) {
+      if (!rule.selector.includes(container) || !declaration(rule.body, property)) continue;
+      for (const selector of splitSelectorList(rule.selector)) {
+        if (!selector.includes(container)) continue;
+        const winner = {
+          specificity: specificity(selector),
+          important: declaration(rule.body, property)!.important,
+          order: rule.order,
+        };
+        assert.ok(
+          !wins(winner, loser),
+          `"${selector}" (${winner.specificity}) beats "${contender.selector}" (${loser.specificity}) ` +
+            `on ${property}, so the markdown class's rule never applies`,
+        );
+      }
+    }
+  }
+});
+
+test('every named font face is one the reader already has', () => {
+  // `Inter` was in the sans stack with no `@font-face` and no font file
+  // anywhere in the repository, so it resolved to nothing on almost every
+  // machine — a name that looked like a design decision and was not one.
+  // Naming a face means shipping it: a family that is neither a generic, nor a
+  // system UI keyword, nor a face that ships with a major OS needs an
+  // `@font-face` and a same-origin file, which is also what `font-src 'self'`
+  // in `public/_headers` commits to.
+  const SYSTEM_FACES = new Set([
+    // CSS generics and system keywords.
+    'sans-serif', 'serif', 'monospace', 'system-ui', 'ui-sans-serif', 'ui-serif', 'ui-monospace',
+    '-apple-system',
+    // Bundled with Windows, macOS, iOS, or Android.
+    'Segoe UI', 'Roboto', 'Helvetica Neue', 'Cascadia Code', 'SFMono-Regular', 'Menlo', 'Consolas',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans Mono CJK SC',
+    'Source Han Sans SC',
+  ]);
+
+  const selfHosted = new Set(
+    [...TOKENS.matchAll(/@font-face[^}]*font-family:\s*'?([^;'"]+)'?/g)].map(([, name]) => name!.trim()),
+  );
+
+  for (const stack of ['--font-sans', '--font-mono']) {
+    const declared = new RegExp(`${stack}:([^;]*)`).exec(TOKENS);
+    assert.ok(declared, `${stack} must be declared`);
+    for (const face of declared[1]!.split(',')) {
+      const name = face.trim().replace(/^'|'$/g, '');
+      if (name === '') continue;
+      assert.ok(
+        SYSTEM_FACES.has(name) || selfHosted.has(name),
+        `${stack} names "${name}", which is neither a system face nor self-hosted with an @font-face`,
+      );
+    }
   }
 });
 
