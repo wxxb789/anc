@@ -259,11 +259,11 @@ Two structural facts drive the order:
 | TK-14 | CI enforcement | TK-13 | P0 | done `4ccd5c9` |
 | TK-05a | Page anatomy and table of contents | TK-11, TK-12 | P0 | done `a37bf7b` |
 | TK-05b | Static relationship surfaces | TK-05a | P0 | done `be89b25` |
-| TK-06 | Search — make it work, then make it good | TK-05a | P0 | 3a |
+| TK-06 | Search — make it work, then make it good | TK-05a | P0 | done `1164c72` |
 | TK-08 | Canonical metadata, feeds, sitemap, social cards | TK-05a | P0 | done `6d7b730` |
-| TK-15 | Math and diagrams — Temml and dual-mode Mermaid | TK-05a | P0 | 3a |
+| TK-15 | Math and diagrams — Temml and dual-mode Mermaid | TK-05a | P0 | done `116b15c` |
 | TK-05c | Collection rails and explorer | TK-05a, TK-05b | P0 | 3b |
-| TK-07 | Hover and focus previews | TK-05b | P0 | 3a |
+| TK-07 | Hover and focus previews | TK-05b | P0 | done `22cd841` |
 | TK-16 | Bilingual chrome | TK-05a, TK-05c | P0 | 3b |
 | TK-17 | Static graph route | TK-05b | P0 | 3b |
 | TK-09 | Privacy, security, and performance gates | all above | P0 | 4 |
