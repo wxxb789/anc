@@ -15,8 +15,10 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "pnpm run validate:content && astro build && pnpm run emit:redirects && pagefind --site dist --exclude-selectors \".heading-anchor\"",
+    "build": "pnpm run validate:content && astro build && pnpm run emit:redirects && pagefind --site dist --exclude-selectors \".heading-anchor\" && pnpm run scan:residue",
     "build:fixture": "node scripts/build-fixture.ts",
+    "scan:residue": "node scripts/scan-residue.ts",
+    "verify": "pnpm run lint && pnpm run check && pnpm run build && pnpm run test",
     "preview": "astro preview",
     "astro": "astro"
   },
