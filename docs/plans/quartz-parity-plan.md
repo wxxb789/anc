@@ -56,16 +56,16 @@ Every Quartz v5 capability in the 36-entry inventory, against what this reposito
 | Wikilink parsing and link resolution | micromark tokenizer + `CrawlLinks` hast pass emitting real `<a href>` and the edge set | **built** — exporter resolves wikilinks; TK-03 rewrites `/<slug>/` → `/notes/<slug>/` via the injected `routeForSlug`, and `wikilinks: false` at `src/lib/markdown.ts:121` is deliberate | parity |
 | Explorer (file tree sidebar) | client-side trie rebuilt from `contentIndex.json`, `new Function()` for the sort comparator | **gap** — no collection tree exists; owner decision 1 puts rails in scope but names no tree | we lose |
 | SPA routing | click interception + micromorph DOM diffing, `<route-announcer>` with an inline `style` | **skipped** — requirements §8.3 defers it; ordinary navigation is the baseline | skipped by design |
-| Table of contents | build-time mdast heading walk, server-rendered `<ol>`, 507 B scroll-spy enhancement | **planned (TK-05 item 3)** — `toc` and `headings` are computed at `src/lib/markdown.ts:752` and have zero consumers | we lose |
-| Breadcrumbs | filesystem trie `ancestryChain`, server-rendered, zero JS | **planned (TK-05 item 2)** — `Home / Notes / <title>` is a constant today and needs no schema change | we lose |
+| Table of contents | build-time mdast heading walk, server-rendered `<ol>`, 507 B scroll-spy enhancement | **built (TK-05a)** — real nested `<ol>` from `RenderedNote.toc`, complete in the server HTML, collapse via native `<details>`, zero JavaScript. Links measure 6.72:1 / 10.37:1 against Quartz's 2.04:1 / 2.92:1 | we win |
+| Breadcrumbs | filesystem trie `ancestryChain`, server-rendered, zero JS | **built (TK-05a)** — `Home / Notes / <collection>? / <title>`, public fields only, current page `aria-current="page"`. One flat collection level; the tree is TK-05c | parity |
 | Folder and tag listings | auto-generates a page per folder and per hierarchical tag prefix | **built (TK-04)** — `/tags/`, `/tags/<tag>/`, `/collections/`, `/collections/<slug>/` derived only from artifact fields, never from folders; no hierarchical tag expansion | parity |
 | Recent notes | sorts `allFiles` by git-derived mtime, dated above undated, title tiebreak | **built (TK-04)** — `/recent/` with `updated ?? created` and a documented alphabetical fallback (`src/lib/routes.ts:170`); no sidebar variant | parity |
-| Full-text search | FlexSearch built in the browser from the whole-corpus JSON, 26 KB gz on every page | **planned (TK-06)** — Pagefind is wired but non-functional: `script-src 'self'` at `public/_headers:5` blocks its WASM, and the injected script at `src/scripts/search-dialog.ts:33` is the deprecated Default UI | we lose |
-| RSS feed + sitemap | template-literal XML concatenation, CDATA plus manual escaping, build-time | **planned (TK-08)** — neither exists; `robots.txt` names no sitemap | we lose |
-| Social preview images | satori + sharp per page, 22 npm packages, fonts fetched at build time | **planned (TK-08 item 5)** — no `og:`/`twitter:` tags and no `rel="canonical"` in `dist/` | we lose |
+| Full-text search | FlexSearch built in the browser from the whole-corpus JSON, 26 KB gz on every page | **planned (TK-06)** — the CSP block is fixed (TK-12 added `'wasm-unsafe-eval'`, and a query now returns a result in a real browser under the shipped policy), but `src/scripts/search-dialog.ts` still injects the deprecated Default UI at 30,211 B gz where the modular UI is 4,244 B gz | we lose |
+| RSS feed + sitemap | template-literal XML concatenation, CDATA plus manual escaping, build-time | **built (TK-08)** — a hand-written Atom 1.0 feed and a sitemap, both byte-identical across consecutive builds, with `robots.txt` naming the sitemap. Zero new dependencies | we win |
+| Social preview images | satori + sharp per page, 22 npm packages, fonts fetched at build time | **built (TK-08)** — deterministic Open Graph and Twitter metadata on every route, plus one static default card. Per-page generated images deliberately skipped: satori and sharp are 22 packages and a native dependency this project has otherwise avoided | parity |
 | i18n (UI chrome, 30 locales, RTL) | typed `Translation` contract, `as const satisfies`, one global `locale`, resolved at build time | **gap** — per-document `<html lang>` is built (TK-02, `Layout.astro:29`), but every chrome string is hardcoded English; constraint 6 requires bilingual chrome | we lose |
 | Comments (Giscus) | cross-origin `client.js` + iframe into GitHub Discussions | **skipped** — constraint 2 forbids it, and a Discussions thread is a second unreviewed publication surface | skipped by design |
-| Syntax highlighting | Shiki/TextMate at build time plus a scope→class token classifier; inline-script copy button | **built (TK-03)** — Prism at build time with `token-*` classes (`src/lib/markdown.ts:265`), but zero `token-*` CSS ships and the `copy-code` button has no handler and no styling | we lose |
+| Syntax highlighting | Shiki/TextMate at build time plus a scope→class token classifier; inline-script copy button | **built (TK-03, TK-12)** — Prism at build time with `token-*` classes; TK-12 shipped the four-role colour map and deleted the dead copy button, which had no handler, no CSS, and welded `Copy` onto every indexed code block. Shiki was rejected because its inline `style` attributes need `style-src 'unsafe-inline'` | we win |
 | Callouts | 13 types over 25 aliases, mask-image icons, collapsible via a 335 B script writing inline styles | **built (TK-03)** — `calloutPlugin` at `src/lib/markdown.ts:328` emits `data-callout` + `callout-<kind>`, with no alias map, no icons, no collapse, and no CSS | we lose |
 | LaTeX / math | remark-math into KaTeX/MathJax/Typst; KaTeX path pulls CSS and a script from jsDelivr | **gap** — `$$…$$` renders as escaped source (`UNHIGHLIGHTED_LANGUAGES`, `src/lib/markdown.ts:138`); owner decision 2 settles on Temml but no ticket owns it | we lose |
 | Mermaid diagrams | `mermaid` fences hydrated by a ~500 KB gz ESM bundle from cdnjs, re-rendered on theme change | **gap** — fences ship as escaped code tagged `data-diagram="mermaid"` (`src/lib/markdown.ts:421`); owner decision 5 settles dual-mode but no ticket owns it | we lose |
@@ -253,14 +253,14 @@ Two structural facts drive the order:
 
 | ID | Title | Depends on | Priority | Wave |
 | --- | --- | --- | --- | --- |
-| TK-11 | Realistic multi-note fixture corpus | — | P0 | done |
-| TK-12 | Shipped-output defect sweep | — | P0 | done |
-| TK-13 | Toolchain migration — Vitest, Oxlint | — | P0 | 1 |
-| TK-14 | CI enforcement | TK-13 | P0 | 2b |
-| TK-05a | Page anatomy and table of contents | TK-11, TK-12 | P0 | 2a |
-| TK-05b | Static relationship surfaces | TK-05a | P0 | 2b |
+| TK-11 | Realistic multi-note fixture corpus | — | P0 | done `855b06b` |
+| TK-12 | Shipped-output defect sweep | — | P0 | done `855b06b` |
+| TK-13 | Toolchain migration — Vitest, Oxlint | — | P0 | done `ba58842` |
+| TK-14 | CI enforcement | TK-13 | P0 | done `4ccd5c9` |
+| TK-05a | Page anatomy and table of contents | TK-11, TK-12 | P0 | done `a37bf7b` |
+| TK-05b | Static relationship surfaces | TK-05a | P0 | done `be89b25` |
 | TK-06 | Search — make it work, then make it good | TK-05a | P0 | 3a |
-| TK-08 | Canonical metadata, feeds, sitemap, social cards | TK-05a | P0 | 2b |
+| TK-08 | Canonical metadata, feeds, sitemap, social cards | TK-05a | P0 | done `6d7b730` |
 | TK-15 | Math and diagrams — Temml and dual-mode Mermaid | TK-05a | P0 | 3a |
 | TK-05c | Collection rails and explorer | TK-05a, TK-05b | P0 | 3b |
 | TK-07 | Hover and focus previews | TK-05b | P0 | 3a |
@@ -272,10 +272,48 @@ Two structural facts drive the order:
 | TK-21 | Interactive graph via SQLite WASM | TK-17, TK-09 | P1 | 5 |
 | TK-19 | Exporter contract evolution and escalation path | — | P1 | any |
 | TK-20 | Oxfmt | TK-13 | P1 | isolated |
-| TK-22 | Migrate from npm to pnpm | TK-13 | P1 | isolated |
+| TK-22 | Migrate from npm to pnpm | TK-13 | P1 | done `ddc9b71` |
 
 TK-11 and TK-12 landed as `855b06b`: 254 tests, article first paint down from 10,119 to
 8,284 B gzip, and search running under the shipped CSP for the first time.
+
+### Delivered so far
+
+Eleven tickets are merged. `main` is at `4ccd5c9` with **346 tests** — 339 passing and 7
+skipped on the published one-note corpus — `pnpm run verify` green, and the residue scan
+clean over 19 files.
+
+| Landed | Commit | What changed |
+| --- | --- | --- |
+| TK-11, TK-12 | `855b06b` | Fixture corpus, and the shipped-output sweep that first made search run |
+| TK-13 | `ba58842` | Vitest, Oxlint, and a rendered 320 px measurement |
+| TK-05a | `a37bf7b` | The §9.2 page anatomy, and the render metadata that had zero consumers |
+| TK-22 | `ddc9b71` | pnpm, with an undeclared import now failing to resolve |
+| TK-05b, TK-08 | `c5a92c9` | Relationship surfaces; canonical URLs, Atom feed, sitemap, social card |
+| TK-14 | `4ccd5c9` | `verify`, the residue scan, and the CI workflow |
+
+**Two authorized fence extensions**, recorded so the audit trail is not silent:
+
+1. **TK-08 edited `tests/deployment.test.ts`**, which its fence excluded. Scope item 6
+   needs a second `_headers` rule for `/_astro/*`, and the file asserted `RULES.length === 1`.
+   That assertion was a *proxy* for the hazard its own comment names — Cloudflare joins
+   duplicate header names with a comma rather than choosing the most specific — so it was
+   replaced with a direct check that no two rules set the same header name. Stricter in the
+   dimension that matters, and proven non-vacuous by seeding a genuine duplicate. Authorized
+   before the edit, not after.
+2. **TK-14 added one `&&` link to `build`**, slightly past its "owns the `verify` script"
+   grant. Cloudflare Pages runs `build` alone, so a residue scan attached only to `verify`
+   would mean the host that publishes the artifact is not the host that scans it. Flagged
+   by the agent rather than assumed.
+
+### Blocking before any deployment
+
+`astro.config.mjs:16` sets the canonical origin to `https://thoughtscape.invalid` — an
+RFC 2606 reserved name chosen so it cannot resolve to a real site by accident. A test walks
+`src/`, `scripts/`, `tests/`, and `public/` and fails if any second file writes the host, so
+assigning a real domain stays a one-line change. **Deploying before that change would
+publish canonical URLs, an Atom feed, and a sitemap all pointing at a domain that does not
+exist.**
 
 **Parallelism.** Tickets in the same wave have no dependency between them *and* no
 overlapping file ownership. The second condition is the binding one — two tickets that
