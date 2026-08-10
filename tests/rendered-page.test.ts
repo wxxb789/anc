@@ -1086,8 +1086,19 @@ test('a tap opens no preview', async (context) => {
     );
 
     // --- And the tap still follows the link ----------------------------------
+    // Re-measured after the reload rather than reusing `box`. The first pass
+    // suppressed the click and dispatched a `MutationObserver` into the page, but
+    // it is the *reload* that matters: font metrics and image sizing settle at
+    // slightly different times on a fresh document, so the link's box can sit a
+    // few pixels from where it was, and a tap at the stale centre lands next to
+    // it. That is a coordinate flake, not a preview defect — measured at roughly
+    // 2 failures in 8 runs before this change, always as a `waitForURL` timeout
+    // on a tap that hit nothing.
     await visit(page, route);
-    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+    const link = page.locator(`a[href="${target}"]`).first();
+    await link.scrollIntoViewIfNeeded();
+    const settled = (await link.boundingBox())!;
+    await page.touchscreen.tap(settled.x + settled.width / 2, settled.y + settled.height / 2);
     await page.waitForURL(`**${target}`, { timeout: 10_000 });
     assert.match(new URL(page.url()).pathname, /^\/notes\//, 'the tap did not follow the link');
   } finally {
