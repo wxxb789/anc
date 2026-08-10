@@ -27,4 +27,4 @@ pnpm-debug.log*
 .tmp/
 
 # agent worktrees (harness scratch, never committed)
-.claude/worktrees/
+.claude/
