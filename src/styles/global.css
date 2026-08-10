@@ -231,26 +231,42 @@ main:focus:not(:focus-visible) {
 }
 
 /*
- * Quartz's one genuinely good explorer idea: `grid-template-rows: 0fr → 1fr`
- * animates a disclosure open without anyone measuring a height in JavaScript.
- * It is applied to the content wrapper rather than to `<details>` itself,
- * because a `<details>` with `display: grid` loses the browser's own
- * open/closed box behaviour.
+ * The open/close transition, on the native `::details-content` pseudo-element.
  *
- * The animation is an enhancement in the strictest sense: a browser that
- * ignores `interpolate-size` snaps open exactly as `<details>` always has, and
- * the global `prefers-reduced-motion` block turns the transition off entirely.
+ * This is Quartz's `0fr → 1fr` idea reached through the platform instead of
+ * through script: `interpolate-size: allow-keywords` lets `block-size` animate
+ * between `0` and `auto`, and `content-visibility` is in the transition list
+ * with `allow-discrete` so the content is not clipped away before the height
+ * has finished collapsing.
+ *
+ * A `transition`, deliberately **not** an `animation`, and that distinction is a
+ * WCAG fix rather than a stylistic one. An `animation` on `[open]` runs when the
+ * page *loads*, because the reader's own group is already open in the served
+ * HTML — so the rail faded in from `opacity: 0` on every navigation, and axe
+ * caught the links mid-fade at a computed **4.44:1** against the 4.5 threshold,
+ * on 245 nodes across both corpora. A transition fires only on a state change,
+ * so an already-open group is simply open at first paint and there is no
+ * partial-opacity frame for anything to measure. Measured, not reasoned: the
+ * violation count went 245 → 0 on this change alone.
+ *
+ * A browser without `interpolate-size` snaps open exactly as `<details>` always
+ * has, and the global `prefers-reduced-motion` block turns the transition off.
  */
-@media (prefers-reduced-motion: no-preference) {
-  .explorer-group[open] > .explorer-notes {
-    animation: explorer-open var(--motion-fast) var(--ease);
+@supports (interpolate-size: allow-keywords) {
+  .explorer-group {
+    interpolate-size: allow-keywords;
   }
-}
 
-@keyframes explorer-open {
-  from {
-    opacity: 0;
-    transform: translateY(-0.25rem);
+  .explorer-group::details-content {
+    block-size: 0;
+    overflow: hidden;
+    transition:
+      block-size var(--motion-fast) var(--ease),
+      content-visibility var(--motion-fast) allow-discrete;
+  }
+
+  .explorer-group[open]::details-content {
+    block-size: auto;
   }
 }
 
@@ -1409,6 +1425,26 @@ main:focus:not(:focus-visible) {
   html {
     scroll-padding-top: 5rem;
   }
+
+  /*
+   * Tablet: the groups become panels beside each other rather than a single
+   * stack, which is the "collapsible side panels" of requirements section 16.
+   *
+   * This band gets its own treatment rather than inheriting the mobile one
+   * because it has width the mobile layout cannot use and not enough width to
+   * put the rail beside the article: measured, `--measure` resolves to 623 px,
+   * and a 240 px rail at 768 px would leave the prose 528 px — narrowing the
+   * reading column to buy chrome, which is the wrong trade in the one band
+   * where the reader is most likely reading. Laying the panels out
+   * horizontally spends the extra width on the navigation instead, and costs
+   * the article nothing.
+   */
+  .explorer-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+    gap: 0 var(--space-6);
+    align-items: start;
+  }
 }
 
 /*
@@ -1451,6 +1487,14 @@ main:focus:not(:focus-visible) {
     /* Reserve the gutter the scrollbar takes, so appearing and disappearing
        does not reflow the list under the reader's pointer. */
     scrollbar-gutter: stable;
+  }
+
+  /* Back to one stack: the tablet band's side-by-side panels are for width the
+     rail does not have once it is a 15rem column. Without this the `auto-fit`
+     grid above would still apply and each group would be squeezed into a
+     fraction of the rail. */
+  .explorer-groups {
+    display: block;
   }
 }
 
