@@ -467,8 +467,13 @@ test('every note page carries the anatomy this ticket owns', () => {
     assert.match(html, /<article class="prose" data-pagefind-body>/, `${slug}: no article body`);
     assert.match(html, /<footer class="note-footer">/, `${slug}: no provenance footer`);
     assert.ok(
-      html.includes(`Canonical path: ${noteRoute(slug)}`),
-      `${slug}: the footer does not carry the canonical route`,
+      // TK-05a emitted the route here and said TK-08 would upgrade it once
+      // `site:` was configured; it now carries the absolute canonical URL, which
+      // is what makes a printed or quoted page findable again. The origin is
+      // matched rather than restated — `tests/metadata.test.ts` owns the
+      // assertion that it is the configured one, in one place.
+      new RegExp(`Canonical URL: https?://[^/<]+${noteRoute(slug)}<`).test(html),
+      `${slug}: the footer does not carry the canonical URL`,
     );
   }
 });

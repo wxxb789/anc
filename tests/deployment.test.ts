@@ -4,8 +4,8 @@
  * exercised by a build, and until TK-12 none was covered by a test — `grep -rn
  * "_headers" tests/ scripts/` returned nothing.
  *
- * `_headers` is six lines, and it is the only place the site's security posture
- * is written down. It is also the file that silently broke search:
+ * `_headers` is the only place the site's security posture and its cache policy
+ * are written down. It is also the file that silently broke search:
  * `script-src 'self'` with no `'wasm-unsafe-eval'` blocked Pagefind's
  * WebAssembly, so the feature had never executed in production.
  *
@@ -62,9 +62,16 @@ function parseHeaders(text: string): HeaderRule[] {
 
 const RULES = parseHeaders(TEXT);
 
+/** The site-wide rule, selected by its pattern rather than by its position. */
+function siteRule(): HeaderRule {
+  const rule = RULES.find((candidate) => candidate.pattern === '/*');
+  assert.ok(rule, `no rule matches the whole site; got: ${RULES.map((r) => r.pattern).join(', ')}`);
+  return rule;
+}
+
 /** Directive name to value, from the single policy the site serves. */
 function policy(): Map<string, string> {
-  const csp = RULES[0]?.headers.get('Content-Security-Policy');
+  const csp = siteRule().headers.get('Content-Security-Policy');
   assert.ok(csp, 'no Content-Security-Policy is served');
   const directives = new Map<string, string>();
   for (const part of csp.split(';')) {
@@ -78,17 +85,69 @@ function policy(): Map<string, string> {
 
 const POLICY = policy();
 
-test('exactly one rule serves the whole site', () => {
+test('no header name is set by more than one rule', () => {
   // Cloudflare joins duplicate header names with a comma across every matching
-  // rule instead of choosing the most specific, so a second overlapping block
-  // is a defect unless it explicitly removes the inherited header with
-  // `! Header-Name`. One rule means the question cannot arise.
-  assert.equal(RULES.length, 1, `expected one rule, got: ${RULES.map((rule) => rule.pattern).join(', ')}`);
-  assert.equal(RULES[0]!.pattern, '/*');
+  // rule instead of choosing the most specific, so two rules setting one header
+  // emit both values. Overriding needs an explicit `! Header-Name`.
+  //
+  // This asserts that hazard directly. Until TK-08 it was approximated by
+  // "there is exactly one rule", which was true and sufficient while the file
+  // had one; TK-08 added `/_astro/*` for the immutable hashed-asset cache, and
+  // that rule shares no header name with the site-wide block. The direct form
+  // is the stricter one — it also rejects two *non*-overlapping patterns that
+  // set the same header, which the count never inspected.
+  const owner = new Map<string, string>();
+  for (const rule of RULES) {
+    for (const name of rule.headers.keys()) {
+      const first = owner.get(name);
+      assert.equal(
+        first,
+        undefined,
+        `${name} is set by both "${first}" and "${rule.pattern}"; Cloudflare comma-joins them ` +
+          'rather than picking the most specific — remove one or override with `! Header-Name`',
+      );
+      owner.set(name, rule.pattern);
+    }
+  }
+
+  // Every rule must be reachable from the site-wide block's perspective: an
+  // unanchored pattern is a rule that silently matches nothing.
+  for (const rule of RULES) {
+    assert.match(rule.pattern, /^\//, `rule pattern "${rule.pattern}" is not an absolute path`);
+  }
+});
+
+test('the whole site is covered by the security rule', () => {
+  assert.ok(siteRule().headers.size > 0, 'the /* rule sets no headers');
+});
+
+test('hashed assets are cached immutably, and nothing else is', () => {
+  // Requirements section 20: `public, max-age=31536000, immutable` for hashed
+  // assets. `/_astro/*` is exactly Astro's content-hashed output, so a changed
+  // file is a changed URL and a cached copy can never be stale.
+  const immutable = RULES.filter((rule) => rule.headers.get('Cache-Control')?.includes('immutable'));
+  assert.deepEqual(
+    immutable.map((rule) => rule.pattern),
+    ['/_astro/*'],
+    'exactly the content-hashed output directory may be cached immutably',
+  );
+  assert.equal(immutable[0]!.headers.get('Cache-Control'), 'public, max-age=31536000, immutable');
+
+  // `/pagefind/*` must never join it. Only `index/` and `fragment/` are
+  // content-hashed there; `pagefind-entry.json` and `wasm.*.pagefind` are
+  // stable-named and rewritten every build, so an immutable rule would pin a
+  // returning reader to an entry file pointing at index chunks that no longer
+  // exist — search breaking silently for the most frequent visitors.
+  for (const rule of RULES) {
+    assert.ok(
+      !rule.pattern.startsWith('/pagefind'),
+      `${rule.pattern}: pagefind assets are not all content-hashed and must use the revalidating default`,
+    );
+  }
 });
 
 test('every security header is served', () => {
-  const headers = RULES[0]!.headers;
+  const headers = siteRule().headers;
   for (const [name, expected] of [
     ['X-Content-Type-Options', 'nosniff'],
     ['Referrer-Policy', 'strict-origin-when-cross-origin'],

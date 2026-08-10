@@ -40,6 +40,7 @@ import {
   relatedNotes,
 } from '../../lib/relations.ts';
 import { collectionRoute, noteRoute, routeKey, tagRoute } from '../../lib/routes.ts';
+import { canonicalUrl } from '../../lib/site.ts';
 // Loaded as a URL rather than imported, so the stylesheet becomes its own
 // content-hashed asset and the `<link>` below can be emitted conditionally.
 // Importing it would merge it into the layout's sheet and ship it everywhere,
@@ -333,9 +334,9 @@ const pager =
       A reviewed public projection. This page was published because it was named on an
       explicit approval list, and it carries only what that projection includes.
     </p>
-    {/* The route, not the absolute URL: `site:` is unconfigured, so an origin
-        here would be invented. TK-08 configures it and upgrades this line and
-        the layout's printed one together. */}
-    <p class="note-canonical">Canonical path: {canonicalRoute}</p>
+    {/* TK-08 configured `site:`, so this is the full canonical URL rather than
+        the route TK-05a could honestly emit. A reader who copies it from a
+        printed or quoted page gets an address that resolves. */}
+    <p class="note-canonical">Canonical URL: {canonicalUrl(Astro.site, canonicalRoute)}</p>
   </footer>
 </Layout>
