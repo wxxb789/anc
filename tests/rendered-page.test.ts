@@ -1096,6 +1096,170 @@ test('a tap opens no preview', async (context) => {
 }, 120_000);
 
 /**
+ * A link with child elements behaves as one link, in both directions.
+ *
+ * Two properties, on the same real anchors:
+ *
+ * 1. Moving between a link's own children does not dismiss its preview. The
+ *    pointer has not left the link, so `pointerout` must be swallowed.
+ * 2. After a failed index load, crossing that same internal boundary **retries**.
+ *    This is the half that was broken and the half nobody found by reasoning:
+ *    `pointerout` is correctly swallowed, so nothing clears `current`, but the
+ *    crossing still fires a fresh `pointerover` for the same anchor — which the
+ *    "already here" branch would swallow too, leaving the preview permanently
+ *    dead. `show` releases `current` on a miss for exactly this.
+ *
+ * Driven from **real** nested anchors rather than an injected probe, at the
+ * reviewer's and the coordinator's insistence, and they were right to insist:
+ * an injected probe is what let the `href="#section"` self-preview defect through
+ * this file's own gate earlier in the ticket. Both searches for such markup had
+ * also looked in the wrong place — no Markdown link label in either corpus
+ * carries inline markup, but the collection pager in
+ * `src/pages/notes/[slug].astro` wraps two `<span>`s in every anchor, and the
+ * fixture corpus builds 50 of them. (Not `LinkedNotes.astro`, which this comment
+ * named until review checked: that component emits
+ * `<li><a href=…>{title}</a></li>`, a bare text anchor with no child element.)
+ *
+ * The published corpus has no collection sequence and so no pager, which is why
+ * this skips rather than fails there — the same shape as the other corpus-scaled
+ * vacuity guards in this file.
+ */
+test('a link with child elements is one link, and an internal crossing retries after a failure', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: 1280, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  /** The first built route whose pager anchor wraps child elements. */
+  async function findNested(): Promise<{ route: string; children: number } | undefined> {
+    for (const route of routes.filter((candidate) => candidate.startsWith('/notes/'))) {
+      await visit(page, route);
+      const children = await page.evaluate(
+        () =>
+          document.querySelector<HTMLAnchorElement>('nav.collection-pager a[href^="/notes/"]')?.children
+            .length ?? 0,
+      );
+      if (children > 1) return { route, children };
+    }
+    return undefined;
+  }
+
+  try {
+    const found = await findNested();
+    if (found === undefined) {
+      return context.skip(
+        'no built route carries a link with child elements — the published corpus has no ' +
+          'collection sequence, so no pager renders; `pnpm run build:fixture` exercises this',
+      );
+    }
+
+    // The pager link must be in the served index, or every assertion below reads
+    // "no preview" as a pass. This is not hypothetical: a `dist/` built from the
+    // fixture artifact while `public/content-index.json` is still the published
+    // one-note projection serves 32 note pages against a 1-entry index, and this
+    // gate then fails at its first wait with a bare timeout. `build-fixture.ts`
+    // overwrites the index for exactly this reason; the check is here so that a
+    // `dist/` assembled any other way says what is wrong instead of timing out.
+    const targetSlug = await page.evaluate(
+      () =>
+        document
+          .querySelector<HTMLAnchorElement>('nav.collection-pager a[href^="/notes/"]')
+          ?.pathname.replace(/^\/notes\/|\/$/g, '') ?? '',
+    );
+    const isIndexed = await page.evaluate(async (slug) => {
+      const response = await fetch('/content-index.json');
+      const payload = (await response.json()) as { entries?: { slug?: string }[] };
+      return (payload.entries ?? []).some((entry) => entry.slug === slug);
+    }, targetSlug);
+    assert.ok(
+      isIndexed,
+      `${found.route}: its pager links to "${targetSlug}", which the served ` +
+        '/content-index.json does not carry — dist/ was built from one artifact and the index ' +
+        'copied from another, so no preview could open and this gate would measure nothing',
+    );
+
+    const first = page.locator('nav.collection-pager a .pager-direction').first();
+    const second = page.locator('nav.collection-pager a .pager-title').first();
+    // The pager sits at the foot of the article; an element outside the viewport
+    // has a box the pointer can never reach.
+    await first.scrollIntoViewIfNeeded();
+    const from = (await first.boundingBox())!;
+    const to = (await second.boundingBox())!;
+    const centre = (box: { x: number; y: number; width: number; height: number }) =>
+      [box.x + box.width / 2, box.y + box.height / 2] as const;
+
+    // --- 1. The crossing does not dismiss, even momentarily ------------------
+    await page.mouse.move(...centre(from));
+    await page.waitForFunction(
+      () => document.querySelector<HTMLElement>('#link-preview')?.hidden === false,
+      undefined,
+      { timeout: 5_000 },
+    );
+
+    // Every transition of `hidden` from here on. Asserting the *end* state after
+    // a wait is not enough and this gate proved it: dismissing on the crossing
+    // and re-opening 120 ms later ends with the panel visible, so an end-state
+    // check passes while the reader watches it blink. A flicker is the defect.
+    await page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>('#link-preview')!;
+      const counter = { hides: 0 };
+      (window as typeof window & { crossing: { hides: number } }).crossing = counter;
+      new MutationObserver(() => {
+        if (panel.hidden) counter.hides += 1;
+      }).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    });
+
+    await page.mouse.move(...centre(to));
+    // Comfortably longer than both the close grace period and the open delay, so
+    // a hide-then-reopen cycle has had time to complete and be counted.
+    await page.waitForTimeout(700);
+
+    assert.equal(
+      await page.evaluate(() => (window as typeof window & { crossing: { hides: number } }).crossing.hides),
+      0,
+      "moving between a link's own children hid its preview — the link is not being treated as one link",
+    );
+    assert.ok(
+      await page.evaluate(() => document.querySelector<HTMLElement>('#link-preview')?.hidden === false),
+      "moving between a link's own children left its preview dismissed",
+    );
+
+    // --- 2. The crossing retries after a failed load --------------------------
+    let isFailing = true;
+    await page.route('**/content-index.json', (route) =>
+      isFailing ? route.fulfill({ status: 500, body: 'nope' }) : route.fallback(),
+    );
+    // A fresh document, so the index is fetched again under the stub.
+    await page.goto(`${origin}${found.route}`, { waitUntil: 'load' });
+    await first.scrollIntoViewIfNeeded();
+
+    await page.mouse.move(...centre((await first.boundingBox())!));
+    await page.waitForTimeout(500);
+    assert.ok(
+      await page.evaluate(() => document.querySelector<HTMLElement>('#link-preview')?.hidden !== false),
+      'a failed index request still opened a preview',
+    );
+
+    isFailing = false;
+    await page.mouse.move(...centre((await second.boundingBox())!));
+    await page.waitForFunction(
+      () => document.querySelector<HTMLElement>('#link-preview')?.hidden === false,
+      undefined,
+      { timeout: 5_000 },
+    ).catch(() => {
+      assert.fail(
+        'after a failed index load, crossing between the link\'s own children never retried — ' +
+          'the preview is permanently dead for that link and no pointer gesture short of ' +
+          'leaving it can recover',
+      );
+    });
+  } finally {
+    await browserContext.close();
+  }
+}, 180_000);
+
+/**
  * A link that is not a published note previews nothing and requests nothing.
  *
  * The privacy property as a browser fact rather than as a code reading: the

@@ -188,16 +188,25 @@ function install(panel: HTMLElement): void {
     if (entry === undefined) {
       // Nothing to show: a failed index load, or a slug the projection does not
       // carry. `current` is released because it means "the link whose preview is
-      // showing or scheduled", and after a miss neither is true — leaving it set
-      // would make the next `pointerover` on that same link take the "already
-      // here" branch instead of retrying.
+      // showing or scheduled", and after a miss neither is true. Leaving it set
+      // makes the next `pointerover` on that same link take the "already here"
+      // branch instead of retrying, and the preview never comes back.
       //
-      // Honestly: no gesture reaching that branch has been reproduced. Leaving a
-      // link fires `pointerout` and `leave()` clears the state anyway, and a
-      // pointer that never leaves fires no further `pointerover` to be swallowed.
-      // This is one line keeping a variable's meaning true rather than a fix for
-      // a defect anyone has seen, and it is recorded that way rather than as a
-      // measured bug.
+      // The gesture that reaches it is **moving between a link's own child
+      // elements**. `pointerout` is correctly swallowed — the pointer has not
+      // left the link — but crossing the internal boundary fires a fresh
+      // `pointerover` for the same anchor, and that is the one this releases for.
+      // An earlier version of this comment claimed no such gesture existed; it
+      // was wrong, and the mistake was testing jitter *within* one element, which
+      // fires no events at all. Reproduced on `/notes/accessibility-baseline/`
+      // moving between the collection pager's two spans: without this line the
+      // preview stays dead, with it the crossing re-arms.
+      //
+      // Not hypothetical markup: the collection pager in
+      // `src/pages/notes/[slug].astro` wraps `<span class="pager-direction">`
+      // and `<span class="pager-title">` in every anchor, and the fixture corpus
+      // builds **50** of them. `tests/rendered-page.test.ts` gates it on those
+      // real anchors.
       current = undefined;
       return;
     }
@@ -271,9 +280,19 @@ function install(panel: HTMLElement): void {
 
   document.addEventListener('pointerout', (event) => {
     if (event.pointerType === 'touch') return;
-    // Moving deeper into the same link — a `<code>` or `<em>` inside it — is not
-    // leaving it, and neither is crossing onto the panel. `relatedTarget` is the
-    // element being entered, and is null when the pointer leaves the window.
+    // Moving deeper into the same link — a `<code>` or `<em>` inside it, or the
+    // collection pager's two spans — is not leaving it, and neither is crossing
+    // onto the panel. `relatedTarget` is the element being entered, and is null
+    // when the pointer leaves the window.
+    //
+    // Belt and braces with `open`'s `keep()`, deliberately. In the ordering
+    // browsers actually use — `pointerout` for the parent, then `pointerover`
+    // for the child — either mechanism alone suffices, and mutation testing
+    // confirms removing either one keeps the gate green. The pair matters for
+    // the opposite ordering: `pointerover` first would call `keep()` with no
+    // timer to clear, and the `pointerout` behind it would then arm a close
+    // while the pointer was still inside the link. One line against an ordering
+    // assumption is cheaper than the flicker it prevents.
     if (previewTarget(event.relatedTarget)?.link === current) return;
     if (isInPanel(event.relatedTarget)) return;
     leave();
