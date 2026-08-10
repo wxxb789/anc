@@ -17,7 +17,8 @@ Build a static, privacy-preserving public projection from an explicit allowlist 
 
 ```bash
 pnpm run sync:content   # local-only: read allowlist from the sibling private vault
-pnpm run build          # Astro static build + Pagefind
+pnpm run build          # Astro static build + Pagefind + residue scan
+pnpm run verify         # every gate: lint, type check, build, residue scan, tests
 pnpm run preview        # local verification
 ```
 
@@ -27,12 +28,40 @@ Cloudflare Pages builds this repository only and never receives access to the pr
 
 ## Verification
 
-- `pnpm run build` passes.
+`pnpm run verify` is the gate. It runs lint, type check, build (which ends in the privacy residue scan), and the test suite, chained with `&&` so a failure anywhere aborts the run rather than letting a later step measure a half-written `dist/` and pass it. Run it before proposing a merge and report the pass count.
+
+### What runs where
+
+| Gate | `pnpm run verify` | `pnpm run build` | CI | Cloudflare Pages |
+| --- | --- | --- | --- | --- |
+| Oxlint | yes | — | yes | — |
+| `astro check` | yes | — | yes | — |
+| Content contract + derived-route validation | yes | yes | yes | yes |
+| Astro build, redirects, Pagefind index | yes | yes | yes | yes |
+| Residue scan over `dist/` — markers, paths, schemes, source maps | yes | yes | yes | yes |
+| Test suite | yes | — | yes | — |
+| Rendered-browser gates (Playwright) | when Chromium is installed | — | yes, always | — |
+
+CI (`.github/workflows/verify.yml`) runs `pnpm run verify` rather than restating its steps, so the two cannot drift; `tests/verify.test.ts` fails if a gate is ever spelled out in the workflow instead. Cloudflare Pages runs `pnpm run build`, which is why the residue scan is a link of `build` and not only of `verify` — the host that publishes the artifact scans it.
+
+**The repository has no git remote, so the workflow does not run yet.** Until one exists, every gate above is enforced only by running `pnpm run verify` on the host.
+
+### Still manual
+
+- Deployment. Requirements section 21.1 stage 13 makes it a separately approved action; CI deliberately cannot deploy and needs no secrets.
+- Post-deploy smoke tests (stage 14), which need a deployed origin.
+- Secret scanning (section 19.1's Gitleaks item), non-allowlisted titles and slugs, and unexpected routes or assets. The residue scan closes six of section 19.1's nine items; these are the other three. The last two are route-model properties that TK-09's deny-by-default assets gate owns.
+- `pnpm run build:fixture`, the 32-note corpus that un-skips the five multi-entry gates. Not in `verify` because it builds the site twice.
+- `git diff --check`, which reads the working tree rather than the artifact and so belongs to the commit step, not the build.
+- `pnpm run sync:content`, which reads the private vault and by design never runs anywhere but a trusted host.
+
+### Properties the gates assert
+
 - Generated routes and `content-index.json` are readable.
 - No horizontal overflow, browser console error, or broken internal link.
 - Search opens and indexes published pages.
 - Backlinks and hover previews contain only allowlisted page metadata.
-- `git diff --check` passes and generated output contains no `msw/` or unresolved `[[wikilinks]]`.
+- `dist/` carries no `msw/` marker, unresolved `[[wikilink]]`, absolute local path, unsafe URL scheme, non-image `data:` URL, or source-map reference — in raw, entity-decoded, or invisible-character-stripped form.
 
 ## Documentation
 

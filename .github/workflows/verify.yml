@@ -1,0 +1,72 @@
+# Runs the same gates the host runs, on every push and pull request.
+#
+# There is deliberately no list of gates here. The one thing a workflow file
+# like this reliably gets wrong is drifting from the local command it mirrors: a
+# gate is added to `verify`, nobody remembers the YAML, and the difference is
+# discovered on the day it matters. `pnpm run verify` is one link in
+# `package.json`, so there is nothing to keep in sync — a gate added there is
+# added here. `tests/verify.test.ts` fails if a gate is ever restated as a step
+# below, which is the way the two would most plausibly come apart. It is not the
+# only way — a gate added as a `- uses:` action step is invisible to that check.
+#
+# This repository has no git remote today, so nothing here runs yet. It is
+# committed anyway: the alternative is remembering to write it at the moment a
+# remote appears, and relying on someone remembering is the failure this file
+# exists to prevent.
+#
+# It deploys nothing. Requirements section 21.1 stage 13 makes deployment a
+# separately approved action, so this builds and tests and stops. It needs no
+# secrets and never gains private-vault access — it checks out this public
+# repository and nothing else. `permissions` is narrowed rather than left to the
+# repository default, so the token handed to the job cannot write.
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # `pnpm/setup` rather than the older `pnpm/action-setup`: pnpm documents
+      # the latter as the action for pnpm v10 and older, and `packageManager`
+      # here pins 11.18.0. No `version` input, deliberately — the action reads
+      # `packageManager` from `package.json`, which is the existing pin. Naming
+      # a version here would create a second one that can disagree with it.
+      #
+      # `install: false` because the install belongs after Node is pinned, as
+      # its own step, against `pnpm-lock.yaml` with `--frozen-lockfile`.
+      - uses: pnpm/setup@v2
+        with:
+          install: false
+
+      # After the pnpm step, for two reasons: `cache: pnpm` shells out to
+      # `pnpm store path`, so pnpm must already be on PATH; and whatever runtime
+      # the pnpm action may have set up, the Node pinned here is prepended last
+      # and is the one every command below runs on.
+      #
+      # `node-version-file` rather than a literal version: `.nvmrc` is the
+      # existing pin, and `tests/deployment.test.ts` already gates it against
+      # `engines.node`.
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The four gates in `tests/rendered-page.test.ts` measure a real rendered
+      # page, and they skip when no browser is present. That is right for a
+      # fresh clone and wrong here: a gate nothing guarantees runs is the exact
+      # problem this ticket exists to close, so CI installs the browser and runs
+      # them rather than reporting a green run that skipped them.
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm run verify
