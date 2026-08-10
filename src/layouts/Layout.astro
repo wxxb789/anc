@@ -66,14 +66,52 @@ const description = describe(Astro.props.description);
       <a class="brand" href="/">thoughtscape</a>
       <nav class="site-nav" aria-label="Primary">
         {PRIMARY_NAV.map((item) => <a href={item.href}>{item.label}</a>)}
-        <button id="search-toggle" type="button" data-js-only>Search</button>
+        {/* The shortcut is in the accessible name rather than in a `title`,
+            which no screen reader reliably announces and no keyboard reader
+            can discover. `aria-keyshortcuts` is the attribute that exists for
+            exactly this, and the visible text stays one word. */}
+        <button
+          id="search-toggle"
+          type="button"
+          aria-keyshortcuts="/"
+          aria-label="Search this site (press slash)"
+          data-js-only
+        >Search</button>
         <button id="theme-toggle" type="button" data-js-only>Theme: system</button>
         <button id="reader-toggle" type="button" aria-pressed="false" data-js-only>Reader mode</button>
       </nav>
     </header>
-    <dialog id="search-dialog" aria-label="Search">
-      <form method="dialog"><button>Close search</button></form>
-      <div id="search"></div>
+    {/* TK-06. Every region the search script fills is declared here in HTML
+        rather than constructed in JavaScript, for three reasons: the `<label>`
+        and the `<input>` stay a real labelled pair instead of Pagefind's
+        `data-`-attribute substitute; the dialog has something to focus the
+        instant it opens, before the bundle has loaded; and the status line is a
+        live region that exists before the first message is written into it, so
+        the message is announced rather than silently appearing.
+
+        `data-pagefind-ignore` on the whole dialog: it is on every page, so
+        without it the index would carry this chrome on all 32 notes — the same
+        defect TK-12 fixed for the back link and the heading anchors.
+
+        The close button is a `<form method="dialog">`, which needs no script
+        and — per the parity plan §7.6 — never navigates, so `form-action 'none'`
+        does not touch it. */}
+    <dialog id="search-dialog" aria-label="Search" data-pagefind-ignore>
+      <form method="dialog" class="search-close"><button>Close search</button></form>
+      <label class="search-label" for="search-input">Search this site</label>
+      {/* `type="search"` for the browser's own clear control and the right
+          on-screen keyboard. `autocomplete="off"` because a site search field
+          offering the reader's previous queries from other sites is noise. */}
+      <input id="search-input" type="search" autocomplete="off" autocapitalize="none" enterkeyhint="search" />
+      <div id="search-filters">
+        <div id="search-filter-tag"></div>
+        <div id="search-filter-collection"></div>
+      </div>
+      {/* `role="status"` is an `aria-live="polite"` region: the reader hears
+          "Loading the search index" or "No results" without focus moving off
+          the field they are typing into. */}
+      <p id="search-status" role="status"></p>
+      <ol id="search-results"></ol>
     </dialog>
     <main id="main" tabindex="-1">
       <slot />

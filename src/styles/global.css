@@ -1014,6 +1014,24 @@ main:focus:not(:focus-visible) {
   font-size: var(--text-sm);
 }
 
+/* --------------------------------------------------------------- search -- */
+
+/*
+ * TK-06. The dialog's own chrome, plus the handful of Pagefind classes worth
+ * restyling.
+ *
+ * Pagefind's `pagefind-modular-ui.css` ships alongside its bundle and is loaded
+ * with it on first open, so most of the result layout is already handled. What
+ * is below is only what the shipped sheet gets wrong for this site: it assumes
+ * its own colours, and it has no notion of these tokens. Everything here is
+ * scoped inside `#search-dialog` so none of it can reach the page.
+ *
+ * Nothing here is a CSP relaxation. `pagefind-highlight.js` — which creates a
+ * `<style>` element and sets `innerText`, defaulting `addStyles` to true — is
+ * never loaded: it is a separate opt-in bundle, and this file does not opt in.
+ * The `<mark>` rule below is ours, on Pagefind's own excerpt markup.
+ */
+
 #search-dialog {
   width: min(44rem, calc(100% - var(--space-4)));
   padding: var(--space-4);
@@ -1025,6 +1043,142 @@ main:focus:not(:focus-visible) {
 
 #search-dialog::backdrop {
   background: rgb(0 0 0 / 0.55);
+}
+
+.search-close {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.search-label {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+#search-input {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  /* 16px minimum, or iOS Safari zooms the page on focus and the reader lands
+     on a layout they then have to pinch back out of. */
+  font-size: max(1rem, var(--text-base));
+}
+
+#search-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/*
+ * The filter groups collapse to nothing when the index carries no values for
+ * them — which is the published corpus, whose artifact has no `tags` and no
+ * `collection`.
+ *
+ * The two child rules do the work: the script builds a pill group into a
+ * container only when the index proves it has values for that filter, so an
+ * unused container stays genuinely empty. The parent rule is what stops the
+ * flex container contributing its own `gap` and padding around two empty
+ * children, and it needs `:has()` rather than `:empty` — `#search-filters`
+ * always has both child elements, so `:empty` could never match it.
+ */
+#search-filters:not(:has(*:not(:empty))) {
+  display: none;
+}
+
+#search-filter-tag:empty,
+#search-filter-collection:empty {
+  display: none;
+}
+
+/*
+ * The status line: one sentence, always in the same place.
+ *
+ * It keeps its box even when empty — `min-height` rather than collapsing —
+ * because the `ready` state writes an empty string, and a line that vanishes
+ * would shift every result down by its height on the first keystroke.
+ */
+#search-status {
+  min-height: 1.5em;
+  margin: var(--space-3) 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+#search-results {
+  max-height: min(60vh, 32rem);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+#search-dialog .pagefind-modular-list-result {
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--color-line);
+}
+
+#search-dialog .pagefind-modular-list-title {
+  margin: 0;
+  font-size: var(--text-base);
+}
+
+#search-dialog .pagefind-modular-list-link {
+  color: var(--color-link);
+  font-weight: 600;
+}
+
+#search-dialog .pagefind-modular-list-excerpt {
+  margin: var(--space-1) 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+/*
+ * The matched term. `--color-wash` behind ordinary text rather than a browser
+ * default yellow, which fails contrast against this site's dark theme, and a
+ * weight change beside it so the match is never signalled by colour alone.
+ */
+#search-dialog mark {
+  background: var(--color-wash);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+/* The filter pills. Pagefind renders real `<button>` elements, so they are
+   keyboard operable already; this is colour and shape only. `aria-pressed`
+   carries the selected state, and the border weight shows it without colour. */
+#search-dialog .pagefind-modular-filter-pill {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-alt);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+}
+
+#search-dialog .pagefind-modular-filter-pill[aria-pressed='true'] {
+  border-color: var(--color-accent);
+  border-width: 2px;
+  font-weight: 600;
+}
+
+/* Pagefind's own hidden markers. Its stylesheet already implements these, but
+   this site's rules are more specific inside the dialog, so restating them is
+   what keeps a suppressed control suppressed. */
+#search-dialog [data-pfmod-hidden] {
+  display: none;
+}
+
+#search-dialog [data-pfmod-suppressed] {
+  visibility: hidden;
 }
 
 /* --------------------------------------------------------- reader mode -- */
