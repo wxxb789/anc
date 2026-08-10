@@ -22,11 +22,14 @@
  * emits class-only markup that the CSP allows unchanged.
  */
 
-import { markdownToHtml, type Features, type HastPluginDefinition } from 'satteri';
+import { markdownToHtml, type Features, type HastNode, type HastPluginDefinition } from 'satteri';
 import Slugger from 'github-slugger';
 import sanitizeHtml from 'sanitize-html';
 import { runHighlighterWithAstro } from '@astrojs/prism/dist/highlighter';
 import prismComponents from 'prismjs/components.json' with { type: 'json' };
+import { renderMath } from './math.ts';
+import { renderDiagram } from './mermaid-render.ts';
+import { DIAGRAM_MODE } from './diagram-mode.ts';
 
 /** A heading authored in the Markdown body, in document order. */
 export interface Heading {
@@ -127,8 +130,8 @@ export const TOC_MIN_HEADINGS = 3;
  *   the body is a thematic break. Leaving this on would silently eat content.
  * - `math` — display math parses; `$…$` does not, because a single `$` in
  *   technical prose is far more often currency (`$5 to $10`) than an equation,
- *   and misparsing it corrupts the sentence. Math renders as plain source; see
- *   `MATH_LANGUAGE` below.
+ *   and misparsing it corrupts the sentence. TK-15 renders what does parse as
+ *   native MathML; see `src/lib/math.ts`.
  * - `smartPunctuation` off — it rewrites `--` to an en-dash, which is wrong for
  *   the CLI flags this corpus is full of.
  * - `wikilinks` off — the exporter resolves public wikilinks to routes, and
@@ -149,17 +152,19 @@ const FEATURES: Features = {
 /** Class satteri puts on math code nodes; also the fence language for math. */
 const MATH_LANGUAGE = 'math';
 
+/** The fence language that carries a diagram. */
+const MERMAID_LANGUAGE = 'mermaid';
+
 /**
  * Fence languages that are never handed to the highlighter.
  *
- * `mermaid` is the recorded downgrade: rendering a diagram at build time would
- * cost a headless-browser-class dependency, and every runtime Mermaid renderer
- * needs `unsafe-eval`. Requirements section 15.2 permits rendering a downgraded
- * construct as plain source, so a Mermaid block ships as an escaped code block
- * tagged `data-diagram="mermaid"`. Math is excluded for the same reason: KaTeX
- * would be a heavyweight new dependency, so `$$…$$` ships as plain source.
+ * Both are rendered rather than highlighted. Math becomes native MathML via
+ * Temml (`src/lib/math.ts`), and a Mermaid fence becomes either a build-time
+ * SVG or a client-rendered diagram depending on `DIAGRAM_MODE` — in the client
+ * case its source ships as escaped text for the runtime to read, which is also
+ * what a reader without JavaScript is left with.
  */
-const UNHIGHLIGHTED_LANGUAGES: ReadonlySet<string> = new Set([MATH_LANGUAGE, 'mermaid']);
+const UNHIGHLIGHTED_LANGUAGES: ReadonlySet<string> = new Set([MATH_LANGUAGE, MERMAID_LANGUAGE]);
 
 /**
  * Every language id and alias Prism ships a grammar for, read from Prism's own
@@ -229,6 +234,57 @@ const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
 
 /** Mirrors the slug shape TK-01 enforces in `schema.ts`. */
 const INTERNAL_HREF = /^\/([a-z0-9]+(?:-+[a-z0-9]+)*)\/(#[^\s]*)?$/;
+
+/**
+ * Placeholders that survive sanitization and are replaced with rendered markup
+ * afterwards.
+ *
+ * Two constructs — MathML and diagram SVG — cannot pass through
+ * `sanitize-html`. Both `math` and `svg` are on its `nonTextTags` list, and
+ * they are there deliberately: an SVG can carry a script, and widening the
+ * allowlist to admit *this* SVG would admit every raw-HTML `<svg>` a note body
+ * chose to write. Requirements §15.2 rejects exactly that.
+ *
+ * So each is rendered by a module that has already established its own, much
+ * narrower guarantee — Temml emits a closed element set from a parsed TeX tree;
+ * `mermaid-render.ts` strips scripts, handlers, styles, and external references
+ * and fails the build rather than passing one through — and the sanitized HTML
+ * carries a marker where it goes.
+ *
+ * **The marker's safety is what makes this sound**, and it rests on three
+ * properties rather than on the string being unusual:
+ *
+ * 1. The token contains no character `escapeHtml` rewrites and none that is
+ *    special in HTML, so it passes through the sanitizer's text handling
+ *    byte-for-byte — asserted by test rather than assumed.
+ * 2. It is emitted as a **text node**, so a note body that writes the literal
+ *    token in its prose gets it escaped… no: a text node is escaped on output
+ *    only for `&<>`, which the token has none of. The real protection is (3).
+ * 3. Substitution is **positional and exhausting**: each token is replaced
+ *    exactly once, in index order, and `substituteDiagrams` fails if the count
+ *    of markers found does not equal the count of renders requested. A body that
+ *    writes the token itself therefore fails the build loudly instead of
+ *    receiving somebody else's diagram — and cannot inject markup either way,
+ *    since the replacement text is chosen by index from this render's own list.
+ */
+const DIAGRAM_TOKEN_PREFIX = 'thoughtscapeDiagramPlaceholder';
+const DIAGRAM_TOKEN_SUFFIX = 'End';
+const MATH_TOKEN_PREFIX = 'thoughtscapeMathPlaceholder';
+const MATH_TOKEN_SUFFIX = 'End';
+
+interface DiagramRequest {
+  source: string;
+  token: string;
+}
+
+interface MathRequest {
+  tex: string;
+  isDisplay: boolean;
+  token: string;
+}
+
+/** A hast node this module constructs. satteri's own content type. */
+type DiagramNode = HastNode;
 
 /**
  * The id shapes satteri generates for GFM footnotes, plus its footnote-section
@@ -545,7 +601,8 @@ function calloutPlugin(): HastPluginDefinition {
 }
 
 /**
- * Code fences become `figure > pre > code` with build-time highlighting.
+ * Code fences become `figure > pre > code` with build-time highlighting; math
+ * and Mermaid fences become rendered content instead.
  *
  * No copy button. TK-03 emitted one `hidden`, for a handler that was never
  * written: it had no CSS and no script, and the word `Copy` was welded into
@@ -554,10 +611,10 @@ function calloutPlugin(): HastPluginDefinition {
  * stops being dead code.
  *
  * Math reaches this visitor too — satteri renders `$$…$$` as
- * `pre > code.language-math` with no fence language — and is skipped so it stays
- * plain, escaped source rather than acquiring a highlighting shell.
+ * `pre > code.language-math` with no fence language — and is handled by
+ * `mathPlugin` rather than here, so it never acquires a highlighting shell.
  */
-function codePlugin(collected: Collected): HastPluginDefinition {
+function codePlugin(collected: Collected, diagrams: DiagramRequest[]): HastPluginDefinition {
   return {
     name: 'thoughtscape-code',
     element: [
@@ -572,9 +629,12 @@ function codePlugin(collected: Collected): HastPluginDefinition {
           // still gets the same shell, so a reader can copy it.
           const language = fenceLanguage(code.data) ?? 'plaintext';
           const source = ctx.textContent(code).replace(/\n$/, '');
-          const isMermaid = language === 'mermaid';
-          if (isMermaid) collected.hasMermaid = true;
-          else collected.hasCode = true;
+
+          if (language === MERMAID_LANGUAGE) {
+            collected.hasMermaid = true;
+            return diagramFigure(source, diagrams);
+          }
+          collected.hasCode = true;
 
           return {
             type: 'element',
@@ -582,7 +642,6 @@ function codePlugin(collected: Collected): HastPluginDefinition {
             properties: {
               className: ['code-block'],
               'data-code-language': language,
-              ...(isMermaid ? { 'data-diagram': 'mermaid' } : {}),
             },
             children: [
               {
@@ -602,15 +661,193 @@ function codePlugin(collected: Collected): HastPluginDefinition {
           };
         },
       },
-      {
-        filter: ['code'],
-        visit(node) {
-          if (asClassList(node.properties?.['className']).includes(`language-${MATH_LANGUAGE}`)) {
-            collected.hasMath = true;
-          }
-        },
-      },
     ],
+  };
+}
+
+/**
+ * A `<figure>` holding one diagram, in whichever form the mode calls for.
+ *
+ * The two modes differ only inside the figure; the figure, its caption, and its
+ * accessible name are the same either way, so a reader meets the same structure
+ * and the page's outline does not depend on a build flag.
+ *
+ * **Build-time mode** emits a placeholder that {@link substituteDiagrams} fills
+ * with rendered SVG after sanitization. The SVG cannot go through the sanitizer
+ * — its allowlist has no `svg`, and widening it to admit one would admit every
+ * raw-HTML `<svg>` a note body cared to write, which is precisely the hole
+ * §15.2 closes. So the diagram is rendered by a module that has already
+ * sanitized it (`mermaid-render.ts` strips scripts, handlers, styles, and
+ * external references, and fails the build rather than passing one through) and
+ * is spliced in afterwards, at a marker the sanitizer itself produced.
+ *
+ * **Client mode** ships the diagram source as escaped text inside a `<pre>`,
+ * which `src/scripts/diagram.ts` reads and replaces. That is also the
+ * no-JavaScript rendering: a reader without scripting sees the diagram's source,
+ * which is legible and honest, rather than an empty box.
+ */
+function diagramFigure(source: string, diagrams: DiagramRequest[]): DiagramNode {
+  const caption = diagramCaption(source);
+
+  if (DIAGRAM_MODE === 'build-time') {
+    const token = `${DIAGRAM_TOKEN_PREFIX}${diagrams.length}${DIAGRAM_TOKEN_SUFFIX}`;
+    diagrams.push({ source, token });
+    return {
+      type: 'element',
+      tagName: 'figure',
+      properties: { className: ['diagram'], 'data-diagram': MERMAID_LANGUAGE },
+      children: [
+        // A `div` rather than the bare token, so the marker has an element to
+        // be a child of and cannot end up adjacent to the caption text.
+        // The scroll container is a keyboard stop, for exactly the reason a
+        // `<pre>` is: a diagram wider than the measure scrolls horizontally at
+        // 320 px, and a scrollable region must be reachable by keyboard (axe
+        // `scrollable-region-focusable`, WCAG 2.1.1). Display math gets the
+        // same treatment a few lines up.
+        {
+          type: 'element',
+          tagName: 'div',
+          properties: { className: ['diagram-canvas'], tabindex: '0' },
+          children: [{ type: 'text', value: token }],
+        },
+        { type: 'element', tagName: 'figcaption', properties: {}, children: [{ type: 'text', value: caption }] },
+      ],
+    };
+  }
+
+  return {
+    type: 'element',
+    tagName: 'figure',
+    properties: { className: ['diagram'], 'data-diagram': MERMAID_LANGUAGE },
+    children: [
+      {
+        type: 'element',
+        tagName: 'pre',
+        properties: { className: ['diagram-source'] },
+        children: [
+          {
+            type: 'element',
+            tagName: 'code',
+            properties: { className: [`language-${MERMAID_LANGUAGE}`] },
+            children: [{ type: 'text', value: source }],
+          },
+        ],
+      },
+      { type: 'element', tagName: 'figcaption', properties: {}, children: [{ type: 'text', value: caption }] },
+    ],
+  };
+}
+
+/**
+ * The diagram's accessible name, taken from its own source.
+ *
+ * A diagram is content, not decoration, so it needs a name — and axe reports an
+ * unnamed `role="graphics-document"` as a violation. The name has to come from
+ * somewhere the author controls, and Mermaid's own `title` directive (`title:`
+ * in front matter, `pie title X`, `gantt title X`) is the only such field. When
+ * the diagram declares one it is used verbatim; when it does not, the diagram's
+ * *kind* is the honest fallback — "Flowchart diagram" says what the reader is
+ * looking at without inventing a description of content this renderer cannot
+ * summarize.
+ *
+ * Deliberately not a fixed literal such as "Diagram": a page with three of them
+ * would give a screen reader three identically named figures, which is the same
+ * defect as an unnamed one.
+ */
+function diagramCaption(source: string): string {
+  const declared = /^\s*(?:---[\s\S]*?\btitle:\s*(.+?)$|(?:pie|gantt|journey|xychart-beta|quadrantChart|radar-beta)\s+title\s+(.+?)$)/m.exec(source);
+  const title = (declared?.[1] ?? declared?.[2])?.trim().replace(/^["']|["']$/g, '');
+  if (title !== undefined && title !== '') return boundLabel(title);
+
+  const kind = /^\s*(?:---[\s\S]*?---\s*)?([A-Za-z][\w-]*)/.exec(source)?.[1] ?? 'Mermaid';
+  return `${DIAGRAM_KIND_NAMES[kind.toLowerCase()] ?? kind} diagram`;
+}
+
+/**
+ * Readable names for the fence keywords a reader would not recognize.
+ *
+ * Only the ones whose keyword is not already the English word: `sequenceDiagram`
+ * reads as "sequenceDiagram diagram" without help, and `graph` means flowchart.
+ * A keyword absent here is used as written, so a new Mermaid diagram type gets a
+ * serviceable name rather than none.
+ */
+const DIAGRAM_KIND_NAMES: Readonly<Record<string, string>> = {
+  graph: 'Flowchart',
+  flowchart: 'Flowchart',
+  'flowchart-v2': 'Flowchart',
+  sequencediagram: 'Sequence',
+  classdiagram: 'Class',
+  'statediagram-v2': 'State',
+  statediagram: 'State',
+  erdiagram: 'Entity-relationship',
+  journey: 'User journey',
+  gitgraph: 'Git graph',
+  'xychart-beta': 'XY chart',
+  'sankey-beta': 'Sankey',
+  'block-beta': 'Block',
+  'packet-beta': 'Packet',
+  'architecture-beta': 'Architecture',
+  'treemap-beta': 'Treemap',
+  'radar-beta': 'Radar',
+  quadrantchart: 'Quadrant',
+  requirementdiagram: 'Requirement',
+  c4context: 'C4 context',
+  mindmap: 'Mind map',
+  kanban: 'Kanban',
+  timeline: 'Timeline',
+  gantt: 'Gantt',
+  pie: 'Pie',
+};
+
+/**
+ * Math becomes MathML, replacing the `pre > code.language-math` shell satteri
+ * emits.
+ *
+ * The MathML is spliced in after sanitization for the same reason the diagram
+ * SVG is: `math` is on the sanitizer's `nonTextTags` list, so admitting it
+ * through the allowlist would admit every raw-HTML `<math>` element a note body
+ * wrote. Temml's output is generated from a parsed TeX tree by a renderer that
+ * emits a closed set of elements and attributes, which is a different and much
+ * narrower trust question than "any MathML in the body".
+ */
+function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefinition {
+  return {
+    name: 'thoughtscape-math',
+    element: {
+      filter: ['code'],
+      visit(node, ctx) {
+        const classes = asClassList(node.properties?.['className']);
+        if (!classes.includes(`language-${MATH_LANGUAGE}`)) return;
+        collected.hasMath = true;
+
+        const isDisplay = classes.includes('math-display');
+        const token = `${MATH_TOKEN_PREFIX}${maths.length}${MATH_TOKEN_SUFFIX}`;
+        maths.push({ tex: ctx.textContent(node), isDisplay, token });
+
+        // Display math replaces the whole `pre`; inline math replaces the
+        // `code`. Leaving the `pre` in place around a `<math display="block">`
+        // would put a scrollable preformatted box around an element that lays
+        // itself out, and would announce a preformatted-text region a reader
+        // then has to step through to reach the expression.
+        //
+        // Display math keeps the `tabindex` the `pre` would have carried, and
+        // for the same reason: a long derivation does not wrap, so the wrapper
+        // scrolls horizontally, and a scrollable region must be reachable by
+        // keyboard (axe `scrollable-region-focusable`, WCAG 2.1.1). Inline math
+        // sits in the text flow and never scrolls, so it gets none.
+        const parent = ctx.parent(node);
+        const target = parent?.type === 'element' && parent.tagName === 'pre' ? parent : node;
+        ctx.replaceNode(target, {
+          type: 'element',
+          tagName: 'span',
+          properties: {
+            className: [isDisplay ? 'math-display' : 'math-inline'],
+            ...(isDisplay ? { tabindex: '0' } : {}),
+          },
+          children: [{ type: 'text', value: token }],
+        });
+      },
+    },
   };
 }
 
@@ -811,14 +1048,18 @@ const POLICY: sanitizeHtml.IOptions = {
     h5: ['id'],
     h6: ['id'],
     code: ['class'],
-    pre: ['tabindex'],
-    span: ['class'],
+    pre: ['tabindex', 'class'],
+    // `tabindex` for the display-math wrapper, which scrolls. Pinned to `0` by
+    // the `span` transform below, so a raw-HTML span cannot claim a tab order.
+    span: ['class', 'tabindex'],
     li: ['id', 'class'],
     ul: ['class'],
     ol: ['class', 'start'],
     section: ['class', 'data-footnotes'],
     blockquote: ['class', 'cite', 'data-callout'],
     figure: ['class', 'data-code-language', 'data-diagram'],
+    figcaption: ['class'],
+    div: ['class', 'tabindex'],
     input: ['type', 'checked', 'disabled', 'aria-label'],
     th: ['colspan', 'rowspan', 'scope', 'data-align'],
     td: ['colspan', 'rowspan', 'data-align'],
@@ -842,16 +1083,22 @@ const POLICY: sanitizeHtml.IOptions = {
     // `data-footnote-backref` is genuinely both: satteri emits it as an
     // attribute *and* as a class value on the same anchor.
     a: ['heading-anchor', 'data-footnote-backref'],
-    code: ['language-*', 'math-inline', 'math-display'],
+    code: ['language-*'],
     // Namespaced by `namespaceTokenClasses`, so this stays closed.
-    span: ['token', 'token-*'],
+    span: ['token', 'token-*', 'math-inline', 'math-display'],
     h2: ['sr-only'],
     li: ['task-list-item'],
     ul: ['contains-task-list'],
     ol: [],
     section: ['footnotes'],
     blockquote: ['callout', 'callout-*'],
-    figure: ['code-block'],
+    // `diagram` is the figure a rendered diagram sits in; `code-block` the one a
+    // fence sits in. `diagram-canvas` and `diagram-source` are the two shapes a
+    // diagram takes, one per mode.
+    figure: ['code-block', 'diagram'],
+    figcaption: [],
+    div: ['diagram-canvas'],
+    pre: ['diagram-source'],
     strong: ['callout-title'],
   },
   allowedSchemes: ['http', 'https', 'mailto'],
@@ -1020,12 +1267,81 @@ function sanitize(
       // would make a screen reader announce a name for every fence.
       //
       // Forced here rather than set in `codePlugin` so it reaches *every* `pre`:
-      // the highlighted code fences, the math blocks the code plugin skips, and
-      // any raw-HTML one. Forcing also pins the value — a raw `tabindex="5"`
-      // would otherwise hijack the document's tab order.
+      // the highlighted code fences, the client-mode diagram source, and any
+      // raw-HTML one. Forcing also pins the value — a raw `tabindex="5"` would
+      // otherwise hijack the document's tab order.
       pre: (tagName, attribs) => ({ tagName, attribs: { ...attribs, tabindex: '0' } }),
+      // The display-math wrapper is the one `span` this pipeline gives a
+      // `tabindex`, because it scrolls. Pinning the value here rather than
+      // trusting the plugin closes the same channel `pre` closes above: by the
+      // time the final HTML is parsed, a raw-HTML `<span tabindex="5">` is
+      // indistinguishable from one the plugin wrote, and it would hijack the
+      // document's tab order. A `span` with any other class keeps none.
+      span: (tagName, attribs) => {
+        const { tabindex: _dropped, ...rest } = attribs;
+        const isScrollable = (attribs['class'] ?? '').split(/\s+/).includes('math-display');
+        return { tagName, attribs: isScrollable ? { ...rest, tabindex: '0' } : rest };
+      },
+      // The diagram's scroll container, by the same rule and for the same
+      // reason: it is the one `div` this pipeline gives a `tabindex`, and the
+      // value is pinned here so a raw-HTML `<div tabindex="5">` cannot claim a
+      // place in the document's tab order.
+      div: (tagName, attribs) => {
+        const { tabindex: _dropped, ...rest } = attribs;
+        const isScrollable = (attribs['class'] ?? '').split(/\s+/).includes('diagram-canvas');
+        return { tagName, attribs: isScrollable ? { ...rest, tabindex: '0' } : rest };
+      },
     },
   });
+}
+
+/**
+ * Replace each placeholder with the markup it stands for.
+ *
+ * Positional and exhausting, which is what makes it safe to splice
+ * sanitizer-exempt markup into sanitized HTML. Each token is looked for exactly
+ * once and by its exact string; the replacement is chosen by the token's own
+ * index in the list this render built, so no property of the *document* selects
+ * what gets inserted. A count mismatch — the shape a note body writing the
+ * literal token would produce — throws rather than resolving to something.
+ *
+ * `split`/`join` rather than `replace`: a `$` in the replacement is a
+ * substitution pattern to `String.replace`, and rendered MathML and SVG both
+ * contain `$` in base64 payloads and TeX text. `replaceAll` with a string
+ * replacement has the same hazard.
+ */
+function substituteRendered(
+  html: string,
+  replacements: readonly { token: string; markup: string }[],
+): string {
+  let result = html;
+  for (const { token, markup } of replacements) {
+    const parts = result.split(token);
+    if (parts.length !== 2) {
+      throw new Error(
+        `rendering placeholder appeared ${parts.length - 1} times, expected exactly once. ` +
+          'A note body that writes the placeholder text itself causes this; the text is ' +
+          `"${token}".`,
+      );
+    }
+    result = parts.join(markup);
+  }
+
+  // Every marker is now spent. A body that wrote one this render never minted —
+  // a different index, or the diagram form on a page with only math — would
+  // otherwise ship it as visible gibberish, while the *same* body on a page
+  // whose indices happened to match failed the build. Checking the shape rather
+  // than the exact strings makes the invariant total, so the two cases behave
+  // alike and neither can reach a reader.
+  const residue = new RegExp(`${DIAGRAM_TOKEN_PREFIX}|${MATH_TOKEN_PREFIX}`).exec(result);
+  if (residue !== null) {
+    throw new Error(
+      `a rendering placeholder survived substitution: "${residue[0]}". A note body that ` +
+        'writes the placeholder text itself causes this.',
+    );
+  }
+
+  return result;
 }
 
 /** Nest a flat, document-order heading list by depth. */
@@ -1056,25 +1372,49 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
     hasMath: false,
     hasMermaid: false,
   };
+  const diagrams: DiagramRequest[] = [];
+  const maths: MathRequest[] = [];
 
   const { html } = await markdownToHtml(markdown, {
     features: FEATURES,
     hastPlugins: [
       headingPlugin(collected, options.pageTitle),
       calloutPlugin(),
-      codePlugin(collected),
+      mathPlugin(collected, maths),
+      codePlugin(collected, diagrams),
       taskListPlugin(),
       tablePlugin(),
     ],
   });
 
+  const sanitized = sanitize(
+    html,
+    routeForSlug,
+    new Set(collected.headings.map((heading) => heading.id)),
+    collected.rawIds,
+  );
+
+  // Rendered after sanitization, at markers the sanitizer preserved. Both
+  // renderers are the trust boundary for their own output; see the note on
+  // `DIAGRAM_TOKEN_PREFIX`. A render failure throws and stops the build, which
+  // is the intended behaviour for a construct that cannot be shown safely.
+  const replacements = [
+    ...maths.map((request) => ({
+      token: request.token,
+      markup: renderMath(request.tex, request.isDisplay),
+    })),
+    // `diagramIdFor` namespaces element ids by the diagram's position, so two
+    // diagrams on one page cannot both define `#arrowhead`.
+    ...(await Promise.all(
+      diagrams.map(async (request, index) => ({
+        token: request.token,
+        markup: await renderDiagram(request.source, `diagram-${index}`, diagramCaption(request.source)),
+      })),
+    )),
+  ];
+
   return {
-    html: sanitize(
-      html,
-      routeForSlug,
-      new Set(collected.headings.map((heading) => heading.id)),
-      collected.rawIds,
-    ),
+    html: substituteRendered(sanitized, replacements),
     headings: collected.headings,
     toc: collected.headings.length >= TOC_MIN_HEADINGS ? buildToc(collected.headings) : [],
     hasCode: collected.hasCode,

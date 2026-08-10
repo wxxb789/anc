@@ -16,6 +16,23 @@ import { getViteConfig } from 'astro/config';
 export default getViteConfig({
   test: {
     include: ['tests/**/*.test.ts'],
+    /**
+     * Raised from Vitest's 5 s default because a single render can now lay out
+     * real diagrams.
+     *
+     * Since TK-15 a Mermaid fence is rendered to SVG at build time rather than
+     * escaped, and that costs a one-off ~1.4 s to import and initialize Mermaid
+     * plus ~50 ms per diagram — each rendered twice, once per palette, to pair
+     * the themes. Measured on the fixture corpus: 2.9 s for all 32 notes on a
+     * cold process, 0.6 s warm. Gates that re-render every note therefore
+     * exceeded 5 s and failed as timeouts rather than on any assertion.
+     *
+     * 30 s is chosen to be comfortably above the cold-process cost while still
+     * failing a genuine hang in under a minute. It is not a way to tolerate a
+     * slow test: `tests/rendered-page.test.ts` drives a real browser and sets
+     * its own longer bounds where it needs them.
+     */
+    testTimeout: 30_000,
     // Each file gets its own worker, matching what `node --test` gave us with
     // one process per file. `tests/markdown.test.ts` depends on it: Prism's
     // grammar registry is a process-wide singleton, and its determinism gate

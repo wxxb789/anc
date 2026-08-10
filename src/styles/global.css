@@ -401,12 +401,14 @@ main:focus:not(:focus-visible) {
 
 /*
  * Every class `src/lib/markdown.ts` can emit has a rule below, or is named in
- * the "deliberately unstyled" block at the end of this section, or — for the
- * `token-*` map alone — lives in `src/styles/code.css`, which loads only on
- * pages that carry a code fence. The allowlist at `markdown.ts` is the list:
- * `heading-anchor`, `code-block`, `language-*`, `token` and `token-*`, `callout`
- * and `callout-*`, `callout-title`, `contains-task-list`, `task-list-item`,
- * `footnotes`, `data-footnote-backref`, `sr-only`, `math-inline`, `math-display`.
+ * the "deliberately unstyled" block at the end of this section, or lives in a
+ * per-page stylesheet that loads only where it is needed: the `token-*` map in
+ * `src/styles/code.css`, the math classes in `src/styles/math.css`, and the
+ * diagram classes in `src/styles/diagram.css`. The allowlist at `markdown.ts`
+ * is the list: `heading-anchor`, `code-block`, `language-*`, `token` and
+ * `token-*`, `callout` and `callout-*`, `callout-title`, `contains-task-list`,
+ * `task-list-item`, `footnotes`, `data-footnote-backref`, `sr-only`,
+ * `math-inline`, `math-display`, `diagram`, `diagram-canvas`, `diagram-source`.
  *
  * Quartz's thirteen-kind callout vocabulary and its mask-image icon set are
  * deliberately not imported: the corpus has zero callouts, and a colour-per-kind
@@ -580,17 +582,18 @@ main:focus:not(:focus-visible) {
 }
 
 /*
- * Math renders as escaped plain source until TK-15 (Temml). Until then it is
- * marked as code rather than left as unstyled body text, so a reader sees an
- * expression that has visibly *not* been typeset rather than a mangled
- * sentence. `math-display` is a block, `math-inline` stays in the line.
+ * Math and diagrams are styled by `src/styles/math.css` and
+ * `src/styles/diagram.css`, which load only on the pages that carry one — owner
+ * decision 7. `math-inline`, `math-display`, `diagram`, and the classes the
+ * diagram flattening pass writes are therefore deliberately absent here rather
+ * than missing: a rule in this sheet would ship the styling to every page and
+ * defeat the gating.
+ *
+ * Until TK-15 this file styled `math-inline`/`math-display` as monospace source,
+ * which was correct while math was a downgrade and is wrong now that it is
+ * MathML: the monospace family and the literal colour would override the math
+ * font on every expression.
  */
-.math-inline,
-.math-display {
-  color: var(--color-syntax-literal);
-  font-family: var(--font-mono);
-  font-size: 0.925em;
-}
 
 /*
  * Deliberately unstyled, with the reason:

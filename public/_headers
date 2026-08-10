@@ -1,3 +1,14 @@
+# The `style-src` value is coupled to `DIAGRAM_MODE` in `src/lib/diagram-mode.ts`
+# and must be changed with it: `'self'` for build-time diagrams, which ship as
+# markup, and `'self' 'unsafe-inline'` for client mode, whose renderer writes
+# inline styles and an injected `<style>` element that this policy would
+# otherwise block — producing a solid black rectangle where the diagram should
+# be. `tests/math-and-diagrams.test.ts` and `tests/built-output.test.ts` both
+# fail if the two disagree.
+#
+# Hash-pinning was measured and cannot replace the relaxation: a CSP hash never
+# covers a `style=` attribute, so `'unsafe-inline'` survives in `style-src-attr`
+# and is merely relocated. See the Mermaid feasibility probe, section 7.3.
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
