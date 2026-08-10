@@ -1,0 +1,83 @@
+---
+/**
+ * The collection explorer: every published note, grouped, as a real `<nav>`.
+ *
+ * Four properties are load-bearing, and each is a decision the parity plan's L5
+ * records against Quartz's explorer:
+ *
+ * 1. **Complete in the server-rendered HTML.** Quartz rebuilds a trie in the
+ *    browser from `contentIndex.json` and renders an empty `<ul>` with
+ *    JavaScript disabled — the whole navigation is gone. Every group and every
+ *    title here is written by the build.
+ * 2. **Collapse costs zero JavaScript.** `<details>`/`<summary>` is the native
+ *    disclosure: keyboard-operable, announced as one, and remembered by the
+ *    browser across a back-navigation. No script is loaded for it, and none
+ *    exists to load.
+ * 3. **The open group is the reader's own.** `collectionNavigation` marks the
+ *    group holding the current page and only that one is `open`, so the rail is
+ *    contextual without a preference to store or a state to sync. Quartz needs
+ *    `localStorage` and a `new Function()` comparator to reach the same place.
+ * 4. **It is chrome, not content.** `data-pagefind-ignore`: it renders on every
+ *    page, so without it every note's search record would carry the title of
+ *    every other note. This is the defect TK-12 fixed for the back link and the
+ *    heading anchors, and a rail is the largest possible instance of it.
+ *
+ * The heading is visually hidden rather than absent. A `<nav>` needs an
+ * accessible name — two unnamed navigations on a page are indistinguishable in a
+ * screen reader's landmark list, and this page has four — but a visible "Browse"
+ * heading above a list that already announces itself is chrome restating chrome.
+ */
+import type { ExplorerGroup } from '../lib/collection-tree.ts';
+
+interface Props {
+  groups: readonly ExplorerGroup[];
+}
+
+const { groups } = Astro.props;
+---
+
+{/* Nothing to browse is not an empty rail: a corpus with one note in one group
+    would render a disclosure whose only content is the page already open. The
+    threshold is two notes, below which the site map in the footer already says
+    everything this would. */}
+{groups.reduce((count, group) => count + group.notes.length, 0) > 1 && (
+  <nav class="explorer" aria-labelledby="explorer-title" data-pagefind-ignore>
+    <h2 id="explorer-title" class="sr-only">Browse collections</h2>
+    <ul class="explorer-groups">
+      {groups.map((group) => (
+        <li>
+          {/* `open` on the reader's own group only. A `<details>` carrying the
+              current page must never start closed — that is the one state where
+              the reader would have to open a disclosure to find where they
+              already are. */}
+          <details class="explorer-group" open={group.isCurrent}>
+            <summary>
+              <span class="explorer-label">{group.label}</span>
+              {/* Text, not a badge: nothing here is carried by colour or shape
+                  alone, and the count tells a reader whether opening the group
+                  costs them three lines or thirty. */}
+              <span class="explorer-count">{group.notes.length}</span>
+            </summary>
+            {/* The collection's own index page, where it has one. The
+                uncollected group has no route — see `ExplorerGroup.route` — and
+                links nothing rather than inventing a page for it. */}
+            {group.route !== undefined && (
+              <a class="explorer-index" href={group.route}>All {group.label} notes</a>
+            )}
+            <ul class="explorer-notes">
+              {group.notes.map((note) => (
+                <li>
+                  {/* `aria-current="page"` on the note being read, and the
+                      stylesheet marks it with a weight and a rule as well as a
+                      colour. A reader who cannot see the colour still knows
+                      where they are. */}
+                  <a href={note.route} aria-current={note.isCurrent ? 'page' : undefined}>{note.title}</a>
+                </li>
+              ))}
+            </ul>
+          </details>
+        </li>
+      ))}
+    </ul>
+  </nav>
+)}

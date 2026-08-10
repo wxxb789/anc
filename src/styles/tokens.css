@@ -162,5 +162,10 @@
   /* Width. `--measure` keeps prose near 65-80 characters. */
   --measure: 68ch;
   --width-page: 68rem;
+  /* The collection rail. Wide enough for a two-line note title at
+     `--text-sm` without hyphenation, narrow enough that the article keeps its
+     full measure on a 1024 px viewport — which is the width the two-column
+     layout switches on. */
+  --width-rail: 15rem;
   --gutter: clamp(1rem, 4vw, 2rem);
 }

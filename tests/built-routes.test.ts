@@ -20,6 +20,7 @@ import { test, type TestContext } from 'vitest';
 import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
+import { collectionNavigation } from '../src/lib/collection-tree.ts';
 import {
   RELATED_DERIVATION,
   RELATED_LIMIT,
@@ -1169,4 +1170,217 @@ test('both document languages reach the built pages', (context) => {
       `${entry.slug}: does not declare its own language`,
     );
   }
+});
+
+/* ----------------------------------------------------------- explorer -- */
+
+/** The rail's markup on a built page, or nothing where it does not render. */
+function explorer(html: string): string | undefined {
+  return /<nav class="explorer"[\s\S]*?<\/nav>/.exec(html)?.[0];
+}
+
+/** Every note route the rail links, in document order. */
+function explorerSlugs(rail: string): string[] {
+  return [...rail.matchAll(/<li><a href="\/notes\/([^/"]+)\//g)].map(([, slug]) => slug!);
+}
+
+/**
+ * The rail is complete in the server-rendered HTML, on every route.
+ *
+ * This is the property Quartz's explorer does not have: its trie is rebuilt in
+ * the browser from `contentIndex.json`, so with JavaScript disabled the whole
+ * navigation is an empty `<ul>`. Asserted against the artifact rather than
+ * against a count, because "found nothing" and "could not look" report the same
+ * cardinality — a rail listing thirty-one of thirty-two notes has the right
+ * order of magnitude and one note nobody can reach.
+ *
+ * Every built route, not one: the rail is layout chrome, so a page that lost it
+ * would be a page where the site's navigation silently ends.
+ */
+test('the explorer lists every published note, on every route', (context) => {
+  requireMultiEntry(context);
+  const expected = entries.map((entry) => entry.slug).sort();
+
+  for (const route of ROUTES) {
+    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    const rail = explorer(readFileSync(new URL(page, DIST), 'utf8'));
+    assert.ok(rail, `${route}: renders no collection explorer`);
+    assert.deepEqual(
+      explorerSlugs(rail).sort(),
+      expected,
+      `${route}: the explorer is not the published corpus`,
+    );
+  }
+});
+
+/**
+ * The rail's groups are the collection facets, plus the uncollected notes.
+ *
+ * Compared against `collectionNavigation` rather than against a literal list,
+ * so the gate follows the model — and against `collectionFacets` inside that
+ * model's own test, so neither can drift into agreeing with the other while
+ * both disagree with `/collections/`.
+ */
+test('the explorer groups match the collection model, in its order', (context) => {
+  requireMultiEntry(context);
+  const html = readFileSync(new URL('index.html', DIST), 'utf8');
+  const rail = explorer(html)!;
+
+  const rendered = [...rail.matchAll(/<span class="explorer-label">([^<]*)<\/span>/g)].map(
+    ([, label]) => label!,
+  );
+  const model = collectionNavigation(entries, '/');
+  assert.deepEqual(rendered, model.map((group) => asRendered(group.label)));
+
+  // Each group's count is the group's own size, not a constant that happens to
+  // look plausible.
+  const counts = [...rail.matchAll(/<span class="explorer-count">(\d+)<\/span>/g)].map(([, n]) =>
+    Number(n),
+  );
+  assert.deepEqual(counts, model.map((group) => group.notes.length));
+});
+
+/**
+ * Collapse is native, and the reader's own group is the open one.
+ *
+ * Two halves, and the second is the one a reader experiences: a rail whose
+ * groups all start closed makes a reader open a disclosure to find where they
+ * already are, and a rail with every group open is a wall of every title on the
+ * site. Exactly one `<details open>`, and it is the group holding the page.
+ */
+test('the explorer opens exactly the group holding the page being read', (context) => {
+  requireMultiEntry(context);
+
+  let checkedCollected = 0;
+  let checkedUncollected = 0;
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const rail = explorer(html)!;
+
+    // Native `<details>`, so the collapse costs no JavaScript at all.
+    assert.match(rail, /<details class="explorer-group"/, `${entry.slug}: the collapse is not a <details>`);
+
+    const groups = [...rail.matchAll(/<details class="explorer-group"( open)?>([\s\S]*?)<\/details>/g)];
+    const open = groups.filter(([, isOpen]) => isOpen !== undefined);
+    assert.equal(open.length, 1, `${entry.slug}: ${open.length} groups are open, expected exactly one`);
+    assert.ok(
+      explorerSlugs(open[0]![2]!).includes(entry.slug),
+      `${entry.slug}: the open group does not contain the page being read`,
+    );
+
+    if (entry.collection === undefined) checkedUncollected += 1;
+    else checkedCollected += 1;
+  }
+
+  assert.ok(checkedCollected > 0, 'no note in a collection was checked');
+  assert.ok(
+    checkedUncollected > 0,
+    'no note outside a collection was checked, so the uncollected group was never the open one',
+  );
+});
+
+/**
+ * The page being read is marked in the rail, and marked once.
+ *
+ * `aria-current="page"` is what a screen reader announces; the stylesheet adds
+ * a weight and a rule so the mark is not carried by colour alone. Zero marks
+ * strands a reader with no sense of place, and two is a lie about where they
+ * are.
+ */
+test('the explorer marks the current note, and only it', (context) => {
+  requireMultiEntry(context);
+  for (const entry of entries) {
+    const rail = explorer(readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8'))!;
+    const marked = [...rail.matchAll(/href="\/notes\/([^/"]+)\/" aria-current="page"/g)].map(
+      ([, slug]) => slug!,
+    );
+    assert.deepEqual(marked, [entry.slug], `${entry.slug}: the rail marks the wrong note, or none`);
+  }
+
+  // And a route that is not a note marks nothing: a collection index is not one
+  // of its own notes.
+  for (const facet of collectionFacets(entries)) {
+    const rail = explorer(readFileSync(new URL(`collections/${facet.key}/index.html`, DIST), 'utf8'))!;
+    assert.doesNotMatch(rail, /aria-current="page"/, `/collections/${facet.key}/: marks a note as current`);
+  }
+});
+
+/**
+ * The rail is not indexed as page content.
+ *
+ * It renders on every page, so without `data-pagefind-ignore` every note's
+ * search record would carry the title of every other note — the same defect
+ * TK-12 fixed for the back link and the heading anchors, at the largest
+ * possible scale. Both halves are asserted: the attribute is on the element,
+ * and a title from another collection does not appear in this page's indexed
+ * body.
+ */
+test('the explorer is excluded from the search index', (context) => {
+  requireMultiEntry(context);
+  const html = readFileSync(new URL(`notes/${entries[0]!.slug}/index.html`, DIST), 'utf8');
+  assert.match(
+    explorer(html)!,
+    /<nav class="explorer"[^>]*\sdata-pagefind-ignore/,
+    'the explorer is indexed as page content',
+  );
+
+  // The article body must not contain the rail: `data-pagefind-body` is on the
+  // article, so a rail rendered inside it would be indexed whatever the
+  // attribute said.
+  const body = /<article class="prose" data-pagefind-body>[\s\S]*?<\/article>/.exec(html)?.[0];
+  assert.ok(body, 'the note page has no indexed article body');
+  assert.doesNotMatch(body, /class="explorer/, 'the explorer renders inside the indexed article body');
+});
+
+/**
+ * A corpus too small to browse renders no rail at all.
+ *
+ * The published artifact is one note: a disclosure whose only content is the
+ * page already open is chrome describing nothing, and the footer site map
+ * already reaches every fixed route. Asserted on the corpus that has it —
+ * the fixture corpus proves the opposite direction above, so both are covered
+ * across the two builds rather than only the convenient one.
+ */
+test('a corpus with nothing to browse renders no explorer', (context) => {
+  context.skip(entries.length > 1, 'corpus has more than one note — this is the published-corpus case');
+  for (const route of ROUTES) {
+    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    assert.equal(
+      explorer(readFileSync(new URL(page, DIST), 'utf8')),
+      undefined,
+      `${route}: renders an explorer for a corpus with one note`,
+    );
+  }
+});
+
+/**
+ * The rail costs no JavaScript, in the built output rather than in intent.
+ *
+ * The whole design rests on this: `<details>` for collapse, `position: sticky`
+ * for the follow, `aria-current` for the location. A script added later to
+ * "improve" any of the three would be invisible to every other gate in this
+ * file, since the markup would be unchanged.
+ */
+test('no script is loaded for the explorer', () => {
+  const before = new Set(['preferences', 'search-dialog', 'link-preview', 'theme-init', 'diagram']);
+  for (const route of ROUTES) {
+    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    const html = readFileSync(new URL(page, DIST), 'utf8');
+    for (const [, source] of html.matchAll(/<script\b[^>]*\ssrc="([^"]*)"/gi)) {
+      assert.doesNotMatch(
+        source!,
+        /explorer|collection-tree/i,
+        `${route}: loads "${source}" — the explorer is meant to need no script`,
+      );
+    }
+  }
+  // Non-vacuity: the page does load *some* script, so a build that emitted none
+  // at all cannot pass this by having nothing to inspect.
+  const anyPage = readFileSync(new URL('index.html', DIST), 'utf8');
+  const loaded = [...anyPage.matchAll(/<script\b[^>]*\ssrc="([^"]*)"/gi)];
+  assert.ok(loaded.length > 0, 'no page loads any script, so this gate inspected nothing');
+  assert.ok(
+    loaded.some(([, source]) => [...before].some((name) => source!.includes(name))),
+    'none of the site’s known scripts was found, so the gate is matching against the wrong shape',
+  );
 });

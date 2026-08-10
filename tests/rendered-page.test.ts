@@ -755,6 +755,159 @@ test('the relationship sections are readable and complete with scripting disable
 }, 180_000);
 
 /**
+ * The collection rail is complete and operable with scripting disabled.
+ *
+ * This is the Quartz explorer failure stated as a browser fact rather than as a
+ * code reading: its trie is rebuilt in the browser, so with JavaScript off the
+ * whole navigation is an empty `<ul>`. `built-routes.test.ts` proves the markup
+ * is in the HTML; what it cannot prove is that the rail is *visible and
+ * operable* once the cascade has run with no scripting — a `<details>` whose
+ * summary is `display: none`, or a rail hidden below a breakpoint, satisfies
+ * every markup check and leaves the reader with nothing.
+ *
+ * **Visibility is `checkVisibility()`, not a box measurement, and that is a
+ * correctness fix rather than a preference.** A closed `<details>` hides its
+ * content with `content-visibility: hidden` on the `::details-content`
+ * pseudo-element — the element keeps a laid-out box, so
+ * `getBoundingClientRect().height > 0` reports every link in every *collapsed*
+ * group as visible. Measured on Chromium 151: a closed group's twelve links all
+ * had non-zero height while being unreachable and unrendered.
+ * `checkVisibility()` accounts for it, and the first version of this gate failed
+ * on exactly that — the gate was wrong, the collapse was not.
+ *
+ * Four properties, at both widths:
+ *
+ * 1. The rail is visible and has a real box.
+ * 2. Its disclosure control is visible, so a closed group can be opened.
+ * 3. A closed group's links are genuinely hidden, and toggling it reveals them —
+ *    with `javaScriptEnabled: false`, which is what makes this the native
+ *    element rather than a script.
+ * 4. Every link in the open group is visible and inside the rail's own box, so
+ *    the list is laid out rather than clipped.
+ */
+test('the collection rail is complete and operable with scripting disabled', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  /** Links inside the rail's groups that a reader can actually see. */
+  const visibleLinksIn = (selector: string): Promise<number> =>
+    page.evaluate(
+      (query) =>
+        [...document.querySelectorAll<HTMLAnchorElement>(query)].filter((link) =>
+          link.checkVisibility(),
+        ).length,
+      selector,
+    );
+
+  try {
+    let checked = 0;
+    let toggled = 0;
+
+    for (const width of CASCADE_WIDTHS_PX) {
+      await page.setViewportSize({ width, height: VIEWPORT_HEIGHT_PX });
+      for (const route of routes) {
+        await visit(page, route);
+
+        const measured = await page.evaluate(() => {
+          const rail = document.querySelector<HTMLElement>('nav.explorer');
+          if (rail === null) return undefined;
+          const box = (element: Element) => element.getBoundingClientRect();
+          const outer = box(rail);
+          const open = rail.querySelector<HTMLDetailsElement>('details[open]');
+          const links = open === null ? [] : [...open.querySelectorAll<HTMLAnchorElement>('a[href]')];
+          return {
+            display: getComputedStyle(rail).display,
+            height: outer.height,
+            groupCount: rail.querySelectorAll('details').length,
+            hasOpenGroup: open !== null,
+            // A summary a reader cannot see is a collapse they can never undo.
+            hiddenSummaries: [...rail.querySelectorAll<HTMLElement>('summary')].filter(
+              (summary) => !summary.checkVisibility(),
+            ).length,
+            openLinks: links.length,
+            visibleLinks: links.filter((link) => link.checkVisibility()).length,
+            // Inside the rail's own box: an item clipped out of a collapsed
+            // container is unreachable while still reporting a size.
+            containedLinks: links.filter((link) => {
+              const rect = box(link);
+              return rect.left >= outer.left - 1 && rect.right <= outer.right + 1;
+            }).length,
+          };
+        });
+        if (measured === undefined) continue;
+
+        const where = `${route} at ${width}px`;
+        checked += 1;
+        assert.notEqual(measured.display, 'none', `${where}: the collection rail is hidden`);
+        assert.ok(measured.height > 0, `${where}: the rail renders at zero height`);
+        assert.ok(measured.groupCount > 0, `${where}: the rail renders no groups`);
+        assert.equal(
+          measured.hiddenSummaries,
+          0,
+          `${where}: ${measured.hiddenSummaries} disclosure controls are not visible, ` +
+            'so a closed group could never be opened',
+        );
+        if (measured.hasOpenGroup) {
+          assert.ok(measured.openLinks > 0, `${where}: the open group renders no links`);
+          assert.equal(
+            measured.visibleLinks,
+            measured.openLinks,
+            `${where}: ${measured.openLinks - measured.visibleLinks} links in the open group are ` +
+              'not visible to the reader',
+          );
+          assert.equal(
+            measured.containedLinks,
+            measured.openLinks,
+            `${where}: ${measured.openLinks - measured.containedLinks} rail links fall outside the ` +
+              'rail box, so the list is being clipped rather than laid out',
+          );
+        }
+      }
+
+      // The disclosure itself, with no scripting: a closed group hides its links
+      // and opening it reveals them. This is the whole reason the collapse is a
+      // `<details>` — a script-driven one would be inert in this context, which
+      // is precisely Quartz's failure.
+      const first = routes[0];
+      if (first === undefined) continue;
+      await visit(page, first);
+      const closed = page.locator('nav.explorer details:not([open]) > summary').first();
+      if ((await closed.count()) === 0) continue;
+
+      assert.equal(
+        await visibleLinksIn('nav.explorer details:not([open]) a[href]'),
+        0,
+        `at ${width}px: a closed group's links are visible while it is closed, ` +
+          'so the collapse hides nothing',
+      );
+      await closed.click();
+      // Past the open animation, which starts at `opacity: 0` — measuring
+      // mid-flight would report a link the reader is about to see as hidden.
+      await page.waitForTimeout(400);
+      assert.ok(
+        (await visibleLinksIn('nav.explorer details[open] a[href]')) > 0,
+        `at ${width}px: opening a group with scripting disabled revealed no links — ` +
+          'the collapse is not the native disclosure',
+      );
+      toggled += 1;
+    }
+
+    // Scaled to the corpus rather than asserted flat: the published artifact is
+    // one note, where the rail deliberately does not render at all.
+    if (entries.length > 1) {
+      assert.ok(checked > 0, 'the corpus has notes to browse but no rail was measured');
+      assert.ok(toggled > 0, 'no closed group was ever toggled, so the collapse was not exercised');
+    }
+  } finally {
+    await browserContext.close();
+  }
+}, 180_000);
+
+/**
  * The link preview opens on hover and on keyboard focus, and stays on screen.
  *
  * TK-07's acceptance criteria are browser properties: a preview reached by

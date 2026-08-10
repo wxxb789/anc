@@ -179,6 +179,120 @@ main:focus:not(:focus-visible) {
   outline: none;
 }
 
+/* ------------------------------------------------------------ explorer -- */
+
+/*
+ * The collection rail (TK-05c).
+ *
+ * Below the two-column breakpoint it is a block after the article: one column,
+ * every group closed except the reader's own, and the disclosures *are* the
+ * drawer requirements section 16 asks for on mobile. The desktop treatment —
+ * sticky, beside the article — is the `@media (min-width: 64rem)` block at the
+ * end of this file.
+ *
+ * Nothing here needs JavaScript. `<details>` is the collapse, `position: sticky`
+ * is the follow, and `aria-current` is the location; there is no script to load
+ * and no state to persist.
+ */
+.explorer {
+  width: min(var(--width-page), 100%);
+  margin: 0 auto var(--space-16);
+  padding: 0 var(--gutter);
+  font-size: var(--text-sm);
+}
+
+.explorer-groups,
+.explorer-notes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.explorer-group {
+  border-bottom: 1px solid var(--color-line);
+}
+
+.explorer-group > summary {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: space-between;
+  align-items: baseline;
+  padding: var(--space-3) var(--space-1);
+  color: var(--color-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Text, not a badge — same treatment as every other count on the site. */
+.explorer-count {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+ * Quartz's one genuinely good explorer idea: `grid-template-rows: 0fr → 1fr`
+ * animates a disclosure open without anyone measuring a height in JavaScript.
+ * It is applied to the content wrapper rather than to `<details>` itself,
+ * because a `<details>` with `display: grid` loses the browser's own
+ * open/closed box behaviour.
+ *
+ * The animation is an enhancement in the strictest sense: a browser that
+ * ignores `interpolate-size` snaps open exactly as `<details>` always has, and
+ * the global `prefers-reduced-motion` block turns the transition off entirely.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .explorer-group[open] > .explorer-notes {
+    animation: explorer-open var(--motion-fast) var(--ease);
+  }
+}
+
+@keyframes explorer-open {
+  from {
+    opacity: 0;
+    transform: translateY(-0.25rem);
+  }
+}
+
+.explorer-index,
+.explorer-notes a {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-link);
+  text-decoration: none;
+}
+
+.explorer-index {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.explorer-notes {
+  padding-bottom: var(--space-2);
+}
+
+.explorer-index:hover,
+.explorer-notes a:hover,
+.explorer-index:focus-visible,
+.explorer-notes a:focus-visible {
+  background: var(--color-wash);
+  text-decoration: underline;
+}
+
+/*
+ * The page being read. Three signals, not one: a weight change, a left rule,
+ * and the text colour. WCAG 1.4.1 — a reader who cannot distinguish the colour
+ * still sees where they are, and `aria-current="page"` says it outright to a
+ * screen reader.
+ */
+.explorer-notes a[aria-current='page'] {
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-wash);
+  color: var(--color-text);
+  font-weight: 700;
+}
+
 .site-footer {
   padding: var(--space-8) var(--gutter);
   border-top: 1px solid var(--color-line);
@@ -1238,6 +1352,11 @@ main:focus:not(:focus-visible) {
 }
 
 :root[data-reader='on'] .site-nav a,
+/* The collection rail, for the same reason as the header's route links: it is
+   navigation into the rest of the site rather than part of the page being
+   read. No route is stranded — the footer site map survives reader mode, and
+   every note is one link from the home page it lists them on. */
+:root[data-reader='on'] .explorer,
 :root[data-reader='on'] .site-footer p:not(.print-only) {
   display: none;
 }
@@ -1261,10 +1380,25 @@ main:focus:not(:focus-visible) {
  * ponytail: the nav's five text links wrap to two or three rows at 320 px and
  * stay fully readable and operable, so no drawer or disclosure is built for
  * them; a `<details>` around five links is more machinery than the problem.
- * Side rails are optional per requirements section 16 and there is nothing to
- * put in one yet — the table of contents, backlinks, and related notes that
- * would fill it are TK-05's. Desktop therefore ships the centred article with
- * no rail, and no empty media query pretending otherwise.
+ *
+ * The rail is TK-05c and reverses this block's earlier "no rail, and no empty
+ * media query pretending otherwise" note, which was written when the content
+ * that would fill one did not exist yet. It does now — `.page-shell` below is
+ * the three layouts requirements section 16 asks for, and each is a property of
+ * one grid rather than three separate treatments:
+ *
+ * - **mobile** (below 48rem): one column, the explorer below the article as a
+ *   stack of closed `<details>` — which is the "drawer" the requirement asks
+ *   for, built out of the disclosure the rail already is rather than out of a
+ *   second navigation model with its own script and focus trap;
+ * - **tablet** (48rem to 64rem): still one column, but the article gains its
+ *   wide padding while the panels stay collapsed and collapsible;
+ * - **desktop** (64rem and up): two columns, article centred on its own measure,
+ *   rail sticky beside it.
+ *
+ * 64rem rather than 48rem for the two-column switch because the rail costs
+ * 15rem: at 48rem the article would be left with under 33rem, which is below
+ * `--measure` and would narrow the prose to buy chrome.
  */
 @media (min-width: 48rem) {
   main {
@@ -1274,6 +1408,49 @@ main:focus:not(:focus-visible) {
   /* The header is one row once there is width for it. */
   html {
     scroll-padding-top: 5rem;
+  }
+}
+
+/*
+ * Desktop: the article and its rail, side by side.
+ *
+ * `minmax(0, …)` on the article track rather than `1fr` alone: a `1fr` track has
+ * an automatic minimum of its content's min-content width, so one long unbroken
+ * token inside the article would push the whole grid wider than the viewport
+ * instead of wrapping. That is the fixed-track overflow the 320 px gate exists
+ * to catch, arriving at 1280 px instead.
+ */
+@media (min-width: 64rem) {
+  .page-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--width-rail);
+    gap: var(--gutter);
+    width: min(calc(var(--width-page) + var(--width-rail) + var(--gutter)), 100%);
+    margin-inline: auto;
+    align-items: start;
+  }
+
+  /* `main` is centred inside its own track rather than by the shell, so the
+     article keeps the measure it has at every other width and the rail does not
+     shift the prose off centre relative to itself. */
+  .page-shell > main {
+    width: 100%;
+  }
+
+  .explorer {
+    /* `sticky`, not a scroll listener: the rail follows the reader down a long
+       article at zero JavaScript. The offset clears the sticky header. */
+    position: sticky;
+    top: 5rem;
+    margin: var(--space-16) 0 0;
+    /* Its own scroll container, so a rail longer than the viewport scrolls
+       within itself instead of stretching the grid row and stranding the
+       bottom of the list where no scroll can reach it. */
+    max-height: calc(100vh - 7rem);
+    overflow-y: auto;
+    /* Reserve the gutter the scrollbar takes, so appearing and disappearing
+       does not reflow the list under the reader's pointer. */
+    scrollbar-gutter: stable;
   }
 }
 
@@ -1313,6 +1490,9 @@ main:focus:not(:focus-visible) {
   .skip-link,
   .breadcrumbs,
   .toc,
+  /* Site-wide navigation, like the breadcrumbs above it: a list of every other
+     page on the site is the definition of chrome on paper. */
+  .explorer,
   /* Navigation into the site, like the breadcrumbs above it: on paper "Next"
      points at nothing. The relationship lists stay — those are information, and
      the rule below prints each one's route. */

@@ -6,6 +6,9 @@ import '../styles/global.css';
 // content-hashed, while the tag stays inline-free and same-origin.
 import themeInit from '../scripts/theme-init.js?url';
 import SiteMetadata from '../components/SiteMetadata.astro';
+import CollectionExplorer from '../components/CollectionExplorer.astro';
+import { entries } from '../lib/content.ts';
+import { collectionNavigation } from '../lib/collection-tree.ts';
 import { PRIMARY_NAV, SITE_MAP } from '../lib/routes.ts';
 import { canonicalUrl, describe, SITE_SUBTITLE } from '../lib/site.ts';
 
@@ -31,6 +34,17 @@ const { title, lang = NAV_LANGUAGE } = Astro.props;
  * when it is present and empty. The fixture corpus has exactly one such note.
  */
 const description = describe(Astro.props.description);
+
+/**
+ * The explorer rail's groups, resolved against the route being rendered.
+ *
+ * Computed in the layout rather than passed in by each page, so every route
+ * carries the same navigation frame by construction — a page that forgets to
+ * ask is the failure mode this prevents, and it is the same reason
+ * `SiteMetadata` lives here. `Astro.url.pathname` is what makes the rail
+ * contextual: it opens the group holding the current page and no other.
+ */
+const explorerGroups = collectionNavigation(entries, Astro.url.pathname);
 ---
 
 <!doctype html>
@@ -113,28 +127,48 @@ const description = describe(Astro.props.description);
       <p id="search-status" role="status"></p>
       <ol id="search-results"></ol>
     </dialog>
-    <main id="main" tabindex="-1">
-      <slot />
-      {/* The link preview panel (TK-07). Empty until a preview opens, and
-          `position: fixed`, so it contributes no layout wherever it sits — but
-          it must sit inside a landmark. axe-core's `region` rule reports every
-          element of page content that is in none, and an open panel parented to
-          `<body>` was exactly that: it was reported on every route, in both
-          themes, at both widths, and moving it here is what cleared it.
+    {/* The reading frame: the article, and the collection rail beside it.
+        Requirements section 16 asks for an explorer, a centred article, and a
+        contextual rail on desktop; collapsible panels on tablet; one column on
+        mobile. This grid is all three — see `.page-shell` in `global.css`.
 
-          That audit is run out of band and is not reproducible from this
-          repository — axe-core is in neither `dependencies` nor
-          `devDependencies`, so the check needs an `axe.min.js` fetched to a
-          scratch path. TK-09 owns the question of whether it becomes a release
-          gate. Recorded this way deliberately: the rule the panel was breaking
-          is nameable and checkable by anyone who runs axe, which is worth more
-          than a violation count nothing here can recompute.
+        The rail follows `<main>` in document order at every width, and the
+        stylesheet never reorders it. That is what keeps the reading order, the
+        tab order, and the visual order the same thing: a reader tabbing forward
+        reaches the article before the site-wide navigation, and a reader with no
+        CSS gets the article first. Placing the explorer visually before the
+        article — Quartz's left-hand shape — would mean either a DOM order that
+        puts a list of every title on the site ahead of the page's own content,
+        or a `grid-column` that makes the tab order disagree with the layout. */}
+    <div class="page-shell">
+      <main id="main" tabindex="-1">
+        <slot />
+        {/* The link preview panel (TK-07). Empty until a preview opens, and
+            `position: fixed`, so it contributes no layout wherever it sits — but
+            it must sit inside a landmark. axe-core's `region` rule reports every
+            element of page content that is in none, and an open panel parented to
+            `<body>` was exactly that: it was reported on every route, in both
+            themes, at both widths, and moving it here is what cleared it.
 
-          After the slot, so the document order a screen reader walks puts a
-          transient description of a link after the content that contains the
-          link, rather than before the article it describes. */}
-      <div id="link-preview" role="tooltip" hidden></div>
-    </main>
+            That audit is run out of band and is not reproducible from this
+            repository — axe-core is in neither `dependencies` nor
+            `devDependencies`, so the check needs an `axe.min.js` fetched to a
+            scratch path. TK-09 owns the question of whether it becomes a release
+            gate. Recorded this way deliberately: the rule the panel was breaking
+            is nameable and checkable by anyone who runs axe, which is worth more
+            than a violation count nothing here can recompute.
+
+            After the slot, so the document order a screen reader walks puts a
+            transient description of a link after the content that contains the
+            link, rather than before the article it describes. */}
+        <div id="link-preview" role="tooltip" hidden></div>
+      </main>
+      {/* TK-05c. Built entirely at build time and collapsed with native
+          `<details>`, so it is complete and operable with scripting disabled —
+          the Quartz explorer failure the parity plan's L5 names. It renders
+          nothing at all on a corpus with fewer than two notes. */}
+      <CollectionExplorer groups={explorerGroups} />
+    </div>
     <footer class="site-footer">
       {/* Every fixed route is linked from here, on every page, so no route is an
           orphan. This nav deliberately survives reader mode, which hides the
