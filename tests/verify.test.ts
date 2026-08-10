@@ -93,6 +93,27 @@ test('every step in the workflow is readable by these gates', () => {
 });
 
 /**
+ * The executables this project's own gates are built from, derived from the
+ * manifest rather than listed.
+ *
+ * Every script body is a `&&` chain of commands; the first word of each link is
+ * the tool it runs. Taking them from there means the set tracks the manifest:
+ * if `check` ever becomes `tsc --noEmit`, `tsc` joins this set on the same
+ * commit, with nothing to remember. An earlier version hardcoded
+ * `vitest|oxlint|astro|pagefind`, which would have let exactly that change slip
+ * past the mirror gate below.
+ *
+ * `pnpm` itself is dropped: a link beginning with it is a script this manifest
+ * declares, which `gateInvokedBy`'s first route already recognises by name.
+ */
+const GATE_TOOLS: ReadonlySet<string> = new Set(
+  Object.values(SCRIPTS)
+    .flatMap((body) => body.split('&&'))
+    .map((link) => link.trim().split(/\s+/)[0])
+    .filter((tool) => tool !== undefined && tool !== '' && tool !== 'pnpm'),
+);
+
+/**
  * The gate a workflow step would be running, or `undefined` if the step is
  * setup rather than a gate.
  *
@@ -102,15 +123,19 @@ test('every step in the workflow is readable by these gates', () => {
  * check` entirely, which run the same gates while matching none of those words.
  * A gate that can be bypassed by spelling it differently is not a gate.
  *
- * So: any step invoking a script *this manifest declares* is a gate, which
- * needs no list and stays correct as scripts are added; and any step invoking
- * one of the underlying tools directly is a gate too, which covers the route
- * that goes around the manifest altogether.
+ * So: any step invoking a script *this manifest declares* is a gate, and any
+ * step invoking one of the tools *those scripts are built from* is a gate too,
+ * which covers the route around the manifest. Neither route carries a list.
+ *
+ * It errs toward calling a step a gate. That is the safe direction: a false
+ * positive means someone routes a step through `verify`, while a false negative
+ * is the silent drift this whole file exists to prevent.
  */
 function gateInvokedBy(step: string): string | undefined {
   const script = /^pnpm\s+(?:run\s+)?([\w:-]+)/.exec(step)?.[1];
   if (script !== undefined && Object.hasOwn(SCRIPTS, script)) return script;
-  return /\b(?:vitest|oxlint|astro|pagefind)\b|\bnode\s+scripts\//.test(step) ? step : undefined;
+  const words = step.split(/[^\w:.-]+/);
+  return words.some((word) => GATE_TOOLS.has(word)) ? step : undefined;
 }
 
 test('the workflow runs verify and does not restate the gates verify composes', () => {
@@ -308,6 +333,16 @@ test('the residue scan fails on each marker it exists to catch', () => {
         `the scan passed ${JSON.stringify(planted)}, or failed without naming ${expected}: ${findings.join('; ')}`,
       );
     }
+
+    // Double encoding must NOT fire: `&amp;#x2F;` renders as the literal text
+    // `&#x2F;` in a browser, so treating it as a marker would invent one the
+    // reader never sees. This pins the decoder's depth at exactly one pass.
+    writeFileSync(join(scratch, 'index.html'), '<p>msw&amp;#x2F;secret</p>', 'utf8');
+    assert.deepEqual(
+      scanResidue(scratch).findings,
+      [],
+      'a double-encoded entity was decoded twice and reported as a marker it never renders as',
+    );
 
     // An unrecognised file kind must fail rather than ship unscanned. This is
     // the property that keeps the scan honest as the build grows: a future step

@@ -25,9 +25,9 @@
  *
  * **What it does not cover**, stated here so the gate is not mistaken for the
  * whole of requirements section 19.1. That list has nine items; this closes
- * five of them — private path markers, work/MSW markers, unresolved wikilinks,
+ * six of them — private path markers, work/MSW markers, unresolved wikilinks,
  * absolute local paths, source maps, and unsafe link schemes. The remaining
- * four are covered elsewhere or not at all:
+ * three are covered elsewhere or not at all:
  *
  * - *Non-allowlisted titles or slugs*, and *unexpected routes or assets*, are
  *   properties of the route model rather than of file bytes. `checkCorpus` and
@@ -115,6 +115,18 @@ function normalizedForms(text: string): string[] {
  * character that appears in a marker — a separator, a scheme's colon, or a
  * bracket. Decoding every named entity in HTML would need a table this file has
  * no reason to carry, and the ones omitted cannot manufacture a marker.
+ *
+ * Double encoding is deliberately *not* followed. `&amp;#x2F;` renders as the
+ * literal text `&#x2F;` in a browser, not as `/`, so decoding twice would
+ * invent a marker the reader never sees.
+ *
+ * ponytail: the trailing `;` is required here, but HTML5 decodes a *numeric*
+ * reference without one — it is a parse error that still yields the character,
+ * so `msw&#x2F secret` renders as the marker and this scan does not flag it.
+ * `decodeEntities` in `src/lib/schema.ts` has the identical gap by construction.
+ * Closing it in one place would leave the two decoders disagreeing about what a
+ * marker is, which is worse than the gap; if it is worth closing, close both in
+ * one change.
  */
 function decodeHtmlEntities(text: string): string {
   const named: Readonly<Record<string, string>> = {

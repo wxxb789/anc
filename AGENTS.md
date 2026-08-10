@@ -50,7 +50,7 @@ CI (`.github/workflows/verify.yml`) runs `pnpm run verify` rather than restating
 
 - Deployment. Requirements section 21.1 stage 13 makes it a separately approved action; CI deliberately cannot deploy and needs no secrets.
 - Post-deploy smoke tests (stage 14), which need a deployed origin.
-- Secret scanning (section 19.1's Gitleaks item), non-allowlisted titles and slugs, and unexpected routes or assets. The residue scan closes five of section 19.1's nine items; these are the rest. The last two are route-model properties that TK-09's deny-by-default assets gate owns.
+- Secret scanning (section 19.1's Gitleaks item), non-allowlisted titles and slugs, and unexpected routes or assets. The residue scan closes six of section 19.1's nine items; these are the other three. The last two are route-model properties that TK-09's deny-by-default assets gate owns.
 - `pnpm run build:fixture`, the 32-note corpus that un-skips the five multi-entry gates. Not in `verify` because it builds the site twice.
 - `git diff --check`, which reads the working tree rather than the artifact and so belongs to the commit step, not the build.
 - `pnpm run sync:content`, which reads the private vault and by design never runs anywhere but a trusted host.
