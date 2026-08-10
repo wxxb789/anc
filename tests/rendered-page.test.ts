@@ -753,3 +753,713 @@ test('the relationship sections are readable and complete with scripting disable
     await browserContext.close();
   }
 }, 180_000);
+
+/**
+ * The link preview opens on hover and on keyboard focus, and stays on screen.
+ *
+ * TK-07's acceptance criteria are browser properties: a preview reached by
+ * keyboard, a panel that never leaves the viewport, and a link that still
+ * navigates whatever the preview does. None is observable from the HTML, and the
+ * unit gates in `tests/preview-model.test.ts` prove the placement arithmetic
+ * without proving it is the arithmetic the page runs.
+ *
+ * Driven from the first built route that carries a note link rather than from a
+ * named one. On the published one-note corpus that is `/`; under
+ * `pnpm run build:fixture` it is every route. Finding it measures both corpora
+ * with no exemption list and no route that silently stops existing.
+ *
+ * Checked at 320 px, where the clamp has the least room and where a panel wider
+ * than the viewport is a horizontal overflow rather than a cosmetic error.
+ */
+test('the link preview opens on hover and on focus, and never leaves the viewport', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  /** The panel's box and contents, as a reader would meet them. */
+  const panelState = () =>
+    page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>('#link-preview');
+      if (panel === null) return undefined;
+      const rect = panel.getBoundingClientRect();
+      return {
+        isHidden: panel.hidden,
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        title: panel.querySelector('strong')?.textContent ?? '',
+        excerpt: panel.querySelector('p')?.textContent ?? '',
+        // Every node in the panel, so an `innerHTML` regression that let the
+        // payload introduce markup shows up as an unexpected element.
+        elements: [...panel.querySelectorAll('*')].map((node) => node.localName).sort(),
+      };
+    });
+
+  const waitForPanel = (shown: boolean) =>
+    page.waitForFunction(
+      (expected) => document.querySelector<HTMLElement>('#link-preview')?.hidden === !expected,
+      shown,
+      { timeout: 5_000 },
+    );
+
+  try {
+    let route: string | undefined;
+    let target = '';
+    for (const candidate of routes) {
+      await visit(page, candidate);
+      const href = await page.evaluate(
+        () => document.querySelector<HTMLAnchorElement>('a[href^="/notes/"]')?.getAttribute('href') ?? '',
+      );
+      if (href !== '') {
+        route = candidate;
+        target = href;
+        break;
+      }
+    }
+    assert.ok(route !== undefined, 'no built route carries a note link, so no preview could be opened');
+
+    await visit(page, route);
+    const link = page.locator(`a[href="${target}"]`).first();
+
+    // --- Hover ---------------------------------------------------------------
+    await link.hover();
+    await waitForPanel(true);
+    const hovered = (await panelState())!;
+    assert.ok(hovered.title.length > 0, 'the preview opened with no title');
+    assert.deepEqual(
+      hovered.elements,
+      ['p', 'strong'],
+      'the preview rendered nodes other than the constructed title and excerpt',
+    );
+    assert.ok(hovered.left >= 0, `the panel starts at ${hovered.left}px, off the left of the viewport`);
+    assert.ok(hovered.top >= 0, `the panel starts at ${hovered.top}px, above the viewport`);
+    assert.ok(
+      hovered.right <= NARROWEST_PX,
+      `the panel ends at ${hovered.right}px in a ${NARROWEST_PX}px viewport`,
+    );
+    assert.ok(
+      hovered.bottom <= VIEWPORT_HEIGHT_PX,
+      `the panel ends at ${hovered.bottom}px in a ${VIEWPORT_HEIGHT_PX}px viewport`,
+    );
+    assert.equal(
+      await link.getAttribute('aria-describedby'),
+      'link-preview',
+      'the previewed link is not described by the panel a screen reader would read',
+    );
+
+    // --- Escape --------------------------------------------------------------
+    await page.keyboard.press('Escape');
+    await waitForPanel(false);
+    assert.equal(
+      await link.getAttribute('aria-describedby'),
+      null,
+      'the dismissed panel is still announced as the link description',
+    );
+
+    // --- Keyboard focus ------------------------------------------------------
+    // The acceptance criterion: focus produces the same preview as hover. Driven
+    // with real `Tab` presses rather than `link.focus()`, because the two are not
+    // equivalent here: the script gates on `:focus-visible` so a tap cannot open
+    // a panel over the page it is navigating to, and programmatic focus does not
+    // always set that state. A gate that focused directly would pass while every
+    // real keyboard reader got nothing.
+    await page.mouse.move(0, 0);
+    let reached = false;
+    for (let press = 0; press < 40 && !reached; press += 1) {
+      await page.keyboard.press('Tab');
+      reached = await page.evaluate(
+        (href) => document.activeElement?.getAttribute('href') === href,
+        target,
+      );
+    }
+    assert.ok(reached, `tabbing never reached ${target}, so the keyboard path was not measured`);
+    await waitForPanel(true);
+    const focused = (await panelState())!;
+    assert.equal(focused.title, hovered.title, 'focus and hover produced different previews');
+    assert.equal(focused.excerpt, hovered.excerpt, 'focus and hover produced different previews');
+
+    // --- Scroll --------------------------------------------------------------
+    await page.mouse.wheel(0, 200);
+    await waitForPanel(false);
+
+    // --- A heading target ----------------------------------------------------
+    // Scope item 3. Neither corpus contains a `/notes/<slug>/#heading` link —
+    // the exporter derives edges from wikilinks and discards their fragments —
+    // so the link is injected rather than searched for, and the gate says so
+    // instead of quietly measuring nothing. The panel names the section as the
+    // fragment itself: the projection carries `{slug, title, excerpt}` and
+    // nothing per heading, so a de-slugged guess at the heading's prose would be
+    // a fabrication, while the fragment is what the address bar shows on arrival.
+    await page.evaluate((href) => {
+      const link = document.createElement('a');
+      link.href = `${href}#introduction`;
+      link.id = 'probe-heading-target';
+      link.textContent = 'probe';
+      document.querySelector('main')!.append(link);
+    }, target);
+    await page.locator('#probe-heading-target').hover();
+    await waitForPanel(true);
+    const withHeading = (await panelState())!;
+    assert.equal(withHeading.title, hovered.title, 'a heading target previewed a different note');
+    assert.deepEqual(
+      withHeading.elements,
+      ['p', 'span', 'strong'],
+      'a heading-target preview did not add the section line, or added something else',
+    );
+    assert.equal(
+      await page.evaluate(
+        () => document.querySelector('#link-preview .preview-fragment')?.textContent ?? '',
+      ),
+      '#introduction',
+      'the section line does not name the heading the link lands on',
+    );
+    await page.keyboard.press('Escape');
+    await waitForPanel(false);
+
+    // --- The link still works ------------------------------------------------
+    // Requirements section 14: a preview never replaces the underlying link.
+    await link.click();
+    await page.waitForURL(`**${target}`, { timeout: 10_000 });
+    assert.match(new URL(page.url()).pathname, /^\/notes\//, 'following a previewed link did not navigate');
+  } finally {
+    await browserContext.close();
+  }
+}, 180_000);
+
+/**
+ * No link on a note page previews the note the reader is already reading.
+ *
+ * This is a defect review found in the first implementation, and it is the one
+ * that mattered most: every `href="#section"` on a note page resolves to that
+ * note's own `pathname`, so a preview keyed on the path alone previewed the open
+ * page from all of them. Measured before the fix on the published note page —
+ * **29 such anchors**: the table of contents, fifteen heading anchors, and the
+ * skip link. The *first* `Tab` a keyboard reader presses landed on
+ * `<a class="skip-link" href="#main">` and opened a panel describing the page
+ * they were already on, with `aria-describedby` pointing at it.
+ *
+ * It is gated over the real anchors rather than an injected probe, because an
+ * injected probe is exactly what let the first implementation ship: the
+ * heading-target case was proven with a link the test itself created, so the 29
+ * real ones were never hovered.
+ */
+test('no link previews the page it is already on', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: 1280, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let checked = 0;
+    for (const route of routes.filter((candidate) => candidate.startsWith('/notes/')).slice(0, 4)) {
+      await visit(page, route);
+
+      const selfLinks = await page.evaluate(() =>
+        [...document.querySelectorAll<HTMLAnchorElement>('a[href]')]
+          .filter((link) => link.pathname === location.pathname)
+          .map((link) => link.getAttribute('href') ?? ''),
+      );
+      assert.ok(
+        selfLinks.length > 0,
+        `${route}: no same-page link was found, so this gate measured nothing — ` +
+          'a note page carries at least a skip link and its heading anchors',
+      );
+
+      // The skip link first and by name: it is the first thing a keyboard reader
+      // reaches, so a panel over it is the worst instance of this defect.
+      await page.keyboard.press('Tab');
+      await page.waitForTimeout(400);
+      const first = await page.evaluate(() => ({
+        focused: document.activeElement?.getAttribute('href') ?? '',
+        isHidden: document.querySelector<HTMLElement>('#link-preview')?.hidden !== false,
+        describedBy: document.activeElement?.getAttribute('aria-describedby'),
+      }));
+      assert.ok(
+        first.isHidden,
+        `${route}: the first Tab (onto "${first.focused}") opened a preview of the page being read`,
+      );
+      assert.equal(
+        first.describedBy,
+        null,
+        `${route}: the first focusable control is described by a preview panel`,
+      );
+
+      for (const href of selfLinks.slice(0, 8)) {
+        const link = page.locator(`a[href="${href}"]`).first();
+        // A heading anchor is revealed on hover, so it may not be hittable; the
+        // event path is what this gate is about either way.
+        try {
+          await link.hover({ timeout: 2_000 });
+        } catch {
+          continue;
+        }
+        await page.waitForTimeout(300);
+        assert.ok(
+          await page.evaluate(() => document.querySelector<HTMLElement>('#link-preview')?.hidden !== false),
+          `${route}: hovering "${href}" previewed the page the reader is already on`,
+        );
+        checked += 1;
+      }
+    }
+    assert.ok(checked > 0, 'no same-page link was hovered, so nothing was measured');
+  } finally {
+    await browserContext.close();
+  }
+}, 180_000);
+
+/**
+ * A tap opens no preview.
+ *
+ * Scope item 7's "do not interfere with touch interaction", and it needs both
+ * doors closed rather than one: the pointer listeners skip `pointerType ===
+ * 'touch'`, but a tap also *focuses* the link, so an unqualified `focusin` would
+ * flash a panel over the page the tap is navigating to. That second door was open
+ * in the first implementation and review found it. The script now gates focus on
+ * `:focus-visible`, which is the browser's own "this focus deserves an indicator"
+ * decision — keyboard yes, tap no. Traced on a real touch context: a tap fires
+ * `pointerover(touch)`, `focusin` with `:focus-visible` false, then `click`.
+ *
+ * The tap's navigation is suppressed for the measurement, and that is what makes
+ * this gate work rather than a shortcut. Left to navigate, the page unloads
+ * before the open delay elapses and the assertion lands on a *fresh* document
+ * whose panel is hidden because nothing has happened on it yet — so the gate
+ * would pass no matter what the script did. Verified: with the `:focus-visible`
+ * gate removed, the navigating version still passed and this version fails.
+ * The tap's navigation is then measured separately, without suppression.
+ */
+test('a tap opens no preview', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: 390, height: 780 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let route: string | undefined;
+    let target = '';
+    for (const candidate of routes) {
+      await visit(page, candidate);
+      const href = await page.evaluate(
+        () => document.querySelector<HTMLAnchorElement>('a[href^="/notes/"]')?.getAttribute('href') ?? '',
+      );
+      if (href !== '') {
+        route = candidate;
+        target = href;
+        break;
+      }
+    }
+    assert.ok(route !== undefined, 'no built route carries a note link to tap');
+
+    // --- The event path, with the page held still ----------------------------
+    await visit(page, route);
+    await page.evaluate(() => {
+      document.addEventListener('click', (event) => event.preventDefault(), true);
+      const panel = document.querySelector<HTMLElement>('#link-preview')!;
+      const counter = { shown: 0 };
+      (window as typeof window & { tapShown: { shown: number } }).tapShown = counter;
+      new MutationObserver(() => {
+        if (!panel.hidden) counter.shown += 1;
+      }).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    });
+
+    const box = (await page.locator(`a[href="${target}"]`).first().boundingBox())!;
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+    // Several times the open delay, so a panel that was going to appear has.
+    await page.waitForTimeout(600);
+    assert.equal(
+      await page.evaluate(() => (window as typeof window & { tapShown: { shown: number } }).tapShown.shown),
+      0,
+      'a tap opened a preview over the page it was navigating to',
+    );
+    // The tap really did reach the link: without this, a mistargeted tap would
+    // satisfy the assertion above by touching nothing at all.
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.getAttribute('href') ?? ''),
+      target,
+      'the tap did not land on the link, so the touch path was not measured',
+    );
+
+    // --- And the tap still follows the link ----------------------------------
+    await visit(page, route);
+    await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForURL(`**${target}`, { timeout: 10_000 });
+    assert.match(new URL(page.url()).pathname, /^\/notes\//, 'the tap did not follow the link');
+  } finally {
+    await browserContext.close();
+  }
+}, 120_000);
+
+/**
+ * A link that is not a published note previews nothing and requests nothing.
+ *
+ * The privacy property as a browser fact rather than as a code reading: the
+ * panel is a projection lookup, so an off-site target has nothing to find — but a
+ * hover that still *requested* something would be either a needless fetch or,
+ * under a scrape-the-target design, the hole this ticket exists to avoid. The
+ * request log is what tells the two apart.
+ *
+ * The first probe is the one that matters and the reason the others are not
+ * enough. `//example.invalid/notes/<published-slug>/` is an off-site URL whose
+ * `pathname` is a *real* note route on this site, so an `href^="/"` test — the
+ * shape this file shipped before — resolves it, finds the slug in the index, and
+ * shows one of our previews for a third party's link. Mutation-tested: replacing
+ * the origin comparison with the prefix test fails on this probe alone, and
+ * passes every other assertion here.
+ *
+ * The links are injected rather than found. The published corpus does carry three
+ * external links (chocolatey.org, openssl.org, slproweb.com) and the fixture
+ * corpus carries none — but neither carries the shape that matters here, an
+ * off-site URL wearing one of *our* note paths, and a gate that hunted for one
+ * would measure nothing on the fixture corpus at all.
+ */
+test('a link that is not a published note previews nothing and requests nothing', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    await visit(page, '/');
+
+    const published = await page.evaluate(
+      () => document.querySelector<HTMLAnchorElement>('a[href^="/notes/"]')?.getAttribute('href') ?? '',
+    );
+    assert.notEqual(published, '', '/ carries no note link, so the off-site probe has no real slug to borrow');
+
+    // Three shapes a naive `href^="/"` test gets wrong, hardest first: an
+    // off-site URL wearing a published note's own path, an ordinary off-site
+    // URL, and a same-origin route that is not a note.
+    const probes = [`//example.invalid${published}`, 'https://example.invalid/x', '/tags/probe/'];
+    // The other half of scope item 6, and deliberately separate: a same-origin
+    // note route whose slug is not in the projection — a stale link to a note
+    // that is no longer published. It is the one probe that legitimately *does*
+    // load the index, since answering "is this slug published?" is what the
+    // index is for, so it is held out of the no-request assertion below.
+    const unknownSlug = '/notes/not-a-published-note/';
+    const probeId = (href: string) => `probe-${href.replaceAll(/\W/g, '')}`;
+
+    const requested: string[] = [];
+    page.on('request', (request) => requested.push(request.url()));
+
+    await page.evaluate((hrefs) => {
+      const main = document.querySelector('main')!;
+      for (const href of hrefs) {
+        const link = document.createElement('a');
+        link.href = href;
+        link.id = `probe-${href.replaceAll(/\W/g, '')}`;
+        link.textContent = 'probe';
+        main.append(link);
+      }
+    }, [...probes, unknownSlug]);
+
+    for (const href of probes) {
+      await page.locator(`#${probeId(href)}`).hover();
+      // Comfortably longer than the open delay, so a preview that was going to
+      // appear has appeared.
+      await page.waitForTimeout(400);
+      assert.ok(
+        await page.evaluate(() => document.querySelector<HTMLElement>('#link-preview')?.hidden !== false),
+        `hovering ${href} opened a preview`,
+      );
+    }
+
+    assert.deepEqual(
+      requested.filter((url) => !url.startsWith(`${origin}/`)),
+      [],
+      'hovering a link that is not a published note issued an off-origin request',
+    );
+    // Scope item 5 is "never *fetch* a non-public target", not only "never show
+    // one". The index is the only thing a hover can request, and none of the
+    // probes above is a note route on this origin, so none should have cost even
+    // that. Asserted before the unknown-slug probe, which legitimately loads it.
+    assert.deepEqual(
+      requested.filter((url) => url.endsWith('/content-index.json')),
+      [],
+      'hovering a link that is not a note route on this origin fetched the preview index',
+    );
+
+    // Scope item 6's unknown slug: a well-formed note route the projection does
+    // not list. The index is consulted — that is the question it answers — and
+    // the answer is "nothing to show", silently.
+    await page.locator(`#${probeId(unknownSlug)}`).hover();
+    await page.waitForTimeout(600);
+    assert.ok(
+      await page.evaluate(() => document.querySelector<HTMLElement>('#link-preview')?.hidden !== false),
+      `hovering ${unknownSlug} previewed a slug that is not in the projection`,
+    );
+  } finally {
+    await browserContext.close();
+  }
+}, 120_000);
+
+/**
+ * Brushing past a link opens nothing, and leaving a shown panel closes it.
+ *
+ * The two halves of the hover-intent requirement, and neither is visible from a
+ * final state: a preview that opens instantly and then closes when the pointer
+ * moves on ends up hidden, exactly like one that was correctly never opened. The
+ * `MutationObserver` is what tells them apart — it records every transition of
+ * the panel's `hidden` attribute, so "it appeared and went away again" is a
+ * different observation from "it never appeared".
+ *
+ * Mutation-tested: dropping the open delay fails the first half, and dropping
+ * the close timer fails the second.
+ */
+test('a link brushed past opens no preview, and a shown preview closes when the pointer leaves', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let route: string | undefined;
+    let target = '';
+    for (const candidate of routes) {
+      await visit(page, candidate);
+      const href = await page.evaluate(
+        () => document.querySelector<HTMLAnchorElement>('a[href^="/notes/"]')?.getAttribute('href') ?? '',
+      );
+      if (href !== '') {
+        route = candidate;
+        target = href;
+        break;
+      }
+    }
+    assert.ok(route !== undefined, 'no built route carries a note link to hover');
+
+    await visit(page, route);
+    // Count every time the panel becomes visible, from now until it is read.
+    await page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>('#link-preview')!;
+      const counter = { shown: 0 };
+      (window as typeof window & { previewShown: { shown: number } }).previewShown = counter;
+      new MutationObserver(() => {
+        if (!panel.hidden) counter.shown += 1;
+      }).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+    });
+    const shownCount = () =>
+      page.evaluate(() => (window as typeof window & { previewShown: { shown: number } }).previewShown.shown);
+
+    // --- Brushed past --------------------------------------------------------
+    // Over the link and away again faster than the open delay, which is what
+    // crossing a link on the way somewhere else looks like.
+    //
+    // Dispatched inside the page rather than driven through `page.mouse`, and
+    // that is a correctness fix rather than a shortcut: two `mouse.move` calls
+    // are two round trips, and on a loaded machine the gap between them can
+    // exceed the open delay — so the gate would report a preview that opened
+    // *because the harness was slow*, which is a flake in the direction of a
+    // false failure. Timed in the page, the dwell is the thing under test rather
+    // than the round-trip time. Hit testing is not what this gate is about and is
+    // covered by the hover gate above, which drives a real pointer.
+    //
+    // The dwell is real rather than zero, so the events land in two separate
+    // tasks. In one task a delay of zero would be indistinguishable from a
+    // correct one — the timer could not have fired yet either way — and the gate
+    // would pass for a preview that opens instantly.
+    const BRUSH_DWELL_MS = 40;
+    await page.evaluate(
+      async ({ selector, dwell }) => {
+        const link = document.querySelector<HTMLAnchorElement>(selector)!;
+        const main = document.querySelector('main')!;
+        const options = { bubbles: true, pointerType: 'mouse' };
+        link.dispatchEvent(new PointerEvent('pointerover', { ...options, relatedTarget: main }));
+        await new Promise((resolve) => setTimeout(resolve, dwell));
+        link.dispatchEvent(new PointerEvent('pointerout', { ...options, relatedTarget: main }));
+      },
+      { selector: `a[href="${target}"]`, dwell: BRUSH_DWELL_MS },
+    );
+    // Several times the open delay, so a preview that was going to open has.
+    await page.waitForTimeout(600);
+    assert.equal(await shownCount(), 0, 'a link the pointer only crossed opened a preview anyway');
+
+    // --- Shown, then left ----------------------------------------------------
+    await page.locator(`a[href="${target}"]`).first().hover();
+    await page.waitForFunction(
+      () => document.querySelector<HTMLElement>('#link-preview')?.hidden === false,
+      undefined,
+      { timeout: 5_000 },
+    );
+    await page.mouse.move(1, VIEWPORT_HEIGHT_PX - 1);
+    await page.waitForFunction(
+      () => document.querySelector<HTMLElement>('#link-preview')?.hidden === true,
+      undefined,
+      { timeout: 5_000 },
+    );
+  } finally {
+    await browserContext.close();
+  }
+}, 120_000);
+
+/**
+ * The payload is data at every step, never markup.
+ *
+ * Requirements section 14 forbids raw `innerHTML`, and the panel is built with
+ * `document.createElement` plus `textContent` for exactly that reason. The gate
+ * cannot see which method was called, so it feeds the payload a string that only
+ * an HTML parser would treat as an element and asserts that no element appeared
+ * and that the text survived verbatim. Mutation-tested: `textContent` swapped for
+ * `innerHTML` fails here, and passes every other gate in this file.
+ *
+ * The payload is stubbed rather than authored into a corpus: the artifact
+ * contract rejects markup like this, so the only honest way to prove the reader
+ * is robust to it is to hand the reader a payload the contract would never emit.
+ */
+test('the preview renders its payload as text, never as markup', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  const EXCERPT = '<img src=x onerror="throw new Error(1)"><b>bold</b> & plain';
+  const TITLE = '<i>Title</i>';
+
+  try {
+    let route: string | undefined;
+    let target = '';
+    for (const candidate of routes) {
+      await visit(page, candidate);
+      const href = await page.evaluate(
+        () => document.querySelector<HTMLAnchorElement>('a[href^="/notes/"]')?.getAttribute('href') ?? '',
+      );
+      if (href !== '') {
+        route = candidate;
+        target = href;
+        break;
+      }
+    }
+    assert.ok(route !== undefined, 'no built route carries a note link to hover');
+
+    const slug = target.replaceAll(/^\/notes\/|\/$/g, '');
+    await page.route('**/content-index.json', (route_) =>
+      route_.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ version: 1, entries: [{ slug, title: TITLE, excerpt: EXCERPT }] }),
+      }),
+    );
+
+    await visit(page, route);
+    await page.locator(`a[href="${target}"]`).first().hover();
+    await page.waitForFunction(
+      () => document.querySelector<HTMLElement>('#link-preview')?.hidden === false,
+      undefined,
+      { timeout: 5_000 },
+    );
+
+    const rendered = await page.evaluate(() => {
+      const panel = document.querySelector<HTMLElement>('#link-preview')!;
+      return {
+        elements: [...panel.querySelectorAll('*')].map((node) => node.localName).sort(),
+        title: panel.querySelector('strong')?.textContent ?? '',
+        excerpt: panel.querySelector('p')?.textContent ?? '',
+      };
+    });
+
+    assert.deepEqual(
+      rendered.elements,
+      ['p', 'strong'],
+      'a payload string became elements in the panel, so it was parsed as markup',
+    );
+    assert.equal(rendered.title, TITLE, 'the title was not rendered verbatim');
+    assert.equal(rendered.excerpt, EXCERPT, 'the excerpt was not rendered verbatim');
+  } finally {
+    await browserContext.close();
+  }
+}, 120_000);
+
+/**
+ * A failed index request fails silently, and the next hover retries.
+ *
+ * The defect this replaces was the memoisation itself: `indexPromise ||= fetch()`
+ * with no `catch` stored the *rejected* promise, so one failed request disabled
+ * previews for the page's lifetime and logged an unhandled rejection on a site
+ * whose gates require a clean console. Both halves are measured.
+ */
+test('a failed index request fails silently and is retried', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let isFailing = true;
+    await page.route('**/content-index.json', (route) =>
+      isFailing ? route.fulfill({ status: 500, body: 'nope' }) : route.fallback(),
+    );
+
+    // `visit` fails the run on any console error, which is the very thing this
+    // gate exists to prove absent — so the navigation is done directly and the
+    // console is judged below rather than by the shared helper.
+    //
+    // Exactly one message is excluded: the browser's own transport log for the
+    // stubbed request. Chromium prints "Failed to load resource: … 500" for any
+    // failed request, from the network stack and before a line of page script
+    // runs, and no application code can suppress it. It is matched by the URL it
+    // is reported against, so a failure logged for anything else still fails.
+    // What this gate is really about is the *second* message the old code
+    // produced — an unhandled rejection from the memoised rejected promise —
+    // which arrives as a `pageerror` and is collected here in full.
+    const noise: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() !== 'error') return;
+      if (message.location().url.endsWith('/content-index.json')) return;
+      noise.push(`console: ${message.text()}`);
+    });
+    page.on('pageerror', (error) => noise.push(`uncaught: ${error.message}`));
+
+    let route: string | undefined;
+    let target = '';
+    for (const candidate of routes) {
+      await page.goto(`${origin}${candidate}`, { waitUntil: 'load' });
+      const href = await page.evaluate(
+        () => document.querySelector<HTMLAnchorElement>('a[href^="/notes/"]')?.getAttribute('href') ?? '',
+      );
+      if (href !== '') {
+        route = candidate;
+        target = href;
+        break;
+      }
+    }
+    assert.ok(route !== undefined, 'no built route carries a note link to hover');
+
+    const link = page.locator(`a[href="${target}"]`).first();
+    await link.hover();
+    await page.waitForTimeout(600);
+    assert.ok(
+      await page.evaluate(() => document.querySelector<HTMLElement>('#link-preview')?.hidden !== false),
+      'a failed index request still opened a preview',
+    );
+    assert.deepEqual(noise, [], 'a failed index request reported an error to the console');
+    // The link the reader actually needs is untouched by the failure.
+    assert.equal(await link.getAttribute('href'), target);
+
+    // And the failure is not permanent: pointing at the link again retries.
+    //
+    // `mouse.move` off and back rather than `hover()` twice, because Playwright's
+    // `hover` is a move to the element's centre and a move to where the pointer
+    // already is dispatches nothing at all — the second call would be a no-op and
+    // this gate would time out against correct code.
+    isFailing = false;
+    const box = (await link.boundingBox())!;
+    await page.mouse.move(0, 0);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForFunction(
+      () => document.querySelector<HTMLElement>('#link-preview')?.hidden === false,
+      undefined,
+      { timeout: 5_000 },
+    );
+    assert.deepEqual(noise, [], 'the retry reported an error to the console');
+  } finally {
+    await browserContext.close();
+  }
+}, 120_000);
