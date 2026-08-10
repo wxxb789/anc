@@ -1,0 +1,118 @@
+---
+/**
+ * Everything a route says about itself to something that is not a browser: the
+ * canonical URL, the Open Graph and Twitter card metadata, and the feed
+ * discovery link.
+ *
+ * It renders into `Layout.astro`'s `<slot name="head" />`, which TK-05a left for
+ * exactly this, and the layout renders it once — so every route carries this
+ * metadata by construction rather than because eight page files each remembered
+ * to ask for it.
+ *
+ * **The article facts are looked up from the route, not passed down.** A note
+ * page would otherwise have to thread `type`, `published`, and `updated` through
+ * `Layout`'s props, widening the interface TK-05a's slot exists to keep narrow,
+ * and every future page would have to remember to pass them. Instead this reads
+ * the same `Astro.url.pathname` the canonical URL is already derived from: if
+ * that path is a note route, the artifact has the note's dates, and if it is
+ * not, there are no article facts to state. The two answers cannot disagree
+ * because they come from one source.
+ *
+ * Every value is derived from `Astro.site`, `Astro.url`, or an artifact field.
+ * Nothing here reads a clock and nothing invents a default, so two builds of one
+ * artifact emit identical bytes.
+ */
+import { getEntry } from '../lib/content.ts';
+import { noteSlugFromPath } from '../lib/route-path.ts';
+import {
+  FEED_PATH,
+  SITE_NAME,
+  SOCIAL_CARD_PATH,
+  canonicalUrl,
+  isIndexable,
+  openGraphLocale,
+  rfc3339,
+  socialTitle,
+} from '../lib/site.ts';
+
+interface Props {
+  title: string;
+  description: string;
+  /** The document's own BCP 47 tag, as `<html lang>` declares it. */
+  lang: string;
+}
+
+const { title, description, lang } = Astro.props;
+
+/**
+ * This page's canonical URL.
+ *
+ * `Astro.url.pathname` rather than a route the caller passes: the canonical URL
+ * of a page is the address it is served at, and deriving it from anything else
+ * is how a page comes to declare a canonical URL that is not its own. With
+ * `trailingSlash: 'always'` this is already the normalized form.
+ */
+const canonical = canonicalUrl(Astro.site, Astro.url.pathname);
+const card = canonicalUrl(Astro.site, SOCIAL_CARD_PATH);
+
+const slug = noteSlugFromPath(Astro.url.pathname);
+const note = slug === undefined ? undefined : getEntry(slug);
+const locale = openGraphLocale(lang);
+---
+
+{/* The 404 document has no address of its own — the host serves its body for
+    every unmatched request — so it claims no canonical URL. Declaring one would
+    tell a crawler that every mistyped address on this site is canonically
+    `/404/`, which is an instruction to index the error page under arbitrary
+    names. `noindex, follow` says the true thing instead, and `follow` keeps the
+    site map in its body useful. */}
+{isIndexable(Astro.url.pathname) ? (
+  <link rel="canonical" href={canonical} />
+) : (
+  <meta name="robots" content="noindex, follow" />
+)}
+
+{/* Open Graph. `og:type` is `article` only on a note page — the index, facet,
+    and static pages are not articles, and typing them as one would ask a
+    consumer to look for an author and a publication date that do not exist. */}
+<meta property="og:type" content={note === undefined ? 'website' : 'article'} />
+<meta property="og:site_name" content={SITE_NAME} />
+{/* Without the ` · thoughtscape` suffix the `<title>` carries: a card renders
+    this line directly above `og:site_name`, so keeping it prints the site's
+    name twice on every card. */}
+<meta property="og:title" content={socialTitle(title)} />
+<meta property="og:description" content={description} />
+<meta property="og:url" content={canonical} />
+{/* Only when the document's language names a territory: Open Graph's value is
+    `language_TERRITORY`, and a bare `en` is not a valid one. `<html lang>`
+    carries the exact BCP 47 tag on every page regardless. */}
+{locale !== undefined && <meta property="og:locale" content={locale} />}
+<meta property="og:image" content={card} />
+{/* The card is a rendering of the site's own mark, identical on every route, so
+    the alternative text says what it is rather than describing the page. */}
+<meta property="og:image:alt" content={`${SITE_NAME} — a public knowledge garden`} />
+
+{/* Widened to the full RFC 3339 form Open Graph's DateTime type requires; the
+    artifact may carry a bare calendar date. The `<time datetime>` on the page
+    itself keeps the artifact's own precision. Each is emitted only when the
+    artifact carries it — this projection states no date it was not given. */}
+{note?.created !== undefined && (
+  <meta property="article:published_time" content={rfc3339(note.created)} />
+)}
+{note?.updated !== undefined && (
+  <meta property="article:modified_time" content={rfc3339(note.updated)} />
+)}
+
+{/* Twitter reads `og:*` for everything else, so only the card type needs
+    stating. `summary_large_image` matches the card's 2:1 aspect ratio. No
+    `twitter:site` or `twitter:creator`: this projection names no account, and
+    a metadata tag is not the place to create one. */}
+<meta name="twitter:card" content="summary_large_image" />
+
+{/* Feed discovery. Absolute, so it is unambiguous wherever the markup is read. */}
+<link
+  rel="alternate"
+  type="application/atom+xml"
+  title={`${SITE_NAME} — all notes`}
+  href={canonicalUrl(Astro.site, FEED_PATH)}
+/>

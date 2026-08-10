@@ -158,14 +158,15 @@ test('no page contains a duplicate id, and every fragment link resolves', () => 
   }
 });
 
-test('every page carries its canonical route for print', () => {
-  // Scope item 10: a printed page must carry its canonical URL. The absolute
-  // origin is TK-08's; the route is what this ticket can honestly emit.
+test('every page carries its canonical URL for print', () => {
+  // Scope item 10: a printed page must carry its canonical URL. TK-05a emitted
+  // the route and left the origin to TK-08, which configured `site:`; a printed
+  // page has no address bar, so the absolute form is the whole point.
   for (const file of PAGES) {
     assert.match(
       read(file),
-      /<p class="print-only">Published at \/[^<]*<\/p>/,
-      `${file}: no printable canonical route`,
+      /<p class="print-only">Published at https?:\/\/[^/<]+\/[^<]*<\/p>/,
+      `${file}: no printable canonical URL`,
     );
   }
 });

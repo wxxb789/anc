@@ -3,3 +3,32 @@
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
+
+# Everything Astro content-hashes. The hash is derived from the file's own
+# bytes, so a changed file is a changed URL and a cached copy of the old one can
+# never be stale — which is the only condition under which `immutable` is safe.
+#
+# The rule sets no header the `/*` block above sets. That matters on Cloudflare
+# Pages, which joins same-named headers from every matching rule with a comma
+# rather than choosing the most specific: two rules setting `Cache-Control`
+# would emit both values. Overriding an inherited header needs an explicit
+# `! Header-Name`. `tests/deployment.test.ts` gates exactly that.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Deliberately NOT listed: `/pagefind/*`.
+#
+# Only two of its four asset classes are content-hashed. `pagefind/index/*` and
+# `pagefind/fragment/*` carry a hash; `pagefind-entry.json` and
+# `wasm.*.pagefind` are stable-named and rewritten on every build. Marking the
+# directory immutable would pin a returning reader's `pagefind-entry.json` to a
+# year-old copy pointing at index chunks that no longer exist — search would
+# break silently after the first republish, for exactly the readers who visit
+# most often. The platform default (`public, max-age=0, must-revalidate` plus an
+# `ETag`) revalidates cheaply and is correct for all four.
+#
+# Also not listed: HTML and the JSON data files. Requirements section 20 asks
+# for a short cache or revalidation for HTML and a short cache with `ETag` for
+# JSON, and Cloudflare Pages already serves precisely that by default on every
+# 200. A rule restating the platform default would be one more thing to keep in
+# sync with it.

@@ -5,7 +5,9 @@ import '../styles/global.css';
 // wrong theme. Importing the URL keeps the source under `src/scripts/` and
 // content-hashed, while the tag stays inline-free and same-origin.
 import themeInit from '../scripts/theme-init.js?url';
+import SiteMetadata from '../components/SiteMetadata.astro';
 import { PRIMARY_NAV, SITE_MAP } from '../lib/routes.ts';
+import { canonicalUrl, describe, SITE_SUBTITLE } from '../lib/site.ts';
 
 interface Props {
   title: string;
@@ -17,11 +19,18 @@ interface Props {
 /** The single navigation language, used whenever a document declares none. */
 const NAV_LANGUAGE = 'en';
 
-const {
-  title,
-  description = 'A static public projection from thoughtscape.',
-  lang = NAV_LANGUAGE,
-} = Astro.props;
+const { title, lang = NAV_LANGUAGE } = Astro.props;
+
+/**
+ * `describe` rather than a default parameter, and that is a fix rather than a
+ * refactor: a default only fires on `undefined`, while the note page passes
+ * `entry.excerpt` — the one required string the content contract admits *empty*.
+ * A note with an empty excerpt therefore shipped
+ * `<meta name="description" content="">`, which is worse than no tag at all,
+ * since a consumer scrapes the page when the tag is absent and renders nothing
+ * when it is present and empty. The fixture corpus has exactly one such note.
+ */
+const description = describe(Astro.props.description);
 ---
 
 <!doctype html>
@@ -33,12 +42,18 @@ const {
     <meta name="generator" content={Astro.generator} />
     <title>{title}</title>
     <script is:inline src={themeInit}></script>
+    {/* TK-08: the canonical URL, the Open Graph and Twitter card metadata, and
+        the feed discovery link. Rendered here rather than by each page so that
+        every route carries them by construction — a page that forgets to ask
+        is the failure mode this prevents. It derives everything from
+        `Astro.site`, `Astro.url`, and the artifact; it takes no new props
+        beyond the three this layout already has. */}
+    <SiteMetadata title={title} description={description} lang={lang} />
     {/* The one seam a page has into the document head.
-        TK-08 fills it with the canonical link, OG and Twitter metadata, and the
-        feed `<link rel="alternate">`. TK-15 fills it with the math stylesheet
-        and font, gated on `RenderedNote.hasMath`, and the Mermaid assets gated
-        on `.hasMermaid`. `src/pages/notes/[slug].astro` already uses it for the
-        `hasCode` case, so the mechanism is exercised rather than speculative.
+        TK-15 fills it with the math stylesheet and font, gated on
+        `RenderedNote.hasMath`, and the Mermaid assets gated on `.hasMermaid`.
+        `src/pages/notes/[slug].astro` already uses it for the `hasCode` case,
+        so the mechanism is exercised rather than speculative.
 
         A named slot rather than a widening `Props` interface: a per-ticket prop
         would make this file the contended one every time a ticket needs a tag
@@ -71,12 +86,12 @@ const {
       <nav class="site-map" aria-label="Site map">
         {SITE_MAP.map((item) => <a href={item.href}>{item.label}</a>)}
       </nav>
-      <p>A reviewed public projection from a private knowledge garden.</p>
+      <p>{SITE_SUBTITLE}</p>
       {/* Scope item 10 requires the printed page to carry its canonical URL.
-          The absolute origin is configured by TK-08, so this prints the route
-          and TK-08 upgrades it to the full URL. Print-only: the on-screen
-          footer's provenance block is TK-05's. */}
-      <p class="print-only">Published at {Astro.url.pathname}</p>
+          A printed page has no address bar, so the full absolute URL is what
+          makes it findable again — TK-05a emitted the route and left this for
+          TK-08 to upgrade once `site:` was configured. */}
+      <p class="print-only">Published at {canonicalUrl(Astro.site, Astro.url.pathname)}</p>
     </footer>
     <div id="link-preview" role="tooltip" hidden></div>
     <script>
