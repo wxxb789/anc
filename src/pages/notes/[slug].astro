@@ -17,20 +17,28 @@
  * | 5 optional summary | here |
  * | 6 table of contents | here, via `TableOfContents.astro` |
  * | 7 sanitized article content | here |
- * | 8 outgoing public links | slot — TK-05b |
- * | 9 static backlinks | here (titles only); context snippets are TK-05b |
- * | 10 related-note fallback | slot — TK-05b |
+ * | 8 outgoing public links | here |
+ * | 9 static backlinks | here |
+ * | 10 related-note fallback | here, derived by `relations.ts` |
  * | 11 local-graph island | slot — TK-17 |
- * | 12 previous/next or collection navigation | slot — TK-05b |
+ * | 12 previous/next or collection navigation | here |
  * | 13 footer with provenance and canonical URL | here; the absolute URL is TK-08 |
  *
  * Nothing on this page needs JavaScript. The table of contents is server
  * rendered, the breadcrumbs are static, and the collapse is a `<details>`.
  */
 import Layout from '../../layouts/Layout.astro';
+import LinkedNotes from '../../components/LinkedNotes.astro';
 import TableOfContents from '../../components/TableOfContents.astro';
 import { entries, getEntry } from '../../lib/content.ts';
 import { renderMarkdown } from '../../lib/markdown.ts';
+import {
+  RELATED_DERIVATION,
+  collectionNeighbours,
+  hasTagPeer,
+  notesForSlugs,
+  relatedNotes,
+} from '../../lib/relations.ts';
 import { collectionRoute, noteRoute, routeKey, tagRoute } from '../../lib/routes.ts';
 // Loaded as a URL rather than imported, so the stylesheet becomes its own
 // content-hashed asset and the `<link>` below can be emitted conditionally.
@@ -97,6 +105,60 @@ function displayDate(value: string): string {
 }
 
 const canonicalRoute = noteRoute(entry.slug);
+
+/**
+ * The three relationship surfaces, resolved once.
+ *
+ * `outgoing` and `backlinks` are the artifact's authored edges; `related` is
+ * derived and says so on the page. All three are computed here rather than in
+ * the template so that the markup below reads as the anatomy it is.
+ *
+ * **A known incompleteness, stated rather than hidden.** The exporter derives
+ * `outgoing` from wikilinks only, so the edge set and the body's own links can
+ * disagree in both directions: a plain Markdown link in a body renders a live
+ * `<a>` with no edge behind it, and — the direction the fixture corpus actually
+ * contains, in three entries — an edge exists for a note the body never links
+ * in prose. The corpus invariant sees neither: it proves the two edge sets are
+ * inverses of *each other*, not that either matches the rendered links. Fixing
+ * that is TK-19's exporter contract work, so the heading here says "links to"
+ * rather than "every link on this page", and no gate below claims a
+ * completeness the data cannot support.
+ */
+const outgoing = notesForSlugs(entry.outgoing, getEntry);
+const backlinks = notesForSlugs(entry.backlinks, getEntry);
+const related = relatedNotes(entry, entries);
+
+/**
+ * Why the related list is empty, when it is.
+ *
+ * Two different facts produce the same empty list and a reader deserves to be
+ * told which: a note with no tag-sharer anywhere, and a note whose every
+ * tag-sharer is already rendered in the two sections above. Saying "nothing
+ * shares a tag" in the second case is a claim the artifact contradicts, which
+ * is precisely what an honest empty state must not do.
+ */
+const relatedEmpty = hasTagPeer(entry, entries)
+  ? 'Every note sharing a tag with this one is already listed above.'
+  : 'No other published note shares a tag with this one.';
+
+/**
+ * The pager: its two links and the name it announces, or nothing at all.
+ *
+ * One value rather than a neighbour pair plus a separate label, so the template
+ * has a single condition to branch on. Two conditions is how a pager ends up
+ * rendered as an empty `<nav>` for the one shape neither corpus contains — a
+ * note alone in its collection. `collectionNeighbours` returns no neighbour for
+ * that case and `tests/relations.test.ts` pins it; this keeps the page from
+ * being able to disagree.
+ *
+ * Naming the collection matters because a page carries several `<nav>` elements
+ * and a screen reader lists them by name.
+ */
+const neighbours = collectionNeighbours(entry, entries);
+const pager =
+  collection !== undefined && (neighbours.previous !== undefined || neighbours.next !== undefined)
+    ? { ...neighbours, label: `More in the ${collection} collection` }
+    : undefined;
 ---
 
 <Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt} lang={entry.language}>
@@ -190,32 +252,80 @@ const canonicalRoute = noteRoute(entry.slug);
     <div set:html={html} />
   </article>
 
-  {/* § 9.2.8 — outgoing public links. TK-05b owns this: `entry.outgoing` is the
-      edge set, and the ticket decides the empty state and the sort order. */}
+  {/* § 9.2.8 — outgoing public links: the notes this one links to, by title.
+      Every target is a published entry — `checkCorpus` proves it — so this can
+      never be a dead link or a private title. */}
+  <LinkedNotes
+    region="outgoing"
+    heading="Links to"
+    entries={outgoing}
+    empty="This note links to no other published note."
+  />
 
-  {/* § 9.2.9 — static backlinks. Titles and routes only. The bounded context
-      snippet, the explicit empty state, and the large-backlink treatment are
-      TK-05b's; nothing here pre-decides them. */}
-  {entry.backlinks.length > 0 && (
-    <aside class="backlinks" aria-labelledby="backlinks-title">
-      <h2 id="backlinks-title">Linked from</h2>
-      <ul>
-        {entry.backlinks.map((slug) => {
-          const backlink = getEntry(slug);
-          return backlink && <li><a href={noteRoute(slug)}>{backlink.title}</a></li>;
-        })}
-      </ul>
-    </aside>
-  )}
+  {/* § 9.2.9 — static backlinks. Requirements section 13.1 asks for five
+      things: source title, source route, an optional source heading, a bounded
+      sanitized context excerpt, and a stable sort order. Three are rendered.
+      The heading and the context excerpt are not, because the artifact carries
+      one slug per edge and nothing about *where* in the source that edge is —
+      no heading, no offset, no surrounding text.
 
-  {/* § 9.2.10 — the related-note fallback list. TK-05b owns the derivation rule
-      and must state it on the page or in documentation. */}
+      `ContentEntry.excerpt` is deliberately not substituted for the missing
+      one. It is the source note's own summary — the same string the card, the
+      `<meta name="description">`, and the hover preview all use — and it is
+      derived from the note's opening, not from the passage that links here.
+      Printed under a backlink it would read as the context of the link while
+      being unrelated to it, which is the fabrication the empty states exist to
+      avoid: a wrong answer presented in the shape of a right one is worse than
+      no answer. A real context excerpt needs a per-edge field; that is TK-19's
+      exporter contract work. */}
+  <LinkedNotes
+    region="backlinks"
+    heading="Linked from"
+    entries={backlinks}
+    empty="No published note links here yet."
+  />
+
+  {/* § 9.2.10 — the related-note fallback. Derived, not authored, and the
+      markup says so: the rule is stated below the heading so a reader is never
+      left to guess whether the owner put these here. `relations.ts` documents
+      the rule and the alternatives it was chosen over. */}
+  <LinkedNotes
+    region="related"
+    heading="Related notes"
+    entries={related}
+    empty={relatedEmpty}
+    derivation={RELATED_DERIVATION}
+  />
 
   {/* § 9.2.11 — the local-graph neighborhood. TK-17 owns it, as build-time
       inline SVG with real `<a>` elements plus the equivalent list section 17
       requires. TK-21's interactive layer must not be stubbed in here. */}
 
-  {/* § 9.2.12 — previous/next or collection navigation. TK-05b owns it. */}
+  {/* § 9.2.12 — collection navigation, "where meaningful": only inside a
+      collection that has another note, and in the same order
+      `/collections/<key>/` lists them. A note with no collection, or the only
+      note in one, renders nothing rather than a pager with two dead ends. */}
+  {pager !== undefined && (
+    <nav class="collection-pager" aria-label={pager.label}>
+      {/* The link carries the destination's own title, so it is a meaningful
+          link out of context — "Previous" alone would be four identical link
+          names on a screen reader's link list. The direction word is a
+          separate element rather than part of the link text for the same
+          reason. */}
+      {pager.previous !== undefined && (
+        <a href={noteRoute(pager.previous.slug)} rel="prev">
+          <span class="pager-direction">Previous</span>
+          <span class="pager-title">{pager.previous.title}</span>
+        </a>
+      )}
+      {pager.next !== undefined && (
+        <a class="pager-next" href={noteRoute(pager.next.slug)} rel="next">
+          <span class="pager-direction">Next</span>
+          <span class="pager-title">{pager.next.title}</span>
+        </a>
+      )}
+    </nav>
+  )}
 
   {/* § 9.2.13 — the footer: public provenance and the canonical route. */}
   <footer class="note-footer">

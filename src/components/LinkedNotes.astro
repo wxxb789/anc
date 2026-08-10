@@ -1,0 +1,80 @@
+---
+/**
+ * A named list of notes related to this one, or an honest statement that there
+ * are none.
+ *
+ * Three of requirements section 9.2's regions are the same shape — outgoing
+ * links (item 8), backlinks (item 9), and the related-note fallback (item 10) —
+ * so they are one component rendered three times rather than three components
+ * that would drift apart. What differs is the heading, the empty message, and
+ * whether the derivation needs stating; all three are props.
+ *
+ * Two properties are load-bearing:
+ *
+ * 1. **The empty state is rendered, not omitted.** Ticket scope item 6 requires
+ *    it, and the reason is that a missing section and a section with nothing in
+ *    it are indistinguishable to a reader who cannot know the site has such a
+ *    section at all. An orphan note now says it is an orphan.
+ * 2. **No JavaScript, and no fetch.** Requirements section 13.1 states that
+ *    static backlinks need neither script nor a database round trip, and every
+ *    list here is resolved from the validated artifact during the build. This is
+ *    a capability where the site is already at parity with Quartz; moving it
+ *    into a query would give that away for nothing.
+ *
+ * The section is located by its `aria-labelledby` id rather than by a per-
+ * surface class: the three look identical by design, so a class that existed
+ * only to tell them apart would be an unstyled hook.
+ */
+import type { ContentEntry } from '../lib/content.ts';
+import { noteRoute } from '../lib/routes.ts';
+
+interface Props {
+  /** Identifies the region: the heading takes `<region>-title`, the aside points at it. */
+  region: string;
+  heading: string;
+  entries: readonly ContentEntry[];
+  /** Rendered in place of the list. Never omitted — see above. */
+  empty: string;
+  /** How the list was derived, where the heading does not already say. */
+  derivation?: string;
+}
+
+const { region, heading, entries, empty, derivation } = Astro.props;
+const titleId = `${region}-title`;
+---
+
+<aside class="relations" aria-labelledby={titleId}>
+  <div class="relations-heading">
+    <h2 id={titleId}>{heading}</h2>
+    {/* Text, not a badge: nothing here is carried by colour or shape alone. It
+        is also what makes a long list legible before it is read — a reader
+        meeting "Linked from" sees whether it is two notes or forty. */}
+    {entries.length > 0 && (
+      <span class="relations-count">{entries.length} {entries.length === 1 ? 'note' : 'notes'}</span>
+    )}
+  </div>
+
+  {/* Only alongside a list. The empty message already states the operative
+      half of the rule, and printing both makes the empty case read as two
+      sentences saying one thing. */}
+  {derivation !== undefined && entries.length > 0 && (
+    <p class="relations-derivation">{derivation}</p>
+  )}
+
+  {entries.length === 0 ? (
+    <p class="empty-state">{empty}</p>
+  ) : (
+    /*
+     * A grid, which is the whole of the large-list treatment: one column at
+     * 320 px, two or three once there is width, so forty backlinks are a block
+     * a reader takes in rather than a screen of scrolling. It stays one `<ul>`,
+     * so the count and the reading order are unchanged and a screen reader
+     * announces "list, 40 items" either way.
+     */
+    <ul class="relations-list">
+      {entries.map((entry) => (
+        <li><a href={noteRoute(entry.slug)}>{entry.title}</a></li>
+      ))}
+    </ul>
+  )}
+</aside>

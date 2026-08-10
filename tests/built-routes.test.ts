@@ -21,6 +21,13 @@ import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import {
+  RELATED_DERIVATION,
+  RELATED_LIMIT,
+  collectionNeighbours,
+  hasTagPeer,
+  relatedNotes,
+} from '../src/lib/relations.ts';
+import {
   FIXED_ROUTES,
   REDIRECT_RULES,
   SITE_MAP,
@@ -430,6 +437,24 @@ function notePages(): { slug: string; html: string }[] {
 }
 
 /**
+ * One of the three relationship sections, by the region it labels.
+ *
+ * The three are one component rendered three times and share a class, so the
+ * `aria-labelledby` id is what tells them apart — which is also what a screen
+ * reader uses, so a gate that could not find a section by its accessible name
+ * would be checking something a reader never meets.
+ */
+function relationSection(html: string, name: string): string | undefined {
+  const pattern = new RegExp(`<aside class="relations" aria-labelledby="${name}-title">[\\s\\S]*?</aside>`);
+  return pattern.exec(html)?.[0];
+}
+
+/** The note slugs a fragment of built HTML links to, in document order. */
+function linkedSlugs(html: string): string[] {
+  return [...html.matchAll(/href="\/notes\/([^/"]+)\//g)].map(([, slug]) => slug!);
+}
+
+/**
  * Requirements section 9.2 lists thirteen page elements. Five later tickets own
  * five of them, and this asserts what TK-05a is responsible for rather than the
  * whole list — a gate that asserted the absent regions would either fail or,
@@ -445,6 +470,109 @@ test('every note page carries the anatomy this ticket owns', () => {
       html.includes(`Canonical path: ${noteRoute(slug)}`),
       `${slug}: the footer does not carry the canonical route`,
     );
+  }
+});
+
+/**
+ * The three relationship sections are on every note page, populated or not.
+ *
+ * Scope item 6: an empty state is explicit, never a silently omitted section.
+ * The published corpus is one note with two empty edge arrays and no tags, so
+ * all three are empty there — which is exactly the case a reader would
+ * otherwise be unable to distinguish from a site that has no such sections.
+ */
+test('every note page carries all three relationship sections', () => {
+  for (const { slug, html } of notePages()) {
+    for (const name of ['outgoing', 'backlinks', 'related']) {
+      const section = relationSection(html, name);
+      assert.ok(section, `${slug}: no "${name}" section`);
+      assert.match(section, /<h2 id="[^"]+-title">/, `${slug}: the "${name}" section has no heading`);
+      const populated = /<ul class="relations-list">/.test(section);
+      const empty = /<p class="empty-state">/.test(section);
+      assert.ok(
+        populated !== empty,
+        `${slug}: the "${name}" section renders ${populated ? 'both a list and' : 'neither a list nor'} an empty state`,
+      );
+    }
+  }
+});
+
+/**
+ * The rendered edge lists are the artifact's edge sets exactly.
+ *
+ * Both directions, on every page rather than on one hub: a section that listed
+ * a note the artifact does not name would be a fabricated relationship, and one
+ * that omitted a named note would be a link a reader cannot follow.
+ *
+ * **This gate does not claim the page's links are complete.** The exporter
+ * derives `outgoing` from wikilinks only, so the edge set and the body's own
+ * links can disagree in either direction: a plain Markdown link in a body
+ * produces a live `<a>` with no edge behind it, and — the direction the fixture
+ * corpus actually contains, in three entries — an edge exists for a note the
+ * body never links in prose. What is asserted is that the section matches the
+ * artifact, which is the property this repository can be responsible for. The
+ * exporter contract is TK-19's.
+ */
+test('the outgoing and backlink sections match the artifact edges exactly', () => {
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    for (const [name, expected] of [
+      ['outgoing', entry.outgoing],
+      ['backlinks', entry.backlinks],
+    ] as const) {
+      const section = relationSection(html, name)!;
+      assert.deepEqual(
+        linkedSlugs(section).sort(),
+        [...expected].sort(),
+        `${slug}: the "${name}" section is not the artifact's edge set`,
+      );
+    }
+  }
+});
+
+/**
+ * Every relationship link is a title that resolves, and the two edge lists are
+ * in title order.
+ *
+ * Order is the requirement (section 13.1 asks for a stable sort order) and
+ * titles are the reason it is not the artifact's own order: both edge arrays
+ * are stored sorted by slug, which is a URL segment a reader never sees.
+ *
+ * The related list is deliberately excluded from the ordering half: it is
+ * ranked by relevance, and title order there would discard the ranking. Its own
+ * order is pinned against the derivation in the multi-entry gate below.
+ */
+test('relationship links carry the destination title, and edge lists are in title order', () => {
+  let orderedLists = 0;
+
+  for (const { slug, html } of notePages()) {
+    for (const name of ['outgoing', 'backlinks', 'related']) {
+      const section = relationSection(html, name)!;
+      const rendered = [...section.matchAll(/href="\/notes\/([^/"]+)\/">([^<]*)<\/a>/g)];
+      const titles: string[] = [];
+      for (const [, target, title] of rendered) {
+        const destination = getEntry(target!);
+        assert.ok(destination, `${slug}: the "${name}" section links "${target}", which is not published`);
+        // Compared through `asRendered`, because a title carrying `&` reaches
+        // the page escaped. Ordering is checked on the artifact's own title, so
+        // the escaping cannot move an entry in the sort.
+        assert.equal(title, asRendered(destination.title), `${slug}: "${target}" is not linked by its title`);
+        titles.push(destination.title);
+      }
+      if (name === 'related') continue;
+      assert.deepEqual(titles, [...titles].sort(), `${slug}: the "${name}" section is not in title order`);
+      // An ordering of one is not an ordering, and on a corpus where every list
+      // is empty the loop above asserts nothing at all.
+      if (titles.length > 1) orderedLists += 1;
+    }
+  }
+
+  // Vacuity, scaled to the corpus rather than asserted flat: the published
+  // artifact is one note with two empty edge arrays, where an empty list is the
+  // correct output and there is genuinely nothing to order. Under
+  // `pnpm run build:fixture` there is, and it must have been reached.
+  if (entries.some((entry) => entry.outgoing.length > 1 || entry.backlinks.length > 1)) {
+    assert.ok(orderedLists > 0, 'the corpus has a multi-edge list but none was checked for order');
   }
 });
 
@@ -785,24 +913,176 @@ test('the backlinks aside renders every incoming link, and only those', (context
   assert.ok(hub.backlinks.length > 1, 'no entry has more than one backlink to check');
 
   const html = readFileSync(new URL(`notes/${hub.slug}/index.html`, DIST), 'utf8');
-  const aside = /<aside class="backlinks"[\s\S]*?<\/aside>/.exec(html);
+  const aside = relationSection(html, 'backlinks');
   assert.ok(aside, `${hub.slug}: has ${hub.backlinks.length} backlinks but rendered no aside`);
 
-  const linked = [...aside[0].matchAll(/href="\/notes\/([^/"]+)\//g)].map(([, slug]) => slug!);
+  const linked = linkedSlugs(aside);
   assert.deepEqual(
     [...linked].sort(),
     [...hub.backlinks].sort(),
     'the aside is not the exact backlink set',
   );
 
-  // An orphan must render no aside at all rather than an empty heading.
+  // An orphan renders the section with its empty state rather than omitting it:
+  // a missing section and an empty one are indistinguishable to a reader who
+  // cannot know the site has such a section at all.
   const orphan = entries.find((entry) => entry.backlinks.length === 0);
   assert.ok(orphan, 'the corpus has no orphan to check the empty case against');
-  assert.doesNotMatch(
+  const orphanSection = relationSection(
     readFileSync(new URL(`notes/${orphan.slug}/index.html`, DIST), 'utf8'),
-    /<aside class="backlinks"/,
-    `${orphan.slug}: has no backlinks but rendered the aside anyway`,
+    'backlinks',
   );
+  assert.ok(orphanSection, `${orphan.slug}: rendered no backlinks section at all`);
+  assert.match(orphanSection, /class="empty-state"/, `${orphan.slug}: has no backlinks and no empty state`);
+  assert.doesNotMatch(orphanSection, /href="\/notes\//, `${orphan.slug}: an empty section still links a note`);
+});
+
+/**
+ * The related-note list on the page is the rule `relations.ts` computes.
+ *
+ * `tests/relations.test.ts` pins the rule itself against synthetic corpora.
+ * What this adds is that the page renders that rule's output rather than some
+ * other list — including the ordering, which is where a template that mapped
+ * over `entries` instead of over the derivation would look identical until read
+ * carefully.
+ */
+test('the related list is the derivation, in the derivation s order', (context) => {
+  requireMultiEntry(context);
+  let withSuggestions = 0;
+
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const section = relationSection(html, 'related')!;
+    const rendered = linkedSlugs(section);
+    const expected = relatedNotes(entry, entries).map((note) => note.slug);
+    assert.deepEqual(rendered, expected, `${entry.slug}: the related list is not the derivation`);
+    assert.ok(rendered.length <= RELATED_LIMIT, `${entry.slug}: the related list is unbounded`);
+
+    // The rule's own exclusions, checked against what shipped rather than
+    // against the function that produced it.
+    const linked = new Set([entry.slug, ...entry.outgoing, ...entry.backlinks]);
+    for (const suggested of rendered) {
+      assert.ok(!linked.has(suggested), `${entry.slug}: suggests "${suggested}", which is already linked`);
+    }
+    if (rendered.length > 0) withSuggestions += 1;
+
+    // The derived list states its rule where it has one to state, and states
+    // the module's rule rather than some other sentence. The two edge lists
+    // must not: an authored edge needs no explanation, and printing one would
+    // suggest those were derived too.
+    if (rendered.length > 0) {
+      assert.ok(
+        section.includes(asRendered(RELATED_DERIVATION)),
+        `${entry.slug}: the related list does not state the derivation rule`,
+      );
+    }
+    for (const other of ['outgoing', 'backlinks']) {
+      assert.doesNotMatch(
+        relationSection(html, other)!,
+        /class="relations-derivation"/,
+        `${entry.slug}: the "${other}" section claims a derivation, but its edges are authored`,
+      );
+    }
+  }
+
+  assert.ok(withSuggestions > 1, 'no note rendered a related list, so this gate checked nothing');
+  // And the empty case must be reachable, or "degrades honestly" is untested.
+  const untagged = entries.find((entry) => (entry.tags?.length ?? 0) === 0);
+  assert.ok(untagged, 'the corpus has no untagged note to check the empty related state against');
+  assert.match(
+    relationSection(readFileSync(new URL(`notes/${untagged.slug}/index.html`, DIST), 'utf8'), 'related')!,
+    /class="empty-state"/,
+    `${untagged.slug}: has no tags but rendered related suggestions`,
+  );
+});
+
+/**
+ * The empty related list says which of the two reasons it is empty.
+ *
+ * There are two, and they are different facts: a note with no tag-sharer
+ * anywhere, and a note whose every tag-sharer is already rendered in the two
+ * sections above. Telling a reader "nothing shares a tag" in the second case is
+ * a claim the artifact contradicts, and the exclusion rule makes it reachable.
+ *
+ * Neither corpus reaches the second case today — every fixture note either has
+ * a suggestion or has no tag at all — so this is *asserted from the model*
+ * rather than by finding a note in each state. The first branch is genuinely
+ * covered, which is what makes it a gate: swapping the two strings, or reading
+ * the wrong field, fails here. The second is pinned so that a future corpus
+ * reaching it cannot ship the wrong sentence unnoticed.
+ */
+test('the empty related state names the right reason', () => {
+  const REASONS = {
+    linked: 'Every note sharing a tag with this one is already listed above.',
+    none: 'No other published note shares a tag with this one.',
+  } as const;
+  assert.notEqual(REASONS.linked, REASONS.none, 'the two reasons are the same sentence');
+
+  let checkedEmpty = 0;
+  for (const { slug, html } of notePages()) {
+    if (relatedNotes(getEntry(slug)!, entries).length > 0) continue;
+    const section = relationSection(html, 'related')!;
+    const expected = hasTagPeer(getEntry(slug)!, entries) ? REASONS.linked : REASONS.none;
+    assert.ok(
+      section.includes(expected),
+      `${slug}: the empty related state does not give the reason the model computes`,
+    );
+    assert.ok(
+      !section.includes(hasTagPeer(getEntry(slug)!, entries) ? REASONS.none : REASONS.linked),
+      `${slug}: the empty related state gives both reasons at once`,
+    );
+    checkedEmpty += 1;
+  }
+  assert.ok(checkedEmpty > 0, 'no note rendered an empty related state, so no reason was checked');
+});
+
+/**
+ * The collection pager exists exactly where a sequence does, and walks it in
+ * the order the collection index lists.
+ *
+ * "Where meaningful" is the requirement, so both directions matter: a pager on
+ * a note with no collection would be chrome pointing nowhere, and a missing one
+ * inside a populated collection would strand the reader.
+ */
+test('the collection pager appears exactly where there is a sequence', (context) => {
+  requireMultiEntry(context);
+  let withPager = 0;
+  let withoutPager = 0;
+
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const pager = /<nav class="collection-pager"[\s\S]*?<\/nav>/.exec(html)?.[0];
+    const { previous, next } = collectionNeighbours(entry, entries);
+    const expected = [previous, next].filter((note) => note !== undefined);
+
+    if (expected.length === 0) {
+      assert.equal(pager, undefined, `${entry.slug}: has no collection sequence but rendered a pager`);
+      withoutPager += 1;
+      continue;
+    }
+
+    assert.ok(pager, `${entry.slug}: is inside a collection sequence but rendered no pager`);
+    assert.match(pager, /<a\b/, `${entry.slug}: rendered an empty pager, which is a landmark pointing nowhere`);
+    assert.deepEqual(
+      linkedSlugs(pager),
+      expected.map((note) => note.slug),
+      `${entry.slug}: the pager does not point at its collection neighbours, in order`,
+    );
+    // The link carries the destination's title, so it is meaningful out of
+    // context — four identical "Previous" links is what a screen reader's link
+    // list would otherwise show.
+    for (const note of expected) {
+      assert.ok(
+        pager.includes(`>${asRendered(note.title)}<`),
+        `${entry.slug}: the pager omits the title of "${note.slug}"`,
+      );
+    }
+    assert.match(pager, /aria-label="[^"]+"/, `${entry.slug}: the pager nav has no accessible name`);
+    withPager += 1;
+  }
+
+  assert.ok(withPager > 1, 'no note rendered a pager, so this gate checked nothing');
+  assert.ok(withoutPager > 0, 'every note rendered a pager, so the "where meaningful" case is untested');
 });
 
 test('every tag and collection page lists exactly its own notes', (context) => {

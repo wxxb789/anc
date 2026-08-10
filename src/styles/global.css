@@ -329,8 +329,11 @@ main:focus:not(:focus-visible) {
   border-bottom: 1px solid var(--color-line);
 }
 
-/* Text, not a badge: the count must not be the only non-textual signal. */
-.facet-count {
+/* Text, not a badge. Same treatment as the facet count, which is the same
+   information in the same relationship to a heading — one rule rather than two
+   that would drift. */
+.facet-count,
+.relations-count {
   color: var(--color-muted);
   font-size: var(--text-sm);
 }
@@ -853,16 +856,143 @@ main:focus:not(:focus-visible) {
   word-break: break-all;
 }
 
-.backlinks {
+/* ------------------------------------------------ relationship surfaces -- */
+
+/*
+ * Requirements section 9.2's items 8, 9, 10, and 12: what this note links to,
+ * what links to it, what it is near, and where it sits in its collection.
+ *
+ * The three lists are one component rendered three times and share one rule
+ * set. They are visually identical on purpose: a reader distinguishes them by
+ * the heading, which is text, rather than by a colour or a border treatment
+ * that would encode the difference in a way section 17 forbids.
+ */
+
+.relations,
+.collection-pager {
   max-width: var(--measure);
-  margin: var(--space-16) auto 0;
+  margin-inline: auto;
+}
+
+.relations {
+  margin-top: var(--space-12);
   padding-top: var(--space-6);
   border-top: 1px solid var(--color-line);
 }
 
-.backlinks h2 {
-  margin-top: 0;
+.relations-heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.relations-heading h2 {
+  margin: 0;
   font-size: var(--text-lg);
+}
+
+/* Text, not a badge: nothing here is carried by colour or shape alone. Styled
+   with `.facet-count` in the facets section — the same information in the same
+   relationship to a heading. */
+
+/*
+ * The derived list states its rule. Only the related-note section carries one:
+ * "Links to" and "Linked from" are authored edges and need no explanation,
+ * while a list nobody wrote does — otherwise a reader cannot tell a suggestion
+ * from an editorial choice.
+ */
+.relations-derivation {
+  margin: var(--space-2) 0 0;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+/*
+ * The large-list treatment, and the whole of it.
+ *
+ * `auto-fit` with a `min()` floor is one column at 320 px and as many as fit
+ * beyond it, so a note with forty backlinks is a block a reader takes in rather
+ * than a screen of scrolling — and it needs no truncation, no "show more"
+ * control, and therefore no JavaScript. The `min(…, 100%)` floor is what keeps
+ * the track from pushing the page past a narrow viewport; a fixed floor is the
+ * usual cause of exactly that.
+ *
+ * It stays one `<ul>` in document order, so the element still carries the count
+ * and the reading order: multi-column is presentation, and a screen reader
+ * announces "list, 40 items" either way.
+ */
+.relations-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: var(--space-1) var(--space-6);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.relations-list li {
+  min-width: 0;
+}
+
+/*
+ * The collection pager: previous and next within one collection.
+ *
+ * Two links in a row that wraps to two rows at 320 px, and `margin-left: auto`
+ * on the next link so a note with only a next neighbour keeps it on the right
+ * where a reader expects it, with no placeholder standing in for the absent
+ * one.
+ */
+.collection-pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-12);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-line);
+}
+
+.collection-pager a {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  text-decoration: none;
+}
+
+.collection-pager a:hover .pager-title,
+.collection-pager a:focus-visible .pager-title {
+  text-decoration: underline;
+}
+
+/*
+ * `.pager-next` is the only positional class the pager needs: `margin-left:
+ * auto` is what keeps a lone next link on the right, where a reader expects it,
+ * with no placeholder standing in for the absent previous one. There is no
+ * `.pager-previous` — the previous link is the flex row's first item already,
+ * and a class carrying no declaration is a hook nobody maintains.
+ */
+.pager-next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.pager-direction {
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pager-title {
+  color: var(--color-link);
+  font-size: var(--text-sm);
 }
 
 /* --------------------------------------------------------- enhancements -- */
@@ -988,6 +1118,10 @@ main:focus:not(:focus-visible) {
   .skip-link,
   .breadcrumbs,
   .toc,
+  /* Navigation into the site, like the breadcrumbs above it: on paper "Next"
+     points at nothing. The relationship lists stay — those are information, and
+     the rule below prints each one's route. */
+  .collection-pager,
   /* The layout's `.print-only` paragraph already prints this page's route.
      Printing the on-screen provenance line too would put the same path on the
      page twice, in two different wordings. TK-08 upgrades both to the absolute
@@ -1007,7 +1141,7 @@ main:focus:not(:focus-visible) {
   .prose,
   .note-header,
   .note-footer,
-  .backlinks {
+  .relations {
     max-width: none;
   }
 
@@ -1019,7 +1153,7 @@ main:focus:not(:focus-visible) {
      configured by TK-08. Swap `attr(href)` for the canonical URL there. */
   .prose a[href]::after,
   .note-header a[href]::after,
-  .backlinks a[href]::after {
+  .relations a[href]::after {
     content: ' (' attr(href) ')';
     font-size: 0.85em;
     word-break: break-all;

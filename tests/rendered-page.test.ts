@@ -42,6 +42,9 @@ import { afterAll, beforeAll, test, type TestContext } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Browser, BrowserContext, ConsoleMessage, Page } from 'playwright';
 
+import { entries } from '../src/lib/content.ts';
+import { collectionNeighbours } from '../src/lib/relations.ts';
+
 const ROOT = new URL('../', import.meta.url);
 const DIST = fileURLToPath(new URL('dist/', ROOT));
 
@@ -583,3 +586,170 @@ test('JavaScript-only controls are offered when scripting is available', async (
     await browserContext.close();
   }
 }, 120_000);
+
+/**
+ * The relationship surfaces are readable and followable with scripting off.
+ *
+ * These are the sections requirements section 5.2 names as core reading
+ * behaviour and section 13.1 states explicitly need no script and no database
+ * fetch. The gate measures the three properties a reader actually depends on:
+ * the section is visible, every link in it is visible and has a real hit area,
+ * and the large-list treatment is a layout rather than a truncation — a list
+ * that renders only its first few entries and hides the rest behind a control
+ * would pass a markup gate and strand a no-script reader.
+ *
+ * Checked at both widths because the multi-column grid only engages at the
+ * wider one, and a track floor that pushed the page past a narrow viewport is
+ * exactly what the 320 px overflow gate above would report as somebody else's
+ * problem.
+ */
+test('the relationship sections are readable and complete with scripting disabled', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let sectionsChecked = 0;
+    let linksChecked = 0;
+    let pagersChecked = 0;
+
+    for (const width of CASCADE_WIDTHS_PX) {
+      await page.setViewportSize({ width, height: VIEWPORT_HEIGHT_PX });
+      for (const route of routes.filter((candidate) => candidate.startsWith('/notes/'))) {
+        await visit(page, route);
+        const measured = await page.evaluate(() => {
+          const box = (element: Element) => element.getBoundingClientRect();
+          const sections = [...document.querySelectorAll<HTMLElement>('aside.relations')].map(
+            (section) => {
+              const links = [...section.querySelectorAll<HTMLAnchorElement>('a[href^="/notes/"]')];
+              const items = [...section.querySelectorAll('li')];
+              return {
+                name: section.getAttribute('aria-labelledby') ?? '(unlabelled)',
+                display: getComputedStyle(section).display,
+                height: box(section).height,
+                // A heading a reader cannot see cannot tell them what the list is.
+                headingVisible: (() => {
+                  const heading = section.querySelector('h2');
+                  return heading !== null && box(heading).height > 0;
+                })(),
+                itemCount: items.length,
+                linkCount: links.length,
+                visibleLinks: links.filter((link) => {
+                  const rect = box(link);
+                  // Rendered at all, in both axes — not a target-size check.
+                  // WCAG 2.2's 24 px minimum carries a spacing exception this
+                  // measurement cannot evaluate, and no gate in this repository
+                  // checks it: the axe audit is run out of band from
+                  // `.tmp/axe-audit.mjs` against an `axe.min.js` on disk, and
+                  // making it a release gate is TK-09's. What is checked here
+                  // is the failure this gate exists for — a link that renders
+                  // at zero size because a list was truncated or clipped.
+                  return rect.height > 0 && rect.width > 0;
+                }).length,
+                // Every link must sit inside the section's own box: an item
+                // clipped out of a collapsed container is invisible while still
+                // reporting a height.
+                containedLinks: links.filter((link) => {
+                  const rect = box(link);
+                  const outer = box(section);
+                  return rect.top >= outer.top - 1 && rect.bottom <= outer.bottom + 1;
+                }).length,
+                emptyStateVisible: (() => {
+                  const empty = section.querySelector('.empty-state');
+                  return empty !== null && box(empty).height > 0;
+                })(),
+              };
+            },
+          );
+
+          const pagerElement = document.querySelector<HTMLElement>('nav.collection-pager');
+          const pager =
+            pagerElement === null
+              ? undefined
+              : {
+                  display: getComputedStyle(pagerElement).display,
+                  links: [...pagerElement.querySelectorAll<HTMLAnchorElement>('a')].map((link) => ({
+                    href: link.getAttribute('href') ?? '',
+                    height: box(link).height,
+                    // The accessible name a screen reader would announce, which
+                    // must not be the bare direction word.
+                    text: (link.textContent ?? '').replaceAll(/\s+/g, ' ').trim(),
+                  })),
+                };
+
+          return { sections, pager };
+        });
+
+        assert.equal(
+          measured.sections.length,
+          3,
+          `${route} at ${width}px: expected three relationship sections, saw ${measured.sections.length}`,
+        );
+
+        for (const section of measured.sections) {
+          const where = `${route} at ${width}px, ${section.name}`;
+          assert.notEqual(section.display, 'none', `${where}: the section is hidden`);
+          assert.ok(section.height > 0, `${where}: the section renders at zero height`);
+          assert.ok(section.headingVisible, `${where}: the heading is not visible`);
+
+          if (section.itemCount === 0) {
+            assert.ok(section.emptyStateVisible, `${where}: empty, and the empty state is not visible`);
+          } else {
+            assert.equal(
+              section.linkCount,
+              section.itemCount,
+              `${where}: ${section.itemCount - section.linkCount} list items carry no link`,
+            );
+            assert.equal(
+              section.visibleLinks,
+              section.linkCount,
+              `${where}: ${section.linkCount - section.visibleLinks} links render at zero size`,
+            );
+            assert.equal(
+              section.containedLinks,
+              section.linkCount,
+              `${where}: ${section.linkCount - section.containedLinks} links fall outside the section box, ` +
+                'so the list is being clipped rather than laid out',
+            );
+            linksChecked += section.linkCount;
+          }
+          sectionsChecked += 1;
+        }
+
+        if (measured.pager !== undefined) {
+          assert.notEqual(measured.pager.display, 'none', `${route} at ${width}px: the pager is hidden`);
+          assert.ok(measured.pager.links.length > 0, `${route} at ${width}px: the pager has no links`);
+          for (const link of measured.pager.links) {
+            assert.ok(link.height > 0, `${route} at ${width}px: a pager link renders at zero height`);
+            assert.match(link.href, /^\/notes\//, `${route} at ${width}px: a pager link leaves the note routes`);
+            assert.ok(
+              !/^(Previous|Next)$/.test(link.text),
+              `${route} at ${width}px: a pager link reads "${link.text}" and nothing else, ` +
+                'so it is meaningless out of context',
+            );
+          }
+          pagersChecked += 1;
+        }
+      }
+    }
+
+    assert.ok(sectionsChecked > 0, 'no relationship section was measured');
+    // Vacuity, scaled to the corpus rather than asserted flat. The published
+    // artifact is one note with two empty edge arrays and no tags, so every
+    // section there is legitimately empty and the empty state is what got
+    // measured; under `pnpm run build:fixture` populated lists and pagers both
+    // exist and must have been reached. Asserting a flat "some link was seen"
+    // would fail on a corpus where nothing is wrong.
+    if (entries.some((entry) => entry.outgoing.length + entry.backlinks.length > 0)) {
+      assert.ok(linksChecked > 0, 'the corpus has edges but no relationship link was measured');
+    }
+    if (entries.some((entry) => collectionNeighbours(entry, entries).next !== undefined)) {
+      assert.ok(pagersChecked > 0, 'the corpus has a collection sequence but no pager was measured');
+    }
+  } finally {
+    await browserContext.close();
+  }
+}, 180_000);
