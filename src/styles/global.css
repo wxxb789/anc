@@ -997,10 +997,31 @@ main:focus:not(:focus-visible) {
 
 /* --------------------------------------------------------- enhancements -- */
 
+/*
+ * The link preview.
+ *
+ * `left`/`top` are set by `link-preview.ts` from `placePreview`, which clamps to
+ * all four viewport edges. Two of this rule's declarations are what let that
+ * arithmetic hold rather than merely try:
+ *
+ * - The width is bounded by `calc(100% - 1rem)`, twice the 8 px margin the
+ *   script clamps to. A percentage on a fixed-position element resolves against
+ *   the initial containing block, which — unlike `100vw` — excludes a classic
+ *   scrollbar, so the CSS and the script measure the same box. The previous
+ *   `100vw` spelling was a scrollbar wider than the space the script clamps to.
+ * - The excerpt is bounded to four lines, so the panel's height cannot grow with
+ *   the payload. Requirements section 8.1 asks for a *bounded* excerpt, and an
+ *   unbounded one is also the case where the vertical clamp has to give up an
+ *   edge. Nothing is lost: the full excerpt is on the note's own page and on its
+ *   card, and the preview is never the only way to reach it.
+ *
+ * No transition and no animation: a reduced-motion reader has nothing here to
+ * opt out of.
+ */
 #link-preview {
   position: fixed;
   z-index: 50;
-  width: min(22rem, calc(100vw - var(--space-4)));
+  width: min(22rem, calc(100% - 1rem));
   padding: var(--space-4);
   border: 1px solid var(--color-line-strong);
   border-radius: var(--radius-md);
@@ -1009,9 +1030,26 @@ main:focus:not(:focus-visible) {
 }
 
 #link-preview p {
+  display: -webkit-box;
+  overflow: hidden;
   margin: var(--space-2) 0 0;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
   color: var(--color-muted);
   font-size: var(--text-sm);
+}
+
+/* The `#heading` a link lands on, shown verbatim because that is what the
+   address bar will show; it is a route fragment, so it is set in the mono face
+   the rest of the site uses for literal strings. */
+.preview-fragment {
+  display: block;
+  margin-top: var(--space-1);
+  overflow-wrap: anywhere;
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 
 /* --------------------------------------------------------------- search -- */

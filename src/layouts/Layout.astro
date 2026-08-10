@@ -115,6 +115,25 @@ const description = describe(Astro.props.description);
     </dialog>
     <main id="main" tabindex="-1">
       <slot />
+      {/* The link preview panel (TK-07). Empty until a preview opens, and
+          `position: fixed`, so it contributes no layout wherever it sits — but
+          it must sit inside a landmark. axe-core's `region` rule reports every
+          element of page content that is in none, and an open panel parented to
+          `<body>` was exactly that: it was reported on every route, in both
+          themes, at both widths, and moving it here is what cleared it.
+
+          That audit is run out of band and is not reproducible from this
+          repository — axe-core is in neither `dependencies` nor
+          `devDependencies`, so the check needs an `axe.min.js` fetched to a
+          scratch path. TK-09 owns the question of whether it becomes a release
+          gate. Recorded this way deliberately: the rule the panel was breaking
+          is nameable and checkable by anyone who runs axe, which is worth more
+          than a violation count nothing here can recompute.
+
+          After the slot, so the document order a screen reader walks puts a
+          transient description of a link after the content that contains the
+          link, rather than before the article it describes. */}
+      <div id="link-preview" role="tooltip" hidden></div>
     </main>
     <footer class="site-footer">
       {/* Every fixed route is linked from here, on every page, so no route is an
@@ -131,7 +150,6 @@ const description = describe(Astro.props.description);
           TK-08 to upgrade once `site:` was configured. */}
       <p class="print-only">Published at {canonicalUrl(Astro.site, Astro.url.pathname)}</p>
     </footer>
-    <div id="link-preview" role="tooltip" hidden></div>
     <script>
       import '../scripts/preferences.ts';
       import '../scripts/search-dialog.ts';
