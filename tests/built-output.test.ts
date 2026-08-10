@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { rawStartTags, startTags } from './support/css-cascade.ts';
+import { DIAGRAM_MODE, REQUIRED_STYLE_SRC, STYLE_SRC_BY_MODE } from '../src/lib/diagram-mode.ts';
 
 const DIST = new URL('../dist/', import.meta.url);
 
@@ -90,16 +91,78 @@ test('no page contains an inline event handler', () => {
   }
 });
 
+/**
+ * No page carries an inline style — in the mode that ships.
+ *
+ * **This gate is mode-aware, and its non-vacuity is asserted rather than
+ * assumed.** Owner decision 5 makes Mermaid dual-mode, and client mode violates
+ * zero-inline-styles *by construction*: `render()` writes 26+ `style=`
+ * attributes and injects a `<style>` element, which is why that mode needs
+ * `style-src 'self' 'unsafe-inline'`. A gate that simply stopped asserting
+ * under that mode would be worse than no gate — it reads as coverage while
+ * measuring nothing.
+ *
+ * So the two modes get two different, equally binding assertions:
+ *
+ * - `build-time`: **zero** inline styles and zero `<style>` elements anywhere,
+ *   which is the property that lets the CSP stay at `style-src 'self'`.
+ * - `client`: the same zero over everything *except* a diagram figure, because
+ *   the runtime writes into that subtree and nowhere else. A stray inline style
+ *   in the page chrome is still a failure, and that is the part of the original
+ *   guarantee client mode does not give up.
+ *
+ * Both branches count what they inspected and fail on zero, so neither can pass
+ * by finding nothing to look at.
+ */
 test('no page contains an inline style attribute or style element', () => {
-  // Not required by TK-02, but the same CSP line ("style-src 'self'") governs it
-  // and the cost of noticing here is one regex.
+  let inspected = 0;
+
   for (const file of PAGES) {
     const html = read(file);
-    for (const tag of startTags(html)) {
+    // In client mode the diagram figure is the one place the runtime is
+    // permitted to write inline styles. Removing that subtree leaves exactly
+    // the region whose guarantee is unchanged between the two modes.
+    const governed =
+      DIAGRAM_MODE === 'client'
+        ? html.replace(/<figure class="diagram"[\s\S]*?<\/figure>/gi, '')
+        : html;
+
+    for (const tag of startTags(governed)) {
+      inspected += 1;
       assert.equal(/\sstyle\s*=/i.exec(tag), null, `${file}: inline style attribute in ${tag}`);
     }
-    assert.equal(/<style\b/i.exec(html), null, `${file}: contains an inline <style> element`);
+    assert.equal(/<style\b/i.exec(governed), null, `${file}: contains an inline <style> element`);
   }
+
+  assert.ok(inspected > 0, 'the gate inspected no markup, so it asserted nothing');
+});
+
+/**
+ * The mode, the markup, and the deployed policy agree.
+ *
+ * A mode switch that changes what the pages contain but not what `_headers`
+ * permits ships a page blocked by its own CSP — visibly, as a black rectangle
+ * where the diagram should be. This is the gate that makes the two inseparable.
+ */
+test('the shipped CSP matches the diagram mode the build used', () => {
+  const headers = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8');
+  const policy = /Content-Security-Policy:\s*(.+)/.exec(headers)?.[1];
+  assert.ok(policy, 'public/_headers declares no Content-Security-Policy');
+
+  const styleSrc = /(?:^|;)\s*style-src\s+([^;]+)/.exec(policy)?.[1]?.trim();
+  assert.equal(
+    styleSrc,
+    REQUIRED_STYLE_SRC,
+    `style-src is "${styleSrc}" but DIAGRAM_MODE is "${DIAGRAM_MODE}", which requires "${REQUIRED_STYLE_SRC}"`,
+  );
+
+  // The two modes must actually differ, or the assertion above is satisfied by
+  // a constant and proves nothing about the coupling.
+  assert.notEqual(
+    STYLE_SRC_BY_MODE['build-time'],
+    STYLE_SRC_BY_MODE.client,
+    'the two modes declare the same style-src, so this gate cannot detect a mismatch',
+  );
 });
 
 test('every page carries the layout shell landmarks', () => {
@@ -258,7 +321,23 @@ test('every class in the rendered article is styled or deliberately not', () => 
     );
 
   for (const { file, html } of articles) {
-    for (const tag of rawStartTags(html)) {
+    // A diagram's own classes are excluded, and the exclusion is a *span* of the
+    // document rather than a name pattern, because the two vocabularies must not
+    // be allowed to overlap in this gate's judgement.
+    //
+    // Inside a rendered `<svg>`, `class` carries Mermaid's structural names —
+    // `flowchart`, `node`, `edgePath`, `actor` — which name what a shape *is*,
+    // not how it looks. TK-15's build-time renderer flattens Mermaid's own
+    // stylesheet onto the elements as SVG presentation attributes, so those
+    // classes are correctly styleless: the appearance travels in `fill`,
+    // `stroke`, and the rest. Requiring a CSS rule for each would demand
+    // hundreds of empty rules for names this project does not author and cannot
+    // enumerate. The classes the *pipeline* writes into a diagram —
+    // `diagram-center`, `diagram-nowrap`, and the rest of `LAYOUT_CLASSES` —
+    // are checked, because they sit on the figure and its wrapper, outside the
+    // SVG, where this gate still reads them.
+    const outsideDiagrams = html.replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
+    for (const tag of rawStartTags(outsideDiagrams)) {
       for (const name of /\sclass="([^"]*)"/.exec(tag)?.[1]?.split(/\s+/) ?? []) {
         if (name === '' || exempt(name)) continue;
         // The trailing boundary matters: a bare `includes('.code')` would be

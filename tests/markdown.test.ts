@@ -4,6 +4,7 @@ import { test } from 'vitest';
 
 import Slugger from 'github-slugger';
 import { TOC_MIN_HEADINGS, defaultRouteForSlug, renderMarkdown, type TocEntry } from '../src/lib/markdown.ts';
+import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 
 const FIXTURES = new URL('./fixtures/markdown/', import.meta.url);
 
@@ -129,9 +130,10 @@ test('highlights code fences at build time with class-only markup', () => {
 });
 
 test('a code block is a bare figure with no dead controls', () => {
-  // Three fences: js, mermaid, and the unlabelled one. Math is not a code block.
+  // Two code fences: js and the unlabelled one. Math and Mermaid are rendered
+  // rather than highlighted, so neither is a `code-block` figure since TK-15.
   const figures = kitchenSink.html.match(/<figure class="code-block"[^>]*>/g) ?? [];
-  assert.equal(figures.length, 3, `expected one figure per fence, got ${figures.length}`);
+  assert.equal(figures.length, 2, `expected one figure per fence, got ${figures.length}`);
   // TK-03 shipped a `hidden` copy button with no handler and no CSS, which
   // welded the word `Copy` onto every indexed code block. TK-05a may bring one
   // back in the same commit as its handler and its styling.
@@ -193,23 +195,47 @@ test('inline marks and external links survive', () => {
   assert.match(kitchenSink.html, /<a href="https:\/\/example\.com\/docs\/">public link<\/a>/);
 });
 
-// --- Downgraded constructs (requirements 15.2) --------------------------------
+// --- Rendered constructs (requirements 15.1) ---------------------------------
+//
+// Both of these were downgrades to escaped source until TK-15, recorded under
+// requirements 15.2. Owner decisions 2 and 5 superseded them: math is native
+// MathML from Temml and a diagram is build-time SVG, both at zero client
+// JavaScript. `tests/math-and-diagrams.test.ts` carries the full coverage; what
+// is pinned here is that the *pipeline* produces them, since this file owns the
+// renderer's contract.
 
-test('Mermaid downgrades to escaped plain source, never a runtime renderer', () => {
-  assert.match(
-    kitchenSink.html,
-    /<figure class="code-block" data-code-language="mermaid" data-diagram="mermaid"><pre tabindex="0"><code class="language-mermaid">graph TD; A--&gt;B;<\/code><\/pre>/,
-  );
+test('a Mermaid fence becomes a rendered diagram, never a runtime renderer', () => {
+  assert.match(kitchenSink.html, /<figure class="diagram" data-diagram="mermaid">/);
   assert.equal(kitchenSink.hasMermaid, true);
+  // Neither mode may put a script or anything `style-src 'self'` blocks into
+  // the *markup*. That is the whole property in build-time mode, and still the
+  // property in client mode, where the runtime arrives as an external module
+  // and the diagram source ships escaped inside a `<pre>`.
   assert.doesNotMatch(kitchenSink.html, /<script/i);
+  assert.doesNotMatch(kitchenSink.html, /<style/i);
+  assert.doesNotMatch(kitchenSink.html, /\sstyle="/);
+
+  if (DIAGRAM_MODE === 'build-time') {
+    // The diagram is markup: real SVG, named for assistive technology, present
+    // with JavaScript disabled.
+    assert.match(kitchenSink.html, /<svg\b[^>]*aria-label="Flowchart diagram"/);
+  } else {
+    // The diagram is the source until the runtime replaces it, which is also
+    // what a reader without JavaScript is left with — the deliberate §5.2/§5.3
+    // carve-out that TK-10 records.
+    assert.match(kitchenSink.html, /<pre class="diagram-source" tabindex="0"><code class="language-mermaid">/);
+  }
 });
 
-test('math downgrades to plain source and single dollars stay literal', () => {
-  assert.match(kitchenSink.html, /<pre tabindex="0"><code class="language-math math-display">E = mc\^2<\/code><\/pre>/);
+test('math becomes MathML and single dollars stay literal', () => {
+  assert.match(kitchenSink.html, /<span class="math-display" tabindex="0"><math display="block"/);
+  assert.match(kitchenSink.html, /<mi>m<\/mi>/, 'the expression is marked up, not escaped');
   assert.equal(kitchenSink.hasMath, true);
   assert.match(kitchenSink.html, /\$5 to \$10/, 'currency must not be parsed as inline math');
-  // Math is not a code block: no copy button, no highlighting shell.
+  // Math is not a code block: no copy button, no highlighting shell, and no
+  // `pre` wrapper — which would make it a keyboard stop with nothing to scroll.
   assert.doesNotMatch(kitchenSink.html, /data-code-language="math"/);
+  assert.doesNotMatch(kitchenSink.html, /language-math/);
 });
 
 test('unsupported plugin syntax renders as inert source, not executed', () => {
@@ -539,21 +565,44 @@ test('text that is not an id does not move a heading anchor', async () => {
   assert.equal(fallback.headings[0]?.id, 'section');
 });
 
-test('every preformatted block is reachable by keyboard', async () => {
-  // A `<pre>` scrolls horizontally when a line exceeds the measure, and axe
-  // flags a scrollable region with no keyboard access (`scrollable-region-focusable`,
-  // WCAG 2.1.1) — it was four serious violations on the single published note.
-  // Every `pre` gets it, not only the highlighted fences: math blocks skip the
-  // code plugin entirely, and a raw-HTML one scrolls just the same.
+test('every scrollable block is reachable by keyboard', async () => {
+  // A block that scrolls horizontally when a line exceeds the measure must be
+  // keyboard reachable — axe `scrollable-region-focusable`, WCAG 2.1.1, four
+  // serious violations on the single published note before TK-05a.
+  //
+  // Two shapes qualify and both are checked. Every `pre`, including a raw-HTML
+  // one. And the display-math wrapper, which since TK-15 is a `span` rather
+  // than a `pre`: a long derivation does not wrap, so it scrolls exactly as a
+  // code fence does. Inline math is in the text flow and gets none.
   const rendered = await renderMarkdown(
     '```js\nconst a = 1;\n```\n\n$$\nx\n$$\n\n<pre tabindex="5">raw</pre>\n',
   );
+
   const blocks = rendered.html.match(/<pre[^>]*>/g) ?? [];
-  assert.equal(blocks.length, 3, `expected three pre elements, got ${blocks.length}`);
+  assert.equal(blocks.length, 2, `expected two pre elements, got ${blocks.length}`);
   for (const block of blocks) {
     // Pinned to 0, not merely present: a raw `tabindex="5"` would put the block
     // ahead of the page's own controls in tab order.
     assert.match(block, /^<pre tabindex="0"(?: |>)/, `pre is not keyboard reachable: ${block}`);
+  }
+
+  assert.match(
+    rendered.html,
+    /<span class="math-display" tabindex="0">/,
+    'display math scrolls and must be keyboard reachable',
+  );
+});
+
+test('a raw-HTML span cannot claim a place in the tab order', async () => {
+  // The display-math wrapper is the one `span` granted a `tabindex`, so the
+  // attribute is now reachable from body content. Left ungoverned it is a tab
+  // order hijack: `tabindex="5"` on a decorative span jumps ahead of the skip
+  // link and every control in the header.
+  const rendered = await renderMarkdown(
+    '<span tabindex="5">decoy</span> and <span class="math-display" tabindex="9">fake</span>\n',
+  );
+  for (const tag of rendered.html.match(/<span[^>]*>/g) ?? []) {
+    assert.doesNotMatch(tag, /tabindex="[1-9]/, `span claims a tab order position: ${tag}`);
   }
 });
 

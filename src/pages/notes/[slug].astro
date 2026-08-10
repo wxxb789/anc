@@ -46,6 +46,9 @@ import { canonicalUrl } from '../../lib/site.ts';
 // Importing it would merge it into the layout's sheet and ship it everywhere,
 // which is precisely what owner decision 7 rules out.
 import codeStylesheet from '../../styles/code.css?url';
+import mathStylesheet from '../../styles/math.css?url';
+import diagramStylesheet from '../../styles/diagram.css?url';
+import { DIAGRAM_MODE } from '../../lib/diagram-mode.ts';
 
 export function getStaticPaths() {
   return entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
@@ -62,7 +65,7 @@ const { entry } = Astro.props;
 // drops that one duplicate rather than the page rendering it twice. A body that
 // keeps some *other* `h1` is left alone and fails the "exactly one h1" gate,
 // which is the honest outcome — see `RenderOptions.pageTitle`.
-const { html, toc, hasCode } = await renderMarkdown(entry.markdown, {
+const { html, toc, hasCode, hasMath, hasMermaid } = await renderMarkdown(entry.markdown, {
   pageTitle: entry.title,
   routeForSlug: (slug) => (getEntry(slug) ? noteRoute(slug) : undefined),
 });
@@ -164,14 +167,43 @@ const pager =
 
 <Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt} lang={entry.language}>
   {/*
-    Owner decision 7, the live case. `hasCode` is true only when the body has a
-    code fence, so the `token-*` map reaches only the pages that render one.
-    TK-15 adds the math and Mermaid sheets here behind `hasMath` and
-    `hasMermaid` — one conditional `<link>` each, never a merged sheet: merging
-    all Mermaid diagram-type stylesheets measures 6,354 B gzip against a 972 B
-    median for one type.
+    Owner decision 7, the live case. Each flag is true only when the body
+    contains the construct, so each sheet reaches only the pages that render
+    one. Three conditional `<link>` elements rather than one merged sheet:
+    merging Mermaid's per-diagram-type stylesheets was measured at 6,354 B gzip
+    against a 972 B median for a single type, and the build-time renderer
+    removes the need for either — `diagram.css` is 14 rules because the theming
+    is flattened onto the SVG itself.
+
+    `hasMath` also gates the ~9 KB Temml stylesheet and, through its
+    `unicode-range`, the 9.4 KB `Temml.woff2` — which a browser fetches only for
+    an expression that actually uses `\mathscr`.
   */}
   {hasCode && <link slot="head" rel="stylesheet" href={codeStylesheet} />}
+  {hasMath && <link slot="head" rel="stylesheet" href={mathStylesheet} />}
+  {hasMermaid && <link slot="head" rel="stylesheet" href={diagramStylesheet} />}
+  {/*
+    Client mode only, and only on a page that has a diagram.
+
+    Astro bundles a script tag **eagerly**: the `hasMermaid` condition decides
+    whether the tag is rendered, not whether the module is built. Keeping
+    Mermaid out of `dist/` in build-time mode is therefore done in
+    `astro.config.mjs`, which resolves `src/scripts/diagram.ts` to an empty stub
+    unless client mode is selected. Both halves are needed — this one so a
+    diagram-free page requests nothing, that one so a diagram-free *build*
+    contains nothing. `tests/math-and-diagrams.test.ts` asserts both over
+    `dist/`.
+
+    `DIAGRAM_MODE` is checked here as well, so build-time mode emits no tag at
+    all rather than one pointing at a 20-byte empty chunk. It is not what keeps
+    Mermaid out — the resolver is — but a request for nothing is still a
+    request.
+  */}
+  {hasMermaid && DIAGRAM_MODE === 'client' && (
+    <script>
+      import '../../scripts/diagram.ts';
+    </script>
+  )}
 
   <header class="note-header">
     {/* § 9.2.3 — the trail. Public fields only; never a private folder name. */}

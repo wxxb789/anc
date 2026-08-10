@@ -93,23 +93,63 @@ interface ModularUI {
 
 /** Pagefind's per-language partitioning, as `pagefind-entry.json` declares it. */
 interface PagefindEntry {
-  languages?: Record<string, { hash?: string }>;
+  languages?: Record<string, { hash?: string; page_count?: number }>;
 }
 
 /**
- * Every indexed language except the one this document is written in.
+ * The partition Pagefind will load for this document, by its own rule.
  *
- * Pagefind lowercases the `<html lang>` it matches against, so the comparison is
- * lowercased here too. A document whose language is a *region* of an indexed one
- * — `en-GB` against an `en` index — resolves to that same index, not to another
- * one, so the prefix test runs in both directions: merging an index Pagefind has
- * already loaded would double every result it returns.
+ * Mirrors `findIndex` in `pagefind.js` exactly, and the order is the whole
+ * point: an exact match on the full lowercased tag first, then the base subtag,
+ * then — when neither exists — the partition with the most pages. Getting this
+ * wrong in either direction is a real defect rather than a nicety, because it
+ * decides which partition must *not* be merged.
+ */
+function primaryLanguage(entry: PagefindEntry, documentLanguage: string): string | undefined {
+  const languages = entry.languages ?? {};
+  const own = documentLanguage.toLowerCase();
+  if (own in languages) return own;
+
+  const base = own.split('-')[0]!;
+  if (base in languages) return base;
+
+  // Pagefind's own fallback when the document's language is indexed under
+  // neither form: the largest partition becomes primary.
+  let largest: string | undefined;
+  for (const [language, index] of Object.entries(languages)) {
+    if (largest === undefined || (index.page_count ?? 0) > (languages[largest]?.page_count ?? 0)) {
+      largest = language;
+    }
+  }
+  return largest;
+}
+
+/**
+ * Every indexed partition except the one Pagefind has already loaded.
+ *
+ * Two failures live in the difference between this and the obvious prefix test,
+ * and both were measured against real `pagefind` output:
+ *
+ * - **A sibling region tag is a separate partition.** Pagefind keys partitions on
+ *   the exact lowercased `<html lang>`, so `en` and `en-gb` are two indexes with
+ *   two hashes. A bidirectional prefix test excludes each from the other, and
+ *   neither is ever merged — so on a corpus carrying both, half the notes stay
+ *   unfindable, which is the exact defect this whole function exists to close.
+ *   The base-subtag rule is only Pagefind's *fallback*, applied when no exact
+ *   match exists; treating it as an equivalence is what hides the sibling.
+ * - **A document whose language is indexed under no form merges the index onto
+ *   itself.** `<html lang="fr">` against an `en`-only index makes `en` primary by
+ *   Pagefind's largest-partition fallback — and a prefix test would also report
+ *   `en` as "other", so every result appeared twice, once per URL form. The
+ *   artifact's `language` is a free-form tag, so one note in a third language is
+ *   all it takes.
+ *
+ * Deriving the exclusion from `primaryLanguage` rather than from string shape
+ * makes both cases fall out of the same rule Pagefind is using.
  */
 export function otherLanguages(entry: PagefindEntry, documentLanguage: string): string[] {
-  const own = documentLanguage.toLowerCase();
-  return Object.keys(entry.languages ?? {}).filter(
-    (language) => !(language === own || own.startsWith(`${language}-`) || language.startsWith(`${own}-`)),
-  );
+  const primary = primaryLanguage(entry, documentLanguage);
+  return Object.keys(entry.languages ?? {}).filter((language) => language !== primary);
 }
 
 /**
@@ -291,6 +331,8 @@ if (trigger != null && dialog != null) {
   const status = document.querySelector<HTMLElement>('#search-status');
   const results = document.querySelector<HTMLElement>('#search-results');
   const input = document.querySelector<HTMLInputElement>('#search-input');
+  /** The one control inside the dialog whose Enter must stay the browser's. */
+  const closeButton = dialog.querySelector<HTMLButtonElement>('.search-close button');
 
   /**
    * The states the ticket requires be told apart.
@@ -458,9 +500,18 @@ if (trigger != null && dialog != null) {
       // for the life of the page. Validating first turns that hang into the
       // failure state, which is a sentence the reader can act on.
       //
+      // Bounded for the same reason, one layer down. Pagefind's `getPtr` spins
+      // `while (raw_ptr === null)` and its own fetches carry no abort signal, so
+      // a chunk that is *accepted and never answered* — a stalled connection
+      // rather than a 503 — leaves this promise permanently pending. Measured:
+      // holding the WebAssembly chunk open left the status on "Loading the
+      // search index…" past 45 s with a dead retry, because `loading` never
+      // settles and `ensureMounted` awaits it forever. The timeout is what makes
+      // that a `failed` state the reader can retry out of.
+      //
       // The result is also what decides which filter pills exist, so proving the
       // index works asks nothing of Pagefind twice.
-      let filters = await runtime.filters();
+      let filters = await withTimeout(runtime.filters(), MERGE_TIMEOUT_MS);
 
       // Merged onto the runtime this file loaded, rather than passed to the UI
       // as a constructor option: the UI would import a *second* copy of
@@ -588,15 +639,18 @@ if (trigger != null && dialog != null) {
       moveSelection(-1);
       return;
     }
-    if (event.key === 'Enter' && state === 'failed' && event.target === input) {
+    if (event.key === 'Enter' && state === 'failed' && event.target !== closeButton) {
       // The failure message tells the reader Enter retries. This is that.
       //
-      // Scoped to the search field, not the whole dialog. Without that, the
-      // `preventDefault` below also cancelled the Close button's implicit
-      // `<form method="dialog">` submission — and in the failed state that
-      // button is the only other focusable element, so a keyboard reader who
-      // tabbed to Close and pressed Enter found it inert at exactly the moment
-      // the dialog was telling them to press Enter.
+      // Scoped by exclusion rather than by naming the field, and the difference
+      // is a real one in both directions. Gating on `event.target === input`
+      // made the retry unreachable whenever focus sat on the dialog itself —
+      // which is where it lands after a click on any non-focusable part of it,
+      // with the message still promising that Enter retries. Not scoping at all
+      // cancelled the Close button's implicit `<form method="dialog">`
+      // submission through the `preventDefault` below, leaving the only other
+      // focusable control in the failed state inert. Excluding exactly that one
+      // control leaves Enter meaning "retry" everywhere else in the dialog.
       event.preventDefault();
       void ensureMounted();
       return;

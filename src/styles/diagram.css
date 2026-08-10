@@ -1,0 +1,149 @@
+/*
+ * Diagrams.
+ *
+ * Loaded only on pages whose body contains one, via the conditional `<link>` in
+ * `src/pages/notes/[slug].astro` gated on `RenderedNote.hasMermaid` — owner
+ * decision 7. A page with no diagram pays nothing, asserted in both directions
+ * by `tests/math-and-diagrams.test.ts`.
+ *
+ * This is the *whole* diagram stylesheet, in both modes, and it is small on
+ * purpose. `src/lib/mermaid-render.ts` flattens Mermaid's own injected
+ * stylesheet onto the elements as SVG presentation attributes at build time, so
+ * nothing here reproduces Mermaid's theming. The alternative — hoisting that
+ * stylesheet into 23 per-diagram-type files — was rejected on a measurement:
+ * 86% of its rules (1,279 of 1,495) match no element in any rendered diagram,
+ * because Mermaid emits the union of every shape it could draw.
+ *
+ * Colour is likewise absent here. Each diagram carries its own
+ * `light-dark(light, dark)` values, paired at build time from two renders, so
+ * one SVG follows the system preference and the site's own theme toggle with no
+ * second file and no script.
+ */
+
+.diagram {
+  margin-block: var(--space-6);
+  /* `figure` has a user-agent margin-inline of 40px, which would indent the
+     diagram relative to the prose around it. */
+  margin-inline: 0;
+}
+
+/*
+ * The diagram itself.
+ *
+ * The SVG carries a `width` attribute holding its intrinsic size and no
+ * `height`, so `max-width: 100%` lets it shrink to fit a 320 px viewport while
+ * the `viewBox` preserves its aspect ratio. Without `height: auto` a browser
+ * would keep the attribute width's implied height and distort it.
+ */
+.diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/*
+ * The diagram is laid out at 16 px and must render at 16 px.
+ *
+ * Mermaid computes every box from its own measurement of the label text at its
+ * configured `fontSize`, which is 16. This site's body text is `--text-base`,
+ * 1.0625rem — **17 px** — and the labels inherit it, so each one rendered 6%
+ * wider than the box built for it and every multi-word label was visibly
+ * clipped: "Private vault" showed as "Private vaul". Measured in Chromium, not
+ * inferred; the two-thousandths-of-an-em font-metric differences between Arial
+ * and the site's stack are within 2.7% and were *not* the cause.
+ *
+ * Pinning the size here rather than raising Mermaid's is the smaller fix: the
+ * diagram's geometry is baked into the SVG at build time, so the number the
+ * renderer measured with is the only number that can be correct. `px` rather
+ * than `rem` for the same reason — a reader who scales the root font size
+ * scales the whole SVG, which keeps the label inside its box, whereas scaling
+ * only the text would reintroduce exactly this clipping.
+ *
+ * **Restricted to `foreignObject` content.** An SVG `<text>` is deliberately
+ * excluded: those carry their own `font-size` presentation attribute — 12 px on
+ * a radar axis label, 38 px on a treemap label, 32 px on the info banner — which
+ * the flattening pass wrote from Mermaid's own stylesheet, and a class rule
+ * beats a presentation attribute. An earlier version of this rule included
+ * `text` and silently resized 139 elements across seven diagram types. Caught by
+ * comparing computed styles against the unflattened SVG in a real browser.
+ */
+.diagram foreignObject div,
+.diagram foreignObject span {
+  font-size: 16px;
+}
+
+.diagram-canvas {
+  /* A wide diagram scrolls rather than widening the page. Centred, because a
+     diagram narrower than the measure otherwise sits oddly against the text.
+     `tabindex="0"` is on the element itself: a scrollable region must be
+     reachable by keyboard, and the browser then scrolls it with the arrows. */
+  overflow-x: auto;
+  text-align: center;
+}
+
+.diagram-canvas:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/*
+ * Client mode only: the diagram's source, shown until the runtime replaces it.
+ *
+ * This is also what a reader without JavaScript is left with, which is why it
+ * is styled as a legible code block rather than hidden. Requirements §5.2 and
+ * §5.3 ask for the static baseline to be the product; client mode is a
+ * deliberate carve-out from that, and showing the source is the honest form of
+ * the carve-out — a hidden element would present the same page as complete
+ * while silently missing a figure.
+ */
+.diagram-source {
+  margin: 0;
+  padding: var(--space-4);
+  overflow-x: auto;
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-body);
+  color: var(--color-text);
+}
+
+.diagram figcaption {
+  margin-top: var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/*
+ * Classes the flattening pass writes.
+ *
+ * The six non-presentational declarations that survive flattening, from
+ * `LAYOUT_CLASSES` in `src/lib/mermaid-render.ts`. Every other declaration in
+ * Mermaid's stylesheet is an SVG presentation attribute and is written onto the
+ * element itself, which is why this list is six rules rather than a stylesheet.
+ */
+.diagram-center { text-align: center; }
+.diagram-left { text-align: left; }
+.diagram-start { text-align: start; }
+.diagram-nowrap { white-space: nowrap; }
+.diagram-line { line-height: 1.5; }
+.diagram-blend { mix-blend-mode: multiply; }
+.diagram-table { display: table; }
+
+/*
+ * A diagram's HTML labels live in a `foreignObject`, outside the article's own
+ * cascade for margins: the browser applies the default `p` margin there and
+ * pushes the label off its own centre.
+ */
+.diagram foreignObject p {
+  margin: 0;
+}
+
+@media print {
+  /* A scroll container prints as its visible window, cutting the diagram off at
+     the page edge. Letting it size itself prints the whole figure. */
+  .diagram-canvas {
+    overflow-x: visible;
+  }
+}

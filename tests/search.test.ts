@@ -51,20 +51,50 @@ const PRIMARY_QUERY = 'the';
  * every Chinese note from an English one — reported to the reader as "no
  * results", which is a statement about the corpus that the corpus contradicts.
  *
- * The interesting cases are the region tags. `en-GB` and `en` resolve to the
- * same index inside Pagefind, so merging one into the other would double every
- * result rather than adding any.
+ * The cases below mirror Pagefind's own `findIndex`, because the rule for which
+ * partition to *exclude* has to be the rule it uses to *choose*. An earlier
+ * version reasoned about tag shape instead, and encoded two bugs measured
+ * against real `pagefind` output: with both `en` and `en-gb` indexed it merged
+ * neither into the other, leaving half the corpus unfindable; and with a
+ * document in a language indexed under no form it merged the primary index onto
+ * itself, so every result rendered twice.
  */
-test('every language partition except the page\'s own is merged', () => {
+test('every language partition except the one Pagefind loads is merged', () => {
   const entry = { languages: { en: {}, 'zh-cn': {} } };
 
   assert.deepEqual(otherLanguages(entry, 'en'), ['zh-cn']);
   assert.deepEqual(otherLanguages(entry, 'zh-CN'), ['en'], 'the comparison must be case-insensitive');
-  // A region of an indexed language is that index, not another one.
-  assert.deepEqual(otherLanguages(entry, 'en-GB'), ['zh-cn'], 'en-GB resolves to the en index');
-  assert.deepEqual(otherLanguages({ languages: { 'zh-cn': {} } }, 'zh'), [], 'zh resolves to the zh-cn index');
+  // No `en-gb` partition exists, so Pagefind falls back to the base subtag and
+  // loads `en` — which is therefore the one that must not be merged.
+  assert.deepEqual(otherLanguages(entry, 'en-GB'), ['zh-cn'], 'en-GB falls back to the en index');
+  assert.deepEqual(otherLanguages({ languages: { 'zh-cn': {} } }, 'zh'), [], 'zh falls back to the zh-cn index');
+
+  // A sibling region tag *is* its own partition, and merging it is the whole
+  // point: the base-subtag rule is Pagefind's fallback, not an equivalence.
+  const withRegion = { languages: { en: {}, 'en-gb': {}, fr: {} } };
+  assert.deepEqual(
+    otherLanguages(withRegion, 'en').sort(),
+    ['en-gb', 'fr'],
+    'a sibling region partition must be merged, or half the corpus stays unfindable',
+  );
+  assert.deepEqual(
+    otherLanguages(withRegion, 'en-GB').sort(),
+    ['en', 'fr'],
+    'an exact match wins over the base subtag, so en-gb must not exclude en',
+  );
+
+  // A document in a language indexed under no form: Pagefind loads the largest
+  // partition, so that one — and only that one — must be excluded. Returning it
+  // as "other" merges the index onto itself and doubles every result.
+  assert.deepEqual(
+    otherLanguages({ languages: { en: { page_count: 28 }, 'zh-cn': { page_count: 4 } } }, 'fr').sort(),
+    ['zh-cn'],
+    'the largest partition is already primary and must not be merged onto itself',
+  );
+
   // A monolingual corpus merges nothing, so the common case costs no fetch.
   assert.deepEqual(otherLanguages({ languages: { en: {} } }, 'en'), []);
+  assert.deepEqual(otherLanguages({ languages: { en: {} } }, 'fr'), [], 'the only partition is always primary');
   // A document with no language must not merge every index twice over.
   assert.deepEqual(otherLanguages({}, 'en'), [], 'an index-less entry file merges nothing');
 });
@@ -374,9 +404,13 @@ test('a query returns a result under the shipped CSP, with a clean console', asy
   try {
     await page.goto(`${origin}/`);
     await openSearch(page);
-    // A term from the corpus rather than a title word: this must prove the body
-    // index works, not that the page's own title is on the page.
-    await page.fill('#search-input', 'certificate');
+    // A body word rather than a title word: this must prove the body index
+    // works, not that the page's own title is on the page. `PRIMARY_QUERY`
+    // rather than a term lifted from one corpus — a query hardcoded to the
+    // published note's vocabulary passes `verify` and times out under
+    // `build:fixture`, which is the same term measured against two different
+    // corpora.
+    await page.fill('#search-input', PRIMARY_QUERY);
     await page.waitForSelector('#search-results a', { timeout: 20_000 });
 
     const results = await page.$$eval('#search-results a', (links) =>
@@ -725,6 +759,29 @@ test('the retry offered on failure recovers once the outage clears', async (cont
       await closable
         .waitForFunction(() => document.querySelector('dialog')?.open === false, undefined, { timeout: 10_000 })
         .catch(() => assert.fail('in the failed state, Enter on the Close button did not close the dialog'));
+
+      // And the other direction, which the first version of the Close fix broke:
+      // Enter must still retry from anywhere else in the dialog. Focus lands on
+      // the dialog element itself after a click on any non-focusable part of it,
+      // and scoping the retry to the input alone left the reader pressing Enter
+      // against a message that promised it would work.
+      await closable.click('#search-toggle');
+      await closable.waitForFunction(
+        () => (document.querySelector('#search-status')?.textContent ?? '').startsWith('The search index could not'),
+        undefined,
+        { timeout: 20_000 },
+      );
+      await closable.evaluate(() => (document.querySelector('#search-dialog') as HTMLElement).focus());
+      await closable.keyboard.press('Enter');
+      await closable
+        .waitForFunction(
+          () => document.querySelector('#search-status')?.textContent === 'Loading the search index…',
+          undefined,
+          { timeout: 10_000 },
+        )
+        .catch(() =>
+          assert.fail('Enter with focus on the dialog itself did not retry, though the message says it would'),
+        );
     } finally {
       await closable.close();
     }
@@ -797,7 +854,7 @@ test('search is fully operable from the keyboard', async (context) => {
       undefined,
       { timeout: 20_000 },
     );
-    await page.fill('#search-input', 'certificate');
+    await page.fill('#search-input', PRIMARY_QUERY);
     await page.waitForSelector('#search-results a', { timeout: 20_000 });
 
     // Down enters the list; up from the first returns to the field rather than
