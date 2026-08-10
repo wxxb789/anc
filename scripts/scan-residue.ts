@@ -116,17 +116,18 @@ function normalizedForms(text: string): string[] {
  * bracket. Decoding every named entity in HTML would need a table this file has
  * no reason to carry, and the ones omitted cannot manufacture a marker.
  *
+ * The trailing `;` is optional, matching `decodeEntities` in
+ * `src/lib/schema.ts`, which is the reference implementation for what counts as
+ * a marker. HTML5 decodes a numeric reference without it — the missing
+ * semicolon is a parse error that still yields the character — so
+ * `msw&#x2F secret` renders as the private path marker. An earlier version of
+ * this file required the semicolon and let that through, on a comment claiming
+ * the schema had the same gap. It does not, and never did: the two decoders
+ * differed by exactly this character, and the scan was the weaker one.
+ *
  * Double encoding is deliberately *not* followed. `&amp;#x2F;` renders as the
  * literal text `&#x2F;` in a browser, not as `/`, so decoding twice would
  * invent a marker the reader never sees.
- *
- * ponytail: the trailing `;` is required here, but HTML5 decodes a *numeric*
- * reference without one — it is a parse error that still yields the character,
- * so `msw&#x2F secret` renders as the marker and this scan does not flag it.
- * `decodeEntities` in `src/lib/schema.ts` has the identical gap by construction.
- * Closing it in one place would leave the two decoders disagreeing about what a
- * marker is, which is worse than the gap; if it is worth closing, close both in
- * one change.
  */
 function decodeHtmlEntities(text: string): string {
   const named: Readonly<Record<string, string>> = {
@@ -140,7 +141,7 @@ function decodeHtmlEntities(text: string): string {
     newline: '\n',
   };
   return text.replace(
-    /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([A-Za-z][A-Za-z0-9]*));/g,
+    /&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([A-Za-z][A-Za-z0-9]*));?/g,
     (match, decimal?: string, hex?: string, name?: string) => {
       const code = decimal === undefined ? (hex === undefined ? NaN : parseInt(hex, 16)) : Number(decimal);
       if (Number.isFinite(code)) return code <= 0x10ffff ? String.fromCodePoint(code) : match;

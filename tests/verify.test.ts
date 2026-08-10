@@ -323,6 +323,12 @@ test('the residue scan fails on each marker it exists to catch', () => {
       // file copied verbatim out of `public/`, the very kind this scan exists
       // to read.
       ['<p>msw&#x2F;secret</p>', 'msw/'],
+      // Without the trailing semicolon too. HTML5 treats that as a parse error
+      // and decodes the character anyway, so this renders as the marker. The
+      // scan required the semicolon until review caught that `decodeEntities`
+      // in `src/lib/schema.ts` had always accepted it optional \u2014 the two
+      // decoders differed by one character and this was the weaker one.
+      ['<p>msw&#x2F secret</p>', 'msw/'],
       ['<p>msw\u200d/secret</p>', 'msw/'],
       ['<a href="data:text/html;base64,PHNjcmlwdD4=">x</a>', 'data:'],
     ] as const) {
