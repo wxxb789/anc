@@ -2298,12 +2298,22 @@ test('a foreign-language title is marked in every list, not only the rail', (con
  * whenever an author writes an ordinary word, and the ticket's own rule is that
  * content renders verbatim in every language.
  *
- * What covers the gap is that each of those is *also* asserted positively and by
- * element rather than by substring: the short nav words by the `ALWAYS` gate
- * above, and every rendered count — which is the case a plural rule gets wrong —
- * by "every rendered count uses the grammar of the page it is on", which compares
- * each `<span class="…-count">` against its own page's formatter. Between the
- * two, a count leaking across a language fails there rather than here.
+ * **Every suppressed key must therefore be covered positively somewhere else**,
+ * by element rather than by substring — and that is a standing obligation, not a
+ * remark. Review found two keys the exclusion hid with no such gate behind them:
+ * `explorerIndex` and `diagramCaption`, both suppressed by the excerpt "Undated
+ * notes ", both of which shipped English onto a Chinese page with the whole
+ * suite green. They now have "the rail collection link is named in the page own
+ * language" and, in `tests/markdown.test.ts`, "an untitled diagram is captioned
+ * in the document own language".
+ *
+ * The rest: the short nav words by the `ALWAYS` gate above; every rendered count
+ * — the case a plural rule gets wrong — by "every rendered count uses the grammar
+ * of the page it is on", which compares each `<span class="…-count">` against its
+ * own page's formatter.
+ *
+ * If you add a chrome string whose fixed part is a common English or Chinese
+ * word, add a positive gate for it in the same commit. This one will not see it.
  */
 test('no page renders a string from a locale other than its own', () => {
   /**
@@ -2460,4 +2470,59 @@ test('a page with no excerpt falls back to its own language description', () => 
     fallbacks > 0 || entries.every((entry) => entry.excerpt.trim() !== ''),
     'the corpus has an empty-excerpt entry but the fallback was never checked',
   );
+});
+
+/**
+ * The rail's collection-index link is named in the page's own language.
+ *
+ * `explorerIndex` is one of the two keys the inverse gate cannot see: its fixed
+ * part is `" notes"`, which a fixture excerpt also contains, so the artifact-text
+ * exclusion suppresses it. That exclusion is documented as safe because the keys
+ * it hides are "covered positively by element" — and for this one no such gate
+ * existed, so replacing the call with an English template shipped
+ * `All engineering notes` into every Chinese page's rail with the suite green.
+ *
+ * Located by class and compared whole, so the collection name inside it stays
+ * the artifact's own text and only the wrapper is checked.
+ */
+test('the rail collection link is named in the page own language', (context) => {
+  const languages = new Set(entries.map((entry) => entry.language ?? NAV_LANGUAGE));
+  context.skip(
+    languages.size < 2,
+    `the corpus declares ${languages.size} language — run \`pnpm run build:fixture\` for the bilingual gate`,
+  );
+
+  let checked = 0;
+  for (const route of ROUTES) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    const language = declaredLanguage(html);
+    const own = translate(language);
+    const other = otherLocale(language);
+
+    for (const [, label] of html.matchAll(
+      /<a class="explorer-index" href="\/collections\/[^"]*">([^<]*)<\/a>/g,
+    )) {
+      // The collection is recovered from the rendered label rather than from the
+      // href, because the href carries the route *key* and the label carries the
+      // artifact's own spelling — and it is the label the reader hears.
+      const collections = collectionFacets(entries).map((facet) => facet.label);
+      const collection = collections.find(
+        (candidate) => label === asRendered(own.explorerIndex(candidate)),
+      );
+      assert.ok(
+        collection !== undefined,
+        `${route} (lang="${language}"): the rail link "${label}" is not this page's own wording — ` +
+          `expected one of ${JSON.stringify(collections.map((name) => own.explorerIndex(name)))}`,
+      );
+      assert.notEqual(
+        label,
+        asRendered(other.explorerIndex(collection)),
+        `${route}: the rail link is in the other language`,
+      );
+      checked += 1;
+    }
+  }
+  // Every fixture collection renders this link on every route, so a build that
+  // emitted none is a defect rather than a corpus shape.
+  assert.ok(checked > 0, 'no rail collection link was inspected');
 });

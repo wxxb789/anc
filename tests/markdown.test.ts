@@ -95,6 +95,40 @@ test('the footnote section is labelled in the document own language', async () =
  * pause nobody wrote. Both shapes are valid Markdown that neither corpus
  * contains, which is why this is a unit test rather than a gate over `dist/`.
  */
+/**
+ * An untitled diagram's caption follows the document's language.
+ *
+ * The second of the two article strings the renderer emits, and the one the
+ * inverse gate over `dist/` cannot see: its fixed part is `" diagram"`, which a
+ * fixture excerpt also contains, so the artifact-text exclusion suppresses it.
+ * Reverting `caption(...)` to an English template left the whole suite green
+ * before this existed.
+ *
+ * A diagram that declares its own `title` is the authored path and is unaffected
+ * — the title is the author's words and is used verbatim in both languages,
+ * which is asserted here too so the boundary is pinned rather than assumed.
+ */
+test('an untitled diagram is captioned in the document own language', async () => {
+  const untitled = '# T\n\n```mermaid\ngraph TD\n  A --> B\n```\n';
+  const titled = '# T\n\n```mermaid\n---\ntitle: 部署流程\n---\ngraph TD\n  A --> B\n```\n';
+
+  for (const [language, expected] of [
+    ['en', 'Flowchart diagram'],
+    ['zh-CN', 'Flowchart 图示'],
+  ] as const) {
+    const { html } = await renderMarkdown(untitled, { pageTitle: 'T', chrome: translate(language) });
+    const caption = /<figcaption[^>]*>([^<]*)<\/figcaption>/.exec(html)?.[1];
+    assert.equal(caption, expected, `${language}: an untitled diagram is not captioned in its own language`);
+  }
+
+  // The author's own title, unchanged, whatever the chrome around it is.
+  for (const language of ['en', 'zh-CN'] as const) {
+    const { html } = await renderMarkdown(titled, { pageTitle: 'T', chrome: translate(language) });
+    const caption = /<figcaption[^>]*>([^<]*)<\/figcaption>/.exec(html)?.[1];
+    assert.equal(caption, '部署流程', `${language}: an authored diagram title was not used verbatim`);
+  }
+});
+
 test('a heading anchor is named for its heading, without surrounding whitespace', async () => {
   const cases: readonly [string, string][] = [
     ['## Status <!-- note -->\n\nx\n', 'Status'],
