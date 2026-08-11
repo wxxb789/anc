@@ -505,7 +505,20 @@ export type NavLabelKey = Extract<keyof Translation, `nav${string}`>;
  * answer than English. A Traditional locale is one more entry here and nothing
  * else.
  */
-const LOCALES: Readonly<Record<string, Translation>> = { en: EN, 'zh-cn': ZH_CN, zh: ZH_CN };
+const LOCALES: Readonly<Record<string, Translation>> = {
+  en: EN,
+  'zh-cn': ZH_CN,
+  zh: ZH_CN,
+  // ISO 639-2/T. `src/lib/schema.ts` admits a two- *or three*-letter primary
+  // subtag, so `zho` is a valid artifact spelling of the same language `zh`
+  // names, and without this key it resolved to English chrome on a Chinese
+  // document — the exact defect this ticket closes, reachable from a
+  // schema-valid artifact. `cmn` and `yue` are deliberately absent: they name
+  // Mandarin and Cantonese specifically, and mapping either onto this Simplified
+  // locale would be a guess about script rather than a spelling of a tag this
+  // site already publishes.
+  zho: ZH_CN,
+};
 
 /**
  * The chrome for one document, from its own `language` field.

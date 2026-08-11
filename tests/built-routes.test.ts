@@ -1055,24 +1055,33 @@ test('the related list is the derivation, in the derivation s order', (context) 
  * the wrong field, fails here. The second is pinned so that a future corpus
  * reaching it cannot ship the wrong sentence unnoticed.
  */
-test('the empty related state names the right reason', () => {
-  const REASONS = {
-    linked: 'Every note sharing a tag with this one is already listed above.',
-    none: 'No other published note shares a tag with this one.',
-  } as const;
-  assert.notEqual(REASONS.linked, REASONS.none, 'the two reasons are the same sentence');
-
+test('the empty related state names the right reason, in the page own language', () => {
   let checkedEmpty = 0;
   for (const { slug, html } of notePages()) {
     if (relatedNotes(getEntry(slug)!, entries).length > 0) continue;
+    // Resolved from the page's own language rather than pinned as an English
+    // literal: both sentences are chrome and follow the document since TK-16.
+    // The English literals were still correct only because every Chinese fixture
+    // note happens to have a suggestion — one zh-CN note with a unique tag would
+    // have failed this on a correct page.
+    const t = translate(declaredLanguage(html));
+    assert.notEqual(
+      t.relatedAlreadyListed,
+      t.relatedNoTagPeer,
+      `${slug}: the two reasons are the same sentence in this locale`,
+    );
     const section = relationSection(html, 'related')!;
-    const expected = hasTagPeer(getEntry(slug)!, entries) ? REASONS.linked : REASONS.none;
+    const expected = hasTagPeer(getEntry(slug)!, entries)
+      ? t.relatedAlreadyListed
+      : t.relatedNoTagPeer;
     assert.ok(
       section.includes(expected),
       `${slug}: the empty related state does not give the reason the model computes`,
     );
     assert.ok(
-      !section.includes(hasTagPeer(getEntry(slug)!, entries) ? REASONS.none : REASONS.linked),
+      !section.includes(
+        hasTagPeer(getEntry(slug)!, entries) ? t.relatedNoTagPeer : t.relatedAlreadyListed,
+      ),
       `${slug}: the empty related state gives both reasons at once`,
     );
     checkedEmpty += 1;
@@ -2267,31 +2276,44 @@ test('a foreign-language title is marked in every list, not only the rail', (con
  *
  * **The second exclusion is a real ceiling, not a formality.** A chrome word
  * that also appears in a note's title, tag, or excerpt is invisible to this gate
- * — the fixture corpus has a note titled "Search That Ships Nothing Until Asked"
- * and a tag spelled `笔记`, so English `searchDialogLabel` ("Search") and Chinese
- * `navNotes` ("笔记") are both suppressed. That is the correct trade: the
- * alternative is a gate that fails whenever an author writes an ordinary word,
- * and the ticket's own rule is that content renders verbatim in every language.
- * Short, common chrome words are covered instead by the positive `ALWAYS` gate
- * above, which locates them by element rather than by substring.
+ * — the fixture corpus has a note titled "Search That Ships Nothing Until Asked",
+ * a tag spelled `笔记`, and an excerpt reading "Undated notes ", so English
+ * `searchDialogLabel`, Chinese `navNotes`, and the English `noteCount` noun are
+ * all suppressed. That is the correct trade: the alternative is a gate that fails
+ * whenever an author writes an ordinary word, and the ticket's own rule is that
+ * content renders verbatim in every language.
+ *
+ * What covers the gap is that each of those is *also* asserted positively and by
+ * element rather than by substring: the short nav words by the `ALWAYS` gate
+ * above, and every rendered count — which is the case a plural rule gets wrong —
+ * by "every rendered count uses the grammar of the page it is on", which compares
+ * each `<span class="…-count">` against its own page's formatter. Between the
+ * two, a count leaking across a language fails there rather than here.
  */
 test('no page renders a string from a locale other than its own', () => {
   /**
    * The fixed part of what a key can render, in one locale.
    *
    * For a plain string that is the string. For an interpolated one it is the
-   * segments around the value — `Link to section: ` and `` — because the value
-   * between them is the author's words and appears in both languages. A segment
-   * shorter than four characters is dropped: `: ` and `：` are punctuation, not
-   * evidence that a page is in one language rather than the other.
+   * segments around the value, because the value between them is the author's
+   * words and appears in both languages. A short segment is dropped as
+   * punctuation — see the filter below for why "short" cannot be one number.
    */
+  /**
+   * A character no locale contains, so splitting on it lands exactly on the
+   * interpolation point. Written as an escape rather than embedded literally:
+   * an invisible character in source is a character the next reader cannot see
+   * and an editor can silently drop.
+   */
+  const SENTINEL = '\u0001';
+
   const fixedParts = (locale: Translation, key: string): string[] => {
     const value = (locale as unknown as Record<string, unknown>)[key];
     if (typeof value === 'string') return [value];
     if (typeof value !== 'function') return [];
     // A sentinel no locale contains, so the split lands on the interpolation
     // point whatever the argument's type.
-    const rendered = String((value as (input: never) => string)('' as never));
+    const rendered = String((value as (input: never) => string)(SENTINEL as never));
     // An entry that *maps* its argument rather than interpolating it — the
     // Chinese `themeLabel` indexes a table of three theme words — yields
     // `undefined` for a sentinel, so its fixed part would be a string no page
@@ -2300,7 +2322,16 @@ test('no page renders a string from a locale other than its own', () => {
     // it leaves uncovered are asserted by the `data-` attribute gate above,
     // which reads them off the element rather than out of the page text.
     if (rendered.includes('undefined')) return [];
-    return rendered.split('').filter((part) => part.trim().length >= 4);
+    // The `>= 4` floor drops punctuation — `: ` and `：` are not evidence that
+    // a page is in one language — but it is measured in *characters*, and Chinese
+    // says in two what English says in fifteen. Applied uniformly it dropped the
+    // Chinese side of every count key, so a Chinese page never looked for the
+    // English " notes", " tags", or " published" and the gate was one-directional
+    // in practice. A segment carrying a Han character is kept whatever its
+    // length, which is what restores the missing half.
+    return rendered
+      .split(SENTINEL)
+      .filter((part) => part.trim().length >= 4 || /\p{Script=Han}/u.test(part));
   };
 
   const KEYS = Object.keys(translate('en'));

@@ -93,7 +93,12 @@ test('an unlisted region falls back to its primary subtag, not to a key name', (
   // shadow of `zh-cn`: `translate` reduces to the *primary* subtag, so all three
   // of these become `zh` and nothing else would catch them. Deleting that key on
   // a reviewer's advice was tried, and this assertion is what reported it.
-  for (const tag of ['zh-Hans-CN', 'zh-TW', 'zh-Hant']) {
+  // `zho` is ISO 639-2/T for the same language, and the schema admits a
+  // three-letter primary subtag — so it is a spelling a valid artifact can
+  // carry, and without its own key it resolved to English chrome on a Chinese
+  // document. It also made the built-output gate self-contradictory, because
+  // that gate picks "the other locale" by `startsWith('zh')`.
+  for (const tag of ['zh-Hans-CN', 'zh-TW', 'zh-Hant', 'zho', 'zho-Hans', 'ZHO']) {
     assert.equal(translate(tag).uncollected, '未归入合集', `${tag} did not resolve to a zh locale`);
   }
   // A language with no locale at all resolves to the navigation language rather
