@@ -262,9 +262,9 @@ Two structural facts drive the order:
 | TK-06 | Search — make it work, then make it good | TK-05a | P0 | done `1164c72` |
 | TK-08 | Canonical metadata, feeds, sitemap, social cards | TK-05a | P0 | done `6d7b730` |
 | TK-15 | Math and diagrams — Temml and dual-mode Mermaid | TK-05a | P0 | done `116b15c` |
-| TK-05c | Collection rails and explorer | TK-05a, TK-05b | P0 | 3b |
+| TK-05c | Collection rails and explorer | TK-05a, TK-05b | P0 | done `e002113` |
 | TK-07 | Hover and focus previews | TK-05b | P0 | done `22cd841` |
-| TK-16 | Bilingual chrome | TK-05a, TK-05c | P0 | 3b |
+| TK-16 | Bilingual chrome | TK-05a, TK-05c | P0 | done `410aad2` |
 | TK-17 | Static graph route | TK-05b | P0 | 3b |
 | TK-09 | Privacy, security, and performance gates | all above | P0 | 4 |
 | TK-18 | Measured benchmark against Quartz v5 | TK-09 | P0 | 4 |
@@ -396,6 +396,14 @@ extracting every class `markdown.ts` can emit would be a fourth consumer of
 replacing rather than deepening. The allowlist is twelve literals; read them once. What
 TK-09 must gain instead: the zero-inline-style assertion becomes mode-aware, because
 Mermaid client mode requires `style-src 'unsafe-inline'` (owner decision 5).
+
+**TK-09 also inherits one known flaky gate.** `tests/math-and-diagrams.test.ts > every
+diagram type renders to CSP-clean SVG` failed once and then passed four consecutive runs
+with the file untouched, found during TK-16. It is unrelated to that ticket and was left
+alone deliberately, but a gate that reddens at random will eventually block a release for
+no reason and train whoever sees it to re-run rather than investigate. Diagnose the race
+rather than adding a retry — TK-07 hit the same shape and the cause was an assertion
+measured against a different document state than its stimulus.
 
 **TK-10 records the deliberate deviations**, which now number at least six: slug renames
 are delete-and-recreate (§9.3 not implemented), SPA routing deferred, encrypted pages
