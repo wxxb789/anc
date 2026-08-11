@@ -24,7 +24,7 @@ import type { AddressInfo } from 'node:net';
 import type { Browser, ConsoleMessage, Page } from 'playwright';
 
 import { otherLanguages } from '../src/scripts/search-dialog.ts';
-import { translate } from '../src/lib/translations.ts';
+import { MESSAGE_DATASET, translate } from '../src/lib/translations.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = fileURLToPath(new URL('dist/', ROOT));
@@ -792,12 +792,48 @@ test('the retry offered on failure recovers once the outage clears', async (cont
         undefined,
         { timeout: 20_000 },
       );
-      await closable.evaluate(() => (document.querySelector('#search-dialog') as HTMLElement).focus());
+      //
+      // Every status frame is recorded, rather than the `loading` one polled
+      // for, and that is a fix rather than a refinement. `loading` is transient
+      // and lasts as long as there is index left to fetch: on the published
+      // one-note corpus it sits there long enough for `waitForFunction` to
+      // sample it, and on the bilingual fixture corpus the merge finishes first
+      // so the poll only ever sees the resting state that follows. The gate was
+      // racing its own stimulus, and it lost 5 times in 5 under
+      // `build:fixture`.
+      //
+      // Measured rather than inferred: a MutationObserver on this exact flow
+      // records `["Loading the search index…", "Type to search this site."]` on
+      // the corpus where the poll reported nothing at all — so the retry was
+      // firing the whole time.
+      //
+      // The property asserted is unchanged: Enter with focus on the dialog
+      // itself retries, and reaching `loading` is what proves it did. The
+      // sentence is read from the element the script reads it from, so this
+      // compares against whatever language the page resolved rather than
+      // against an English literal — `Layout.astro` fills those attributes per
+      // document since TK-16.
+      const loadingMessage = await closable.evaluate(
+        (key) => (document.querySelector('#search-status') as HTMLElement).dataset[key]!,
+        MESSAGE_DATASET.loading,
+      );
+      await closable.evaluate(() => {
+        const status = document.querySelector('#search-status')!;
+        const seen: string[] = [];
+        (globalThis as unknown as { retryStates: string[] }).retryStates = seen;
+        new MutationObserver(() => seen.push(status.textContent ?? '')).observe(status, {
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
+        (document.querySelector('#search-dialog') as HTMLElement).focus();
+      });
       await closable.keyboard.press('Enter');
       await closable
         .waitForFunction(
-          () => document.querySelector('#search-status')?.textContent === 'Loading the search index…',
-          undefined,
+          (text) =>
+            (globalThis as unknown as { retryStates: string[] }).retryStates.includes(text),
+          loadingMessage,
           { timeout: 10_000 },
         )
         .catch(() =>
