@@ -25,6 +25,7 @@ import type { ContentEntry } from '../src/lib/schema.ts';
 import {
   GLOBAL_NODE_LIMIT,
   LOCAL_NODE_LIMIT,
+  boundCounts,
   drawnNeighbours,
   edgeDirection,
   globalGraph,
@@ -324,14 +325,18 @@ test('the documented global bound is the one the module applies', () => {
  * `LOCAL_NODE_LIMIT`: the fixture corpus's busiest note has 10 neighbours
  * against a bound of 12, and the published note has none.
  *
- * It is not hypothetical. The first version passed `graph.nodes.length` as both
- * bases and would have rendered "13 of 16" where the truth was 12 of 15; the
- * second corrected only the total and rendered "13 of 15", which is worse — the
- * numerator then exceeded the notes actually drawn. Both shipped looking
- * plausible, and both were invisible to every gate over `dist/`.
+ * It is not hypothetical, and it took three attempts. The first version passed
+ * the raw node count as both bases and would have rendered "13 of 16" where the
+ * truth was 12 of 15. The second corrected only the total and rendered "13 of
+ * 15" — worse, because the numerator then exceeded the notes actually drawn.
+ * The third fixed the component and added a test that *restated* the
+ * arithmetic, which caught nothing: reverting the component left the suite
+ * green, because the test compared the model against a copy of the expression
+ * rather than against the component.
  *
- * So this reproduces the page's own expression against the model and requires
- * the numbers to be the neighbour counts, on both sides of the bound.
+ * So this asserts on {@link boundCounts}, which is the single place the numbers
+ * are computed and which the component interpolates directly. A regression in
+ * either now moves both.
  */
 test('the bound sentence counts neighbours, never the note itself', () => {
   const peers = (count: number) =>
@@ -345,11 +350,7 @@ test('the bound sentence counts neighbours, never the note itself', () => {
   for (const count of [3, LOCAL_NODE_LIMIT, LOCAL_NODE_LIMIT + 1, LOCAL_NODE_LIMIT + 9]) {
     const corpus = peers(count);
     const graph = localGraph(corpus[0]!, lookupIn(corpus));
-
-    // The expression `NoteGraph.astro` renders, restated here so a change to it
-    // that reintroduces the subject fails rather than shipping.
-    const shown = graph.nodes.length - graph.nodes.filter((node) => node.isSubject).length;
-    const total = shown + graph.omitted;
+    const { shown, total } = boundCounts(graph);
 
     assert.equal(shown, Math.min(count, LOCAL_NODE_LIMIT), `${count} neighbours: the drawn count is wrong`);
     assert.equal(total, count, `${count} neighbours: the stated total is not the neighbour count`);
@@ -362,6 +363,24 @@ test('the bound sentence counts neighbours, never the note itself', () => {
       `${count} neighbours: the subject is not drawn, so the exclusion proves nothing`,
     );
   }
+});
+
+/**
+ * `/graph/` has no subject, so its counts are simply its node counts.
+ *
+ * The same function serves both surfaces, and this is why it needs no flag
+ * telling them apart: with no subject node the subtraction is the identity.
+ */
+test('the site graph s bound counts every drawn node, having no subject to exclude', () => {
+  const corpus = neighbourhoodCorpus();
+  const graph = globalGraph(corpus, 4);
+  const { shown, total } = boundCounts(graph);
+  assert.ok(
+    !graph.nodes.some((node) => node.isSubject),
+    'the global graph drew a subject, so this no longer tests the identity case',
+  );
+  assert.equal(shown, graph.nodes.length);
+  assert.equal(total, corpus.length);
 });
 
 // --- Determinism -------------------------------------------------------------

@@ -503,6 +503,36 @@ export function drawnNeighbours(graph: Graph): Map<string, ContentEntry[]> {
 }
 
 /**
+ * The two numbers the bound sentence states: how many notes are drawn, and how
+ * many there are.
+ *
+ * **Here rather than in the component**, and that placement is the whole point.
+ * The sentence reads "Drawing N of M *neighbouring notes*", and a note is not
+ * one of its own neighbours — so neither number may count the subject. Two
+ * versions shipped getting this wrong: the first passed the raw node count as
+ * both bases and would have rendered "13 of 16" where the truth was 12 of 15;
+ * the second corrected only the total and rendered "13 of 15", where the
+ * numerator exceeded the notes actually drawn.
+ *
+ * Neither was catchable, and a test *restating* the arithmetic did not catch
+ * the second either — reverting the component's fix left the suite green,
+ * because the test compared the model against a copy of the expression rather
+ * than against the component. Neither corpus reaches {@link LOCAL_NODE_LIMIT},
+ * so no built page renders the sentence at all and the gate over `dist/` cannot
+ * see it.
+ *
+ * So the numbers live here, the component interpolates what this returns, and
+ * `tests/graph.test.ts` asserts on this function. One source, and a change to
+ * it moves the page and the gate together.
+ */
+export function boundCounts(graph: Graph): { shown: number; total: number } {
+  // `/graph/` draws no subject node, so the count is zero there and this is the
+  // identity — which is why it needs no flag distinguishing the two surfaces.
+  const shown = graph.nodes.length - graph.nodes.filter((node) => node.isSubject).length;
+  return { shown, total: shown + graph.omitted };
+}
+
+/**
  * Whether there is a graph worth drawing at all.
  *
  * A figure of one circle and no lines states nothing a reader could not have

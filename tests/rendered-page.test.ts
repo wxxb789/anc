@@ -289,10 +289,16 @@ async function visit(page: Page, route: string): Promise<void> {
  * The list is checked in both directions: an unlisted overflow fails, and a
  * listed route that has *stopped* overflowing also fails, so an exemption cannot
  * outlive the defect it records.
+ *
+ * `.prose table` rather than `table`: since TK-17 every note page carries a
+ * second table — the graph's equivalent representation — and a bare type
+ * selector would exempt that one too, on the two routes that carry both. The
+ * exemption records one deferred defect in the article body, so it names the
+ * article body.
  */
 const KNOWN_OVERFLOW: Readonly<Record<string, string>> = {
-  '/notes/content-contract/': 'table',
-  '/notes/table-heavy-comparison/': 'table',
+  '/notes/content-contract/': '.prose table',
+  '/notes/table-heavy-comparison/': '.prose table',
 };
 
 /** One element that extends past the viewport, as a reader would meet it. */
@@ -427,7 +433,15 @@ test('no built page overflows horizontally at 320 px', async (context) => {
           // An overflow with no nameable element is still an overflow: text can
           // push the document wider without any element's box crossing the edge.
           // Reporting the widths alone beats discarding a proven defect.
-          `${overflow.culprits.join('; ') || 'no element could be named as the cause'}`,
+          `${overflow.culprits.join('; ') || 'no element could be named as the cause'}` +
+          // Named so a reader of the failure knows what was set aside and why.
+          // A page whose only wide elements are inside a scroll container and
+          // which *still* reports a document overflow has a different defect —
+          // most likely the container itself — and this is the number that says
+          // so rather than leaving it to be rediscovered.
+          (overflow.clippedCount > 0
+            ? ` (${overflow.clippedCount} further element(s) sit inside a scroll container and cannot widen the page)`
+            : ''),
       );
     }
 

@@ -36,6 +36,7 @@ import {
 } from '../src/lib/relations.ts';
 import {
   LOCAL_NODE_LIMIT,
+  boundCounts,
   drawnNeighbours,
   globalGraph,
   localGraph,
@@ -2985,22 +2986,56 @@ test('the site graph route renders the corpus graph with real links', () => {
     '/graph/ draws labels that are not its titles under the truncation rule',
   );
 
+  // Every node named, and the decorative halves hidden — the same accessibility
+  // contract the per-note figure is held to. `/graph/` has no subject, so every
+  // node's relationship is the generic word, which is what makes the fourth
+  // column its only edge representation.
+  const t = translate(declaredLanguage(html));
+  for (const node of graph.nodes) {
+    const expected = asInAttribute(
+      t.graphNodeLabel(node.entry.title, t.graphLinkedRelation, node.degree),
+    );
+    assert.ok(
+      section.includes(`aria-label="${expected}"`),
+      `/graph/: no node named "${expected}"`,
+    );
+    assert.ok(
+      section.includes(`cx="${node.x}" cy="${node.y}"`),
+      `/graph/: no circle at the computed position of ${node.entry.slug} (${node.x}, ${node.y})`,
+    );
+  }
+  for (const [tag] of section.matchAll(/<circle class="graph-dot"[^>]*>/g)) {
+    assert.match(tag, /aria-hidden="true"/, '/graph/: a node circle is exposed to assistive technology');
+  }
+  for (const [tag] of section.matchAll(/<text class="graph-label"[^>]*>/g)) {
+    assert.match(tag, /aria-hidden="true"/, '/graph/: a truncated label is read beside its full title');
+  }
+
   // The table's fourth column, which on this route is the only representation
   // of the edge set available to a non-visual reader: every row's relationship
   // is the same generic word, because there is no subject to be relative to.
   const table = /<details class="graph-table">[\s\S]*?<\/details>/.exec(section);
   assert.ok(table, '/graph/ has no equivalent table');
   const joined = drawnNeighbours(graph);
-  const t = translate(declaredLanguage(html));
   const rows = [...table[0].matchAll(/<tr><th scope="row">[\s\S]*?<\/tr>/g)].map((match) => match[0]);
+  assert.equal(rows.length, graph.nodes.length, '/graph/: the table does not have a row per drawn node');
   for (const node of graph.nodes) {
     const row = rows.find((candidate) =>
       new RegExp(`^<tr><th scope="row"><a href="/notes/${node.entry.slug}/"`).test(candidate),
     );
     assert.ok(row, `/graph/: the table omits ${node.entry.slug}, which the figure draws`);
+    const heading = /^<tr><th scope="row">([\s\S]*?)<\/th>/.exec(row)![1]!;
+    assert.ok(
+      heading.includes(`>${asRendered(node.entry.title)}<`),
+      `/graph/: the table row for ${node.entry.slug} does not carry its full title`,
+    );
     assert.ok(
       row.includes(`<td>${asRendered(t.graphLinkedRelation)}</td>`),
       `/graph/: ${node.entry.slug} claims a relationship on a graph with no subject`,
+    );
+    assert.ok(
+      row.includes(`<td>${node.degree}</td>`),
+      `/graph/: the table states a different drawn degree for ${node.entry.slug} than the figure`,
     );
     assert.deepEqual(
       [...row.matchAll(/<li><a\s+href="\/notes\/([^/"]+)\//g)].map(([, target]) => target!),
@@ -3057,6 +3092,12 @@ test('a truncated graph says so, and every graph offers the way to the rest', ()
     const sentence = asRendered(
       t.graphBoundedLocal(Math.min(neighbours, LOCAL_NODE_LIMIT), neighbours),
     );
+    // And the model agrees with that independent derivation, so `boundCounts` —
+    // which is what the page actually interpolates — is pinned against the
+    // artifact here as well as against synthetic corpora in `graph.test.ts`.
+    const counts = boundCounts(graph);
+    assert.equal(counts.total, neighbours, `${slug}: the bound's total is not its neighbour count`);
+    assert.equal(counts.shown, Math.min(neighbours, LOCAL_NODE_LIMIT), `${slug}: wrong drawn count`);
     if (graph.omitted > 0) {
       assert.ok(bound[1]!.includes(sentence), `${slug}: drops ${graph.omitted} notes without saying so`);
       truncated += 1;

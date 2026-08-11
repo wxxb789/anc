@@ -205,6 +205,25 @@
   outline-offset: 2px;
 }
 
+/*
+ * The table's own scroll container.
+ *
+ * Four columns do not fit 320 px — the narrowest supported viewport — and the
+ * article's Markdown tables have the same problem with no fix, because a
+ * wrapper is the pipeline's to emit and `display: block` on the `<table>`
+ * itself would strip its semantics (TK-02's deferral, still recorded in
+ * `global.css`). This table is rendered by a component, so the wrapper is
+ * simply written.
+ */
+.graph-table-scroll {
+  overflow-x: auto;
+}
+
+.graph-table-scroll:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 .graph-table table {
   width: 100%;
   margin-top: var(--space-2);
@@ -237,10 +256,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.graph-table td:last-child {
-  text-align: left;
-}
-
 /* The notes at the other end of a row's lines: a list, not a sentence, so a
    screen reader announces how many there are before reading them. */
 .graph-joined {
@@ -267,10 +282,27 @@
     overflow-x: visible;
   }
 
-  /* The table is the graph's equivalent representation, so a printed page must
-     carry it rather than a collapsed summary of it. */
-  .graph-table[open] > summary,
+  /*
+   * The table is the graph's equivalent representation (requirements section
+   * 17), so a printed page has to carry it — and a closed `<details>` prints
+   * closed, which would drop it from paper entirely.
+   *
+   * `display: block` on the content is what forces it open: `details[open]`
+   * cannot be set from CSS, and the UA rule that hides a closed disclosure's
+   * content is a `display` rule this overrides. The marker is removed because a
+   * disclosure triangle on paper points at an interaction nobody can perform.
+   *
+   * An earlier version set only `list-style: none`, and its comment claimed
+   * this effect — removing the marker while the section stayed collapsed.
+   */
   .graph-table > summary {
     list-style: none;
+  }
+
+  .graph-table-scroll {
+    /* A scroll container prints as its visible window, cutting the right-hand
+       columns off at the page edge. */
+    display: block;
+    overflow-x: visible;
   }
 }

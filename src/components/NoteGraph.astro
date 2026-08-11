@@ -43,6 +43,7 @@
 import {
   NODE_RADIUS,
   SUBJECT_RADIUS,
+  boundCounts,
   drawnNeighbours,
   hasDrawableGraph,
   type Graph,
@@ -62,7 +63,10 @@ interface Props {
   empty: string;
   /** Where "show me the rest" goes, and what it says. */
   expand: { href: string; text: string; label: string };
-  /** Stated when the bound dropped notes. Takes drawn and total counts. */
+  /**
+   * Stated when the bound dropped notes. Takes the drawn and total *neighbour*
+   * counts, which `boundCounts` computes — the subject is in neither.
+   */
   bounded: (shown: number, total: number) => string;
   /** The page's own language, which decides every string's grammar. */
   lang: string;
@@ -111,24 +115,16 @@ const isDrawable = hasDrawableGraph(graph);
 const drawn = graph.nodes.length;
 
 /**
- * The two numbers the bound sentence interpolates.
+ * The two numbers the bound sentence interpolates, from the model.
  *
- * **Counted over what the sentence says it counts**, which is the neighbouring
- * notes — a note is not one of its own neighbours. Passing the raw node count
- * made a truncated neighbourhood read "Drawing 13 of 16 neighbouring notes"
- * where the truth was 12 of 15; correcting only the total then made it read
- * "13 of 15", which is worse, because the two numbers no longer shared even a
- * wrong basis and the first exceeded the notes actually drawn.
- *
- * Subtracting the subject unconditionally is correct on both surfaces rather
- * than only on one: `/graph/` has no subject node, so the count is zero there
- * and the expression is the identity. A `countsSubject` prop stood here for one
- * commit and was deleted — it selected between two branches that compute the
- * same thing, and its stated justification was the reverse of what the code
- * did.
+ * Computed by `boundCounts` rather than here: the sentence counts *neighbouring
+ * notes* and a note is not its own neighbour, which two shipped versions got
+ * wrong — and a test restating the same arithmetic did not catch the second,
+ * because it compared the model against a copy of this expression rather than
+ * against this component. Neither corpus reaches the bound, so no built page
+ * renders the sentence and no gate over `dist/` can see it either.
  */
-const shown = drawn - graph.nodes.filter((node) => node.isSubject).length;
-const total = shown + graph.omitted;
+const { shown, total } = boundCounts(graph);
 
 /** Which notes each drawn node is joined to, for the table's fourth column. */
 const joined = drawnNeighbours(graph);
@@ -287,7 +283,14 @@ const joined = drawnNeighbours(graph);
       */}
       <details class="graph-table">
         <summary>{t.graphTableCaption}</summary>
-        <table>
+        {/* The scroll container the article's own Markdown tables still lack:
+            four columns do not fit 320 px, and a wrapper is what lets the table
+            scroll instead of widening the page while keeping its semantics —
+            `display: block` on the `<table>` itself would strip them. It is a
+            keyboard stop for the same reason the figure's canvas is (axe
+            `scrollable-region-focusable`, WCAG 2.1.1). */}
+        <div class="graph-table-scroll" tabindex="0">
+          <table>
           <caption class="sr-only">{t.graphTableCaption}</caption>
           <thead>
             <tr>
@@ -330,7 +333,8 @@ const joined = drawnNeighbours(graph);
               </tr>
             ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       </details>
 
       {/* The bound, and the expansion action beside it — requirements section
