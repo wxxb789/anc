@@ -49,7 +49,7 @@ Every Quartz v5 capability in the 36-entry inventory, against what this reposito
 
 | Quartz capability | Their approach | Our status | Verdict |
 | --- | --- | --- | --- |
-| Graph view (local + global) | d3 + PixiJS from jsDelivr, canvas-only, driven by an inline `fetchData` promise | **gap** — `/graph/` is in requirements §9.1 and no ticket owns it; TK-05 item 7 owns only the accessible list stand-in | we lose |
+| Graph view (local + global) | d3 + PixiJS from jsDelivr, canvas-only, driven by an inline `fetchData` promise | **built (TK-17)** — inline SVG with real `<a>` elements laid out at build time, on `/notes/<slug>/` and `/graph/`. Works with JavaScript disabled, median 975 B gz per page, deterministic across builds, edge direction by line shape rather than colour, and an equivalent table naming both ends of every drawn edge | we win |
 | Content index / relationship artifact | one `contentIndex.json` carrying full plaintext per page, shared by graph, search, explorer, 404 | **built** — `public/content-index.json`, 404 B, `{slug,title,excerpt}` only, byte-compared against the artifact at `scripts/validate-content.ts:36` | we win |
 | Backlinks panel | build-time `allFiles.filter(f => f.links.includes(slug))` into static `<ul>`, zero JS | **built** — static list at `src/pages/notes/[slug].astro:28-38`; context snippets, empty state, and sort order are TK-05 | parity |
 | Popover previews | `mouseenter` → fetch whole page → `DOMParser` → lift `.popover-hint`, positioned by @floating-ui | **built** — `src/scripts/link-preview.ts`, hover-only, no delay, no keyboard, caches a rejected promise at `:28`; TK-07 owns the rewrite | we lose |
@@ -86,17 +86,20 @@ Every Quartz v5 capability in the 36-entry inventory, against what this reposito
 
 ### Rows marked gap
 
-Seven capabilities have no owner. Each is a backlog candidate, not a defect in a shipped ticket.
+Seven capabilities had no owner when this audit was taken at `04f8d9c`. Each was a backlog
+candidate, not a defect in a shipped ticket. The table is the audit as found; the **Closed
+by** column records which ticket has since taken each one, so the snapshot stays readable
+as history rather than being rewritten into a status board.
 
-| Gap | What is missing | Governing decision |
-| --- | --- | --- |
-| `/graph/` route | Requirements §9.1 lists it; TK-05 item 7 covers only the per-note list stand-in, and no ticket emits a site-wide graph route | Constraint 5 forces a static, `<a>`-bearing representation; a canvas island can only be an enhancement |
-| Collection tree / explorer | No build-time `<nav>` of the collection hierarchy exists on any page | Owner decision 1 puts rails in scope; native `<details>`/`<summary>` gives collapse at zero JS |
-| Bilingual chrome strings | `Layout.astro` hardcodes English for the skip link, nav, and all three toggles; `NoteList.astro` and every facet page do the same | Constraint 6; the resolution key is per-document `entry.language`, not one site locale |
-| Math rendering | `$$…$$` renders as escaped source with `math-inline`/`math-display` classes that have zero CSS | Owner decision 2 (Temml, prerendered MathML, ~9 KB CSS + 9.4 KB woff2) is settled but unticketed |
-| Mermaid rendering | Fences render as escaped code tagged `data-diagram="mermaid"` | Owner decision 5 (dual-mode, client-side default) is settled but unticketed; TK-02's zero-inline-style `dist/` gate must become mode-aware |
-| Obsidian syntax surface | `==highlight==` and image embeds do not render; the exporter destroys `![[…]]` before the repo sees it | Split decision — highlight is a TK-03 plugin; embeds require an exporter fix this repo cannot make |
-| Published-but-unlisted state | No artifact field and no listing-surface contract; `status` admits only `published`/`tombstone`, and the `tombstone` shape cannot currently be produced (`checkCorpus` rejects it whenever a live note links in) | Needs a TK-01 schema field plus one test enumerating every listing surface, or an explicit decision not to have the state |
+| Gap | What is missing | Governing decision | Closed by |
+| --- | --- | --- | --- |
+| `/graph/` route | Requirements §9.1 lists it; TK-05 item 7 covers only the per-note list stand-in, and no ticket emits a site-wide graph route | Constraint 5 forces a static, `<a>`-bearing representation; a canvas island can only be an enhancement | **TK-17** `7dfd94f` |
+| Collection tree / explorer | No build-time `<nav>` of the collection hierarchy exists on any page | Owner decision 1 puts rails in scope; native `<details>`/`<summary>` gives collapse at zero JS | **TK-05c** `e002113` |
+| Bilingual chrome strings | `Layout.astro` hardcodes English for the skip link, nav, and all three toggles; `NoteList.astro` and every facet page do the same | Constraint 6; the resolution key is per-document `entry.language`, not one site locale | **TK-16** `410aad2` |
+| Math rendering | `$$…$$` renders as escaped source with `math-inline`/`math-display` classes that have zero CSS | Owner decision 2 (Temml, prerendered MathML, ~9 KB CSS + 9.4 KB woff2) is settled but unticketed | **TK-15** `116b15c` |
+| Mermaid rendering | Fences render as escaped code tagged `data-diagram="mermaid"` | Owner decision 5 (dual-mode, client-side default) is settled but unticketed; TK-02's zero-inline-style `dist/` gate must become mode-aware | **TK-15** `116b15c` |
+| Obsidian syntax surface | `==highlight==` and image embeds do not render; the exporter destroys `![[…]]` before the repo sees it | Split decision — highlight is a TK-03 plugin; embeds require an exporter fix this repo cannot make | open |
+| Published-but-unlisted state | No artifact field and no listing-surface contract; `status` admits only `published`/`tombstone`, and the `tombstone` shape cannot currently be produced (`checkCorpus` rejects it whenever a live note links in) | Needs a TK-01 schema field plus one test enumerating every listing surface, or an explicit decision not to have the state | open |
 
 ---
 
@@ -226,7 +229,10 @@ to us and structurally unavailable to Quartz.
 | C10 | **A build that fails rather than ships something wrong** | `validateArtifact` at module evaluation (`src/lib/content.ts:15`); `facets()` throws and names both colliding labels rather than disambiguating with a numeric suffix, because a suffix would make one tag's public URL depend on which other tags exist | `emit.ts:84-95` catches per-emitter failures, prints *"Build completed with N emitter failure(s). Output may be incomplete"*, and **exits 0**. Any CI gate checking exit status deploys it. `util/trace.ts:36-41` `process.exit(1)` on the main thread but `throw` in a worker, so the same malformed file behaves differently depending on whether the corpus crossed the 128-file concurrency threshold. `helpers.ts:13` writes non-atomically into a directory that was already `rm -rf`'d, so a mid-emit crash leaves no previous good state |
 
 Two of these — C1 and C2 — are the only items in the whole analysis that make the site
-*more feature rich* rather than *tidier*, and C1 currently has no ticket. Everything else
+*more feature rich* rather than *tidier*. **C1 is now built**: TK-17 (`7dfd94f`) ships the
+graph as inline SVG with real `<a>` elements on both the article page and `/graph/`, laid
+out at build time, working with JavaScript disabled, at a median 975 B gzip per page.
+Everything else
 on the backlog is parity work, correctly scoped. A superset needs a superset.
 
 ---
@@ -265,7 +271,7 @@ Two structural facts drive the order:
 | TK-05c | Collection rails and explorer | TK-05a, TK-05b | P0 | done `e002113` |
 | TK-07 | Hover and focus previews | TK-05b | P0 | done `22cd841` |
 | TK-16 | Bilingual chrome | TK-05a, TK-05c | P0 | done `410aad2` |
-| TK-17 | Static graph route | TK-05b | P0 | 3b |
+| TK-17 | Static graph route | TK-05b | P0 | done `7dfd94f` |
 | TK-09 | Privacy, security, and performance gates | all above | P0 | 4 |
 | TK-18 | Measured benchmark against Quartz v5 | TK-09 | P0 | 4 |
 | TK-10 | ADRs and deferred-scope documentation | all above | P0 | 4 |
@@ -280,9 +286,10 @@ TK-11 and TK-12 landed as `855b06b`: 254 tests, article first paint down from 10
 
 ### Delivered so far
 
-Eleven tickets are merged. `main` is at `4ccd5c9` with **346 tests** — 339 passing and 7
-skipped on the published one-note corpus — `pnpm run verify` green, and the residue scan
-clean over 19 files.
+Seventeen tickets are merged. `main` is at `7dfd94f` with **505 tests** — 479 passing and
+26 skipped on the published one-note corpus, 504 passing and 1 skipped under
+`pnpm run build:fixture` — `pnpm run verify` green, and the residue scan clean over 24
+files.
 
 | Landed | Commit | What changed |
 | --- | --- | --- |
@@ -292,6 +299,12 @@ clean over 19 files.
 | TK-22 | `ddc9b71` | pnpm, with an undeclared import now failing to resolve |
 | TK-05b, TK-08 | `c5a92c9` | Relationship surfaces; canonical URLs, Atom feed, sitemap, social card |
 | TK-14 | `4ccd5c9` | `verify`, the residue scan, and the CI workflow |
+| TK-06 | `1164c72` | Search that runs under the shipped CSP, on the modular UI |
+| TK-15 | `116b15c` | Temml math and build-time Mermaid, both zero-JS |
+| TK-05c | `e002113` | The collection rail, complete and collapsible without script |
+| TK-07 | `22cd841` | Hover and focus previews from the projected index only |
+| TK-16 | `410aad2` | Per-document chrome: a zh-CN note renders Chinese chrome in the same build |
+| TK-17 | `7dfd94f` | The graph as real HTML — inline SVG, real links, no script, deterministic |
 
 **Two authorized fence extensions**, recorded so the audit trail is not silent:
 
@@ -397,13 +410,20 @@ replacing rather than deepening. The allowlist is twelve literals; read them onc
 TK-09 must gain instead: the zero-inline-style assertion becomes mode-aware, because
 Mermaid client mode requires `style-src 'unsafe-inline'` (owner decision 5).
 
-**TK-09 also inherits one known flaky gate.** `tests/math-and-diagrams.test.ts > every
-diagram type renders to CSP-clean SVG` failed once and then passed four consecutive runs
-with the file untouched, found during TK-16. It is unrelated to that ticket and was left
-alone deliberately, but a gate that reddens at random will eventually block a release for
-no reason and train whoever sees it to re-run rather than investigate. Diagnose the race
-rather than adding a retry — TK-07 hit the same shape and the cause was an assertion
-measured against a different document state than its stimulus.
+**TK-09 also inherits one known flaky gate, and it is wider than first recorded.**
+`tests/math-and-diagrams.test.ts > every diagram type renders to CSP-clean SVG` failed once
+and then passed four consecutive runs with the file untouched, found during TK-16. TK-17
+saw the same file redden four more times across full-suite runs, in **four different
+tests** — `every diagram type renders to CSP-clean SVG`, `diagram rendering is
+deterministic across processes`, `build-time mode ships no diagram runtime at all`, and
+`the per-page cost of math and diagrams is recorded` — while the file passed alone every
+time it was run in isolation. So it is the *file* that is flaky under concurrent load, not
+one assertion, which points at a shared resource (the Mermaid render harness, or `dist/`
+read while another suite rebuilds it) rather than at a single racy check. It is unrelated
+to both tickets and was left alone deliberately, but a gate that reddens at random will
+eventually block a release for no reason and train whoever sees it to re-run rather than
+investigate. Diagnose the race rather than adding a retry — TK-07 hit the same shape and
+the cause was an assertion measured against a different document state than its stimulus.
 
 **TK-10 records the deliberate deviations**, which now number at least six: slug renames
 are delete-and-recreate (§9.3 not implemented), SPA routing deferred, encrypted pages
