@@ -270,7 +270,8 @@ Two structural facts drive the order:
 | TK-18 | Measured benchmark against Quartz v5 | TK-09 | P0 | 4 |
 | TK-10 | ADRs and deferred-scope documentation | all above | P0 | 4 |
 | TK-21 | Interactive graph via SQLite WASM | TK-17, TK-09 | P1 | 5 |
-| TK-19 | Exporter contract evolution and escalation path | — | P1 | any |
+| TK-23 | Generalisation and distribution | TK-16, TK-17 | P0 | 3c |
+| TK-19 | Formalise the artifact contract | TK-23 | P0 | 3c |
 | TK-20 | Oxfmt | TK-13 | P1 | isolated |
 | TK-22 | Migrate from npm to pnpm | TK-13 | P1 | done `ddc9b71` |
 
@@ -306,6 +307,27 @@ clean over 19 files.
    would mean the host that publishes the artifact is not the host that scans it. Flagged
    by the agent rather than assumed.
 
+### The project is becoming a reusable publisher
+
+Decided 2026-08-11, and it reshapes what remains. The target is that **another user adds
+one GitHub Action to their own notes repository** and gets a published knowledge garden.
+Today the architecture is hardcoded to one owner: `export.py` refuses to write anywhere but
+a directory named `thoughtscape-publish`, the vault path is a fixed relative path, and the
+site origin, title, navigation, and about and privacy copy are literals in the tree.
+
+Two consequences, both already folded into the backlog:
+
+- **No domain is needed to develop, test, or preview.** The origin becomes deployment-time
+  configuration; local preview targets `http://publish.localhost/`. The note below about
+  the placeholder origin stands as a deployment gate, not a development one.
+- **TK-19 changes shape.** A contract defined by one implementation is not a contract, and
+  other users will not have this owner's `export.py`. It is now "formalise the artifact
+  contract so any producer can implement it", with the six reproduced defects restated as
+  specification test cases.
+
+TK-23 is scheduled ahead of wave 4 deliberately: building release gates, a benchmark, and
+architecture records around single-owner assumptions would mean redoing all three.
+
 ### Blocking before any deployment
 
 `astro.config.mjs:16` sets the canonical origin to `https://thoughtscape.invalid` — an
@@ -340,6 +362,7 @@ defines.
 | 2b | TK-05b, TK-08, TK-14 | TK-05b fills the relationship region TK-05a leaves; TK-08 fills the `<head>` slot TK-05a leaves and otherwise owns `src/pages/rss.xml.ts` and the sitemap emitter; TK-14 owns `.github/` and the `verify` script. The only shared file is `package.json` — **TK-14 lands its script last**. |
 | 3a | TK-06, TK-07, TK-15 | TK-06 owns `src/scripts/search-dialog.ts` and the Pagefind build flags; TK-07 owns `src/scripts/link-preview.ts`; TK-15 owns the math and diagram paths in `src/lib/markdown.ts` plus `src/scripts/mermaid.ts`. Disjoint. All three consume TK-05a's slots without redefining them. |
 | 3b | TK-05c, then TK-16, then TK-17 | TK-05c creates the rail components; TK-16 rewrites every chrome string **inside components TK-05c and TK-05a created**, so it cannot precede them; TK-17 adds `src/pages/graph.astro` and `src/lib/graph.ts` and touches the article page's neighborhood slot. Serial. |
+| 3c | TK-23, then TK-19 | Inserted ahead of wave 4 by owner decision. Generalisation changes the assumptions gates, benchmarks, and architecture records would otherwise be built on, and TK-19 formalises a contract whose audience only exists once TK-23 makes a second producer possible. |
 | 4 | TK-09, then TK-18, then TK-10 | Strictly serial. Gates must see the finished surface; the benchmark needs the gates' numbers; the ADRs record what the other two found. |
 | 5 | TK-21 alone | Phase 2. It enhances TK-17's static baseline and must not start before TK-09 has established the budget gates it has to pass. |
 
@@ -783,34 +806,105 @@ is available and nobody has run it.
 
 ---
 
-#### TK-19 — Exporter contract evolution and escalation path
+#### TK-19 — Formalise the artifact contract
 
-**Requirements:** sections 10.3, 21.1
+**Requirements:** sections 10.1, 10.3, 21.1
 
-**Problem.** The exporter lives in the private vault and is not writable from this
-repository. The backlog assumes optional fields "will appear" and nothing plans for the day
-they do, or for the defects that already exist. Six are reproduced: wikilinks are rewritten
-inside code fences and the edge set derives from the same fence-blind scan, so a note
-documenting Obsidian syntax injects a phantom edge that `checkCorpus` will prove symmetric
-and pass; the frontmatter regex eats content up to a second `---`; wikilink heading anchors
-are discarded; image embeds degrade to bare words; the excerpt regex turns `Step-by-Step`
-into `StepbyStep` and that string is the meta description, the card, the preview, and the
-search snippet; and `outgoing` derives from wikilinks only, so a plain Markdown link
-produces no backlink and no gate can see it.
+**Problem.** The artifact contract is currently defined by whatever one private
+`export.py` happens to emit. That was adequate while this repository published one
+person's vault; it is not adequate now that the project is to be a reusable publisher
+(TK-23), because other users will not have that script. A contract defined by one
+implementation is not a contract.
+
+Six defects in the reference implementation are reproduced, and each is really a hole in
+the unwritten specification rather than only a bug: wikilinks are rewritten inside code
+fences and the edge set derives from the same fence-blind scan, so a note documenting
+Obsidian syntax injects a phantom edge that `checkCorpus` proves symmetric and passes; the
+frontmatter regex eats content up to a second `---`; wikilink heading anchors are
+discarded, which is why TK-07's heading previews ship as a bounded partial; image embeds
+degrade to bare words; the excerpt regex turns `Step-by-Step` into `StepbyStep`, and that
+string is the meta description, the card, the hover preview, and the search snippet; and
+`outgoing` derives from wikilinks only, so a plain Markdown link produces a live anchor
+with no backlink on its target and no gate can see it. `created` and `updated` are not
+emitted at all, which is why `/recent/` falls back to alphabetical order.
 
 **Scope.**
 
-1. Write the contract-change specification the exporter's owner would implement, defect by
-   defect, with a test case for each. This repository does not implement it.
-2. Document the escalation path for a contract change that breaks the build, including the
-   known case where two tag labels collide and no fix is available from this repository.
-3. State, per pending ticket, which behaviour is blocked on the exporter, so nobody builds
-   a renderer for a field that will never arrive.
+1. Write the artifact specification as a document any producer can implement against —
+   not as a patch list for one script. Field by field: type, constraints, what a consumer
+   may assume, and what it must degrade to when a field is absent. `src/lib/schema.ts` is
+   the de facto specification today; the written contract must agree with it or the
+   disagreement is itself a finding.
+2. Give each of the six defects a reproducible test case stated against the specification
+   rather than against `export.py`, so a second implementation inherits the same
+   requirement.
+3. Publish a conformance fixture — a small vault-shaped input and the exact artifact a
+   conforming producer must emit from it — so an implementation can be checked without
+   reading the reference code.
+4. Document the escalation path for a contract change that breaks the build, including the
+   known case where two tag labels slug to the same key and no fix is available from the
+   consuming repository.
+5. State, per pending ticket, which behaviour is blocked on a producer, so nobody builds a
+   renderer for a field that will never arrive.
+
+This repository does not implement the producer. It specifies what it consumes.
 
 **Acceptance criteria.**
 
-- One specification document with a reproducible test case per defect.
+- One specification document a stranger could implement a producer from, with a
+  reproducible test case per defect.
+- A conformance fixture pairing an input with its required output.
+- The specification and `src/lib/schema.ts` agree, or every divergence is recorded with a
+  reason.
 - Every blocked behaviour in the backlog names its blocker.
+
+---
+
+#### TK-23 — Generalisation and distribution
+
+**Requirements:** the owner's decision of 2026-08-11; sections 21.1, 21.2
+
+**Problem.** The project is hardcoded to one owner. `export.py` refuses to write anywhere
+but a directory named `thoughtscape-publish` and checks `package.json`'s name to prove it;
+the vault path is a fixed relative path; the site origin, title, navigation labels, and the
+about and privacy copy are literals in the tree. Another user cannot clone this and publish
+their own garden.
+
+The target is that a user adds **one GitHub Action to their own notes repository** and gets
+a published knowledge garden. That is a different product from what exists, and it is
+scheduled **ahead of wave 4** deliberately: building release gates, a benchmark, and
+architecture records around single-owner assumptions would mean redoing all three once
+those assumptions change.
+
+**Scope.**
+
+1. **Make every site-identifying literal configuration** with a documented default: origin,
+   site title, navigation labels, about and privacy copy, and the vault path. The origin
+   already has the right shape — `astro.config.mjs` is the single place it is written and
+   `tests/metadata.test.ts` fails if it is ever written elsewhere — so this is a change of
+   source, not of structure.
+2. **The origin becomes deployment-time configuration.** No domain is needed to develop,
+   test, or preview. Remove the assumption that a build requires a real origin.
+3. **Local preview at `http://publish.localhost/`**, so the local experience needs no
+   domain and no hosts-file surgery beyond what `.localhost` already guarantees.
+4. **A reusable GitHub Action** a user adds to their notes repository. It must run the
+   allowlist export, the build, and every gate `verify` composes, and it must fail closed:
+   the privacy scan is the product, not a formality.
+5. **Keep the privacy model intact.** The allowlist manifest and the artifact boundary are
+   the reason this project exists. Generalising must not turn "publish exactly what the
+   manifest names" into "publish the repository".
+6. **Document the setup path** end to end for a user who has a notes repository and nothing
+   else.
+
+**Acceptance criteria.**
+
+- A second, synthetic notes repository publishes successfully through the Action with no
+  edit to this repository's source.
+- `pnpm run build` and `pnpm run preview` succeed with no origin configured, and preview is
+  reachable at `http://publish.localhost/`.
+- No site-identifying literal remains outside configuration, proven by a test.
+- The privacy scan runs inside the Action and fails the run on a seeded violation.
+- A user-facing setup document, followed start to finish, produces a published site.
 
 ---
 
