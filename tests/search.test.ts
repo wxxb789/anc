@@ -24,7 +24,7 @@ import type { AddressInfo } from 'node:net';
 import type { Browser, ConsoleMessage, Page } from 'playwright';
 
 import { otherLanguages } from '../src/scripts/search-dialog.ts';
-import { MESSAGE_DATASET, translate } from '../src/lib/translations.ts';
+import { MESSAGE_DATASET, translate, type Translation } from '../src/lib/translations.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = fileURLToPath(new URL('dist/', ROOT));
@@ -396,15 +396,59 @@ function collectFailures(page: Page): string[] {
   return failures;
 }
 
+/**
+ * Which `Translation` key holds each announceable state's sentence.
+ *
+ * The gates key by state, and `MESSAGE_DATASET` maps a state to the *dataset*
+ * key the markup carries — `messageLoading`, not `searchLoading` — so it cannot
+ * index the locale table. A rename in either direction is a type error here.
+ */
+const SEARCH_STATE_KEY = {
+  idle: 'searchIdle',
+  loading: 'searchLoading',
+  empty: 'searchEmpty',
+  failed: 'searchFailed',
+} as const satisfies Record<keyof typeof MESSAGE_DATASET, keyof Translation>;
+
+/**
+ * The status sentence a page's own locale resolves for a state.
+ *
+ * Since TK-16 these four sentences are per-document chrome: `Layout.astro`
+ * resolves them for the document's own language and writes them to
+ * `#search-status` as `data-message-*`, and `search-dialog.ts` announces by
+ * reading them back. A gate that hardcodes the English form asserts against a
+ * sentence a zh-CN page never renders — `dist/notes/orphan-three-zh/` carries
+ * `data-message-loading="正在加载搜索索引…"`, so an English literal makes
+ * `openSearch` wait 20 s for text that page has no way to produce.
+ *
+ * Resolved through `translate()` rather than read back off the page's own
+ * attribute, and the difference is what keeps these gates gates. Sourcing the
+ * expectation from the element under test compares the page against itself: it
+ * passes for whatever the page renders, including nothing at all, so the whole
+ * i18n contract could regress green. This states the sentence `Layout.astro`
+ * was supposed to write, from the same table it writes from.
+ *
+ * The language comes from `<html lang>` — the document's own, not a site-wide
+ * constant — because per-document resolution is the property TK-16 establishes.
+ */
+async function statusMessage(page: Page, state: keyof typeof SEARCH_STATE_KEY): Promise<string> {
+  const language = await page.getAttribute('html', 'lang');
+  assert.ok(language !== null && language !== '', 'the page declares no lang, so no chrome language can be resolved');
+  const sentence = translate(language)[SEARCH_STATE_KEY[state]];
+  assert.ok(sentence !== '', `the "${language}" locale has no ${state} sentence for the dialog to announce`);
+  return sentence;
+}
+
 /** Open the dialog and wait for the bundle to settle into a resting state. */
 async function openSearch(page: Page): Promise<void> {
+  const loading = await statusMessage(page, 'loading');
   await page.click('#search-toggle');
   await page.waitForFunction(
-    () => {
+    (sentence) => {
       const status = document.querySelector('#search-status');
-      return status !== null && status.textContent !== 'Loading the search index…';
+      return status !== null && status.textContent !== sentence;
     },
-    undefined,
+    loading,
     { timeout: 20_000 },
   );
 }
@@ -471,18 +515,26 @@ test('no results, still loading, and load failure are told apart', async (contex
     page = await browser.newPage();
     await page.goto(`${origin}/`);
 
+    // Each sentence is read before the state is driven to, so the comparison is
+    // against what this document resolved rather than against English. Equality
+    // rather than the `startsWith` these two once used: `announce` assigns the
+    // attribute verbatim, so the whole sentence is the exact expected text, and
+    // a prefix would also accept a state that merely began the same way.
+    const loadingSentence = await statusMessage(page, 'loading');
+    const emptySentence = await statusMessage(page, 'empty');
+
     await page.click('#search-toggle');
     await page.waitForFunction(
-      () => document.querySelector('#search-status')?.textContent === 'Loading the search index…',
-      undefined,
+      (sentence) => document.querySelector('#search-status')?.textContent === sentence,
+      loadingSentence,
       { timeout: 10_000 },
     );
     const loadingMessage = await page.textContent('#search-status');
 
     interference = {};
     await page.waitForFunction(
-      () => document.querySelector('#search-status')?.textContent !== 'Loading the search index…',
-      undefined,
+      (sentence) => document.querySelector('#search-status')?.textContent !== sentence,
+      loadingSentence,
       { timeout: 20_000 },
     );
     const idleMessage = await page.textContent('#search-status');
@@ -490,8 +542,8 @@ test('no results, still loading, and load failure are told apart', async (contex
     // A term no note contains. The corpus is real, so this has to be nonsense.
     await page.fill('#search-input', 'zzqqxwv');
     await page.waitForFunction(
-      () => (document.querySelector('#search-status')?.textContent ?? '').startsWith('No results'),
-      undefined,
+      (sentence) => document.querySelector('#search-status')?.textContent === sentence,
+      emptySentence,
       { timeout: 20_000 },
     );
     const emptyMessage = await page.textContent('#search-status');
@@ -507,8 +559,8 @@ test('no results, still loading, and load failure are told apart', async (contex
       await broken.goto(`${origin}/`);
       await broken.click('#search-toggle');
       await broken.waitForFunction(
-        () => (document.querySelector('#search-status')?.textContent ?? '').startsWith('The search index could not'),
-        undefined,
+        (sentence) => document.querySelector('#search-status')?.textContent === sentence,
+        await statusMessage(broken, 'failed'),
         { timeout: 20_000 },
       );
       const failedMessage = await broken.textContent('#search-status');
@@ -594,19 +646,22 @@ test('a broken search runtime reports failure rather than a working empty index'
   ];
 
   /** Open search on the home page with one asset missing; return what it says. */
-  async function withoutAsset(missing: string): Promise<{ status: string; rows: number }> {
+  async function withoutAsset(missing: string): Promise<{ status: string; rows: number; failed: string }> {
     interference = { failPath: missing, exact: true };
     const page = await browser.newPage();
     try {
       await page.goto(`${origin}/`);
+      // Both sentences come from the page under test, and the failure one is
+      // returned alongside the status so the caller compares like with like.
+      const failed = await statusMessage(page, 'failed');
       await page.click('#search-toggle');
       await page
         .waitForFunction(
-          () => {
+          (sentence) => {
             const text = document.querySelector('#search-status')?.textContent ?? '';
-            return text !== '' && text !== 'Loading the search index…';
+            return text !== '' && text !== sentence;
           },
-          undefined,
+          await statusMessage(page, 'loading'),
           { timeout: 20_000 },
         )
         .catch(() => undefined);
@@ -618,7 +673,7 @@ test('a broken search runtime reports failure rather than a working empty index'
       const rows = await page.$$eval('#search-results a', (links) => links.length);
       // Failure must never cost the reader the page they came for.
       assert.ok(await page.isVisible('main'), `${missing}: the page became unusable`);
-      return { status, rows };
+      return { status, rows, failed };
     } finally {
       await page.close();
     }
@@ -626,9 +681,9 @@ test('a broken search runtime reports failure rather than a working empty index'
 
   try {
     for (const missing of fatal) {
-      const { status } = await withoutAsset(missing);
+      const { status, failed } = await withoutAsset(missing);
       assert.ok(
-        status.startsWith('The search index could not'),
+        status === failed,
         `with ${missing} unavailable the reader was told ${JSON.stringify(status)} ` +
           'instead of that the search index had failed',
       );
@@ -680,20 +735,21 @@ test('a lost merged language leaves the rest of the search working', async (cont
       const page = await browser.newPage();
       try {
         await page.goto(`${origin}/`);
+        const failed = await statusMessage(page, 'failed');
         await page.click('#search-toggle');
         await page
           .waitForFunction(
-            () => {
+            (sentence) => {
               const text = document.querySelector('#search-status')?.textContent ?? '';
-              return text !== '' && text !== 'Loading the search index…';
+              return text !== '' && text !== sentence;
             },
-            undefined,
+            await statusMessage(page, 'loading'),
             { timeout: 20_000 },
           )
           .catch(() => undefined);
         const status = (await page.textContent('#search-status')) ?? '';
         assert.ok(
-          !status.startsWith('The search index could not'),
+          status !== failed,
           `losing the merged "${language}" index failed the whole search — the reader still has the ` +
             `"${homeLanguage}" index for the page they are on, and partial results beat none`,
         );
@@ -769,10 +825,11 @@ test('the retry offered on failure recovers once the outage clears', async (cont
     const closable = await browser.newPage();
     try {
       await closable.goto(`${origin}/`);
+      const failedSentence = await statusMessage(closable, 'failed');
       await closable.click('#search-toggle');
       await closable.waitForFunction(
-        () => (document.querySelector('#search-status')?.textContent ?? '').startsWith('The search index could not'),
-        undefined,
+        (sentence) => document.querySelector('#search-status')?.textContent === sentence,
+        failedSentence,
         { timeout: 20_000 },
       );
       await closable.focus('.search-close button');
@@ -788,8 +845,8 @@ test('the retry offered on failure recovers once the outage clears', async (cont
       // against a message that promised it would work.
       await closable.click('#search-toggle');
       await closable.waitForFunction(
-        () => (document.querySelector('#search-status')?.textContent ?? '').startsWith('The search index could not'),
-        undefined,
+        (sentence) => document.querySelector('#search-status')?.textContent === sentence,
+        failedSentence,
         { timeout: 20_000 },
       );
       //
@@ -809,14 +866,9 @@ test('the retry offered on failure recovers once the outage clears', async (cont
       //
       // The property asserted is unchanged: Enter with focus on the dialog
       // itself retries, and reaching `loading` is what proves it did. The
-      // sentence is read from the element the script reads it from, so this
-      // compares against whatever language the page resolved rather than
-      // against an English literal — `Layout.astro` fills those attributes per
-      // document since TK-16.
-      const loadingMessage = await closable.evaluate(
-        (key) => (document.querySelector('#search-status') as HTMLElement).dataset[key]!,
-        MESSAGE_DATASET.loading,
-      );
+      // sentence comes from the page's own locale rather than from an English
+      // literal — `Layout.astro` resolves those per document since TK-16.
+      const loadingMessage = await statusMessage(closable, 'loading');
       await closable.evaluate(() => {
         const status = document.querySelector('#search-status')!;
         const seen: string[] = [];
@@ -848,11 +900,12 @@ test('the retry offered on failure recovers once the outage clears', async (cont
       const page = await browser.newPage();
       try {
         await page.goto(`${origin}/`);
+        const failed = await statusMessage(page, 'failed');
         await page.click('#search-toggle');
         await page
           .waitForFunction(
-            () => (document.querySelector('#search-status')?.textContent ?? '').startsWith('The search index could not'),
-            undefined,
+            (sentence) => document.querySelector('#search-status')?.textContent === sentence,
+            failed,
             { timeout: 20_000 },
           )
           .catch(() => assert.fail(`${missing}: search never reported failure, so there was nothing to retry`));
@@ -861,8 +914,8 @@ test('the retry offered on failure recovers once the outage clears', async (cont
         await page.focus('#search-input');
         await page.keyboard.press('Enter');
         await page.waitForFunction(
-          () => !(document.querySelector('#search-status')?.textContent ?? '').startsWith('The search index could not'),
-          undefined,
+          (sentence) => document.querySelector('#search-status')?.textContent !== sentence,
+          failed,
           { timeout: 20_000 },
         ).catch(() => assert.fail(`${missing}: Enter did not retry after the outage cleared`));
 
@@ -907,8 +960,8 @@ test('search is fully operable from the keyboard', async (context) => {
     assert.equal(await page.inputValue('#search-input'), '', 'the shortcut key was typed into the field');
 
     await page.waitForFunction(
-      () => document.querySelector('#search-status')?.textContent !== 'Loading the search index…',
-      undefined,
+      (sentence) => document.querySelector('#search-status')?.textContent !== sentence,
+      await statusMessage(page, 'loading'),
       { timeout: 20_000 },
     );
     await page.fill('#search-input', PRIMARY_QUERY);
