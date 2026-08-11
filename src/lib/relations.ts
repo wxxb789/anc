@@ -67,23 +67,7 @@ export function notesForSlugs(
  */
 export const RELATED_LIMIT = 5;
 
-/**
- * The rule this module implements is also stated to the reader, and the prose
- * lives in `Translation.relatedDerivation` — in both languages, since it is
- * chrome.
- *
- * It used to live here, beside the comparator, because the first version of this
- * module shipped a page that stated a rule the ranking did not implement: the
- * prose said "rarest tag first" while the code summed weights, so two middling
- * tags beat one rare one. TK-16 moved it, because a sentence that must exist in
- * two languages cannot also live in the module that has no locale.
- *
- * **If you change the ranking below, change `relatedDerivation` in both locales
- * of `src/lib/translations.ts`.** A string next to the comparator was never
- * proof the two agreed — `tests/relations.test.ts` proves that — and the gate
- * over `dist/` still asserts the page renders exactly the resolved sentence, so
- * a stale one is caught by the same test it always was.
- */
+
 
 /**
  * `tagFacets` for one corpus, computed once.
@@ -167,6 +151,19 @@ function sharedFacets(entry: ContentEntry, entries: readonly ContentEntry[]): Fa
  * page" means: `Gardening` and `gardening` are one tag here because they are
  * one tag there. A private second normalization would let a note be listed as
  * related on a tag the site never publishes.
+ *
+ * **The rule below is also stated to the reader, and that prose is not here.**
+ * It lives in `Translation.relatedDerivation`, in both languages, because it is
+ * chrome and chrome is per document since TK-16. It used to sit beside this
+ * comparator because the first version of this module shipped a page stating a
+ * rule the ranking did not implement — the prose said "rarest tag first" while
+ * the code summed weights, so two middling tags beat one rare one.
+ *
+ * So: **if you change the ranking below, change `relatedDerivation` in both
+ * locales of `src/lib/translations.ts`.** Proximity was never proof the two
+ * agreed — `tests/relations.test.ts` proves the rule and the gate over `dist/`
+ * asserts the page renders exactly the resolved sentence — but it was the
+ * reminder, and this paragraph is what replaces it.
  *
  * ponytail: the facets are recomputed per call, so a whole build is quadratic
  * in tag membership — at `MAX_ENTRIES` that is roughly two million set

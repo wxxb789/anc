@@ -17,25 +17,19 @@ interface Props {
   level?: 2 | 3;
   /** The page's own language, which decides the chrome around these cards. */
   lang: string;
-  /**
-   * Shown instead of the grid when there is nothing to list.
-   *
-   * Only the home page and `/recent/` can actually reach it: a facet page
-   * exists because an entry produced it, so its list is never empty. It defaults
-   * to the resolved `noNotesYet` rather than each caller passing a message that
-   * cannot be displayed — a string nobody can see is a string nobody maintains.
-   */
-  empty?: string;
 }
 
 const { entries, level = 3, lang } = Astro.props;
 const t = translate(lang);
-const empty = Astro.props.empty ?? t.noNotesYet;
 const Heading = `h${level}` as 'h2' | 'h3';
 ---
 
+{/* Only the home page and `/recent/` can reach the empty state: a facet page
+    exists because an entry produced it, so its list is never empty. The message
+    is the locale's rather than a caller's prop — every caller passed the same
+    string, and a per-caller override nobody used is a string nobody maintains. */}
 {entries.length === 0 ? (
-  <p class="empty-state">{empty}</p>
+  <p class="empty-state">{t.noNotesYet}</p>
 ) : (
   <div class="note-grid">
     {entries.map((entry) => (

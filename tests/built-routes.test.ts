@@ -20,7 +20,7 @@ import { test, type TestContext } from 'vitest';
 import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
-import { NAV_LANGUAGE, translate } from '../src/lib/translations.ts';
+import { NAV_LANGUAGE, THEME_NAMES, translate, type Translation } from '../src/lib/translations.ts';
 import {
   RELATED_LIMIT,
   collectionNeighbours,
@@ -1486,7 +1486,6 @@ function declaredLanguage(html: string): string {
   return lang;
 }
 
-/** The locale a page in `language` must not render anything from. */
 /**
  * A string as it appears inside a built *attribute* value.
  *
@@ -1500,7 +1499,15 @@ function asInAttribute(value: string): string {
   return asRendered(value).replaceAll('"', '&quot;');
 }
 
-function otherLocale(language: string) {
+/**
+ * The locale a page in `language` must **not** render anything from.
+ *
+ * Two locales, so "the other one" is well defined: a `zh*` page's other locale
+ * is English and every other page's is Chinese. Adding a third locale makes this
+ * a choice rather than a fact, at which point the negative assertions it feeds
+ * need restating as "no locale but this document's".
+ */
+function otherLocale(language: string): Translation {
   return translate(language.toLowerCase().startsWith('zh') ? 'en' : 'zh-CN');
 }
 
@@ -1966,12 +1973,25 @@ test('artifact text is rendered verbatim whatever language the chrome is in', ()
 test('no shipped script carries a translation table', () => {
   // Strings long enough to be unmistakable, from the two surfaces a script
   // writes text into, in both languages.
+  // Every marker must be a **contiguous literal in the source**, or it cannot
+  // appear in a bundle even if the whole locale shipped and the assertion is
+  // vacuous. `themeLabel('dark')` was one such: it is assembled at runtime by
+  // indexing an object, so `主题：深色` exists in no source file and no bundle
+  // could contain it. The theme labels are covered by the raw state words
+  // instead, which are literals in the locale.
   const MARKERS = [
     translate('en').searchFailed,
     translate('zh-CN').searchFailed,
     translate('en').searchEmpty,
-    translate('zh-CN').themeLabel('dark'),
+    translate('zh-CN').searchEmpty,
     translate('zh-CN').skipToContent,
+    translate('en').noteProvenance,
+    translate('zh-CN').noteProvenance,
+    // The three theme words, which `themeLabel` interpolates and which are the
+    // only part of that entry a bundle could carry.
+    '跟随系统',
+    '浅色',
+    '深色',
   ];
 
   let inspected = 0;
@@ -2030,7 +2050,22 @@ test('the article chrome the renderer emits is in the document own language', ()
       // everything before it is the author's words. The label is then *rebuilt*
       // around exactly that text and compared whole, which is what avoids ever
       // pattern-matching translated prose.
-      const heading = headingText!.slice(0, headingText!.indexOf('<a class="heading-anchor"')).trim();
+      //
+      // Decoded and stripped first. The captured text is *built HTML*, so a
+      // heading containing `&` arrives as `&amp;` and one containing inline
+      // code arrives wrapped in `<code>` — re-escaping either produces
+      // `&amp;amp;` and a mismatch on a page that is correct. Only the three
+      // entities `asRendered` produces are decoded, which is exactly the inverse
+      // of the escaping being undone.
+      const heading = headingText!
+        .slice(0, headingText!.indexOf('<a class="heading-anchor"'))
+        .replace(/<[^>]*>/g, '')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#38;', '&')
+        .replaceAll('&amp;', '&')
+        .trim();
       // `asInAttribute`, not `asRendered`: a heading containing a double quote
       // renders raw in the element's text and as `&quot;` inside the attribute,
       // so comparing the two forms with one escaper reports a mismatch on a
@@ -2052,4 +2087,149 @@ test('the article chrome the renderer emits is in the document own language', ()
   // Every note in both corpora has headings, so a build that emitted no anchor
   // at all is a defect rather than a corpus shape to tolerate.
   assert.ok(anchors > 0, 'no heading anchor was inspected, so this gate checked nothing');
+});
+
+/**
+ * Every `data-` attribute a shipped script reads is present and non-empty.
+ *
+ * This is what makes the two lookup tables checkable. `preferences.ts` reads
+ * `dataset[THEME_DATASET[theme]]` and `search-dialog.ts` reads
+ * `dataset[MESSAGE_DATASET[state]]`, and neither is a type error when
+ * misspelled — `dataset[key]` is `string | undefined` for any key — so a rename
+ * on either side is a theme toggle that renders the raw English state name, or
+ * a status line that silently goes blank. Both are invisible to every other
+ * gate here, because the markup and the script are each individually valid.
+ *
+ * The attribute names are spelled from the same camelCase keys the scripts use,
+ * converted the way the DOM converts them, so this gate and the runtime cannot
+ * disagree about the mapping.
+ */
+test('every data- attribute a shipped script reads is present and non-empty', () => {
+  /** `messageIdle` → `data-message-idle`, exactly as `dataset` maps it. */
+  const attributeFor = (key: string) => `data-${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+
+  const expected = [
+    { selector: 'button id="theme-toggle"', keys: THEME_NAMES.map((theme) => `label${theme[0]!.toUpperCase()}${theme.slice(1)}`) },
+    { selector: 'p id="search-status"', keys: ['messageIdle', 'messageLoading', 'messageEmpty', 'messageFailed'] },
+  ] as const;
+
+  let checked = 0;
+  for (const route of ROUTES) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    for (const { selector, keys } of expected) {
+      const [tag, id] = selector.split(' ') as [string, string];
+      const element: string | undefined = new RegExp(`<${tag}\\s[^>]*${id}[^>]*>`).exec(html)?.[0];
+      assert.ok(element !== undefined, `${route}: no element matching "${selector}"`);
+      for (const key of keys) {
+        const attributeValue: string | undefined = new RegExp(`\\s${attributeFor(key)}="([^"]*)"`).exec(element)?.[1];
+        assert.ok(
+          attributeValue !== undefined,
+          `${route}: "${selector}" carries no ${attributeFor(key)}, so the script reading ` +
+            `dataset.${key} gets undefined and renders nothing`,
+        );
+        assert.ok(attributeValue.trim() !== '', `${route}: ${attributeFor(key)} is empty`);
+        checked += 1;
+      }
+    }
+  }
+  assert.ok(checked > 0, 'no attribute was inspected');
+});
+
+/**
+ * A foreign-language title is marked wherever a title is listed.
+ *
+ * The rail gate above covers one of the five places this site lists a note's
+ * title, and the other four were ungated: deleting `partLanguage` from
+ * `NoteList`, from `LinkedNotes`, or from either half of the collection pager
+ * left the whole suite green. Every list is covered here, keyed on the class the
+ * component gives it, and the per-surface counters are what stop a surface that
+ * rendered nothing from passing silently.
+ */
+test('a foreign-language title is marked in every list, not only the rail', (context) => {
+  const languages = new Set(entries.map((entry) => entry.language ?? NAV_LANGUAGE));
+  context.skip(
+    languages.size < 2,
+    `the corpus declares ${languages.size} language — run \`pnpm run build:fixture\` for the bilingual gate`,
+  );
+
+  const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+
+  /**
+   * Each surface, and the markup that identifies one of its title elements.
+   *
+   * Every pattern captures the element's attributes and the slug it links, so
+   * the same check runs over all of them. The note card is two elements — the
+   * heading and the excerpt — and both carry the attribute, so both are matched.
+   */
+  const SURFACES: readonly { name: string; pattern: RegExp; reversed: boolean }[] = [
+    // `\s?([^>]*)` rather than `\s([^>]*)`: an unmarked heading is a bare
+    // `<h3>` with no attributes at all, and requiring the space matched only the
+    // marked ones — so the gate saw four Chinese headings, all correct, and no
+    // English ones. That version reported the English cards as missing.
+    { name: 'note card heading', pattern: /<h[23]\s?([^>]*)><a href="\/notes\/([^/"]+)\//g, reversed: false },
+    { name: 'note card excerpt', pattern: /<article class="note-card">[\s\S]*?<a href="\/notes\/([^/"]+)\/"[^>]*>[\s\S]*?<p\s?([^>]*)>/g, reversed: true },
+    // `\s?` again: an unmarked anchor closes right after its href.
+    { name: 'relations list', pattern: /<li><a href="\/notes\/([^/"]+)\/"\s?([^>]*)>/g, reversed: true },
+    { name: 'collection pager', pattern: /<a[^>]*href="\/notes\/([^/"]+)\/"[^>]*rel="(?:prev|next)"[^>]*>[\s\S]*?<span class="pager-title"\s?([^>]*)>/g, reversed: true },
+  ];
+
+  const marked = new Map<string, number>();
+  const unmarked = new Map<string, number>();
+
+  for (const route of ROUTES) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    const pageLanguage = declaredLanguage(html);
+    // The rail lists the whole corpus on every page and is checked by its own
+    // gate; excluding it here keeps each surface's counters honest about that
+    // surface rather than being dominated by the rail's rows.
+    const body = html.replace(/<nav class="explorer"[\s\S]*?<\/nav>/, '');
+
+    for (const surface of SURFACES) {
+      for (const match of body.matchAll(surface.pattern)) {
+        const [attributes, slug] = surface.reversed
+          ? [match[2]!, match[1]!]
+          : [match[1]!, match[2]!];
+        const entry = bySlug.get(slug);
+        if (entry === undefined) continue;
+        const own = entry.language ?? NAV_LANGUAGE;
+        // `(?:^|\s)`, not `\s`: the captured attribute string starts at the
+        // attribute itself, so `lang="zh-CN"` has no leading space and a bare
+        // `\slang=` found nothing — reporting a correctly marked heading as
+        // unmarked. The rail gate above captures a leading space because its
+        // pattern matches `<a\s`; this one does not, and assuming they were the
+        // same shape is what produced the false failure.
+        const declared = /(?:^|\s)lang="([^"]*)"/.exec(attributes)?.[1];
+        if (own.toLowerCase() === pageLanguage.toLowerCase()) {
+          assert.equal(
+            declared,
+            undefined,
+            `${route}: ${surface.name} for "${slug}" is in the page's own language but carries lang="${declared}"`,
+          );
+          unmarked.set(surface.name, (unmarked.get(surface.name) ?? 0) + 1);
+        } else {
+          assert.equal(
+            declared,
+            own,
+            `${route}: ${surface.name} for "${slug}" is ${own} on a ${pageLanguage} page but is marked ${JSON.stringify(declared)}`,
+          );
+          marked.set(surface.name, (marked.get(surface.name) ?? 0) + 1);
+        }
+      }
+    }
+  }
+
+  // Every surface was reached, and every surface met at least one foreign title.
+  // Without both, deleting the attribute from a component the corpus happens not
+  // to exercise would leave this green — which is the defect that made this gate
+  // necessary in the first place.
+  for (const surface of SURFACES) {
+    assert.ok(
+      (marked.get(surface.name) ?? 0) > 0,
+      `no foreign-language title was inspected on the ${surface.name} — this surface is ungated`,
+    );
+    assert.ok(
+      (unmarked.get(surface.name) ?? 0) > 0,
+      `no same-language title was inspected on the ${surface.name}`,
+    );
+  }
 });
