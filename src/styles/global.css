@@ -1513,12 +1513,19 @@ main:focus:not(:focus-visible) {
        article at zero JavaScript. The offset clears the sticky header. */
     position: sticky;
     top: 5rem;
-    /* The gutter goes: it is the page's own edge padding, and inside a grid
-       track the shell's `gap` already separates the rail from the article.
+    /* The page gutter goes: it is the page's own edge padding, and inside a
+       grid track the shell's `gap` already separates the rail from the article.
        Keeping it would spend roughly a quarter of `--width-rail` on whitespace
-       and wrap titles that would otherwise fit. */
+       and wrap titles that would otherwise fit.
+
+       Not zero, though. `overflow-y: auto` below makes this a scroll container,
+       which clips on *both* axes — and the global focus ring is a 2 px outline
+       at `outline-offset: 2px`, so it reaches 4 px outside the element it is
+       drawn on. Measured with no padding: the ring on a summary sat exactly
+       4 px left of the rail's box and was cut flat. This is the space it needs
+       to be seen (WCAG 2.4.11). */
     margin: var(--space-16) 0 0;
-    padding: 0;
+    padding: 0 0 0 4px;
     /* Its own scroll container, so a rail longer than the viewport scrolls
        within itself instead of stretching the grid row and stranding the
        bottom of the list where no scroll can reach it. */
@@ -1545,17 +1552,31 @@ main:focus:not(:focus-visible) {
 
   *,
   *::before,
-  *::after,
-  /* A type selector matches elements, never a pseudo-element, so `*` alone does
-     not reach `::details-content` — the one thing on this site that animates
-     through it. Measured: with `prefers-reduced-motion: reduce` the explorer's
-     open transition still computed to 0.12s until this selector was added, so
-     the reset was silently exempting the newest animation on the site. */
-  *::details-content {
+  *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /*
+   * The explorer's open transition, in its own rule and **not** appended to the
+   * list above.
+   *
+   * Two facts make that separation load-bearing. A type selector matches
+   * elements and never a pseudo-element, so `*` alone does not reach
+   * `::details-content` — measured, the transition still computed to 0.12s
+   * under `reduce` until this rule existed. And an unrecognized pseudo-element
+   * invalidates the *entire* selector list it appears in, not just its own
+   * compound — also measured: `#a, #a::before, #a::unknown { … }` applies to
+   * nothing at all. `::details-content` is new enough that plenty of browsers
+   * do not know it, so putting it in the list above would have traded a
+   * rail-only reduced-motion gap for a site-wide one on exactly those
+   * browsers. Alone, it fails alone.
+   */
+  *::details-content {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }
 
@@ -1595,6 +1616,17 @@ main:focus:not(:focus-visible) {
   #search-dialog,
   #link-preview {
     display: none !important;
+  }
+
+  /* The two-column track goes with the rail it was reserved for. `:has(>
+     .explorer)` still matches the `display: none` child above, so without this
+     a landscape sheet keeps a 240 px column for something that is not printed
+     — measured at 1056 px, 272 px of blank paper down the right-hand edge. The
+     `:has()` selector is repeated rather than written plain because
+     `.page-shell` alone loses to it on specificity. Same defect and same fix as
+     the reader-mode reset above. */
+  .page-shell:has(> .explorer) {
+    display: block;
   }
 
   main {
