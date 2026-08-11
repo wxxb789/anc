@@ -26,6 +26,8 @@
    TK-12 held the scope open with a bare `export {}`; a real export replaced it. */
 
 /** Where the Pagefind bundle lives, as both a `<link>` href and an import base. */
+import { MESSAGE_DATASET } from '../lib/translations.ts';
+
 const BUNDLE_PATH = '/pagefind/';
 
 /**
@@ -315,26 +317,7 @@ const FILTER_REGIONS = [
   { filter: 'collection', containerElement: '#search-filter-collection', selectMultiple: false },
 ] as const;
 
-/**
- * The `dataset` key holding each announceable state's sentence.
- *
- * Written out rather than derived from the state name: `dataset['messageIdle']`
- * is `data-message-idle` in the markup, and nothing but this table records that
- * the two are meant to be the same thing.
- *
- * It is not a type error if one side is misspelled — `dataset[k]` is
- * `string | undefined` for any `k`, so the status line would simply go blank.
- * What makes the pairing checkable is the gate over `dist/`:
- * `tests/built-routes.test.ts` asserts every attribute named here is present and
- * non-empty on every built page. `preferences.ts` carries the same table for the
- * same reason and is covered by the same gate.
- */
-const MESSAGE_DATASET = {
-  idle: 'messageIdle',
-  loading: 'messageLoading',
-  empty: 'messageEmpty',
-  failed: 'messageFailed',
-} as const;
+
 
 /**
  * `globalThis.document?.` rather than a bare `document.`: this module exports

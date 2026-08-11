@@ -14,7 +14,7 @@
    module with its own top-level scope, so TK-06 and TK-07 can each declare
    `root`, `dialog`, or `preview` without colliding with the other's file. It was
    a bare `export {}` until TK-16 gave the file a real import. */
-import { THEME_NAMES, type ThemeName } from '../lib/translations.ts';
+import { THEME_DATASET, THEME_NAMES, type ThemeName } from '../lib/translations.ts';
 
 /*
  * These two keys are also read by `src/scripts/theme-init.js`, which cannot
@@ -38,28 +38,6 @@ const READER_KEY = 'thoughtscape:reader';
 const THEMES = THEME_NAMES;
 type Theme = ThemeName;
 
-/**
- * The `dataset` key carrying each theme's label.
- *
- * Written out rather than built from the theme name, and that is a fix rather
- * than a style: `dataset['label' + capitalize(theme)]` is a key spelled in two
- * places by two different rules, so a rename on either side yielded `undefined`
- * and the toggle silently fell back to rendering the raw English state name
- * inside Chinese chrome.
- *
- * Naming the keys does **not** make a typo a type error — `dataset[k]` is
- * `string | undefined` for any string `k`, so `labelSytem` compiles. What it
- * does is put both spellings where one diff shows them, and make the pairing
- * checkable: `tests/built-routes.test.ts` asserts every attribute this table
- * names is present and non-empty on every built page, which is the assertion
- * that actually fails on a rename. `search-dialog.ts` carries the same table
- * and is covered by the same gate.
- */
-const THEME_DATASET: Readonly<Record<Theme, string>> = {
-  system: 'labelSystem',
-  light: 'labelLight',
-  dark: 'labelDark',
-};
 
 const root = document.documentElement;
 

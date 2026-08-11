@@ -20,7 +20,14 @@ import { test, type TestContext } from 'vitest';
 import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
-import { NAV_LANGUAGE, THEME_NAMES, translate, type Translation } from '../src/lib/translations.ts';
+import {
+  MESSAGE_DATASET,
+  NAV_LANGUAGE,
+  THEME_DATASET,
+  datasetAttribute,
+  translate,
+  type Translation,
+} from '../src/lib/translations.ts';
 import {
   RELATED_LIMIT,
   collectionNeighbours,
@@ -2123,12 +2130,20 @@ test('the article chrome the renderer emits is in the document own language', ()
  * disagree about the mapping.
  */
 test('every data- attribute a shipped script reads is present and non-empty', () => {
-  /** `messageIdle` → `data-message-idle`, exactly as `dataset` maps it. */
-  const attributeFor = (key: string) => `data-${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+  // `datasetAttribute` is the same function the layout writes its attributes
+  // with, so this gate and the markup cannot disagree about the mapping — only
+  // about whether the attribute is actually there.
+  const attributeFor = datasetAttribute;
 
+  // The keys come from the tables the scripts actually index, imported rather
+  // than restated. Deriving them from `THEME_NAMES` or from a literal list was
+  // tried and is not equivalent: it catches a rename in the markup and misses
+  // one in the script, which is the direction that ships the defect — the
+  // toggle falls back to rendering the raw English state name inside Chinese
+  // chrome, and nothing else in the suite clicks it.
   const expected = [
-    { selector: 'button id="theme-toggle"', keys: THEME_NAMES.map((theme) => `label${theme[0]!.toUpperCase()}${theme.slice(1)}`) },
-    { selector: 'p id="search-status"', keys: ['messageIdle', 'messageLoading', 'messageEmpty', 'messageFailed'] },
+    { selector: 'button id="theme-toggle"', keys: Object.values(THEME_DATASET) },
+    { selector: 'p id="search-status"', keys: Object.values(MESSAGE_DATASET) },
   ] as const;
 
   let checked = 0;

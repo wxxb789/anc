@@ -11,7 +11,14 @@ import { entries } from '../lib/content.ts';
 import { collectionNavigation } from '../lib/collection-navigation.ts';
 import { PRIMARY_NAV, SITE_MAP } from '../lib/routes.ts';
 import { canonicalUrl, describe, SITE_NAME } from '../lib/site.ts';
-import { NAV_LANGUAGE, THEME_NAMES, translate } from '../lib/translations.ts';
+import {
+  MESSAGE_DATASET,
+  NAV_LANGUAGE,
+  THEME_DATASET,
+  THEME_NAMES,
+  datasetAttribute,
+  translate,
+} from '../lib/translations.ts';
 
 interface Props {
   title: string;
@@ -117,7 +124,7 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncol
           type="button"
           data-js-only
           {...Object.fromEntries(
-            THEME_NAMES.map((theme) => [`data-label-${theme}`, t.themeLabel(theme)]),
+            THEME_NAMES.map((theme) => [datasetAttribute(THEME_DATASET[theme]), t.themeLabel(theme)]),
           )}
         >{t.themeLabel(THEME_NAMES[0])}</button>
         <button id="reader-toggle" type="button" aria-pressed="false" data-js-only>{t.readerToggle}</button>
@@ -159,14 +166,12 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncol
           announces its own language. There is no rendered text — the region is
           empty until a state is announced, which is what makes the first message
           an announcement rather than a change nobody hears. */}
-      <p
-        id="search-status"
-        role="status"
-        data-message-idle={t.searchIdle}
-        data-message-loading={t.searchLoading}
-        data-message-empty={t.searchEmpty}
-        data-message-failed={t.searchFailed}
-      ></p>
+      <p id="search-status" role="status" {...Object.fromEntries([
+        [datasetAttribute(MESSAGE_DATASET.idle), t.searchIdle],
+        [datasetAttribute(MESSAGE_DATASET.loading), t.searchLoading],
+        [datasetAttribute(MESSAGE_DATASET.empty), t.searchEmpty],
+        [datasetAttribute(MESSAGE_DATASET.failed), t.searchFailed],
+      ])}></p>
       <ol id="search-results"></ol>
     </dialog>
     {/* The reading frame: the article, and the collection rail beside it.

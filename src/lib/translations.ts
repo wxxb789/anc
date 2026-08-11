@@ -51,6 +51,54 @@ export const THEME_NAMES = ['system', 'light', 'dark'] as const;
 export type ThemeName = (typeof THEME_NAMES)[number];
 
 /**
+ * The `dataset` key carrying each theme's label, and each search state's
+ * sentence, on the element the build writes them to.
+ *
+ * These pair a *script's* lookup with an *attribute* in the markup, and neither
+ * side type-checks the other: `dataset[key]` is `string | undefined` for any
+ * string, so a rename on either side is a toggle rendering the raw English state
+ * name inside Chinese chrome, or a status line that silently goes blank.
+ *
+ * They live here, in the module with no DOM, rather than beside the scripts that
+ * index them, for two reasons. The gate over `dist/` has to read *these objects*
+ * to check the pairing, and importing a client script under Node runs its
+ * top-level `document` access. And the layout writes its attributes from the
+ * same values through {@link datasetAttribute}, so the two spellings are now
+ * derived from one string rather than written twice — a rename here changes
+ * both sides together, which is what makes the divergence impossible rather
+ * than merely detectable.
+ *
+ * Restating the keys in the test instead was tried and is not equivalent: it
+ * catches a rename in the markup and misses one in the script, which is the
+ * direction that ships the defect. Verified by mutation.
+ */
+export const THEME_DATASET: Readonly<Record<ThemeName, string>> = {
+  system: 'labelSystem',
+  light: 'labelLight',
+  dark: 'labelDark',
+};
+
+/**
+ * The attribute name the DOM maps a `dataset` key from: `messageIdle` becomes
+ * `data-message-idle`.
+ *
+ * The layout writes attributes through this and the scripts read the keys
+ * directly, so the two spellings are derived from one value rather than written
+ * twice — which is what makes a rename impossible to get half-right.
+ */
+export function datasetAttribute(key: string): string {
+  return `data-${key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`;
+}
+
+/** The four announceable search states. `ready` renders no sentence — see `announce`. */
+export const MESSAGE_DATASET = {
+  idle: 'messageIdle',
+  loading: 'messageLoading',
+  empty: 'messageEmpty',
+  failed: 'messageFailed',
+} as const;
+
+/**
  * The site navigation language: what a route that is not one document renders,
  * and what a document carrying no `language` falls back to.
  *
