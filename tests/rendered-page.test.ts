@@ -2134,11 +2134,13 @@ test('the graph table prints even when its disclosure is closed', async (context
           const details = document.querySelector<HTMLDetailsElement>('details.graph-table');
           if (details === null) return undefined;
           const rows = [...details.querySelectorAll<HTMLElement>('tbody tr')];
+          const summary = details.querySelector('summary');
           return {
             isOpen: details.open,
             rows: rows.length,
             visibleRows: rows.filter((row) => row.checkVisibility()).length,
-            summaryVisible: details.querySelector('summary')?.checkVisibility() ?? false,
+            summaryVisible: summary?.checkVisibility() ?? false,
+            marker: summary === null ? '' : getComputedStyle(summary).listStyleType,
           };
         });
 
@@ -2148,6 +2150,7 @@ test('the graph table prints even when its disclosure is closed', async (context
       if (onScreen === undefined) continue;
       assert.equal(onScreen.isOpen, false, `${route}: the table starts open, so the print case is untested`);
       assert.ok(onScreen.rows > 0, `${route}: the table has no rows to hide or print`);
+      assert.ok(onScreen.summaryVisible, `${route}: the disclosure control is not visible to open`);
       assert.equal(
         onScreen.visibleRows,
         0,
@@ -2163,6 +2166,12 @@ test('the graph table prints even when its disclosure is closed', async (context
         `${route}: ${onPaper.rows - onPaper.visibleRows} of ${onPaper.rows} table rows are absent from ` +
           'the printed page — the equivalent representation section 17 requires is not on paper',
       );
+      // The caption stays: it names what the table is, and a printed page has
+      // no other way to say so. Only its marker goes, which is what the print
+      // rule's `list-style: none` does — a disclosure triangle on paper points
+      // at an interaction nobody can perform.
+      assert.ok(onPaper.summaryVisible, `${route}: the table's caption is missing from the printed page`);
+      assert.equal(onPaper.marker, 'none', `${route}: the printed page shows a disclosure marker`);
       await page.emulateMedia({ media: 'screen' });
       inspected += 1;
     }

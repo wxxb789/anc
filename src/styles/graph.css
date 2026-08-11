@@ -39,14 +39,12 @@
 .graph-canvas {
   /* A graph wider than the measure scrolls rather than widening the page.
      `tabindex="0"` is on the element in the markup: a scrollable region must be
-     reachable by keyboard, and the browser then scrolls it with the arrows. */
+     reachable by keyboard, and the browser then scrolls it with the arrows.
+     The focus ring comes from `global.css`'s universal `:focus-visible`, which
+     already sets exactly this outline — restating it here was 87 bytes of a
+     conditional stylesheet that changed no computed value. */
   overflow-x: auto;
   text-align: center;
-}
-
-.graph-canvas:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
 }
 
 /*
@@ -200,11 +198,6 @@
   cursor: pointer;
 }
 
-.graph-table summary:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
-}
-
 /*
  * The table's own scroll container.
  *
@@ -226,11 +219,6 @@
  */
 .graph-table-scroll {
   overflow-x: auto;
-}
-
-.graph-table-scroll:focus-visible {
-  outline: 2px solid var(--color-focus);
-  outline-offset: 2px;
 }
 
 .graph-table table {

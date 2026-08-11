@@ -1049,7 +1049,7 @@ main:focus:not(:focus-visible) {
  * The graph region's frame, here rather than in `graph.css`.
  *
  * `graph.css` is conditional — it loads only on a page that actually draws a
- * figure (owner decision 7), which is the right trade for 699 B gz of SVG
+ * figure (owner decision 7), which is the right trade for a stylesheet of SVG
  * styling that most pages have no use for. But the region itself renders on
  * *every* note page, carrying its heading and, where there is no neighbourhood,
  * an empty state. Leaving the frame in the conditional sheet shipped that empty
