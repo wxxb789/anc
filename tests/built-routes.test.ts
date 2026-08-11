@@ -2292,6 +2292,14 @@ test('no page renders a string from a locale other than its own', () => {
     // A sentinel no locale contains, so the split lands on the interpolation
     // point whatever the argument's type.
     const rendered = String((value as (input: never) => string)('' as never));
+    // An entry that *maps* its argument rather than interpolating it — the
+    // Chinese `themeLabel` indexes a table of three theme words — yields
+    // `undefined` for a sentinel, so its fixed part would be a string no page
+    // can ever contain, and the comparison could never fail. Dropped, so the
+    // gate does not carry an assertion that cannot fire. The three theme words
+    // it leaves uncovered are asserted by the `data-` attribute gate above,
+    // which reads them off the element rather than out of the page text.
+    if (rendered.includes('undefined')) return [];
     return rendered.split('').filter((part) => part.trim().length >= 4);
   };
 

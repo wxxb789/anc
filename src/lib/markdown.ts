@@ -578,7 +578,13 @@ function headingPlugin(
           properties: {
             className: ['heading-anchor'],
             href: `#${id}`,
-            'aria-label': label(text),
+            // Trimmed, as the id on the line above already is. A heading
+            // carrying an image, a raw tag, or an HTML comment yields text with
+            // leading or trailing whitespace — `## Status <!-- note -->` gives
+            // `"Status "` — and an accessible name ending in a space is a name
+            // a screen reader reads with a pause nobody wrote. Both shapes are
+            // valid Markdown that neither corpus happens to contain.
+            'aria-label': label(text.trim()),
           },
           children: [{ type: 'text', value: '#' }],
         });

@@ -5,6 +5,7 @@ import { test } from 'vitest';
 import Slugger from 'github-slugger';
 import { TOC_MIN_HEADINGS, defaultRouteForSlug, renderMarkdown, type TocEntry } from '../src/lib/markdown.ts';
 import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
+import { translate } from '../src/lib/translations.ts';
 
 const FIXTURES = new URL('./fixtures/markdown/', import.meta.url);
 
@@ -39,6 +40,77 @@ test('renders footnotes with their backreference section', () => {
   assert.match(kitchenSink.html, /href="#user-content-fn-src"/);
   assert.match(kitchenSink.html, /href="#user-content-fnref-src"/);
   assert.match(kitchenSink.html, /The synthetic source note\./);
+});
+
+/**
+ * The footnote section's own two strings follow the document's language.
+ *
+ * GFM emits a visually hidden `<h2>` opening the section and an `aria-label` on
+ * every backref, and both are English defaults unless supplied — so a Chinese
+ * article announced "Back to reference 1" to a screen reader, which is the only
+ * reader who meets either string. They are passed through `RenderOptions.chrome`
+ * like the heading anchor and the diagram caption.
+ *
+ * Asserted here rather than over `dist/` because no built page reaches it: the
+ * one fixture note with footnotes is English, so the interesting direction is
+ * unreachable from either corpus and a gate over the artifact would check
+ * nothing. Reverting `featuresFor` to a module constant left the whole suite
+ * green before this existed.
+ *
+ * The rerun form is the half worth stating: a footnote cited twice gets a second
+ * backref labelled `1-2`, and that suffix is substituted by satteri into the
+ * `{reference}` placeholder the locale receives — so the locale is free to put
+ * the number where its own grammar wants it.
+ */
+test('the footnote section is labelled in the document own language', async () => {
+  const source = '# T\n\nOne[^a] and again[^a].\n\n[^a]: The note.\n';
+  const expected = {
+    en: { heading: 'Footnotes', first: 'Back to reference 1', rerun: 'Back to reference 1-2' },
+    'zh-CN': { heading: '脚注', first: '返回正文引用 1', rerun: '返回正文引用 1-2' },
+  } as const;
+
+  for (const [language, words] of Object.entries(expected)) {
+    const { html } = await renderMarkdown(source, { pageTitle: 'T', chrome: translate(language) });
+    assert.ok(
+      html.includes(`id="footnote-label">${words.heading}<`),
+      `${language}: the footnotes heading is not "${words.heading}"`,
+    );
+    for (const label of [words.first, words.rerun]) {
+      assert.ok(html.includes(`aria-label="${label}"`), `${language}: no backref labelled "${label}"`);
+    }
+    // And nothing from the other locale survives beside it.
+    const other = language === 'en' ? expected['zh-CN'] : expected.en;
+    for (const label of [other.heading, other.first]) {
+      assert.ok(!html.includes(label), `${language}: the footnote section also carries "${label}"`);
+    }
+  }
+});
+
+/**
+ * A heading anchor's accessible name is the heading, trimmed.
+ *
+ * The trim is the assertion: satteri's `textContent` keeps the whitespace around
+ * an image, a raw tag, or an HTML comment, so `## Status <!-- note -->` produced
+ * `aria-label="Link to section: Status "` — a name a screen reader reads with a
+ * pause nobody wrote. Both shapes are valid Markdown that neither corpus
+ * contains, which is why this is a unit test rather than a gate over `dist/`.
+ */
+test('a heading anchor is named for its heading, without surrounding whitespace', async () => {
+  const cases: readonly [string, string][] = [
+    ['## Status <!-- note -->\n\nx\n', 'Status'],
+    ['## ![icon](https://example.test/x.png) Overview\n\nx\n', 'Overview'],
+    ['## Plain Heading\n\nx\n', 'Plain Heading'],
+    ['## `code` in a heading\n\nx\n', 'code in a heading'],
+  ];
+
+  for (const [body, heading] of cases) {
+    const { html } = await renderMarkdown(`# T\n\n${body}`, {
+      pageTitle: 'T',
+      chrome: translate('zh-CN'),
+    });
+    const label = /<a class="heading-anchor"[^>]*aria-label="([^"]*)"/.exec(html)?.[1];
+    assert.equal(label, `跳转到章节：${heading}`, `${JSON.stringify(body)}: wrong accessible name`);
+  }
 });
 
 test('renders task lists as disabled checkboxes, never interactive', () => {
