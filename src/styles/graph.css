@@ -214,6 +214,15 @@
  * itself would strip its semantics (TK-02's deferral, still recorded in
  * `global.css`). This table is rendered by a component, so the wrapper is
  * simply written.
+ *
+ * Its `tabindex="0"` is unconditional even though the container only scrolls at
+ * narrow widths — measured: 350 px of content in 288 px at 320 px, and no
+ * overflow at 768 or 1280. That is the same shape `<pre>` and `.diagram-canvas`
+ * already have, and for the same reason: whether a region scrolls depends on
+ * the viewport and on the content, so the alternative is a keyboard stop that
+ * appears and disappears as a reader resizes. This is not the dead stop the
+ * figure's own `min-width` fixed — that one could *never* scroll at any width,
+ * which is a different fault.
  */
 .graph-table-scroll {
   overflow-x: auto;
@@ -236,8 +245,10 @@
   padding: var(--space-2);
   border-bottom: 1px solid var(--color-line-strong);
   text-align: left;
-  /* A title is the one cell that can be long; letting it wrap is what keeps the
-     table inside a 320 px viewport without a scroll container. */
+  /* A title is the one cell that can be long, and a long one would otherwise
+     set the column's width from its longest unbroken word. Wrapping keeps the
+     table close to its container; the scroll wrapper above is what handles the
+     rest, since four columns do not fit 320 px however they wrap. */
   overflow-wrap: break-word;
 }
 
@@ -285,24 +296,34 @@
   /*
    * The table is the graph's equivalent representation (requirements section
    * 17), so a printed page has to carry it — and a closed `<details>` prints
-   * closed, which would drop it from paper entirely.
+   * closed, which drops it from paper entirely.
    *
-   * `display: block` on the content is what forces it open: `details[open]`
-   * cannot be set from CSS, and the UA rule that hides a closed disclosure's
-   * content is a `display` rule this overrides. The marker is removed because a
-   * disclosure triangle on paper points at an interaction nobody can perform.
+   * `content-visibility: visible` on `::details-content` is what opens it:
+   * `details[open]` cannot be set from CSS, and Chromium hides a closed
+   * disclosure's content with `content-visibility: hidden` on that
+   * pseudo-element rather than with `display`. This repository already measured
+   * that once — `tests/rendered-page.test.ts` records it for the explorer rail's
+   * collapse — and two earlier versions of this rule ignored it: one set only
+   * `list-style: none`, the other overrode `display` on a `<div>` that was
+   * already block. Both left the table off the printed page while claiming in a
+   * comment to have fixed it. Verified by `checkVisibility()` on a body cell
+   * under `media: print`, not by reading a bounding box, which a hidden element
+   * still reports.
    *
-   * An earlier version set only `list-style: none`, and its comment claimed
-   * this effect — removing the marker while the section stayed collapsed.
+   * The marker goes because a disclosure triangle on paper points at an
+   * interaction nobody can perform.
    */
   .graph-table > summary {
     list-style: none;
   }
 
+  .graph-table::details-content {
+    content-visibility: visible;
+  }
+
   .graph-table-scroll {
     /* A scroll container prints as its visible window, cutting the right-hand
        columns off at the page edge. */
-    display: block;
     overflow-x: visible;
   }
 }

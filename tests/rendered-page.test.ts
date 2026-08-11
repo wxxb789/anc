@@ -2086,3 +2086,89 @@ test('the keyboard reaches every graph node, in the order the layout documents',
     await browserContext.close();
   }
 }, 120_000);
+
+/**
+ * The equivalent table is on the printed page, disclosure or not.
+ *
+ * Requirements section 17 asks for the graph's data as an equivalent list or
+ * table. On screen that table is a `<details>`, because the same data twice in
+ * a row is a long page — but a closed disclosure **prints closed**, which would
+ * drop the equivalent representation from paper entirely and leave a printed
+ * page carrying a picture and nothing a non-visual reader could use.
+ *
+ * **Measured with `checkVisibility()` under `media: print`, never with a box.**
+ * A closed `<details>` hides its content with `content-visibility: hidden` on
+ * `::details-content`, and such an element keeps a laid-out box — so
+ * `getBoundingClientRect().height > 0` reports a hidden table as present. That
+ * is not hypothetical here: two versions of the print rule shipped claiming in
+ * a comment to open the table while leaving it hidden, and one of them was
+ * "verified" by exactly that box measurement. The collection rail's gate above
+ * records the same trap; this is the second element to meet it.
+ *
+ * Both directions, so the rule cannot pass by opening the table everywhere: on
+ * screen the disclosure must still hide its content, or the `<details>` has
+ * stopped being one.
+ */
+test('the graph table prints even when its disclosure is closed', async (context) => {
+  const browser = requireBrowser(context);
+  const drawn = entries.filter((entry) => localGraph(entry, getEntry).edges.length > 0);
+  context.skip(
+    drawn.length === 0,
+    'no note draws a graph on this corpus — run `pnpm run build:fixture` for the print gate',
+  );
+
+  const browserContext = await browser.newContext({
+    viewport: { width: CASCADE_WIDTHS_PX.at(-1)!, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let inspected = 0;
+
+    for (const route of [noteRoute(drawn[0]!.slug), '/graph/']) {
+      if (!routes.includes(route)) continue;
+      await visit(page, route);
+
+      const measure = () =>
+        page.evaluate(() => {
+          const details = document.querySelector<HTMLDetailsElement>('details.graph-table');
+          if (details === null) return undefined;
+          const rows = [...details.querySelectorAll<HTMLElement>('tbody tr')];
+          return {
+            isOpen: details.open,
+            rows: rows.length,
+            visibleRows: rows.filter((row) => row.checkVisibility()).length,
+            summaryVisible: details.querySelector('summary')?.checkVisibility() ?? false,
+          };
+        });
+
+      // Screen first: the disclosure must genuinely hide its content, or the
+      // print assertion below proves nothing.
+      const onScreen = await measure();
+      if (onScreen === undefined) continue;
+      assert.equal(onScreen.isOpen, false, `${route}: the table starts open, so the print case is untested`);
+      assert.ok(onScreen.rows > 0, `${route}: the table has no rows to hide or print`);
+      assert.equal(
+        onScreen.visibleRows,
+        0,
+        `${route}: a closed disclosure still shows its rows — it is not collapsing at all`,
+      );
+
+      await page.emulateMedia({ media: 'print' });
+      const onPaper = await measure();
+      assert.ok(onPaper !== undefined, `${route}: the table disappeared under print media`);
+      assert.equal(
+        onPaper.visibleRows,
+        onPaper.rows,
+        `${route}: ${onPaper.rows - onPaper.visibleRows} of ${onPaper.rows} table rows are absent from ` +
+          'the printed page — the equivalent representation section 17 requires is not on paper',
+      );
+      await page.emulateMedia({ media: 'screen' });
+      inspected += 1;
+    }
+
+    assert.ok(inspected > 0, 'no graph table was inspected under print media');
+  } finally {
+    await browserContext.close();
+  }
+}, 120_000);

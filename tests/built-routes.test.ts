@@ -3057,12 +3057,21 @@ test('the site graph route renders the corpus graph with real links', () => {
  * recorded here rather than hidden: the fixture corpus's busiest note has 10
  * neighbours against a bound of 12, and the published note has none. So no
  * built page renders the truncation sentence, and this gate cannot prove that
- * branch. `tests/graph.test.ts` proves the *model's* two states apart on both
- * sides of the bound; the *sentence's* arithmetic is proven there too, by
- * rendering the same two numbers this page would.
+ * branch. `boundCounts` — the single place the two numbers are computed, and
+ * what the component interpolates — is pinned in `tests/graph.test.ts` against
+ * synthetic corpora on both sides of the bound, and below against this corpus.
  *
- * What is left here is the complete case, asserted as a positive: the bound
- * element exists and carries the expansion link. A corpus that grows past
+ * **What remains ungated is the component's *use* of it.** Re-inlining the
+ * arithmetic in `NoteGraph.astro` would ship green, because no page renders the
+ * sentence for a gate to read. Closing that needs one fixture note with more
+ * than `LOCAL_NODE_LIMIT` neighbours; the fixture corpus is TK-11's and adding
+ * an edge re-baselines every gate that counts notes, so it is left as a stated
+ * gap rather than taken here. The exposure is narrow — the numbers come from
+ * one exported function that the component destructures — and it is the third
+ * thing this one sentence has taught.
+ *
+ * What is left is the complete case, asserted as a positive: the bound element
+ * exists and carries the expansion link. A corpus that grows past
  * `LOCAL_NODE_LIMIT` starts exercising the other branch here automatically, at
  * which point this note stops being true and the gate gets stronger on its own.
  */
