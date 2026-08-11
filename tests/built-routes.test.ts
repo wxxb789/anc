@@ -21,8 +21,8 @@ import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import { UNCOLLECTED_LABEL } from '../src/lib/collection-navigation.ts';
+import { NAV_LANGUAGE, translate } from '../src/lib/translations.ts';
 import {
-  RELATED_DERIVATION,
   RELATED_LIMIT,
   collectionNeighbours,
   hasTagPeer,
@@ -468,18 +468,40 @@ function linkedSlugs(html: string): string[] {
  */
 test('every note page carries the anatomy this ticket owns', () => {
   for (const { slug, html } of notePages()) {
-    assert.match(html, /<nav class="breadcrumbs" aria-label="Breadcrumb">/, `${slug}: no breadcrumbs`);
+    // The accessible name is chrome and is therefore in the page's own language
+    // since TK-16 — so the assertion is that the landmark carries *its own
+    // locale's* name, not the English one. A `<nav>` with no accessible name is
+    // indistinguishable from the other three in a screen reader's landmark list,
+    // which is the property this checks; which words it uses is the locale's.
+    const t = translate(declaredLanguage(html));
+    // A literal, not a pattern: a translated label is prose, and prose in a
+    // regexp is metacharacters nobody escaped.
+    assert.ok(
+      html.includes(`<nav class="breadcrumbs" aria-label="${t.breadcrumbLabel}">`),
+      `${slug}: no breadcrumbs named in this page's own language`,
+    );
     assert.match(html, /<h1 class="note-title">/, `${slug}: no page title`);
     assert.match(html, /<article class="prose" data-pagefind-body>/, `${slug}: no article body`);
     assert.match(html, /<footer class="note-footer">/, `${slug}: no provenance footer`);
+    // TK-05a emitted the route here and said TK-08 would upgrade it once `site:`
+    // was configured; it now carries the absolute canonical URL, which is what
+    // makes a printed or quoted page findable again. The origin is matched
+    // rather than restated — `tests/metadata.test.ts` owns the assertion that it
+    // is the configured one, in one place.
+    //
+    // Located by its element rather than by the sentence around it: since TK-16
+    // that sentence is per-document chrome, and building a regexp out of
+    // translated prose would mean escaping metacharacters in every language —
+    // one missed and the gate quietly matches anything. The wording itself is
+    // asserted by the chrome gate below, in both languages.
+    const canonical = /<p class="note-canonical">([^<]*)<\/p>/.exec(html)?.[1];
+    assert.ok(canonical !== undefined, `${slug}: the footer has no canonical URL line`);
+    // The URL, not the sentence: `[^\s<]` bounds the host so a run of prose
+    // cannot stand in for one, and the end anchor keeps a path with the route as
+    // a *prefix* from matching.
     assert.ok(
-      // TK-05a emitted the route here and said TK-08 would upgrade it once
-      // `site:` was configured; it now carries the absolute canonical URL, which
-      // is what makes a printed or quoted page findable again. The origin is
-      // matched rather than restated — `tests/metadata.test.ts` owns the
-      // assertion that it is the configured one, in one place.
-      new RegExp(`Canonical URL: https?://[^/<]+${noteRoute(slug)}<`).test(html),
-      `${slug}: the footer does not carry the canonical URL`,
+      new RegExp(String.raw`https?://[^\s<]+${noteRoute(slug)}(?:\s|$)`).test(canonical),
+      `${slug}: the canonical line "${canonical}" does not carry this note's absolute URL`,
     );
   }
 });
@@ -671,10 +693,16 @@ test('note metadata renders every field the artifact carries, and no other', () 
     const entry = getEntry(slug)!;
     const meta = /<dl class="note-meta">([\s\S]*?)<\/dl>/.exec(html)?.[1];
 
+    // The row labels are chrome, so since TK-16 they are in the page's own
+    // language: a zh-CN note's rows read 发布于 / 更新于 / 所属合集. Resolving
+    // them here rather than restating the English is what keeps this gate about
+    // *which rows exist* — which is the property it owns — rather than about
+    // which words they use.
+    const t = translate(declaredLanguage(html));
     const expected = [
-      ['Published', entry.created],
-      ['Updated', entry.updated],
-      ['Collection', entry.collection],
+      [t.metaPublished, entry.created],
+      [t.metaUpdated, entry.updated],
+      [t.metaCollection, entry.collection],
     ] as const;
     const carriesAny = expected.some(([, value]) => value !== undefined) || (entry.tags?.length ?? 0) > 0;
     assert.equal(
@@ -978,15 +1006,19 @@ test('the related list is the derivation, in the derivation s order', (context) 
     if (rendered.length > 0) withSuggestions += 1;
 
     // The derived list states its rule where it has one to state, and states
-    // the module's rule rather than some other sentence. The two edge lists
-    // must not: an authored edge needs no explanation, and printing one would
-    // suggest those were derived too.
+    // the module's rule rather than some other sentence. Since TK-16 that
+    // sentence is per document, so the expectation is resolved from *this
+    // entry's* language — asserting the English sentence would fail on the four
+    // Chinese fixture notes, and asserting nothing would let the page state a
+    // rule the ranking does not implement.
     if (rendered.length > 0) {
       assert.ok(
-        section.includes(asRendered(RELATED_DERIVATION)),
-        `${entry.slug}: the related list does not state the derivation rule`,
+        section.includes(asRendered(translate(entry.language).relatedDerivation)),
+        `${entry.slug}: the related list does not state the derivation rule in its own language`,
       );
     }
+    // The two edge lists must state no rule at all: an authored edge needs no
+    // explanation, and printing one would suggest those were derived too.
     for (const other of ['outgoing', 'backlinks']) {
       assert.doesNotMatch(
         relationSection(html, other)!,
@@ -1434,5 +1466,490 @@ test('no script is loaded for the explorer', () => {
 
   // Non-vacuity: some script was read and scanned, so a build that emitted none
   // cannot pass this by having nothing to inspect.
+  assert.ok(inspected > 0, 'no shipped script was read, so this gate inspected nothing');
+});
+
+/* ------------------------------------------------------ bilingual chrome -- */
+
+/**
+ * The language the built page declares, which is what a browser and a screen
+ * reader act on.
+ *
+ * Read off `<html lang>` rather than off the artifact, because the property
+ * under test is that the two agree: a page declaring `zh-CN` around English
+ * chrome is the Quartz defect TK-16 exists to avoid, and taking the expectation
+ * from the artifact on both sides would prove only that the artifact is
+ * self-consistent.
+ */
+function declaredLanguage(html: string): string {
+  const lang = /<html lang="([^"]+)"/.exec(html)?.[1];
+  assert.ok(lang !== undefined, 'the page declares no language at all');
+  return lang;
+}
+
+/** The locale a page in `language` must not render anything from. */
+function otherLocale(language: string) {
+  return translate(language.toLowerCase().startsWith('zh') ? 'en' : 'zh-CN');
+}
+
+/**
+ * A note page renders the chrome of its own document's language.
+ *
+ * **This is the ticket.** Quartz's `cfg.locale` is a single global read by 47
+ * plugins, so a zh-CN document there renders `lang="zh"` around English
+ * "Backlinks" — the document's language and the interface language cannot
+ * disagree because only one of them exists. Here `language` is a per-entry field
+ * on the validated contract, so one build can carry both.
+ *
+ * Asserted on *content*, in both directions: each page must contain the
+ * sentences its own locale resolves and must not contain the other locale's. A
+ * count of translated pages would be satisfied by a build that translated
+ * everything into one language.
+ *
+ * Runs unconditionally on both corpora. On the published one-note corpus every
+ * page takes the `undefined` → navigation-language fallback, which is the branch
+ * a reader of this site actually meets, and the negative half still holds; the
+ * fixture corpus is where both branches are live.
+ */
+test('a note page renders the chrome of its own language, and not the other', () => {
+  assert.ok(entries.length > 0, 'the artifact has no notes, so no chrome can be checked');
+
+  /**
+   * Chrome every note page renders whatever the note itself carries.
+   *
+   * Every one of these is a **whole element's text or a whole attribute value**,
+   * matched as such below rather than as a bare substring. That is not
+   * fastidiousness: `searchToggle` is the single word "Search", and the fixture
+   * corpus has a note titled "Search That Ships Nothing Until Asked" listed in
+   * the rail of every page — so a substring check reports the English chrome
+   * present on a Chinese page and the gate fails for a reason that has nothing
+   * to do with the defect it exists to catch. Content is not chrome, and a gate
+   * over chrome must not be able to see content.
+   */
+  const ALWAYS = [
+    { key: 'skipToContent', as: 'text' },
+    { key: 'searchToggle', as: 'text' },
+    { key: 'readerToggle', as: 'text' },
+    { key: 'searchFieldLabel', as: 'text' },
+    { key: 'searchClose', as: 'text' },
+    { key: 'outgoingHeading', as: 'text' },
+    { key: 'backlinksHeading', as: 'text' },
+    { key: 'relatedHeading', as: 'text' },
+    { key: 'noteProvenance', as: 'text' },
+    { key: 'navRecent', as: 'text' },
+    { key: 'navTags', as: 'text' },
+    { key: 'siteSubtitle', as: 'text' },
+    { key: 'tocHeading', as: 'text' },
+    { key: 'breadcrumbLabel', as: 'attribute' },
+    { key: 'primaryNavLabel', as: 'attribute' },
+    { key: 'siteMapLabel', as: 'attribute' },
+    { key: 'searchToggleLabel', as: 'attribute' },
+  ] as const;
+
+  /**
+   * Whether the page renders this exact string as a whole element's text, or as
+   * a whole attribute value.
+   *
+   * `>text<` and `="value"` are the two forms, and both are anchored at each end
+   * — which is what stops a chrome word matching inside a note title and what
+   * stops a short label matching inside a longer one.
+   */
+  const renders = (html: string, value: string, as: 'text' | 'attribute'): boolean =>
+    as === 'text'
+      ? html.includes(`>${asRendered(value)}<`)
+      : html.includes(`="${asRendered(value)}"`);
+
+  let inspected = 0;
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const language = declaredLanguage(html);
+
+    // The page declares the language the artifact gave it, or the navigation
+    // language where it gave none. A screen reader switches voice on this, so it
+    // is an accessibility property rather than only a metadata one.
+    assert.equal(
+      language,
+      entry.language ?? NAV_LANGUAGE,
+      `${entry.slug}: <html lang> is not the entry's own language`,
+    );
+
+    const own = translate(language);
+    const other = otherLocale(language);
+
+    for (const { key, as } of ALWAYS) {
+      // The table of contents renders only above the heading threshold, so its
+      // heading is checked only where the page actually has one.
+      if (key === 'tocHeading' && !html.includes('class="toc"')) continue;
+      const mine = own[key];
+      const theirs = other[key];
+      assert.ok(
+        renders(html, mine, as),
+        `${entry.slug} (lang="${language}"): does not render "${key}" in its own language ` +
+          `(${JSON.stringify(mine)})`,
+      );
+      assert.ok(
+        !renders(html, theirs, as),
+        `${entry.slug} (lang="${language}"): renders "${key}" in the OTHER language ` +
+          `(${JSON.stringify(theirs)}) — chrome is resolved from something other than this document`,
+      );
+      inspected += 1;
+    }
+  }
+  assert.ok(inspected > 0, 'no chrome string was inspected');
+});
+
+/**
+ * Both languages in one build, which no site-wide locale can express.
+ *
+ * The gate above proves each page is self-consistent; this proves the pages
+ * disagree with each other, which is precisely what a single global rules out.
+ * It is the one assertion here that would still fail if `translate` were changed
+ * to read a constant, and it needs a corpus carrying two languages to mean
+ * anything — hence the skip rather than a weaker check.
+ */
+test('one build carries Chinese chrome and English chrome on different pages', (context) => {
+  const languages = new Set(entries.map((entry) => entry.language ?? NAV_LANGUAGE));
+  context.skip(
+    languages.size < 2,
+    `the corpus declares ${languages.size} language — run \`pnpm run build:fixture\` for the bilingual gate`,
+  );
+
+  /** One built note page per declared language. */
+  const pageByLanguage = new Map<string, { slug: string; html: string }>();
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const language = declaredLanguage(html);
+    if (!pageByLanguage.has(language)) pageByLanguage.set(language, { slug: entry.slug, html });
+  }
+  assert.ok(pageByLanguage.size >= 2, 'the build emitted note pages in fewer than two languages');
+
+  const english = [...pageByLanguage].find(([language]) => !language.toLowerCase().startsWith('zh'));
+  const chinese = [...pageByLanguage].find(([language]) => language.toLowerCase().startsWith('zh'));
+  assert.ok(english !== undefined, 'the build has no English note page');
+  assert.ok(chinese !== undefined, 'the build has no Chinese note page');
+
+  // The same key, rendered as two different sentences, in one `dist/`. Matched
+  // as whole element text — see `renders` above for why a substring will not do.
+  const HAN = /\p{Script=Han}/u;
+  const asText = (html: string, value: string) => html.includes(`>${asRendered(value)}<`);
+  for (const key of ['skipToContent', 'backlinksHeading', 'readerToggle', 'noteProvenance'] as const) {
+    const englishText = translate('en')[key];
+    const chineseText = translate('zh-CN')[key];
+    assert.match(chineseText, HAN, `the zh-CN "${key}" carries no Han character`);
+    assert.ok(
+      asText(english[1].html, englishText),
+      `${english[1].slug}: the English page does not render "${key}" in English`,
+    );
+    assert.ok(
+      !asText(english[1].html, chineseText),
+      `${english[1].slug}: the English page also renders the Chinese "${key}"`,
+    );
+    assert.ok(
+      asText(chinese[1].html, chineseText),
+      `${chinese[1].slug}: the Chinese page does not render "${key}" in Chinese`,
+    );
+    assert.ok(
+      !asText(chinese[1].html, englishText),
+      `${chinese[1].slug}: the Chinese page also renders the English "${key}"`,
+    );
+  }
+});
+
+/**
+ * A route that is not one document renders the navigation language.
+ *
+ * The documented rule, asserted rather than left implicit. The home page,
+ * `/recent/`, the tag and collection indexes, every facet page, and the 404 each
+ * aggregate many entries or none, so there is no single document language to
+ * read — and borrowing a member's would make a public page change language
+ * because an unrelated note was published. `src/lib/translations.ts` states the
+ * rule; this is what keeps it from drifting.
+ */
+test('every route that is not a single document renders the navigation language', () => {
+  const noteRoutes = new Set(entries.map((entry) => noteRoute(entry.slug)));
+  const nav = translate(NAV_LANGUAGE);
+  const other = otherLocale(NAV_LANGUAGE);
+
+  let inspected = 0;
+  for (const route of ROUTES) {
+    if (noteRoutes.has(route)) continue;
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    assert.equal(
+      declaredLanguage(html),
+      NAV_LANGUAGE,
+      `${route}: aggregates many documents but declares a language other than the navigation one`,
+    );
+    for (const key of ['skipToContent', 'navRecent', 'siteSubtitle', 'readerToggle'] as const) {
+      // Whole element text, not a substring: a note title listed in the rail
+      // would otherwise be able to satisfy — or falsify — a chrome assertion.
+      assert.ok(
+        html.includes(`>${asRendered(nav[key])}<`),
+        `${route}: does not render "${key}" in the navigation language`,
+      );
+      assert.ok(
+        !html.includes(`>${asRendered(other[key])}<`),
+        `${route}: renders "${key}" in a language no document on it declares`,
+      );
+    }
+    inspected += 1;
+  }
+  assert.ok(inspected > 0, 'no non-document route was inspected');
+});
+
+/**
+ * A rendered count uses the grammar of the page it is on.
+ *
+ * English pluralises and Chinese does not, and a naive `n === 1 ? 'note' :
+ * 'notes'` applied to Chinese produces nonsense. Every rendered count is
+ * compared against the formatter its own page's locale supplies, so a shared
+ * plural rule reaching either language fails here rather than in review.
+ *
+ * Three surfaces carry a count and all three are read: the corpus size on the
+ * home and recent pages, the per-facet note counts, and the three relations
+ * sections on a note page. The first is rendered on every corpus, which is what
+ * keeps this from being a fixture-only gate.
+ */
+test('every rendered count uses the grammar of the page it is on', () => {
+  let checked = 0;
+
+  // The corpus size, on the two routes that state it. Both are non-document
+  // routes, so both are in the navigation language.
+  for (const [route, size] of [
+    ['/', entries.length],
+    ['/recent/', recentFirst(entries).length],
+  ] as const) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    const expected = asRendered(translate(declaredLanguage(html)).publishedCount(size));
+    assert.ok(html.includes(expected), `${route}: does not state the corpus size as ${JSON.stringify(expected)}`);
+    checked += 1;
+  }
+
+  // The per-facet counts, which are note counts however the facet is grouped.
+  for (const [facets, route] of [
+    [tagFacets(entries), tagRoute],
+    [collectionFacets(entries), collectionRoute],
+  ] as const) {
+    if (facets.length === 0) continue;
+    const indexRoute = route(facets[0]!.key).replace(/[^/]+\/$/, '');
+    const html = readFileSync(new URL(pageFor(indexRoute), DIST), 'utf8');
+    const locale = translate(declaredLanguage(html));
+    const rendered = [...html.matchAll(/<span class="facet-count">([^<]*)<\/span>/g)].map(([, text]) => text!);
+    assert.deepEqual(
+      rendered,
+      facets.map((facet) => asRendered(locale.noteCount(facet.entries.length))),
+      `${indexRoute}: a facet count is not this page's own grammar`,
+    );
+    checked += rendered.length;
+  }
+
+  // The three relations sections, each of which states a count only when it has
+  // members — so the expectation is built from the same three lists the page
+  // rendered, in document order.
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const locale = translate(declaredLanguage(html));
+    const counts = [...html.matchAll(/<span class="relations-count">([^<]*)<\/span>/g)].map(
+      ([, text]) => text!,
+    );
+    const expected = [
+      entry.outgoing.length,
+      entry.backlinks.length,
+      relatedNotes(entry, entries).length,
+    ]
+      .filter((size) => size > 0)
+      .map((size) => asRendered(locale.noteCount(size)));
+    assert.deepEqual(counts, expected, `${entry.slug}: a relations count is not this page's own grammar`);
+    checked += counts.length;
+  }
+
+  assert.ok(checked > 0, 'no count was rendered anywhere, so this gate checked nothing');
+});
+
+/**
+ * The singular is where a plural rule is wrong, so it must actually be rendered.
+ *
+ * The gate above compares each rendered count against its own locale, which is
+ * the assertion that matters — but on a corpus where every count happens to be
+ * plural it never exercises the branch. This one requires both forms in English
+ * and neither in Chinese, and needs a corpus with counts of one and of many.
+ */
+test('English renders both a singular and a plural count, and Chinese renders one form', (context) => {
+  requireMultiEntry(context);
+
+  /** Every count string the build rendered, by the language of the page it is on. */
+  const byLanguage = new Map<string, Set<string>>();
+  for (const route of ROUTES) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    const language = declaredLanguage(html);
+    const found = byLanguage.get(language) ?? new Set<string>();
+    for (const [, text] of html.matchAll(/<span class="(?:relations|facet)-count">([^<]*)<\/span>/g)) {
+      found.add(text!);
+    }
+    byLanguage.set(language, found);
+  }
+
+  const english = [...byLanguage].filter(([language]) => !language.toLowerCase().startsWith('zh'));
+  const rendered = new Set(english.flatMap(([, counts]) => [...counts]));
+  assert.ok(
+    rendered.has(asRendered(translate('en').noteCount(1))),
+    `no English page rendered a count of one, so the singular form was never checked: ${[...rendered].join(' / ')}`,
+  );
+  assert.ok(
+    [...rendered].some((text) => /^\d+ notes$/.test(text)),
+    `no English page rendered a plural count: ${[...rendered].join(' / ')}`,
+  );
+
+  // Chinese renders the invariant form, whatever the number. Asserted on what
+  // shipped rather than on the formatter, so a template that pluralised in the
+  // markup instead of in the locale would still be caught.
+  for (const [language, counts] of byLanguage) {
+    if (!language.toLowerCase().startsWith('zh')) continue;
+    for (const text of counts) {
+      assert.match(
+        text,
+        /^\d+ 篇笔记$/,
+        `a ${language} page rendered the count "${text}", which is not the invariant Chinese form`,
+      );
+    }
+  }
+});
+
+/**
+ * A foreign-language title in a list says which language it is.
+ *
+ * WCAG 2.2 AA success criterion 3.1.2 is about *parts* of a page, and every
+ * route on a bilingual site is that case: the explorer rail lists the whole
+ * corpus, so an English page carries every Chinese title on the site. Without
+ * `lang` a screen reader reads those in an English voice.
+ *
+ * Both directions, because both are defects: a missing attribute is the
+ * accessibility failure, and an attribute on a title already in the page's own
+ * language is redundant markup on every row of every list.
+ */
+test('a listed title in another language is marked, and one in the same language is not', (context) => {
+  const languages = new Set(entries.map((entry) => entry.language ?? NAV_LANGUAGE));
+  context.skip(
+    languages.size < 2,
+    `the corpus declares ${languages.size} language — run \`pnpm run build:fixture\` for the bilingual gate`,
+  );
+
+  const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+  let marked = 0;
+  let unmarked = 0;
+
+  for (const route of ROUTES) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    const pageLanguage = declaredLanguage(html);
+    const rail = explorer(html);
+    if (rail === undefined) continue;
+
+    // Each rail row, with whatever attributes its anchor carries.
+    for (const [, attributes, slug] of rail.matchAll(
+      /<li><a\s([^>]*href="\/notes\/([^/"]+)\/"[^>]*)>/g,
+    )) {
+      const entry = bySlug.get(slug!);
+      assert.ok(entry, `${route}: the rail links "${slug}", which is not a published note`);
+      const own = entry.language ?? NAV_LANGUAGE;
+      const declared = /\slang="([^"]*)"/.exec(attributes!)?.[1];
+      if (own === pageLanguage) {
+        assert.equal(
+          declared,
+          undefined,
+          `${route}: "${slug}" is in the page's own language but carries a redundant lang="${declared}"`,
+        );
+        unmarked += 1;
+      } else {
+        assert.equal(
+          declared,
+          own,
+          `${route}: "${slug}" is ${own} on a ${pageLanguage} page but is marked ${JSON.stringify(declared)}`,
+        );
+        marked += 1;
+      }
+    }
+  }
+
+  // Both branches were actually taken. Without this the test passes on a build
+  // that emitted no rail rows at all, which is the "found nothing / could not
+  // look" failure this repository has hit twice.
+  assert.ok(marked > 0, 'no foreign-language title was inspected');
+  assert.ok(unmarked > 0, 'no same-language title was inspected');
+});
+
+/**
+ * Content is not translated. Chrome is.
+ *
+ * The other half of the ticket, and the easier half to break quietly: a title, an
+ * excerpt, a tag, and a collection name are the author's words, and a locale that
+ * "helpfully" rewrote one would put words in the author's mouth. A tag reading
+ * `security` stays `security` on a Chinese page.
+ */
+test('artifact text is rendered verbatim whatever language the chrome is in', () => {
+  assert.ok(entries.length > 0, 'the artifact has no notes, so no content can be checked');
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    assert.ok(html.includes(asRendered(entry.title)), `${entry.slug}: the title is not rendered verbatim`);
+    for (const tag of entry.tags ?? []) {
+      assert.ok(html.includes(asRendered(tag)), `${entry.slug}: the tag "${tag}" is not rendered verbatim`);
+    }
+    if (entry.collection !== undefined) {
+      assert.ok(
+        html.includes(asRendered(entry.collection)),
+        `${entry.slug}: the collection "${entry.collection}" is not rendered verbatim`,
+      );
+    }
+  }
+
+  // And on a facet page, where the label is the heading: the Chinese tags appear
+  // on English facet pages and must survive unchanged there too.
+  for (const facet of tagFacets(entries)) {
+    const html = readFileSync(new URL(pageFor(tagRoute(facet.key)), DIST), 'utf8');
+    assert.ok(
+      html.includes(asRendered(facet.label)),
+      `/tags/${facet.key}/: the label "${facet.label}" is not rendered verbatim`,
+    );
+  }
+});
+
+/**
+ * Neither locale reaches the browser.
+ *
+ * "Zero client JavaScript may be added" is the ticket's constraint, and the way
+ * this design could break it is subtle rather than obvious: a locale table
+ * imported by `preferences.ts` or `search-dialog.ts` would ship *both* languages
+ * to every reader to say what the build already knew, and would grow with each
+ * language added. The strings travel as `data-` attributes instead, and this is
+ * what proves it — asserted on the shipped bundles' contents rather than on
+ * their names, since Astro concatenates the layout's imports into one chunk
+ * whose name says nothing about what is inside it.
+ */
+test('no shipped script carries a translation table', () => {
+  // Strings long enough to be unmistakable, from the two surfaces a script
+  // writes text into, in both languages.
+  const MARKERS = [
+    translate('en').searchFailed,
+    translate('zh-CN').searchFailed,
+    translate('en').searchEmpty,
+    translate('zh-CN').themeLabel('dark'),
+    translate('zh-CN').skipToContent,
+  ];
+
+  let inspected = 0;
+  for (const route of ROUTES) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    for (const [, source] of html.matchAll(/<script\b[^>]*\ssrc="([^"]*)"/gi)) {
+      const file = new URL(source!.slice(1), DIST);
+      if (!exists(file)) continue;
+      const code = readFileSync(file, 'utf8');
+      inspected += 1;
+      for (const marker of MARKERS) {
+        assert.ok(
+          !code.includes(marker),
+          `${route}: the shipped script "${source}" carries the chrome string ${JSON.stringify(marker)} — ` +
+            'resolution is a build-time lookup and no locale belongs in the bundle',
+        );
+      }
+    }
+  }
   assert.ok(inspected > 0, 'no shipped script was read, so this gate inspected nothing');
 });

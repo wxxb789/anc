@@ -23,6 +23,7 @@
 
 import type { ContentEntry } from './schema.ts';
 import { noteRoute } from './route-path.ts';
+import { NAV_LANGUAGE, translate } from './translations.ts';
 import {
   FIXED_ROUTES,
   collectionFacets,
@@ -35,11 +36,13 @@ import {
 /** The site's own name. A proper noun, so it is not chrome TK-16 translates. */
 export const SITE_NAME = 'thoughtscape';
 
-/** The feed's `<subtitle>`. Chrome, and the one string here TK-16 may want. */
-export const SITE_SUBTITLE = 'A reviewed public projection from a private knowledge garden.';
-
 /**
- * The description a page falls back to when it has nothing more specific.
+ * A page's description, or the fallback its own language gives it.
+ *
+ * The fallback is passed in rather than read from a module constant because it
+ * is chrome, and chrome is per document since TK-16: a Chinese note with an
+ * empty excerpt must describe itself in Chinese. `Layout.astro` passes
+ * `t.siteDescription`, resolved from the document's own `language`.
  *
  * Reachable, not defensive. `excerpt` is the one required string the content
  * contract admits empty (`src/lib/schema.ts` exempts it from the non-empty
@@ -53,11 +56,8 @@ export const SITE_SUBTITLE = 'A reviewed public projection from a private knowle
  * card both fall back to scraping the page when the tag is absent, and both
  * render nothing when it is present and empty.
  */
-export const SITE_DESCRIPTION = 'A static public projection from thoughtscape.';
-
-/** A page's description, or the site's, when the artifact carries no excerpt. */
-export function describe(description: string | undefined): string {
-  return description === undefined || description.trim() === '' ? SITE_DESCRIPTION : description;
+export function describe(description: string | undefined, fallback: string): string {
+  return description === undefined || description.trim() === '' ? fallback : description;
 }
 
 /** Where the Atom feed is served. `rss` is a reserved route segment (TK-01). */
@@ -347,7 +347,11 @@ export function renderFeed(site: URL | undefined, entries: readonly ContentEntry
     '<?xml version="1.0" encoding="utf-8"?>',
     '<feed xmlns="http://www.w3.org/2005/Atom">',
     ...element('title', SITE_NAME, '', true),
-    ...element('subtitle', SITE_SUBTITLE),
+    // The feed is the whole corpus rather than one document, so its own chrome
+    // is the navigation language — the same rule every non-document route
+    // follows. Each `<entry>` still carries its own `xml:lang` below, so a
+    // reader's client knows which language each note is in.
+    ...element('subtitle', translate(NAV_LANGUAGE).siteSubtitle),
     `<id>${escapeXml(home)}</id>`,
     `<link rel="alternate" type="text/html" href="${escapeXml(home)}"/>`,
     `<link rel="self" type="application/atom+xml" href="${escapeXml(self)}"/>`,

@@ -9,24 +9,28 @@
  */
 import type { ContentEntry } from '../lib/content.ts';
 import { noteRoute } from '../lib/routes.ts';
+import { partLanguage, translate } from '../lib/translations.ts';
 
 interface Props {
   entries: readonly ContentEntry[];
   /** Heading level for each card title, chosen so the page never skips a level. */
   level?: 2 | 3;
+  /** The page's own language, which decides the chrome around these cards. */
+  lang: string;
   /**
    * Shown instead of the grid when there is nothing to list.
    *
    * Only the home page and `/recent/` can actually reach it: a facet page
-   * exists because an entry produced it, so its list is never empty. The
-   * default is deliberately generic rather than each caller passing a message
-   * that cannot be displayed — a string nobody can see is a string nobody
-   * maintains.
+   * exists because an entry produced it, so its list is never empty. It defaults
+   * to the resolved `noNotesYet` rather than each caller passing a message that
+   * cannot be displayed — a string nobody can see is a string nobody maintains.
    */
   empty?: string;
 }
 
-const { entries, level = 3, empty = 'No notes are published yet.' } = Astro.props;
+const { entries, level = 3, lang } = Astro.props;
+const t = translate(lang);
+const empty = Astro.props.empty ?? t.noNotesYet;
 const Heading = `h${level}` as 'h2' | 'h3';
 ---
 
@@ -36,9 +40,20 @@ const Heading = `h${level}` as 'h2' | 'h3';
   <div class="note-grid">
     {entries.map((entry) => (
       <article class="note-card">
-        <Heading><a href={noteRoute(entry.slug)}>{entry.title}</a></Heading>
-        <p>{entry.excerpt}</p>
-        <a class="read-more" href={noteRoute(entry.slug)}>Read note →</a>
+        {/*
+          The title and the excerpt are the author's words, so they are rendered
+          verbatim — and marked with their own `lang` when it differs from the
+          page's. Every route lists the whole corpus, so on a bilingual site most
+          of these grids are mixed; without the attribute a screen reader reads a
+          Chinese title in an English voice, which is WCAG 2.2 AA 3.1.2. The
+          attribute is emitted only on the cards that need it, so a single-
+          language corpus carries none.
+        */}
+        <Heading lang={partLanguage(entry.language, lang)}>
+          <a href={noteRoute(entry.slug)}>{entry.title}</a>
+        </Heading>
+        <p lang={partLanguage(entry.language, lang)}>{entry.excerpt}</p>
+        <a class="read-more" href={noteRoute(entry.slug)}>{t.readNote}</a>
       </article>
     ))}
   </div>

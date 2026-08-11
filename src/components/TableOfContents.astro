@@ -26,6 +26,7 @@
  * `tests/design-tokens.test.ts` proves at 6.72:1 and 10.37:1.
  */
 import type { TocEntry } from '../lib/markdown.ts';
+import { translate } from '../lib/translations.ts';
 
 interface Props {
   entries: readonly TocEntry[];
@@ -35,9 +36,15 @@ interface Props {
    * `<nav>` from being emitted once per level.
    */
   isRoot?: boolean;
+  /**
+   * The note's own language. Only the root renders a chrome string, so only the
+   * root needs it — the nested calls carry heading text, which is the article's
+   * own words in the article's own language either way.
+   */
+  lang?: string;
 }
 
-const { entries, isRoot = false } = Astro.props;
+const { entries, isRoot = false, lang } = Astro.props;
 ---
 
 {isRoot ? (
@@ -46,7 +53,7 @@ const { entries, isRoot = false } = Astro.props;
         affordance to *close* it. A reader who never touches it loses nothing,
         and with JavaScript disabled the element still opens and closes. */}
     <details class="toc-details" open>
-      <summary id="toc-title">On this page</summary>
+      <summary id="toc-title">{translate(lang).tocHeading}</summary>
       <Astro.self entries={entries} />
     </details>
   </nav>

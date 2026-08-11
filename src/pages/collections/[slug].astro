@@ -1,26 +1,36 @@
 ---
+/**
+ * `/collections/<key>/` — the notes in one curated collection.
+ *
+ * A facet aggregates many documents, so its chrome is the navigation language
+ * rather than any member's; see `src/lib/translations.ts`. The collection name
+ * is artifact text, interpolated unchanged.
+ */
 import Layout from '../../layouts/Layout.astro';
 import NoteList from '../../components/NoteList.astro';
 import { entries } from '../../lib/content.ts';
 import { collectionFacets } from '../../lib/routes.ts';
+import { TITLE_SUFFIX } from '../../lib/site.ts';
+import { NAV_LANGUAGE, translate } from '../../lib/translations.ts';
 
 export function getStaticPaths() {
   return collectionFacets(entries).map((facet) => ({ params: { slug: facet.key }, props: { facet } }));
 }
 
 const { facet } = Astro.props;
+const t = translate(NAV_LANGUAGE);
 ---
 
 <Layout
-  title={`Collection: ${facet.label} · thoughtscape`}
-  description={`Published notes in the ${facet.label} collection.`}
+  title={`${t.collectionPageTitle(facet.label)}${TITLE_SUFFIX}`}
+  description={t.collectionPageDescription(facet.label)}
 >
   <section aria-labelledby="collection-title">
     <div class="section-heading">
-      <h1 id="collection-title">Collection: {facet.label}</h1>
-      <span>{facet.entries.length} {facet.entries.length === 1 ? 'note' : 'notes'}</span>
+      <h1 id="collection-title">{t.collectionPageTitle(facet.label)}</h1>
+      <span>{t.noteCount(facet.entries.length)}</span>
     </div>
-    <p class="facet-note"><a href="/collections/">← All collections</a></p>
-    <NoteList entries={facet.entries} level={2} />
+    <p class="facet-note"><a href="/collections/">{t.allCollections}</a></p>
+    <NoteList entries={facet.entries} level={2} lang={NAV_LANGUAGE} />
   </section>
 </Layout>

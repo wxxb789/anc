@@ -24,6 +24,7 @@ import type { AddressInfo } from 'node:net';
 import type { Browser, ConsoleMessage, Page } from 'playwright';
 
 import { otherLanguages } from '../src/scripts/search-dialog.ts';
+import { translate } from '../src/lib/translations.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = fileURLToPath(new URL('dist/', ROOT));
@@ -176,10 +177,30 @@ test('every page ships the search dialog as markup', () => {
 test('the search trigger names its keyboard shortcut', () => {
   for (const file of requirePages()) {
     const html = readFileSync(file, 'utf8');
+    const language = /<html lang="([^"]+)"/.exec(html)?.[1];
+    assert.ok(language !== undefined, `${file}: the page declares no language`);
     const trigger = /<button id="search-toggle"[^>]*>/.exec(html)?.[0];
     assert.ok(trigger !== undefined, `${file}: no search trigger`);
     assert.match(trigger, /aria-keyshortcuts="\/"/, `${file}: the trigger does not name its shortcut`);
-    assert.match(trigger, /aria-label="[^"]*slash[^"]*"/, `${file}: the shortcut is not in the accessible name`);
+    // The accessible name is chrome, so since TK-16 it is in the page's own
+    // language: an English page says "press slash" and a Chinese one says
+    // "按斜杠键". Matching the English word would fail on every Chinese page,
+    // and matching nothing would let the shortcut drop out of the name — so the
+    // assertion is against the sentence this page's own locale resolves.
+    // A literal comparison, not a pattern: the English label contains "(press
+    // slash)", and a parenthesis in a regexp built from prose is a capture group
+    // that matches the wrong thing rather than the text.
+    assert.ok(
+      trigger.includes(`aria-label="${translate(language).searchToggleLabel}"`),
+      `${file}: the accessible name is not this page's own (lang="${language}"): ${trigger}`,
+    );
+    // And that sentence mentions the key, in whichever language it is written.
+    // Stated over the locale rather than over the page, so a locale that dropped
+    // the shortcut from the name fails here rather than shipping.
+    assert.ok(
+      /slash|斜杠/.test(translate(language).searchToggleLabel),
+      `${file}: the "${language}" accessible name does not mention the shortcut key`,
+    );
     // The trigger cannot work without scripting, so it must not render without
     // it. `tests/rendered-page.test.ts` proves the cascade actually hides it.
     assert.match(trigger, /data-js-only/, `${file}: a script-only control is offered unconditionally`);

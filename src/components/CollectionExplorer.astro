@@ -28,12 +28,16 @@
  * heading above a list that already announces itself is chrome restating chrome.
  */
 import type { ExplorerGroup } from '../lib/collection-navigation.ts';
+import { partLanguage, translate } from '../lib/translations.ts';
 
 interface Props {
   groups: readonly ExplorerGroup[];
+  /** The page's own language. The group labels are artifact text and are not. */
+  lang: string;
 }
 
-const { groups } = Astro.props;
+const { groups, lang } = Astro.props;
+const t = translate(lang);
 ---
 
 {/* Nothing to browse is not an empty rail: a corpus with one note in one group
@@ -42,7 +46,7 @@ const { groups } = Astro.props;
     everything this would. */}
 {groups.reduce((count, group) => count + group.notes.length, 0) > 1 && (
   <nav class="explorer" aria-labelledby="explorer-title" data-pagefind-ignore>
-    <h2 id="explorer-title" class="sr-only">Browse collections</h2>
+    <h2 id="explorer-title" class="sr-only">{t.explorerHeading}</h2>
     <ul class="explorer-groups">
       {groups.map((group) => (
         <li>
@@ -60,9 +64,13 @@ const { groups } = Astro.props;
             </summary>
             {/* The collection's own index page, where it has one. The
                 uncollected group has no route — see `ExplorerGroup.route` — and
-                links nothing rather than inventing a page for it. */}
+                links nothing rather than inventing a page for it.
+
+                The label is interpolated by the locale rather than concatenated
+                here: Chinese puts the modifier before the head noun with `的`,
+                so `All X notes` and `X 的全部笔记` cannot share a template. */}
             {group.route !== undefined && (
-              <a class="explorer-index" href={group.route}>All {group.label} notes</a>
+              <a class="explorer-index" href={group.route}>{t.explorerIndex(group.label)}</a>
             )}
             <ul class="explorer-notes">
               {group.notes.map((note) => (
@@ -70,8 +78,18 @@ const { groups } = Astro.props;
                   {/* `aria-current="page"` on the note being read, and the
                       stylesheet marks it with a weight and a rule as well as a
                       colour. A reader who cannot see the colour still knows
-                      where they are. */}
-                  <a href={note.route} aria-current={note.isCurrent ? 'page' : undefined}>{note.title}</a>
+                      where they are.
+
+                      `lang` on a title whose language differs from the page's.
+                      This rail lists the *whole corpus* on every route, so on a
+                      bilingual site it is the largest concentration of foreign-
+                      language text on any page — 4 of the 32 fixture notes on
+                      every English page, and 28 on every Chinese one. */}
+                  <a
+                    href={note.route}
+                    aria-current={note.isCurrent ? 'page' : undefined}
+                    lang={partLanguage(note.language, lang)}
+                  >{note.title}</a>
                 </li>
               ))}
             </ul>

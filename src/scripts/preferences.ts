@@ -46,9 +46,20 @@ function currentTheme(): Theme {
   return THEMES.includes(value as Theme) ? (value as Theme) : 'system';
 }
 
-/** The label carries the state in text, not only in the rendered colours. */
+/**
+ * The label carries the state in text, not only in the rendered colours.
+ *
+ * The three labels are read off the button's own `data-label-*` attributes,
+ * which `Layout.astro` filled from the translation resolved for *this document*
+ * — so a Chinese note's toggle cycles "主题：跟随系统 / 浅色 / 深色" and an
+ * English one cycles "Theme: system / light / dark", from one shared script.
+ * TK-16 could have shipped a locale table in the bundle instead; that would put
+ * both languages on the wire for every reader and grow with each language added,
+ * to say the same words the server already knew. The fallback keeps the toggle
+ * operable rather than blank if the markup and this file ever disagree.
+ */
 function showTheme(theme: Theme, button: HTMLButtonElement): void {
-  button.textContent = `Theme: ${theme}`;
+  button.textContent = button.dataset[`label${theme[0]!.toUpperCase()}${theme.slice(1)}`] ?? theme;
 }
 
 function showReader(on: boolean, button: HTMLButtonElement): void {

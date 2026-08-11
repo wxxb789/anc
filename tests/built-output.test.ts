@@ -225,11 +225,20 @@ test('every page carries its canonical URL for print', () => {
   // Scope item 10: a printed page must carry its canonical URL. TK-05a emitted
   // the route and left the origin to TK-08, which configured `site:`; a printed
   // page has no address bar, so the absolute form is the whole point.
+  //
+  // The URL is asserted, not the sentence around it: since TK-16 that sentence
+  // is per-document chrome, so a Chinese note prints "本页地址：<url>" and an
+  // English one prints "Published at <url>". Matching either wording here would
+  // make this gate fail on one of the two languages; matching the element and
+  // the URL inside it is the property that actually matters, and
+  // `tests/built-routes.test.ts` asserts the wording in both languages.
   for (const file of PAGES) {
+    const line = /<p class="print-only">([^<]*)<\/p>/.exec(read(file))?.[1];
+    assert.ok(line !== undefined, `${file}: no printable canonical URL line`);
     assert.match(
-      read(file),
-      /<p class="print-only">Published at https?:\/\/[^/<]+\/[^<]*<\/p>/,
-      `${file}: no printable canonical URL`,
+      line,
+      /https?:\/\/[^\s]+\//,
+      `${file}: the printed line "${line}" carries no absolute URL`,
     );
   }
 });

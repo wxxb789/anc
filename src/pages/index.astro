@@ -1,24 +1,33 @@
 ---
+/**
+ * The home page.
+ *
+ * Not one document but the whole corpus, so its chrome is the navigation
+ * language — see `src/lib/translations.ts` for the rule, and for why the
+ * alternative of borrowing some member's language would make a public page
+ * change language because an unrelated note was published.
+ */
 import Layout from '../layouts/Layout.astro';
 import NoteList from '../components/NoteList.astro';
 import { entries } from '../lib/content.ts';
+import { SITE_NAME } from '../lib/site.ts';
+import { NAV_LANGUAGE, translate } from '../lib/translations.ts';
+
+const t = translate(NAV_LANGUAGE);
 ---
 
-<Layout title="thoughtscape" description="A curated static projection from a private Obsidian garden.">
+<Layout title={SITE_NAME} description={t.homeDescription}>
   <section class="hero">
-    <p class="eyebrow">PUBLIC PROJECTION</p>
-    <h1>Notes that earned their way out.</h1>
-    <p>
-      A small, reviewed projection from a private Obsidian garden. The private vault stays private;
-      this site contains only explicitly allowlisted pages.
-    </p>
+    <p class="eyebrow">{t.homeEyebrow}</p>
+    <h1>{t.homeHeading}</h1>
+    <p>{t.homeIntro}</p>
   </section>
 
   <section id="notes" aria-labelledby="notes-title">
     <div class="section-heading">
-      <h2 id="notes-title">Notes</h2>
-      <span>{entries.length} published</span>
+      <h2 id="notes-title">{t.homeNotesHeading}</h2>
+      <span>{t.publishedCount(entries.length)}</span>
     </div>
-    <NoteList entries={entries} empty="No notes are published yet." />
+    <NoteList entries={entries} lang={NAV_LANGUAGE} />
   </section>
 </Layout>

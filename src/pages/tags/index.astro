@@ -1,22 +1,28 @@
 ---
+/**
+ * `/tags/` — every public tag in the projection.
+ *
+ * A corpus route, so the chrome is the navigation language. The tag labels
+ * themselves are artifact text and are never translated: `security` stays
+ * `security`, `笔记` stays `笔记`.
+ */
 import Layout from '../../layouts/Layout.astro';
 import FacetIndex from '../../components/FacetIndex.astro';
 import { entries } from '../../lib/content.ts';
 import { tagFacets, tagRoute } from '../../lib/routes.ts';
+import { TITLE_SUFFIX } from '../../lib/site.ts';
+import { NAV_LANGUAGE, translate } from '../../lib/translations.ts';
 
+const t = translate(NAV_LANGUAGE);
 const facets = tagFacets(entries);
 ---
 
-<Layout title="Tags · thoughtscape" description="Every public tag in the projection.">
+<Layout title={`${t.tagsTitle}${TITLE_SUFFIX}`} description={t.tagsDescription}>
   <section aria-labelledby="tags-title">
     <div class="section-heading">
-      <h1 id="tags-title">Tags</h1>
-      <span>{facets.length} {facets.length === 1 ? 'tag' : 'tags'}</span>
+      <h1 id="tags-title">{t.tagsTitle}</h1>
+      <span>{t.tagCount(facets.length)}</span>
     </div>
-    <FacetIndex
-      facets={facets}
-      route={tagRoute}
-      empty="The current projection carries no tags. This page lists every public tag as soon as the projection includes them."
-    />
+    <FacetIndex facets={facets} route={tagRoute} empty={t.tagsEmpty} lang={NAV_LANGUAGE} />
   </section>
 </Layout>

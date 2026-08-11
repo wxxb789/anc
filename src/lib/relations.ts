@@ -68,19 +68,22 @@ export function notesForSlugs(
 export const RELATED_LIMIT = 5;
 
 /**
- * The rule, in one sentence, for the reader.
+ * The rule this module implements is also stated to the reader, and the prose
+ * lives in `Translation.relatedDerivation` — in both languages, since it is
+ * chrome.
  *
- * It lives beside the code it describes rather than in the template, because
- * the first version of this module shipped a page that stated a rule the
- * ranking did not implement: the prose said "rarest tag first" while the code
- * summed weights, so two middling tags beat one rare one. A string next to the
- * comparator is not proof they agree — `tests/relations.test.ts` proves that —
- * but it is what makes them move in the same commit, and a gate asserts the
- * page renders this exact text.
+ * It used to live here, beside the comparator, because the first version of this
+ * module shipped a page that stated a rule the ranking did not implement: the
+ * prose said "rarest tag first" while the code summed weights, so two middling
+ * tags beat one rare one. TK-16 moved it, because a sentence that must exist in
+ * two languages cannot also live in the module that has no locale.
+ *
+ * **If you change the ranking below, change `relatedDerivation` in both locales
+ * of `src/lib/translations.ts`.** A string next to the comparator was never
+ * proof the two agreed — `tests/relations.test.ts` proves that — and the gate
+ * over `dist/` still asserts the page renders exactly the resolved sentence, so
+ * a stale one is caught by the same test it always was.
  */
-export const RELATED_DERIVATION =
-  'Suggested by shared tags, the tag grouping fewest notes first. ' +
-  'Notes already listed above are excluded.';
 
 /**
  * `tagFacets` for one corpus, computed once.

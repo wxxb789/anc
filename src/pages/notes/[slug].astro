@@ -33,14 +33,14 @@ import TableOfContents from '../../components/TableOfContents.astro';
 import { entries, getEntry } from '../../lib/content.ts';
 import { renderMarkdown } from '../../lib/markdown.ts';
 import {
-  RELATED_DERIVATION,
   collectionNeighbours,
   hasTagPeer,
   notesForSlugs,
   relatedNotes,
 } from '../../lib/relations.ts';
 import { collectionRoute, noteRoute, routeKey, tagRoute } from '../../lib/routes.ts';
-import { canonicalUrl } from '../../lib/site.ts';
+import { canonicalUrl, TITLE_SUFFIX } from '../../lib/site.ts';
+import { translate, NAV_LANGUAGE, partLanguage } from '../../lib/translations.ts';
 // Loaded as a URL rather than imported, so the stylesheet becomes its own
 // content-hashed asset and the `<link>` below can be emitted conditionally.
 // Importing it would merge it into the layout's sheet and ship it everywhere,
@@ -55,6 +55,31 @@ export function getStaticPaths() {
 }
 
 const { entry } = Astro.props;
+
+/**
+ * **The one route that is a document**, and therefore the whole point of TK-16.
+ *
+ * Every other page on this site aggregates many entries or none and resolves its
+ * chrome from the navigation language. This one renders exactly one artifact
+ * entry, so it resolves from that entry's own `language` — and the result is
+ * that a zh-CN note renders Chinese chrome under `<html lang="zh-CN">` while an
+ * English note in the same build renders English chrome. `translate` falls back
+ * to the navigation language for an entry carrying no `language`, which is the
+ * published corpus's single note.
+ */
+const t = translate(entry.language);
+
+/**
+ * This page's language as an actual tag, which is what `<html lang>` carries and
+ * what a listed foreign title is compared against.
+ *
+ * `entry.language` is optional and `translate` resolves that to the navigation
+ * language; this resolves it to the same value so that a note declaring none and
+ * a note declaring `en` mark exactly the same set of foreign titles. Passing
+ * `entry.language` raw would compare `undefined` against `'en'` and put a
+ * redundant `lang="en"` on every English title on the published corpus.
+ */
+const lang = entry.language ?? NAV_LANGUAGE;
 // The renderer takes this mapping rather than knowing the route shape itself,
 // so `/notes/<slug>/` is defined in exactly one place. Returning undefined for
 // an unpublished slug leaves that href untouched rather than pointing it at a
@@ -84,8 +109,8 @@ const { html, toc, hasCode, hasMath, hasMermaid } = await renderMarkdown(entry.m
  */
 const collection = entry.collection;
 const breadcrumbs: { label: string; href?: string }[] = [
-  { label: 'Home', href: '/' },
-  { label: 'Notes', href: '/#notes' },
+  { label: t.navHome, href: '/' },
+  { label: t.navNotes, href: '/#notes' },
   ...(collection === undefined ? [] : [{ label: collection, href: collectionRoute(collection) }]),
   { label: entry.title },
 ];
@@ -141,9 +166,7 @@ const related = relatedNotes(entry, entries);
  * shares a tag" in the second case is a claim the artifact contradicts, which
  * is precisely what an honest empty state must not do.
  */
-const relatedEmpty = hasTagPeer(entry, entries)
-  ? 'Every note sharing a tag with this one is already listed above.'
-  : 'No other published note shares a tag with this one.';
+const relatedEmpty = hasTagPeer(entry, entries) ? t.relatedAlreadyListed : t.relatedNoTagPeer;
 
 /**
  * The pager: its two links and the name it announces, or nothing at all.
@@ -161,11 +184,15 @@ const relatedEmpty = hasTagPeer(entry, entries)
 const neighbours = collectionNeighbours(entry, entries);
 const pager =
   collection !== undefined && (neighbours.previous !== undefined || neighbours.next !== undefined)
-    ? { ...neighbours, label: `More in the ${collection} collection` }
+    ? { ...neighbours, label: t.moreInCollection(collection) }
     : undefined;
 ---
 
-<Layout title={`${entry.title} · thoughtscape`} description={entry.excerpt} lang={entry.language}>
+<Layout
+  title={`${entry.title}${TITLE_SUFFIX}`}
+  description={entry.excerpt}
+  lang={entry.language}
+>
   {/*
     Owner decision 7, the live case. Each flag is true only when the body
     contains the construct, so each sheet reaches only the pages that render
@@ -207,7 +234,7 @@ const pager =
 
   <header class="note-header">
     {/* § 9.2.3 — the trail. Public fields only; never a private folder name. */}
-    <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <nav class="breadcrumbs" aria-label={t.breadcrumbLabel}>
       <ol>
         {breadcrumbs.map((crumb) => (
           <li>
@@ -234,25 +261,25 @@ const pager =
       <dl class="note-meta">
         {entry.created !== undefined && (
           <div>
-            <dt>Published</dt>
+            <dt>{t.metaPublished}</dt>
             <dd><time datetime={entry.created}>{displayDate(entry.created)}</time></dd>
           </div>
         )}
         {entry.updated !== undefined && (
           <div>
-            <dt>Updated</dt>
+            <dt>{t.metaUpdated}</dt>
             <dd><time datetime={entry.updated}>{displayDate(entry.updated)}</time></dd>
           </div>
         )}
         {collection !== undefined && (
           <div>
-            <dt>Collection</dt>
+            <dt>{t.metaCollection}</dt>
             <dd><a href={collectionRoute(collection)}>{collection}</a></dd>
           </div>
         )}
         {entry.tags !== undefined && entry.tags.length > 0 && (
           <div>
-            <dt>Tags</dt>
+            <dt>{t.metaTags}</dt>
             <dd>
               <ul class="note-tags">
                 {entry.tags.map((tag) => (
@@ -278,7 +305,7 @@ const pager =
   {/* § 9.2.6 — the table of contents, on pages above `TOC_MIN_HEADINGS`. The
       renderer returns an empty `toc` below the threshold, so the threshold
       lives in one place and this is only the rendering decision. */}
-  {toc.length > 0 && <TableOfContents entries={toc} isRoot />}
+  {toc.length > 0 && <TableOfContents entries={toc} isRoot lang={entry.language} />}
 
   {/* § 9.2.7 — the sanitized article body. */}
   <article class="prose" data-pagefind-body>
@@ -290,9 +317,10 @@ const pager =
       never be a dead link or a private title. */}
   <LinkedNotes
     region="outgoing"
-    heading="Links to"
+    heading={t.outgoingHeading}
     entries={outgoing}
-    empty="This note links to no other published note."
+    empty={t.outgoingEmpty}
+    lang={lang}
   />
 
   {/* § 9.2.9 — static backlinks. Requirements section 13.1 asks for five
@@ -313,9 +341,10 @@ const pager =
       exporter contract work. */}
   <LinkedNotes
     region="backlinks"
-    heading="Linked from"
+    heading={t.backlinksHeading}
     entries={backlinks}
-    empty="No published note links here yet."
+    empty={t.backlinksEmpty}
+    lang={lang}
   />
 
   {/* § 9.2.10 — the related-note fallback. Derived, not authored, and the
@@ -324,10 +353,11 @@ const pager =
       the rule and the alternatives it was chosen over. */}
   <LinkedNotes
     region="related"
-    heading="Related notes"
+    heading={t.relatedHeading}
     entries={related}
     empty={relatedEmpty}
-    derivation={RELATED_DERIVATION}
+    derivation={t.relatedDerivation}
+    lang={lang}
   />
 
   {/* § 9.2.11 — the local-graph neighborhood. TK-17 owns it, as build-time
@@ -344,17 +374,24 @@ const pager =
           link out of context — "Previous" alone would be four identical link
           names on a screen reader's link list. The direction word is a
           separate element rather than part of the link text for the same
-          reason. */}
+          reason — and the title carries its own `lang` when the neighbour is in
+          another language, which the direction word never is. */}
       {pager.previous !== undefined && (
         <a href={noteRoute(pager.previous.slug)} rel="prev">
-          <span class="pager-direction">Previous</span>
-          <span class="pager-title">{pager.previous.title}</span>
+          <span class="pager-direction">{t.pagerPrevious}</span>
+          <span
+            class="pager-title"
+            lang={partLanguage(pager.previous.language, lang)}
+          >{pager.previous.title}</span>
         </a>
       )}
       {pager.next !== undefined && (
         <a class="pager-next" href={noteRoute(pager.next.slug)} rel="next">
-          <span class="pager-direction">Next</span>
-          <span class="pager-title">{pager.next.title}</span>
+          <span class="pager-direction">{t.pagerNext}</span>
+          <span
+            class="pager-title"
+            lang={partLanguage(pager.next.language, lang)}
+          >{pager.next.title}</span>
         </a>
       )}
     </nav>
@@ -362,13 +399,10 @@ const pager =
 
   {/* § 9.2.13 — the footer: public provenance and the canonical route. */}
   <footer class="note-footer">
-    <p>
-      A reviewed public projection. This page was published because it was named on an
-      explicit approval list, and it carries only what that projection includes.
-    </p>
+    <p>{t.noteProvenance}</p>
     {/* TK-08 configured `site:`, so this is the full canonical URL rather than
         the route TK-05a could honestly emit. A reader who copies it from a
         printed or quoted page gets an address that resolves. */}
-    <p class="note-canonical">Canonical URL: {canonicalUrl(Astro.site, canonicalRoute)}</p>
+    <p class="note-canonical">{t.canonicalUrlLine(canonicalUrl(Astro.site, canonicalRoute))}</p>
   </footer>
 </Layout>

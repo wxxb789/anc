@@ -12,22 +12,24 @@
  */
 import Layout from '../layouts/Layout.astro';
 import { SITE_MAP } from '../lib/routes.ts';
+import { TITLE_SUFFIX } from '../lib/site.ts';
+import { NAV_LANGUAGE, translate } from '../lib/translations.ts';
+
+// The one route with no document behind it at all: the host serves this body
+// for any unmatched address, so there is nothing whose language could be read.
+const t = translate(NAV_LANGUAGE);
 ---
 
-<Layout title="Page not found · thoughtscape" description="That page is not part of this site.">
+<Layout title={`${t.notFoundTitle}${TITLE_SUFFIX}`} description={t.notFoundDescription}>
   <article class="prose">
-    <h1>Page not found</h1>
+    <h1>{t.notFoundTitle}</h1>
 
-    <p>
-      That address does not match a published page. It may have been withdrawn, or it may never
-      have existed here — published pages that move keep a permanent redirect, so a page that was
-      once here would have brought you along.
-    </p>
+    <p>{t.notFoundBody}</p>
 
-    <h2>Where to go instead</h2>
+    <h2>{t.notFoundWhereTo}</h2>
 
     <ul>
-      {SITE_MAP.map((item) => <li><a href={item.href}>{item.label}</a></li>)}
+      {SITE_MAP.map((item) => <li><a href={item.href}>{t[item.label]}</a></li>)}
     </ul>
   </article>
 </Layout>

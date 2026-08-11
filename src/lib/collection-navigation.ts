@@ -34,6 +34,14 @@ export interface ExplorerNote {
   route: string;
   /** The page being viewed. Rendered with `aria-current="page"`. */
   isCurrent: boolean;
+  /**
+   * The note's own language, so the rail can mark a title whose language
+   * differs from the page's. Every route renders the whole corpus in this rail,
+   * so on a bilingual site most pages list titles in both languages — and a
+   * screen reader reads a Chinese title in an English voice unless the title
+   * says what it is. `partLanguage` decides when the attribute is needed.
+   */
+  language?: string;
 }
 
 /** One collection, or the notes belonging to none. */
@@ -62,11 +70,18 @@ export interface ExplorerGroup {
 }
 
 /**
- * The label for notes carrying no `collection`.
+ * The label for notes carrying no `collection`, in the navigation language.
  *
- * Named rather than written inline because it is the one string in this module a
- * reader meets, and TK-16 translates it in one place. Four of the thirty-two
- * fixture notes reach it; on the published one-note corpus it is the only group.
+ * The default rather than the only value: `collectionNavigation` takes the
+ * resolved label as a parameter so the rail on a Chinese note reads
+ * "未归入合集" while the same group on an English note reads "Uncollected", in
+ * one build. This constant keeps the module pure — it imports no locale table,
+ * so it stays exercisable against synthetic fixtures — and gives a caller with
+ * no opinion the navigation language. `Layout.astro` always has an opinion,
+ * because it has resolved the document's own.
+ *
+ * Four of the thirty-two fixture notes reach this group; on the published
+ * one-note corpus it is the only group.
  */
 export const UNCOLLECTED_LABEL = 'Uncollected';
 
@@ -90,6 +105,7 @@ export const UNCOLLECTED_LABEL = 'Uncollected';
 export function collectionNavigation(
   entries: readonly ContentEntry[],
   currentPath: string,
+  uncollectedLabel: string = UNCOLLECTED_LABEL,
 ): ExplorerGroup[] {
   const currentSlug = noteSlugFromPath(currentPath);
   // The collection holding the note being read, when a note is being read.
@@ -102,6 +118,7 @@ export function collectionNavigation(
     title: entry.title,
     route: noteRoute(entry.slug),
     isCurrent: entry.slug === currentSlug,
+    language: entry.language,
   });
 
   const groups: ExplorerGroup[] = collectionFacets(entries).map((facet) => ({
@@ -121,7 +138,7 @@ export function collectionNavigation(
     // from every group above it.
     const notes = [...uncollected].sort(byTitleThenSlug).map(note);
     groups.push({
-      label: UNCOLLECTED_LABEL,
+      label: uncollectedLabel,
       notes,
       // Marked only by the note being read: this group has no index route, so a
       // path can never select it on its own.

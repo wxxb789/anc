@@ -1,8 +1,21 @@
 ---
+/**
+ * `/tags/<key>/` — the notes carrying one tag.
+ *
+ * A facet aggregates many documents, so its chrome is the navigation language
+ * rather than any member's. Resolving it from, say, the first note would make
+ * this page's language depend on which entry sorts first — a public page
+ * changing language because an unrelated note was published.
+ *
+ * The tag itself is interpolated into the heading and the title as artifact
+ * text, unchanged.
+ */
 import Layout from '../../layouts/Layout.astro';
 import NoteList from '../../components/NoteList.astro';
 import { entries } from '../../lib/content.ts';
 import { tagFacets } from '../../lib/routes.ts';
+import { TITLE_SUFFIX } from '../../lib/site.ts';
+import { NAV_LANGUAGE, translate } from '../../lib/translations.ts';
 
 export function getStaticPaths() {
   // No facets means no paths, which is the correct static answer: `/tags/` still
@@ -12,18 +25,19 @@ export function getStaticPaths() {
 }
 
 const { facet } = Astro.props;
+const t = translate(NAV_LANGUAGE);
 ---
 
 <Layout
-  title={`Tag: ${facet.label} · thoughtscape`}
-  description={`Published notes tagged ${facet.label}.`}
+  title={`${t.tagPageTitle(facet.label)}${TITLE_SUFFIX}`}
+  description={t.tagPageDescription(facet.label)}
 >
   <section aria-labelledby="tag-title">
     <div class="section-heading">
-      <h1 id="tag-title">Tag: {facet.label}</h1>
-      <span>{facet.entries.length} {facet.entries.length === 1 ? 'note' : 'notes'}</span>
+      <h1 id="tag-title">{t.tagPageTitle(facet.label)}</h1>
+      <span>{t.noteCount(facet.entries.length)}</span>
     </div>
-    <p class="facet-note"><a href="/tags/">← All tags</a></p>
-    <NoteList entries={facet.entries} level={2} />
+    <p class="facet-note"><a href="/tags/">{t.allTags}</a></p>
+    <NoteList entries={facet.entries} level={2} lang={NAV_LANGUAGE} />
   </section>
 </Layout>

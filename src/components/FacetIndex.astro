@@ -8,6 +8,7 @@
  * no such field yet, and lights up on its own as soon as one appears.
  */
 import type { Facet } from '../lib/routes.ts';
+import { translate } from '../lib/translations.ts';
 
 interface Props {
   facets: readonly Facet[];
@@ -15,9 +16,12 @@ interface Props {
   route: (key: string) => string;
   /** Shown in place of the list when the artifact carries no such field. */
   empty: string;
+  /** The page's own language, which decides the count's grammar. */
+  lang: string;
 }
 
-const { facets, route, empty } = Astro.props;
+const { facets, route, empty, lang } = Astro.props;
+const t = translate(lang);
 ---
 
 {facets.length === 0 ? (
@@ -26,10 +30,15 @@ const { facets, route, empty } = Astro.props;
   <ul class="facet-list">
     {facets.map((facet) => (
       <li>
+        {/* The label is the artifact's own text — a tag reading `security` stays
+            `security` on a Chinese page, and `笔记` stays `笔记` on an English
+            one. Only the count beside it is chrome. */}
         <a href={route(facet.key)}>{facet.label}</a>
         {/* The count is text, not a colour or an icon: no information here is
-            carried by colour alone. */}
-        <span class="facet-count">{facet.entries.length} {facet.entries.length === 1 ? 'note' : 'notes'}</span>
+            carried by colour alone. Both callers count *notes* — a tag row says
+            how many notes carry the tag — so this is `noteCount` rather than a
+            per-facet noun. */}
+        <span class="facet-count">{t.noteCount(facet.entries.length)}</span>
       </li>
     ))}
   </ul>

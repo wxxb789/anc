@@ -27,7 +27,6 @@ import { noteRoute } from '../src/lib/routes.ts';
 import {
   FEED_PATH,
   SITEMAP_PATH,
-  SITE_DESCRIPTION,
   SITE_NAME,
   SOCIAL_CARD_PATH,
   TITLE_SUFFIX,
@@ -45,6 +44,7 @@ import {
   rfc3339,
   socialTitle,
 } from '../src/lib/site.ts';
+import { translate } from '../src/lib/translations.ts';
 
 const DIST = new URL('../dist/', import.meta.url);
 
@@ -515,12 +515,35 @@ test('only the error document is non-indexable', () => {
  * the note page passes it straight through — so this is a live artifact shape,
  * not a defensive check. A default parameter does not catch it, because a
  * default only fires on `undefined`.
+ *
+ * Since TK-16 the fallback is passed in rather than read from a module
+ * constant, because it is chrome and chrome is per document — so the second
+ * assertion below is the one that matters now: a Chinese note with an empty
+ * excerpt must fall back to the Chinese sentence, not across a language.
  */
-test('an empty or blank description falls back to the site description, never to nothing', () => {
-  for (const empty of [undefined, '', '   ', '\n\t']) {
-    assert.equal(describe(empty), SITE_DESCRIPTION, `${JSON.stringify(empty)} did not fall back`);
+test('an empty or blank description falls back to the given fallback, never to nothing', () => {
+  for (const language of ['en', 'zh-CN']) {
+    const fallback = translate(language).siteDescription;
+    for (const empty of [undefined, '', '   ', '\n\t']) {
+      assert.equal(
+        describe(empty, fallback),
+        fallback,
+        `${language}: ${JSON.stringify(empty)} did not fall back`,
+      );
+    }
   }
-  assert.equal(describe('A real excerpt.'), 'A real excerpt.', 'a real description was replaced');
+  // The two fallbacks are genuinely different sentences, or the loop above
+  // proves only that one string equals itself twice.
+  assert.notEqual(
+    translate('en').siteDescription,
+    translate('zh-CN').siteDescription,
+    'the two locales share a fallback description, so the per-language check is vacuous',
+  );
+  assert.equal(
+    describe('A real excerpt.', translate('en').siteDescription),
+    'A real excerpt.',
+    'a real description was replaced',
+  );
 });
 
 // --- What the build actually emitted ------------------------------------------

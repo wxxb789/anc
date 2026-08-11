@@ -10,7 +10,8 @@ import CollectionExplorer from '../components/CollectionExplorer.astro';
 import { entries } from '../lib/content.ts';
 import { collectionNavigation } from '../lib/collection-navigation.ts';
 import { PRIMARY_NAV, SITE_MAP } from '../lib/routes.ts';
-import { canonicalUrl, describe, SITE_SUBTITLE } from '../lib/site.ts';
+import { canonicalUrl, describe, SITE_NAME } from '../lib/site.ts';
+import { NAV_LANGUAGE, THEME_NAMES, translate } from '../lib/translations.ts';
 
 interface Props {
   title: string;
@@ -19,10 +20,19 @@ interface Props {
   lang?: string;
 }
 
-/** The single navigation language, used whenever a document declares none. */
-const NAV_LANGUAGE = 'en';
-
 const { title, lang = NAV_LANGUAGE } = Astro.props;
+
+/**
+ * This document's chrome, resolved from this document's own language.
+ *
+ * The whole of TK-16 is that this line reads `lang` — a per-entry field on the
+ * validated contract — rather than one site-wide locale. A zh-CN note therefore
+ * renders Chinese chrome inside `<html lang="zh-CN">` while an English note in
+ * the same build renders English chrome, which is a shape Quartz's global
+ * `cfg.locale` cannot express. Routes that are not a single document pass no
+ * `lang` and land on `NAV_LANGUAGE`; `translations.ts` documents why.
+ */
+const t = translate(lang);
 
 /**
  * `describe` rather than a default parameter, and that is a fix rather than a
@@ -32,8 +42,11 @@ const { title, lang = NAV_LANGUAGE } = Astro.props;
  * `<meta name="description" content="">`, which is worse than no tag at all,
  * since a consumer scrapes the page when the tag is absent and renders nothing
  * when it is present and empty. The fixture corpus has exactly one such note.
+ *
+ * The fallback is this document's own, so a Chinese note with an empty excerpt
+ * describes itself in Chinese rather than falling back across a language.
  */
-const description = describe(Astro.props.description);
+const description = describe(Astro.props.description, t.siteDescription);
 
 /**
  * The explorer rail's groups, resolved against the route being rendered.
@@ -44,7 +57,7 @@ const description = describe(Astro.props.description);
  * `SiteMetadata` lives here. `Astro.url.pathname` is what makes the rail
  * contextual: it opens the group holding the current page and no other.
  */
-const explorerGroups = collectionNavigation(entries, Astro.url.pathname);
+const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncollected);
 ---
 
 <!doctype html>
@@ -75,11 +88,13 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname);
     <slot name="head" />
   </head>
   <body>
-    <a class="skip-link" href="#main">Skip to content</a>
+    <a class="skip-link" href="#main">{t.skipToContent}</a>
     <header class="site-header">
-      <a class="brand" href="/">thoughtscape</a>
-      <nav class="site-nav" aria-label="Primary">
-        {PRIMARY_NAV.map((item) => <a href={item.href}>{item.label}</a>)}
+      {/* The site's name is a proper noun, so it is the one word in this header
+          that is not translated — see `SITE_NAME`. */}
+      <a class="brand" href="/">{SITE_NAME}</a>
+      <nav class="site-nav" aria-label={t.primaryNavLabel}>
+        {PRIMARY_NAV.map((item) => <a href={item.href}>{t[item.label]}</a>)}
         {/* The shortcut is in the accessible name rather than in a `title`,
             which no screen reader reliably announces and no keyboard reader
             can discover. `aria-keyshortcuts` is the attribute that exists for
@@ -88,11 +103,24 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname);
           id="search-toggle"
           type="button"
           aria-keyshortcuts="/"
-          aria-label="Search this site (press slash)"
+          aria-label={t.searchToggleLabel}
           data-js-only
-        >Search</button>
-        <button id="theme-toggle" type="button" data-js-only>Theme: system</button>
-        <button id="reader-toggle" type="button" aria-pressed="false" data-js-only>Reader mode</button>
+        >{t.searchToggle}</button>
+        {/* The three theme labels travel as `data-` attributes rather than as a
+            locale table in the bundle: `preferences.ts` cycles the attribute and
+            reads back the label the build already resolved, so the script ships
+            no strings, knows no locale, and adds no bytes that scale with the
+            number of languages. The rendered text is the `system` label, which
+            is the state before any preference is stored. */}
+        <button
+          id="theme-toggle"
+          type="button"
+          data-js-only
+          data-label-system={t.themeLabel('system')}
+          data-label-light={t.themeLabel('light')}
+          data-label-dark={t.themeLabel('dark')}
+        >{t.themeLabel(THEME_NAMES[0])}</button>
+        <button id="reader-toggle" type="button" aria-pressed="false" data-js-only>{t.readerToggle}</button>
       </nav>
     </header>
     {/* TK-06. Every region the search script fills is declared here in HTML
@@ -110,9 +138,9 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname);
         The close button is a `<form method="dialog">`, which needs no script
         and — per the parity plan §7.6 — never navigates, so `form-action 'none'`
         does not touch it. */}
-    <dialog id="search-dialog" aria-label="Search" data-pagefind-ignore>
-      <form method="dialog" class="search-close"><button>Close search</button></form>
-      <label class="search-label" for="search-input">Search this site</label>
+    <dialog id="search-dialog" aria-label={t.searchDialogLabel} data-pagefind-ignore>
+      <form method="dialog" class="search-close"><button>{t.searchClose}</button></form>
+      <label class="search-label" for="search-input">{t.searchFieldLabel}</label>
       {/* `type="search"` for the browser's own clear control and the right
           on-screen keyboard. `autocomplete="off"` because a site search field
           offering the reader's previous queries from other sites is noise. */}
@@ -123,8 +151,22 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname);
       </div>
       {/* `role="status"` is an `aria-live="polite"` region: the reader hears
           "Loading the search index" or "No results" without focus moving off
-          the field they are typing into. */}
-      <p id="search-status" role="status"></p>
+          the field they are typing into.
+
+          The four load-state sentences travel as `data-` attributes for the same
+          reason the theme labels do: `search-dialog.ts` reads the one it needs
+          off this element, so the bundle carries no locale table and the page
+          announces its own language. There is no rendered text — the region is
+          empty until a state is announced, which is what makes the first message
+          an announcement rather than a change nobody hears. */}
+      <p
+        id="search-status"
+        role="status"
+        data-message-idle={t.searchIdle}
+        data-message-loading={t.searchLoading}
+        data-message-empty={t.searchEmpty}
+        data-message-failed={t.searchFailed}
+      ></p>
       <ol id="search-results"></ol>
     </dialog>
     {/* The reading frame: the article, and the collection rail beside it.
@@ -167,22 +209,22 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname);
           `<details>`, so it is complete and operable with scripting disabled —
           the Quartz explorer failure the parity plan's L5 names. It renders
           nothing at all on a corpus with fewer than two notes. */}
-      <CollectionExplorer groups={explorerGroups} />
+      <CollectionExplorer groups={explorerGroups} lang={lang} />
     </div>
     <footer class="site-footer">
       {/* Every fixed route is linked from here, on every page, so no route is an
           orphan. This nav deliberately survives reader mode, which hides the
           header's secondary links: hiding the only path to a route would make
           reader mode remove information rather than chrome. */}
-      <nav class="site-map" aria-label="Site map">
-        {SITE_MAP.map((item) => <a href={item.href}>{item.label}</a>)}
+      <nav class="site-map" aria-label={t.siteMapLabel}>
+        {SITE_MAP.map((item) => <a href={item.href}>{t[item.label]}</a>)}
       </nav>
-      <p>{SITE_SUBTITLE}</p>
+      <p>{t.siteSubtitle}</p>
       {/* Scope item 10 requires the printed page to carry its canonical URL.
           A printed page has no address bar, so the full absolute URL is what
           makes it findable again — TK-05a emitted the route and left this for
           TK-08 to upgrade once `site:` was configured. */}
-      <p class="print-only">Published at {canonicalUrl(Astro.site, Astro.url.pathname)}</p>
+      <p class="print-only">{t.publishedAt(canonicalUrl(Astro.site, Astro.url.pathname))}</p>
     </footer>
     <script>
       import '../scripts/preferences.ts';

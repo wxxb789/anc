@@ -27,6 +27,7 @@
  */
 import type { ContentEntry } from '../lib/content.ts';
 import { noteRoute } from '../lib/routes.ts';
+import { partLanguage, translate } from '../lib/translations.ts';
 
 interface Props {
   /** Identifies the region: the heading takes `<region>-title`, the aside points at it. */
@@ -37,9 +38,12 @@ interface Props {
   empty: string;
   /** How the list was derived, where the heading does not already say. */
   derivation?: string;
+  /** The page's own language, which decides the count's grammar. */
+  lang: string;
 }
 
-const { region, heading, entries, empty, derivation } = Astro.props;
+const { region, heading, entries, empty, derivation, lang } = Astro.props;
+const t = translate(lang);
 const titleId = `${region}-title`;
 ---
 
@@ -48,9 +52,14 @@ const titleId = `${region}-title`;
     <h2 id={titleId}>{heading}</h2>
     {/* Text, not a badge: nothing here is carried by colour or shape alone. It
         is also what makes a long list legible before it is read — a reader
-        meeting "Linked from" sees whether it is two notes or forty. */}
+        meeting "Linked from" sees whether it is two notes or forty.
+
+        `noteCount` rather than a count and a noun assembled here: English
+        pluralises and Chinese does not, so the whole phrase is the locale's to
+        form. A shared `n === 1` branch would put an English rule on a language
+        that has none. */}
     {entries.length > 0 && (
-      <span class="relations-count">{entries.length} {entries.length === 1 ? 'note' : 'notes'}</span>
+      <span class="relations-count">{t.noteCount(entries.length)}</span>
     )}
   </div>
 
@@ -73,7 +82,12 @@ const titleId = `${region}-title`;
      */
     <ul class="relations-list">
       {entries.map((entry) => (
-        <li><a href={noteRoute(entry.slug)}>{entry.title}</a></li>
+        <li>
+          {/* The linked note's own language, when it differs from this page's.
+              A bilingual corpus links across languages — three fixture notes
+              do — and an unmarked foreign title is read in the wrong voice. */}
+          <a href={noteRoute(entry.slug)} lang={partLanguage(entry.language, lang)}>{entry.title}</a>
+        </li>
       ))}
     </ul>
   )}

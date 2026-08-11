@@ -316,6 +316,21 @@ const FILTER_REGIONS = [
 ] as const;
 
 /**
+ * The `dataset` key holding each announceable state's sentence.
+ *
+ * Written out rather than derived from the state name, so a rename on either
+ * side is a type error here instead of a status line that silently goes blank:
+ * `dataset['messageIdle']` is `data-message-idle` in the markup, and nothing but
+ * this table records that the two are meant to be the same thing.
+ */
+const MESSAGE_DATASET = {
+  idle: 'messageIdle',
+  loading: 'messageLoading',
+  empty: 'messageEmpty',
+  failed: 'messageFailed',
+} as const;
+
+/**
  * `globalThis.document?.` rather than a bare `document.`: this module exports
  * `otherLanguages`, and `tests/search.test.ts` imports it under Node to check
  * the region-tag cases a browser gate cannot reach without a third fixture
@@ -345,17 +360,6 @@ if (trigger != null && dialog != null) {
    */
   type State = 'idle' | 'loading' | 'ready' | 'empty' | 'failed';
 
-  const MESSAGES: Record<State, string> = {
-    idle: 'Type to search this site.',
-    loading: 'Loading the search index…',
-    // Results are on screen; the list is the message. A sentence here would sit
-    // above the rows contradicting them.
-    ready: '',
-    empty: 'No results. Try a different word.',
-    failed:
-      'The search index could not be loaded. The rest of this page still works — press Enter to try again.',
-  };
-
   let state: State = 'idle';
   let loading: Promise<{ ui: ModularUI; runtime: PagefindRuntime }> | undefined;
   let isMounted = false;
@@ -363,14 +367,28 @@ if (trigger != null && dialog != null) {
   let attempt = 0;
 
   /**
-   * Announce a state.
+   * Announce a state, in the language of the document the dialog is on.
    *
-   * `textContent`, never `innerHTML`: this is a live region and the only strings
-   * it ever holds are the literals above.
+   * The four sentences are read off `#search-status`'s own `data-message-*`
+   * attributes, which `Layout.astro` filled from the translation resolved for
+   * this document. That is what makes the search dialog bilingual at zero added
+   * bytes: a locale table in this bundle would put every language on the wire
+   * for every reader, to say what the build already knew — and it would grow
+   * with each language, on a script that ships on every page.
+   *
+   * `ready` is not among them: results are on screen and the list is the
+   * message, so a sentence there would sit above the rows contradicting them.
+   * It is the empty string, and it is the only state that is.
+   *
+   * `textContent`, never `innerHTML`: this is a live region, and what goes into
+   * it is now attribute text rather than a literal in this file — so it stays
+   * data throughout. The strings are chrome the build authored rather than
+   * artifact content, but the rule does not depend on that being true.
    */
   function announce(next: State): void {
     state = next;
-    if (status !== null) status.textContent = MESSAGES[next];
+    if (status === null) return;
+    status.textContent = next === 'ready' ? '' : (status.dataset[MESSAGE_DATASET[next]] ?? '');
   }
 
   /**

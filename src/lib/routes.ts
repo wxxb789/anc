@@ -20,6 +20,7 @@
 
 import { slug as slugify } from 'github-slugger';
 import type { ContentEntry } from './schema.ts';
+import type { NavLabelKey } from './translations.ts';
 import { NOTES_SEGMENT, noteRoute, noteSlugFromPath } from './route-path.ts';
 
 /**
@@ -354,10 +355,17 @@ export function renderRedirects(
   ].join('\n');
 }
 
-/** A link rendered in the site chrome. */
+/**
+ * A link rendered in the site chrome.
+ *
+ * `label` names a translation key rather than holding the text, so this module
+ * stays the record of *where* the site's routes are and never becomes a second
+ * place one of its languages is written down. The key type admits only the
+ * `nav*` entries, so a route cannot accidentally point at a sentence.
+ */
 export interface NavItem {
   href: string;
-  label: string;
+  label: NavLabelKey;
 }
 
 /**
@@ -374,12 +382,12 @@ export interface NavItem {
  * were a destination a reader could choose.
  */
 export const SITE_MAP: readonly NavItem[] = [
-  { href: '/', label: 'Home' },
-  { href: '/recent/', label: 'Recent' },
-  { href: `/${TAGS_SEGMENT}/`, label: 'Tags' },
-  { href: `/${COLLECTIONS_SEGMENT}/`, label: 'Collections' },
-  { href: '/about/', label: 'About' },
-  { href: '/privacy/', label: 'Privacy' },
+  { href: '/', label: 'navHome' },
+  { href: '/recent/', label: 'navRecent' },
+  { href: `/${TAGS_SEGMENT}/`, label: 'navTags' },
+  { href: `/${COLLECTIONS_SEGMENT}/`, label: 'navCollections' },
+  { href: '/about/', label: 'navAbout' },
+  { href: '/privacy/', label: 'navPrivacy' },
 ];
 
 /** The routes every build emits regardless of what the artifact contains. */
@@ -394,8 +402,8 @@ export const FIXED_ROUTES: readonly string[] = SITE_MAP.map((item) => item.href)
  * Privacy are read once, so they live in the footer site map only.
  */
 export const PRIMARY_NAV: readonly NavItem[] = [
-  { href: '/#notes', label: 'Notes' },
-  { href: '/recent/', label: 'Recent' },
-  { href: `/${TAGS_SEGMENT}/`, label: 'Tags' },
-  { href: `/${COLLECTIONS_SEGMENT}/`, label: 'Collections' },
+  { href: '/#notes', label: 'navNotes' },
+  { href: '/recent/', label: 'navRecent' },
+  { href: `/${TAGS_SEGMENT}/`, label: 'navTags' },
+  { href: `/${COLLECTIONS_SEGMENT}/`, label: 'navCollections' },
 ];
