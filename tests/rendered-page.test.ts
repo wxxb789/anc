@@ -830,11 +830,26 @@ test('the collection rail is complete and operable with scripting disabled', asy
             ).length,
             openLinks: links.length,
             visibleLinks: links.filter((link) => link.checkVisibility()).length,
-            // Inside the rail's own box: an item clipped out of a collapsed
-            // container is unreachable while still reporting a size.
+            // Inside the boxes that contain it, on **both** axes.
+            //
+            // The vertical bound is measured against the open `<details>`, not
+            // against the rail, and it is what catches a collapse that never
+            // actually opens: `checkVisibility()` stays true for a link inside
+            // a zero-height `::details-content`, so a group whose open state
+            // renders nothing reports all twelve links visible. Measured under
+            // exactly that mutation — 12 links "visible", the group 51 px tall,
+            // and **0** of them inside it. The horizontal bound against the
+            // rail catches the other shape, a list clipped sideways out of a
+            // container that scrolls.
             containedLinks: links.filter((link) => {
               const rect = box(link);
-              return rect.left >= outer.left - 1 && rect.right <= outer.right + 1;
+              const group = box(open!);
+              return (
+                rect.left >= outer.left - 1 &&
+                rect.right <= outer.right + 1 &&
+                rect.top >= group.top - 1 &&
+                rect.bottom <= group.bottom + 1
+              );
             }).length,
           };
         });
@@ -863,7 +878,8 @@ test('the collection rail is complete and operable with scripting disabled', asy
             measured.containedLinks,
             measured.openLinks,
             `${where}: ${measured.openLinks - measured.containedLinks} rail links fall outside the ` +
-              'rail box, so the list is being clipped rather than laid out',
+              'boxes that should contain them — the open group renders at no height, or the list ' +
+              'is being clipped rather than laid out',
           );
         }
       }

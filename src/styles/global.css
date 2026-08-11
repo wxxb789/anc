@@ -275,7 +275,23 @@ main:focus:not(:focus-visible) {
 
   .explorer-group::details-content {
     block-size: 0;
-    overflow: hidden;
+    /*
+     * `clip` with a margin rather than `hidden`, so the focus ring survives.
+     *
+     * This pseudo-element is a clip box that hugs the links exactly, and the
+     * global ring is a 2 px outline at `outline-offset: 2px` — so under
+     * `overflow: hidden` every link's ring was cut flat on both horizontal
+     * edges. Measured: 0 px of ring reached the left and right of a note link
+     * at every width, against the 4 px it needs. The rail's own padding cannot
+     * fix this one; it is a second, inner clip box.
+     *
+     * `overflow-clip-margin` lets the ring paint outside the box while the box
+     * still clips the collapse — which `scroll` or `visible` would not, since
+     * either would let a closed group's links bleed below its summary. WCAG
+     * 2.4.11.
+     */
+    overflow: clip;
+    overflow-clip-margin: 4px;
     transition:
       block-size var(--motion-fast) var(--ease),
       content-visibility var(--motion-fast) allow-discrete;
