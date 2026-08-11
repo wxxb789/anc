@@ -492,7 +492,9 @@ test('every note page carries the anatomy this ticket owns', () => {
     // that sentence is per-document chrome, and building a regexp out of
     // translated prose would mean escaping metacharacters in every language —
     // one missed and the gate quietly matches anything. The wording itself is
-    // asserted by the chrome gate below, in both languages.
+    // asserted by the "no page renders a string from a locale other than its
+    // own" gate at the end of this file, which compares the fixed part of every
+    // interpolated entry against both locales.
     const canonical = /<p class="note-canonical">([^<]*)<\/p>/.exec(html)?.[1];
     assert.ok(canonical !== undefined, `${slug}: the footer has no canonical URL line`);
     // The URL, not the sentence: `[^\s<]` bounds the host so a run of prose
@@ -1563,6 +1565,13 @@ test('a note page renders the chrome of its own language, and not the other', ()
     { key: 'primaryNavLabel', as: 'attribute' },
     { key: 'siteMapLabel', as: 'attribute' },
     { key: 'searchToggleLabel', as: 'attribute' },
+    // Short chrome words the inverse gate below cannot see: each is a substring
+    // of some artifact title or tag in the fixture corpus, so that gate's
+    // content exclusion suppresses them. Located here by element instead, which
+    // is why the two gates are complementary rather than redundant.
+    { key: 'searchDialogLabel', as: 'attribute' },
+    { key: 'navNotes', as: 'text' },
+    { key: 'navHome', as: 'text' },
   ] as const;
 
   /**
@@ -2232,4 +2241,169 @@ test('a foreign-language title is marked in every list, not only the rail', (con
       `no same-language title was inspected on the ${surface.name}`,
     );
   }
+});
+
+/**
+ * **No page renders any string from a locale other than its own.**
+ *
+ * The inverse of the gate above, and the one that closes the hole a list
+ * leaves. `ALWAYS` names seventeen keys, which means a mutation that ships
+ * English for any of the other fifty is green — and review found exactly that:
+ * `metaTags`, both pager directions, the explorer heading and its index link,
+ * the uncollected label, the search dialog's accessible name, the seven `data-`
+ * values, and both relation empty states were all unchecked per language. A
+ * list of what to verify is a list to forget to add to; this asserts over the
+ * whole contract instead, so a key added tomorrow is covered the day it exists.
+ *
+ * Every locale entry is reduced to the concrete strings it can render — a
+ * function entry through the same sample arguments the contract's own tests use
+ * — and the page is searched for any of the *other* locale's. Interpolated
+ * entries are compared on their invariant part, because their variable part is
+ * artifact text that legitimately appears in both languages.
+ *
+ * Two exclusions, each because the string is not evidence of a language: a value
+ * that is a substring of the same key's own-locale form, and one the artifact
+ * itself puts on the page.
+ *
+ * **The second exclusion is a real ceiling, not a formality.** A chrome word
+ * that also appears in a note's title, tag, or excerpt is invisible to this gate
+ * — the fixture corpus has a note titled "Search That Ships Nothing Until Asked"
+ * and a tag spelled `笔记`, so English `searchDialogLabel` ("Search") and Chinese
+ * `navNotes` ("笔记") are both suppressed. That is the correct trade: the
+ * alternative is a gate that fails whenever an author writes an ordinary word,
+ * and the ticket's own rule is that content renders verbatim in every language.
+ * Short, common chrome words are covered instead by the positive `ALWAYS` gate
+ * above, which locates them by element rather than by substring.
+ */
+test('no page renders a string from a locale other than its own', () => {
+  /**
+   * The fixed part of what a key can render, in one locale.
+   *
+   * For a plain string that is the string. For an interpolated one it is the
+   * segments around the value — `Link to section: ` and `` — because the value
+   * between them is the author's words and appears in both languages. A segment
+   * shorter than four characters is dropped: `: ` and `：` are punctuation, not
+   * evidence that a page is in one language rather than the other.
+   */
+  const fixedParts = (locale: Translation, key: string): string[] => {
+    const value = (locale as unknown as Record<string, unknown>)[key];
+    if (typeof value === 'string') return [value];
+    if (typeof value !== 'function') return [];
+    // A sentinel no locale contains, so the split lands on the interpolation
+    // point whatever the argument's type.
+    const rendered = String((value as (input: never) => string)('' as never));
+    return rendered.split('').filter((part) => part.trim().length >= 4);
+  };
+
+  const KEYS = Object.keys(translate('en'));
+  assert.ok(KEYS.length > 40, `the contract has only ${KEYS.length} keys`);
+
+  /**
+   * Text the artifact itself puts on the page, in any language.
+   *
+   * A chrome string that a *tag*, a title, a collection, or an excerpt also
+   * contains cannot be evidence of the wrong locale: the fixture corpus has a
+   * tag literally spelled `笔记`, which is also the Chinese `navNotes`, so the
+   * English home page carries it because it lists that tag — as it must. Content
+   * is the author's and is rendered verbatim in every language; that is the
+   * ticket's own rule, and this is where the gate has to honour it.
+   */
+  const CONTENT = new Set<string>();
+  for (const entry of entries) {
+    for (const text of [entry.title, entry.excerpt, entry.description, entry.collection]) {
+      if (text !== undefined) CONTENT.add(text);
+    }
+    for (const tag of entry.tags ?? []) CONTENT.add(tag);
+    for (const alias of entry.aliases ?? []) CONTENT.add(alias);
+  }
+  /** Whether some artifact text contains this string, so the page would carry it anyway. */
+  const isContent = (text: string): boolean =>
+    [...CONTENT].some((value) => value.includes(text));
+
+  let compared = 0;
+  for (const route of ROUTES) {
+    const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
+    const own = translate(declaredLanguage(html));
+    const other = otherLocale(declaredLanguage(html));
+
+    for (const key of KEYS) {
+      // A foreign string that is *also* a substring of this page's own form for
+      // the same key cannot be evidence of anything — finding it proves only
+      // that the correct string is present.
+      const mine = fixedParts(own, key);
+      for (const foreign of fixedParts(other, key)) {
+        if (mine.some((part) => part.includes(foreign))) continue;
+        if (isContent(foreign)) continue;
+        assert.ok(
+          !html.includes(asRendered(foreign)) && !html.includes(asInAttribute(foreign)),
+          `${route} (lang="${declaredLanguage(html)}"): renders ${JSON.stringify(foreign)} — ` +
+            `the "${key}" string from the other locale`,
+        );
+        compared += 1;
+      }
+    }
+  }
+  assert.ok(compared > 0, 'no key was compared, so this gate checked nothing');
+});
+
+/**
+ * A document with no excerpt describes itself in its own language.
+ *
+ * The one chrome string reachable through a *data* shape rather than a route:
+ * `excerpt` is the single required field the contract admits empty, and
+ * `Layout.astro` falls back to `t.siteDescription` for it. Neither corpus can
+ * exercise the interesting half — the only empty-excerpt fixture entry is
+ * `minimal-note`, which by design declares no optional field at all, so adding a
+ * `language` to it would destroy the thing it tests.
+ *
+ * So this asserts the composition over `dist/`: every built page's meta
+ * description is either the entry's own excerpt or *this page's* fallback. What
+ * it cannot yet catch is a layout that hardcoded the English fallback, because
+ * no built page reaches the fallback in a non-English document — that half is
+ * `tests/metadata.test.ts`'s, which exercises `describe` against both locales
+ * directly. Stated rather than implied, because a gate whose interesting branch
+ * no corpus reaches is a gate that looks stronger than it is.
+ *
+ * Closing it in `dist/` needs one zh-CN fixture entry with an empty excerpt. The
+ * obvious candidate, `minimal-note`, cannot be it: it exists to carry *no*
+ * optional field, so giving it a `language` would destroy what it tests.
+ */
+test('a page with no excerpt falls back to its own language description', () => {
+  let fallbacks = 0;
+  let excerpts = 0;
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const language = declaredLanguage(html);
+    const described = /<meta name="description" content="([^"]*)"/.exec(html)?.[1];
+    assert.ok(described !== undefined, `${entry.slug}: has no meta description`);
+
+    if (entry.excerpt.trim() === '') {
+      assert.equal(
+        described,
+        asInAttribute(translate(language).siteDescription),
+        `${entry.slug} (lang="${language}"): an empty excerpt did not fall back to its own language`,
+      );
+      assert.notEqual(
+        described,
+        asInAttribute(otherLocale(language).siteDescription),
+        `${entry.slug}: fell back across a language`,
+      );
+      fallbacks += 1;
+    } else {
+      assert.equal(
+        described,
+        asInAttribute(entry.excerpt),
+        `${entry.slug}: the meta description is not the entry's own excerpt`,
+      );
+      excerpts += 1;
+    }
+  }
+  assert.ok(excerpts > 0, 'no entry with an excerpt was checked');
+  // The fallback branch exists only on the fixture corpus, which carries exactly
+  // one empty-excerpt entry. Asserted as "checked it where it exists" rather
+  // than skipped, so the published corpus still runs the excerpt half.
+  assert.ok(
+    fallbacks > 0 || entries.every((entry) => entry.excerpt.trim() !== ''),
+    'the corpus has an empty-excerpt entry but the fallback was never checked',
+  );
 });

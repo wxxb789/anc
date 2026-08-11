@@ -61,6 +61,7 @@ const TEXT_KEYS = [
   'diagramCaption',
   'feedTitle',
   'socialCardAlt',
+  'footnoteBackLabel',
 ] as const;
 const THEME_KEYS = ['themeLabel'] as const;
 

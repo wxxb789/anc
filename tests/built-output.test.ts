@@ -231,7 +231,9 @@ test('every page carries its canonical URL for print', () => {
   // English one prints "Published at <url>". Matching either wording here would
   // make this gate fail on one of the two languages; matching the element and
   // the URL inside it is the property that actually matters, and
-  // `tests/built-routes.test.ts` asserts the wording in both languages.
+  // The wording is asserted by `tests/built-routes.test.ts`'s "no page renders a
+  // string from a locale other than its own" gate, which covers `publishedAt`
+  // through its fixed part.
   for (const file of PAGES) {
     const line = /<p class="print-only">([^<]*)<\/p>/.exec(read(file))?.[1];
     assert.ok(line !== undefined, `${file}: no printable canonical URL line`);

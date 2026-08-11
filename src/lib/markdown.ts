@@ -65,6 +65,20 @@ export interface RenderedNote {
   hasMermaid: boolean;
 }
 
+/**
+ * The chrome this module emits *into* the article, in the document's language.
+ *
+ * Four strings, and only four: a heading anchor's accessible name, an untitled
+ * diagram's caption, the footnote section's hidden heading, and each footnote
+ * backref's accessible name. Everything else this module writes is the author's
+ * Markdown. Named as a type rather than repeated as a `Pick` because three
+ * functions here take it and `RenderOptions` declares it.
+ */
+export type ArticleChrome = Pick<
+  Translation,
+  'headingAnchorLabel' | 'diagramCaption' | 'footnotesHeading' | 'footnoteBackLabel'
+>;
+
 export interface RenderOptions {
   /**
    * The title the surrounding page renders as its own `<h1>`.
@@ -117,7 +131,7 @@ export interface RenderOptions {
    * Omitted, they fall back to the navigation language, so a caller with no
    * document in hand renders exactly what it did before.
    */
-  chrome?: Pick<Translation, 'headingAnchorLabel' | 'diagramCaption'>;
+  chrome?: ArticleChrome;
 }
 
 /**
@@ -156,14 +170,31 @@ export const TOC_MIN_HEADINGS = 3;
  * - `headingAttributes` off — `# text { #id .class }` would let body content
  *   choose its own ids and classes, defeating the anchor and class allowlists.
  */
-const FEATURES: Features = {
-  gfm: true,
-  frontmatter: false,
-  math: { singleDollarTextMath: false },
-  smartPunctuation: false,
-  wikilinks: false,
-  headingAttributes: false,
-};
+function featuresFor(chrome: ArticleChrome): Features {
+  return {
+    // GFM's footnote section carries two strings of its own — the visually
+    // hidden `<h2>` and each backref's `aria-label` — and they are English
+    // defaults unless supplied. A Chinese article with a footnote therefore
+    // announced "Back to reference 1" to a screen reader, which is the same
+    // defect as an English heading anchor and is fixed the same way. satteri
+    // takes them directly, so this costs no dependency and no parsing.
+    //
+    // `{reference}` is satteri's placeholder, substituted with `1` or `1-2`; the
+    // locale receives it as the interpolated value, so a locale is free to put
+    // the number wherever its grammar wants it.
+    gfm: {
+      footnotes: {
+        label: chrome.footnotesHeading,
+        backLabel: chrome.footnoteBackLabel('{reference}'),
+      },
+    },
+    frontmatter: false,
+    math: { singleDollarTextMath: false },
+    smartPunctuation: false,
+    wikilinks: false,
+    headingAttributes: false,
+  };
+}
 
 /** Class satteri puts on math code nodes; also the fence language for math. */
 const MATH_LANGUAGE = 'math';
@@ -798,6 +829,15 @@ function diagramCaption(source: string, caption: Translation['diagramCaption']):
  * reads as "sequenceDiagram diagram" without help, and `graph` means flowchart.
  * A keyword absent here is used as written, so a new Mermaid diagram type gets a
  * serviceable name rather than none.
+ *
+ * ponytail: these names are English, so an untitled diagram on a Chinese page
+ * reads "Flowchart 图示" — the noun follows the document and the kind does not.
+ * Deliberate, and the smaller wrong of the two available: the alternative is a
+ * per-locale table of Mermaid diagram kinds, and a reader who meets a Mermaid
+ * diagram is more likely to recognize "Flowchart" than a translation of it. A
+ * diagram that declares its own `title` bypasses this entirely and is the
+ * authored path. Move these into `Translation` if a corpus ever ships untitled
+ * diagrams on Chinese pages at any volume.
  */
 const DIAGRAM_KIND_NAMES: Readonly<Record<string, string>> = {
   graph: 'Flowchart',
@@ -1407,7 +1447,7 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
   const maths: MathRequest[] = [];
 
   const { html } = await markdownToHtml(markdown, {
-    features: FEATURES,
+    features: featuresFor(chrome),
     hastPlugins: [
       headingPlugin(collected, options.pageTitle, chrome.headingAnchorLabel),
       calloutPlugin(),

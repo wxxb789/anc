@@ -186,6 +186,19 @@ export interface Translation {
    */
   headingAnchorLabel: (heading: string) => string;
   /**
+   * The heading that opens the footnotes section, which GFM emits at the end of
+   * an article that has any. Visually hidden, so a screen reader is the only
+   * reader who meets it — which makes its language an accessibility property.
+   */
+  footnotesHeading: string;
+  /**
+   * Accessible name of the arrow that returns from a footnote to the passage
+   * citing it. `reference` is the citation's number, or `n-K` where one footnote
+   * is cited more than once; it is a positional label, not prose, so it is
+   * interpolated rather than described.
+   */
+  footnoteBackLabel: (reference: string) => string;
+  /**
    * A diagram's caption when the diagram declares no title of its own.
    *
    * The kind — "Flowchart", "Sequence" — comes from the Mermaid fence and stays
@@ -307,6 +320,8 @@ const EN = {
   metaTags: 'Tags',
   tocHeading: 'On this page',
   headingAnchorLabel: (heading) => `Link to section: ${heading}`,
+  footnotesHeading: 'Footnotes',
+  footnoteBackLabel: (reference) => `Back to reference ${reference}`,
   diagramCaption: (kind) => `${kind} diagram`,
   outgoingHeading: 'Links to',
   outgoingEmpty: 'This note links to no other published note.',
@@ -437,6 +452,8 @@ const ZH_CN = {
   metaTags: '标签',
   tocHeading: '本页目录',
   headingAnchorLabel: (heading) => `跳转到章节：${heading}`,
+  footnotesHeading: '脚注',
+  footnoteBackLabel: (reference) => `返回正文引用 ${reference}`,
   diagramCaption: (kind) => `${kind} 图示`,
   outgoingHeading: '链出笔记',
   outgoingEmpty: '这篇笔记没有链接到其他公开笔记。',
