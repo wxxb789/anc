@@ -2614,13 +2614,7 @@ test('the rendered neighbourhood draws exactly the artifact s edges over its nod
     ]);
 
     // Every authored edge with both ends drawn, computed from the artifact.
-    const expected = new Set<string>();
-    for (const candidate of entries) {
-      if (!drawn.has(candidate.slug)) continue;
-      for (const target of candidate.outgoing) {
-        if (drawn.has(target)) expected.add([candidate.slug, target].sort().join(' '));
-      }
-    }
+    const expected = new Set(artifactPairsWithin(drawn));
 
     // A note whose only edges leave the drawn set renders the empty state, and
     // that is correct rather than an omission: there is nothing to draw.
@@ -2639,43 +2633,11 @@ test('the rendered neighbourhood draws exactly the artifact s edges over its nod
 
     // **Which pairs, not just how many.** A count alone passes for a figure
     // that drew the right number of the wrong edges, and an edge is the one
-    // thing on this page with no text to give it away. The rendered geometry is
-    // resolved back to a pair of slugs through the *node* positions the same
-    // HTML carries, so the comparison stays page-against-artifact rather than
-    // model-against-model.
-    const positions = new Map(
-      [...section.matchAll(/<circle class="graph-dot" cx="(-?[\d.]+)" cy="(-?[\d.]+)"/g)].map(
-        (match, index) => [`${match[1]},${match[2]}`, index],
-      ),
-    );
-    const nodeOrder = [...section.matchAll(/<a class="graph-node[^"]*" href="\/notes\/([^/"]+)\//g)].map(
-      ([, target]) => target!,
-    );
-    const drawnPairs = new Set<string>();
-    for (const [, x1, y1, x2, y2] of section.matchAll(
-      /<line class="graph-edge[^"]*" x1="(-?[\d.]+)" y1="(-?[\d.]+)" x2="(-?[\d.]+)" y2="(-?[\d.]+)"/g,
-    )) {
-      // An edge is trimmed to stop short of both circles, so its endpoints are
-      // not the node centres: the nearest node to each end is the one it
-      // touches. Nearest rather than exact, and the assertion below is what
-      // keeps "nearest" from silently matching the wrong circle.
-      const nearest = (x: string, y: string): string => {
-        let best = '';
-        let bestDistance = Infinity;
-        for (const [key, index] of positions) {
-          const [cx, cy] = key.split(',').map(Number) as [number, number];
-          const distance = Math.hypot(cx - Number(x), cy - Number(y));
-          if (distance < bestDistance) {
-            bestDistance = distance;
-            best = nodeOrder[index]!;
-          }
-        }
-        return best;
-      };
-      drawnPairs.add([nearest(x1!, y1!), nearest(x2!, y2!)].sort().join(' '));
-    }
+    // thing on this page with no text to give it away. `renderedEdgePairs`
+    // resolves the drawn geometry back to slugs through the *node* positions
+    // the same HTML carries, so the comparison stays page-against-artifact.
     assert.deepEqual(
-      [...drawnPairs].sort(),
+      renderedEdgePairs(section),
       [...expected].sort(),
       `${slug}: the lines the figure draws are not the artifact's edges between its drawn notes`,
     );
@@ -2919,13 +2881,75 @@ test('the graph table is the equivalent representation, not a summary', () => {
 });
 
 /**
+ * The pairs of notes a rendered figure actually draws a line between.
+ *
+ * Resolved from the markup rather than from the model: each line's endpoints
+ * are matched to the nearest drawn circle, because an edge is trimmed to stop
+ * short of both nodes and so never starts at a centre. That keeps the
+ * comparison page-against-contract instead of model-against-model.
+ *
+ * "Nearest" is safe because the caller compares the whole set against an
+ * independently derived one — a mismatched endpoint changes a pair and fails
+ * rather than passing quietly.
+ */
+function renderedEdgePairs(section: string): string[] {
+  const positions = [
+    ...section.matchAll(/<circle class="graph-dot" cx="(-?[\d.]+)" cy="(-?[\d.]+)"/g),
+  ].map((match) => [Number(match[1]), Number(match[2])] as const);
+  const slugs = [...section.matchAll(/<a class="graph-node[^"]*" href="\/notes\/([^/"]+)\//g)].map(
+    ([, slug]) => slug!,
+  );
+  assert.equal(positions.length, slugs.length, 'a drawn node has no circle, or a circle has no link');
+
+  const nearest = (x: number, y: number): string => {
+    let best = '';
+    let bestDistance = Infinity;
+    for (const [index, [cx, cy]] of positions.entries()) {
+      const distance = Math.hypot(cx - x, cy - y);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = slugs[index]!;
+      }
+    }
+    return best;
+  };
+
+  return [
+    ...section.matchAll(
+      /<line class="graph-edge[^"]*" x1="(-?[\d.]+)" y1="(-?[\d.]+)" x2="(-?[\d.]+)" y2="(-?[\d.]+)"/g,
+    ),
+  ]
+    .map(([, x1, y1, x2, y2]) =>
+      [nearest(Number(x1), Number(y1)), nearest(Number(x2), Number(y2))].sort().join(' '),
+    )
+    .sort();
+}
+
+/** Every authored edge with both ends inside `drawn`, from the artifact. */
+function artifactPairsWithin(drawn: ReadonlySet<string>): string[] {
+  const pairs = new Set<string>();
+  for (const candidate of entries) {
+    if (!drawn.has(candidate.slug)) continue;
+    for (const target of candidate.outgoing) {
+      if (drawn.has(target)) pairs.add([candidate.slug, target].sort().join(' '));
+    }
+  }
+  return [...pairs].sort();
+}
+
+/**
  * `/graph/` renders the site-wide graph, or says why it does not.
  *
  * The route is in `SITE_MAP`, so the footer links it from every page and the
  * route-set gate at the top of this file already requires it to exist. What is
- * checked here is that it carries the same guarantees the per-note figure does —
- * chiefly that every node is a real link, which is the whole difference from a
- * canvas.
+ * checked here is that it carries the **same** guarantees the per-note figure
+ * does, through the same helpers — chiefly that every node is a real link,
+ * which is the whole difference from a canvas, and that the lines drawn are the
+ * artifact's edges rather than merely the right number of them.
+ *
+ * This route is the one the edge-set and table findings were really about: it
+ * has no subject, so every row's relationship is the same generic word and the
+ * fourth column is the only place its edge set appears at all.
  */
 test('the site graph route renders the corpus graph with real links', () => {
   const html = readFileSync(new URL('graph/index.html', DIST), 'utf8');
@@ -2943,16 +2967,47 @@ test('the site graph route renders the corpus graph with real links', () => {
   const nodes = [...section.matchAll(/<a class="graph-node[^"]*" href="\/notes\/([^/"]+)\//g)].map(
     ([, slug]) => slug!,
   );
+  const drawn = new Set(graph.nodes.map((node) => node.entry.slug));
+  assert.deepEqual([...nodes].sort(), [...drawn].sort(), '/graph/ does not draw the ranked node set');
+
+  // The edges by content, against the artifact — not a count. A ranked packing
+  // that drew the right number of the wrong lines would otherwise pass.
   assert.deepEqual(
-    [...nodes].sort(),
-    graph.nodes.map((node) => node.entry.slug).sort(),
-    '/graph/ does not draw the ranked node set',
+    renderedEdgePairs(section),
+    artifactPairsWithin(drawn),
+    "/graph/ draws lines that are not the artifact's edges between its drawn notes",
   );
-  assert.equal(
-    [...section.matchAll(/<line class="graph-edge/g)].length,
-    graph.edges.length,
-    '/graph/ draws a different number of edges than the layout computed',
+
+  // The drawn labels, under the same truncation rule.
+  assert.deepEqual(
+    [...section.matchAll(/<text class="graph-label"[^>]*>([^<]*)<\/text>/g)].map(([, text]) => text!),
+    graph.nodes.map((node) => asRendered(truncateLabel(node.entry.title))),
+    '/graph/ draws labels that are not its titles under the truncation rule',
   );
+
+  // The table's fourth column, which on this route is the only representation
+  // of the edge set available to a non-visual reader: every row's relationship
+  // is the same generic word, because there is no subject to be relative to.
+  const table = /<details class="graph-table">[\s\S]*?<\/details>/.exec(section);
+  assert.ok(table, '/graph/ has no equivalent table');
+  const joined = drawnNeighbours(graph);
+  const t = translate(declaredLanguage(html));
+  const rows = [...table[0].matchAll(/<tr><th scope="row">[\s\S]*?<\/tr>/g)].map((match) => match[0]);
+  for (const node of graph.nodes) {
+    const row = rows.find((candidate) =>
+      new RegExp(`^<tr><th scope="row"><a href="/notes/${node.entry.slug}/"`).test(candidate),
+    );
+    assert.ok(row, `/graph/: the table omits ${node.entry.slug}, which the figure draws`);
+    assert.ok(
+      row.includes(`<td>${asRendered(t.graphLinkedRelation)}</td>`),
+      `/graph/: ${node.entry.slug} claims a relationship on a graph with no subject`,
+    );
+    assert.deepEqual(
+      [...row.matchAll(/<li><a\s+href="\/notes\/([^/"]+)\//g)].map(([, target]) => target!),
+      joined.get(node.entry.slug)!.map((other) => other.slug),
+      `/graph/: the linked-to column for ${node.entry.slug} is not the edges the figure draws`,
+    );
+  }
 });
 
 /**
@@ -2967,21 +3022,22 @@ test('the site graph route renders the corpus graph with real links', () => {
  * recorded here rather than hidden: the fixture corpus's busiest note has 10
  * neighbours against a bound of 12, and the published note has none. So no
  * built page renders the truncation sentence, and this gate cannot prove that
- * branch — `tests/graph.test.ts` proves the model's two states apart over a
- * synthetic corpus on both sides of the bound, which is where the distinction
- * is actually falsifiable. What is left here is the complete case, asserted as
- * a positive: the bound element exists and carries the expansion link.
+ * branch. `tests/graph.test.ts` proves the *model's* two states apart on both
+ * sides of the bound; the *sentence's* arithmetic is proven there too, by
+ * rendering the same two numbers this page would.
  *
- * A corpus that grows past `LOCAL_NODE_LIMIT` starts exercising the other
- * branch here automatically, at which point this note stops being true and the
- * gate gets stronger on its own.
+ * What is left here is the complete case, asserted as a positive: the bound
+ * element exists and carries the expansion link. A corpus that grows past
+ * `LOCAL_NODE_LIMIT` starts exercising the other branch here automatically, at
+ * which point this note stops being true and the gate gets stronger on its own.
  */
 test('a truncated graph says so, and every graph offers the way to the rest', () => {
   let complete = 0;
   let truncated = 0;
 
   for (const { slug, html } of notePages()) {
-    const graph = localGraph(getEntry(slug)!, getEntry);
+    const entry = getEntry(slug)!;
+    const graph = localGraph(entry, getEntry);
     if (graph.edges.length === 0) continue;
     const section = graphSection(html, 'note-graph')!;
     const t = translate(declaredLanguage(html));
@@ -2992,8 +3048,14 @@ test('a truncated graph says so, and every graph offers the way to the rest', ()
     );
     const bound = /<p class="graph-bound">([\s\S]*?)<\/p>/.exec(section);
     assert.ok(bound, `${slug}: the graph states no bound line at all`);
+    // **Both numbers from the artifact, not from the component's expression.**
+    // The sentence says "neighbouring notes", so the count is the note's own
+    // one-hop neighbours — a note is not its own neighbour. Deriving this from
+    // `graph.nodes.length` is what made an earlier version of this gate agree
+    // with a page that was off by one in the numerator.
+    const neighbours = new Set([...entry.outgoing, ...entry.backlinks]).size;
     const sentence = asRendered(
-      t.graphBoundedLocal(graph.nodes.length, graph.nodes.length + graph.omitted),
+      t.graphBoundedLocal(Math.min(neighbours, LOCAL_NODE_LIMIT), neighbours),
     );
     if (graph.omitted > 0) {
       assert.ok(bound[1]!.includes(sentence), `${slug}: drops ${graph.omitted} notes without saying so`);

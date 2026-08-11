@@ -299,10 +299,21 @@ const KNOWN_OVERFLOW: Readonly<Record<string, string>> = {
 interface Overflow {
   scrollWidth: number;
   innerWidth: number;
-  /** Overflowing elements outside the exempt subtree — what the gate judges. */
+  /** Overflowing elements that are neither exempt nor clipped — what the gate judges. */
   culprits: string[];
-  /** How many overflowing elements the exemption accounted for. */
+  /**
+   * How many overflowing elements the **exemption** accounted for.
+   *
+   * Clipped elements are counted separately and deliberately: this number is
+   * what the stale-exemption check reads to decide whether a recorded defect is
+   * still present, so folding a correctly-clipping scroll container into it
+   * would report every graph-bearing route as still overflowing and silently
+   * disarm that check. Both exempt routes draw a graph, so that was not
+   * hypothetical.
+   */
   exemptCount: number;
+  /** Overflowing elements a scrolling ancestor clips — a feature, not a defect. */
+  clippedCount: number;
 }
 
 /**
@@ -347,12 +358,17 @@ function measureOverflow(page: Page, limit: number, exempt: string | undefined):
         return false;
       };
       const isExempt = (element: HTMLElement) =>
-        isClipped(element) ||
-        (exemptSelector !== undefined &&
-          (element.matches(exemptSelector) || element.closest(exemptSelector) !== null));
+        exemptSelector !== undefined &&
+        (element.matches(exemptSelector) || element.closest(exemptSelector) !== null);
 
+      // Three disjoint groups, counted separately: what the exemption covers,
+      // what a scroll container clips, and what is left — which is the only
+      // group that is a defect. Merging the first two is what would let a
+      // graph-bearing route report its recorded table defect as still present
+      // after the table was fixed.
+      const clipped = overflowing.filter((element) => !isExempt(element) && isClipped(element));
       const culprits = overflowing
-        .filter((element) => !isExempt(element))
+        .filter((element) => !isExempt(element) && !isClipped(element))
         .map((element) => {
           const right = Math.round(element.getBoundingClientRect().right);
           const name = element.id !== '' ? `#${element.id}` : `.${element.className || '(no class)'}`;
@@ -363,7 +379,8 @@ function measureOverflow(page: Page, limit: number, exempt: string | undefined):
         scrollWidth: root.scrollWidth,
         innerWidth: window.innerWidth,
         culprits: culprits.slice(0, 5),
-        exemptCount: overflowing.length - culprits.length,
+        exemptCount: overflowing.length - culprits.length - clipped.length,
+        clippedCount: clipped.length,
       };
     },
     { edge: limit, exemptSelector: exempt },

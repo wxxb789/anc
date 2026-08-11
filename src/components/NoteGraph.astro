@@ -64,15 +64,6 @@ interface Props {
   expand: { href: string; text: string; label: string };
   /** Stated when the bound dropped notes. Takes drawn and total counts. */
   bounded: (shown: number, total: number) => string;
-  /**
-   * Whether the bound sentence counts the subject among its total.
-   *
-   * `/graph/` says "notes" and counts every node; the neighbourhood says
-   * "neighbouring notes" and a note is not its own neighbour. A prop rather
-   * than a derivation, so the arithmetic follows the sentence being filled in
-   * rather than a coincidence of the data.
-   */
-  countsSubject?: boolean;
   /** The page's own language, which decides every string's grammar. */
   lang: string;
   /** Heading level, so the region sits correctly in each page's outline. */
@@ -87,7 +78,6 @@ const {
   empty,
   expand,
   bounded,
-  countsSubject = false,
   lang,
   level = 2,
 } = Astro.props;
@@ -123,19 +113,21 @@ const drawn = graph.nodes.length;
 /**
  * The two numbers the bound sentence interpolates.
  *
- * **Counted over what the sentence says it counts**, which is not the same on
- * the two graphs: the neighbourhood's sentence says "neighbouring notes" and
- * the subject is not one of its own neighbours, so it is excluded — while
- * `/graph/`'s says "notes" and every drawn node is one. Passing the raw node
- * count to both was the first version, and it made a truncated neighbourhood
- * read "Drawing 13 of 16 neighbouring notes" where the truth was 12 of 15.
+ * **Counted over what the sentence says it counts**, which is the neighbouring
+ * notes — a note is not one of its own neighbours. Passing the raw node count
+ * made a truncated neighbourhood read "Drawing 13 of 16 neighbouring notes"
+ * where the truth was 12 of 15; correcting only the total then made it read
+ * "13 of 15", which is worse, because the two numbers no longer shared even a
+ * wrong basis and the first exceeded the notes actually drawn.
  *
- * `countsSubject` rather than reading `graph.nodes.some(isSubject)`: an
- * unbounded `/graph/` legitimately draws no subject, and a neighbourhood always
- * has one, so deriving it from the data would make the arithmetic depend on a
- * coincidence rather than on which sentence is being filled in.
+ * Subtracting the subject unconditionally is correct on both surfaces rather
+ * than only on one: `/graph/` has no subject node, so the count is zero there
+ * and the expression is the identity. A `countsSubject` prop stood here for one
+ * commit and was deleted — it selected between two branches that compute the
+ * same thing, and its stated justification was the reverse of what the code
+ * did.
  */
-const shown = countsSubject ? drawn : drawn - graph.nodes.filter((node) => node.isSubject).length;
+const shown = drawn - graph.nodes.filter((node) => node.isSubject).length;
 const total = shown + graph.omitted;
 
 /** Which notes each drawn node is joined to, for the table's fourth column. */
@@ -347,7 +339,7 @@ const joined = drawnNeighbours(graph);
           unconditional: "see the whole graph" is useful whether or not this one
           was truncated. */}
       <p class="graph-bound">
-        {graph.omitted > 0 && <span>{bounded(drawn, total)} </span>}
+        {graph.omitted > 0 && <span>{bounded(shown, total)} </span>}
         <a href={expand.href} aria-label={expand.label}>{expand.text}</a>
       </p>
     </>

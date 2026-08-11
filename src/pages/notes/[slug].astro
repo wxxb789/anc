@@ -32,7 +32,7 @@ import LinkedNotes from '../../components/LinkedNotes.astro';
 import NoteGraph from '../../components/NoteGraph.astro';
 import TableOfContents from '../../components/TableOfContents.astro';
 import { entries, getEntry } from '../../lib/content.ts';
-import { localGraph } from '../../lib/graph.ts';
+import { hasDrawableGraph, localGraph } from '../../lib/graph.ts';
 import { renderMarkdown } from '../../lib/markdown.ts';
 import {
   collectionNeighbours,
@@ -237,8 +237,10 @@ const graph = localGraph(entry, getEntry);
   {hasMermaid && <link slot="head" rel="stylesheet" href={diagramStylesheet} />}
   {/* The graph sheet reaches only a note that actually draws one — a note with
       no neighbourhood renders a sentence and requests nothing. The published
-      corpus's single note is exactly that case. */}
-  {graph.edges.length > 0 && <link slot="head" rel="stylesheet" href={graphStylesheet} />}
+      corpus's single note is exactly that case. `hasDrawableGraph` is the same
+      predicate the component branches on, so the stylesheet and the figure
+      cannot disagree about whether there is a graph. */}
+  {hasDrawableGraph(graph) && <link slot="head" rel="stylesheet" href={graphStylesheet} />}
   {/*
     Client mode only, and only on a page that has a diagram.
 

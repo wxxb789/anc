@@ -28,7 +28,7 @@
 import Layout from '../layouts/Layout.astro';
 import NoteGraph from '../components/NoteGraph.astro';
 import { entries } from '../lib/content.ts';
-import { globalGraph } from '../lib/graph.ts';
+import { globalGraph, hasDrawableGraph } from '../lib/graph.ts';
 import { TITLE_SUFFIX } from '../lib/site.ts';
 import { NAV_LANGUAGE, translate } from '../lib/translations.ts';
 // Loaded as a URL rather than imported, so the stylesheet becomes its own
@@ -41,7 +41,9 @@ const graph = globalGraph(entries);
 ---
 
 <Layout title={`${t.graphTitle}${TITLE_SUFFIX}`} description={t.graphDescription}>
-  {graph.edges.length > 0 && <link slot="head" rel="stylesheet" href={graphStylesheet} />}
+  {/* The same predicate the component branches on, so the stylesheet and the
+      figure can never disagree about whether there is a graph. */}
+  {hasDrawableGraph(graph) && <link slot="head" rel="stylesheet" href={graphStylesheet} />}
 
   <NoteGraph
     graph={graph}
@@ -51,7 +53,6 @@ const graph = globalGraph(entries);
     derivation={t.graphGlobalDerivation}
     empty={t.graphSiteEmpty}
     bounded={t.graphBounded}
-    countsSubject
     expand={{ href: '/#notes', text: t.graphExpand, label: t.graphExpandLabel }}
     lang={NAV_LANGUAGE}
   />

@@ -315,6 +315,55 @@ test('the documented global bound is the one the module applies', () => {
   assert.equal(globalGraph(corpus).nodes.length, GLOBAL_NODE_LIMIT);
 });
 
+/**
+ * The two numbers the bound sentence states are the neighbour counts.
+ *
+ * The sentence reads "Drawing N of M **neighbouring notes**", and a note is not
+ * one of its own neighbours — so neither number may count the subject. This is
+ * the arithmetic no built page can check, because neither corpus reaches
+ * `LOCAL_NODE_LIMIT`: the fixture corpus's busiest note has 10 neighbours
+ * against a bound of 12, and the published note has none.
+ *
+ * It is not hypothetical. The first version passed `graph.nodes.length` as both
+ * bases and would have rendered "13 of 16" where the truth was 12 of 15; the
+ * second corrected only the total and rendered "13 of 15", which is worse — the
+ * numerator then exceeded the notes actually drawn. Both shipped looking
+ * plausible, and both were invisible to every gate over `dist/`.
+ *
+ * So this reproduces the page's own expression against the model and requires
+ * the numbers to be the neighbour counts, on both sides of the bound.
+ */
+test('the bound sentence counts neighbours, never the note itself', () => {
+  const peers = (count: number) =>
+    withBacklinks([
+      entry('subject', {
+        outgoing: Array.from({ length: count }, (_, index) => `peer-${String(index).padStart(2, '0')}`),
+      }),
+      ...Array.from({ length: count }, (_, index) => entry(`peer-${String(index).padStart(2, '0')}`)),
+    ]);
+
+  for (const count of [3, LOCAL_NODE_LIMIT, LOCAL_NODE_LIMIT + 1, LOCAL_NODE_LIMIT + 9]) {
+    const corpus = peers(count);
+    const graph = localGraph(corpus[0]!, lookupIn(corpus));
+
+    // The expression `NoteGraph.astro` renders, restated here so a change to it
+    // that reintroduces the subject fails rather than shipping.
+    const shown = graph.nodes.length - graph.nodes.filter((node) => node.isSubject).length;
+    const total = shown + graph.omitted;
+
+    assert.equal(shown, Math.min(count, LOCAL_NODE_LIMIT), `${count} neighbours: the drawn count is wrong`);
+    assert.equal(total, count, `${count} neighbours: the stated total is not the neighbour count`);
+    assert.ok(shown <= total, `${count} neighbours: the sentence would read "${shown} of ${total}"`);
+    // The subject is drawn, and is excluded from both numbers — which is the
+    // whole defect. Without this the two assertions above hold for a graph that
+    // simply never drew the subject at all.
+    assert.ok(
+      graph.nodes.some((node) => node.isSubject),
+      `${count} neighbours: the subject is not drawn, so the exclusion proves nothing`,
+    );
+  }
+});
+
 // --- Determinism -------------------------------------------------------------
 
 /**
