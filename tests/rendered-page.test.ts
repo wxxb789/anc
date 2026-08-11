@@ -42,8 +42,10 @@ import { afterAll, beforeAll, test, type TestContext } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Browser, BrowserContext, ConsoleMessage, Page } from 'playwright';
 
-import { entries } from '../src/lib/content.ts';
+import { entries, getEntry } from '../src/lib/content.ts';
 import { collectionNeighbours } from '../src/lib/relations.ts';
+import { localGraph } from '../src/lib/graph.ts';
+import { noteRoute } from '../src/lib/routes.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = fileURLToPath(new URL('dist/', ROOT));
@@ -1812,6 +1814,212 @@ test('a failed index request fails silently and is retried', async (context) => 
       { timeout: 5_000 },
     );
     assert.deepEqual(noise, [], 'the retry reported an error to the console');
+  } finally {
+    await browserContext.close();
+  }
+}, 120_000);
+
+/**
+ * The graph is complete and operable with scripting disabled.
+ *
+ * **This is the gate the whole ticket exists to pass.** Quartz's graph is three
+ * empty `<div>`s plus roughly 525 KB brotli of d3 and PixiJS from a
+ * third-party CDN, so with JavaScript off a reader sees nothing at all. Here
+ * the figure is laid out at build time and every node is a real `<a>`, so
+ * `javaScriptEnabled: false` must change nothing about it.
+ *
+ * What is measured, and why each half is needed:
+ *
+ * - The SVG renders at a real size. A figure present in the markup and laid out
+ *   at zero height is invisible to a reader while passing every markup gate.
+ * - Every node link has a real hit area and a resolvable `href`. A node drawn
+ *   but not clickable is a picture, which is precisely what this replaces.
+ * - The equivalent table opens and lists rows. Requirements section 17 requires
+ *   it, and `<details>` is the native disclosure — so it must work with no
+ *   script, which is the property the collection rail's own gate established.
+ *
+ * Checked at both widths because the figure sits in a scroll container: a
+ * `max-width` that failed to engage would push the page past 320 px, and the
+ * overflow gate above would then report it as somebody else's problem.
+ */
+test('the graph is drawn, linked, and operable with scripting disabled', async (context) => {
+  const browser = requireBrowser(context);
+  const browserContext = await browser.newContext({
+    javaScriptEnabled: false,
+    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    let figuresChecked = 0;
+    let emptyStatesChecked = 0;
+
+    for (const width of CASCADE_WIDTHS_PX) {
+      await page.setViewportSize({ width, height: VIEWPORT_HEIGHT_PX });
+      for (const route of routes.filter(
+        (candidate) => candidate.startsWith('/notes/') || candidate === '/graph/',
+      )) {
+        await visit(page, route);
+        const measured = await page.evaluate(() => {
+          const box = (element: Element) => element.getBoundingClientRect();
+          const region = document.querySelector<HTMLElement>('section.graph-region');
+          if (region === null) return undefined;
+
+          const svg = region.querySelector<SVGSVGElement>('svg.graph-svg');
+          const emptyState = region.querySelector<HTMLElement>('.empty-state');
+          if (svg === null) {
+            return {
+              hasFigure: false,
+              emptyVisible: emptyState !== null && box(emptyState).height > 0,
+              nodes: [],
+              rows: 0,
+              tableOpens: false,
+              svgWidth: 0,
+              svgHeight: 0,
+            };
+          }
+
+          // The disclosure is opened the way a reader without scripting does:
+          // by setting the attribute the browser itself toggles. Reading the
+          // rows while it is shut would measure a collapsed subtree.
+          const details = region.querySelector<HTMLDetailsElement>('details.graph-table');
+          if (details !== null) details.open = true;
+
+          return {
+            hasFigure: true,
+            emptyVisible: false,
+            svgWidth: box(svg).width,
+            svgHeight: box(svg).height,
+            nodes: [...region.querySelectorAll<SVGAElement>('a.graph-node')].map((node) => {
+              const rect = box(node);
+              return {
+                href: node.getAttribute('href') ?? '',
+                name: node.getAttribute('aria-label') ?? '',
+                width: rect.width,
+                height: rect.height,
+              };
+            }),
+            rows: region.querySelectorAll('details.graph-table tbody tr').length,
+            tableOpens:
+              details !== null &&
+              [...details.querySelectorAll<HTMLElement>('tbody tr')].every(
+                (row) => box(row).height > 0,
+              ),
+          };
+        });
+
+        assert.ok(measured !== undefined, `${route} at ${width}px: no graph region at all`);
+        const where = `${route} at ${width}px`;
+
+        if (!measured.hasFigure) {
+          // A note with no neighbourhood says so. That is the published
+          // corpus's own shape, so it is the state most readers of this site
+          // actually meet — and it must be visible rather than a blank gap.
+          assert.ok(measured.emptyVisible, `${where}: no figure and no visible empty state`);
+          emptyStatesChecked += 1;
+          continue;
+        }
+
+        assert.ok(measured.svgWidth > 0 && measured.svgHeight > 0, `${where}: the graph lays out at zero size`);
+        assert.ok(measured.nodes.length > 0, `${where}: the graph draws no node links`);
+
+        for (const node of measured.nodes) {
+          assert.match(node.href, /^\/notes\/[^/]+\/$/, `${where}: node href "${node.href}" is not a note route`);
+          assert.ok(node.name.trim() !== '', `${where}: a node link has no accessible name`);
+          // Rendered at all, in both axes. Not a target-size check: WCAG 2.2's
+          // 24 px minimum carries a spacing exception this measurement cannot
+          // evaluate. What is caught here is a node that renders at zero size,
+          // which is a link nobody can reach.
+          assert.ok(
+            node.width > 0 && node.height > 0,
+            `${where}: the node "${node.name}" renders at zero size, so it cannot be clicked`,
+          );
+        }
+
+        assert.ok(
+          measured.rows === measured.nodes.length,
+          `${where}: the table has ${measured.rows} rows for ${measured.nodes.length} drawn nodes`,
+        );
+        assert.ok(measured.tableOpens, `${where}: the equivalent table does not open without scripting`);
+        figuresChecked += 1;
+      }
+    }
+
+    // Both states must have been reached, or this gate is measuring one branch
+    // and reporting on two. The published corpus has only the empty case, so
+    // the figure half is asserted against the corpus rather than unconditionally.
+    assert.ok(emptyStatesChecked > 0 || figuresChecked > 0, 'no graph region was inspected at all');
+    assert.ok(
+      figuresChecked > 0 || entries.every((entry) => localGraph(entry, getEntry).edges.length === 0),
+      'no drawn graph was inspected and the corpus is not edge-free',
+    );
+  } finally {
+    await browserContext.close();
+  }
+}, 180_000);
+
+/**
+ * Keyboard traversal reaches every node, in the documented order.
+ *
+ * The acceptance criterion says "a documented order", and the order is the
+ * model's own: the subject first, then its neighbours by title then slug — the
+ * same order `notesForSlugs` puts the outgoing and backlink lists in a few
+ * inches up the page. That is what makes it documentable rather than incidental:
+ * a reader tabbing through the figure meets the notes in the order the lists
+ * above already named them.
+ *
+ * Driven with real `Tab` presses rather than by reading `tabindex`, because the
+ * question is what the browser does. The expected order is resolved from the
+ * model, never from the DOM being checked.
+ */
+test('the keyboard reaches every graph node, in the order the layout documents', async (context) => {
+  const browser = requireBrowser(context);
+  const drawn = entries.filter((entry) => localGraph(entry, getEntry).edges.length > 0);
+  context.skip(
+    drawn.length === 0,
+    'no note draws a graph on this corpus — run `pnpm run build:fixture` for the traversal gate',
+  );
+
+  const browserContext = await browser.newContext({
+    viewport: { width: CASCADE_WIDTHS_PX.at(-1)!, height: VIEWPORT_HEIGHT_PX },
+  });
+  const page = await browserContext.newPage();
+
+  try {
+    // One note is enough for a tab-order gate and the suite runs per built
+    // route elsewhere; the busiest graph is the one where an ordering defect
+    // would show. Chosen by drawn degree so the choice does not depend on the
+    // corpus's own listing order.
+    const subject = [...drawn].sort((a, b) => {
+      const left = localGraph(a, getEntry).nodes.length;
+      const right = localGraph(b, getEntry).nodes.length;
+      return left !== right ? right - left : a.slug < b.slug ? -1 : 1;
+    })[0]!;
+    const expected = localGraph(subject, getEntry).nodes.map((node) => noteRoute(node.entry.slug));
+
+    await visit(page, noteRoute(subject.slug));
+    // Start from the scroll container that precedes the first node, so the
+    // first `Tab` lands on a node rather than somewhere earlier in the page.
+    await page.focus('.graph-canvas');
+
+    const reached: string[] = [];
+    for (let step = 0; step < expected.length + 2; step += 1) {
+      await page.keyboard.press('Tab');
+      const href = await page.evaluate(() => {
+        const active = document.activeElement;
+        return active !== null && active.classList.contains('graph-node')
+          ? active.getAttribute('href')
+          : undefined;
+      });
+      if (href === undefined || href === null) break;
+      reached.push(href);
+    }
+
+    assert.deepEqual(
+      reached,
+      expected,
+      `${subject.slug}: tabbing through the graph does not reach every node in the documented order`,
+    );
   } finally {
     await browserContext.close();
   }

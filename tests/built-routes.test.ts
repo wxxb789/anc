@@ -35,7 +35,14 @@ import {
   relatedNotes,
 } from '../src/lib/relations.ts';
 import {
+  LOCAL_NODE_LIMIT,
+  globalGraph,
+  localGraph,
+  type GraphNode,
+} from '../src/lib/graph.ts';
+import {
   FIXED_ROUTES,
+  GRAPH_SEGMENT,
   REDIRECT_RULES,
   SITE_MAP,
   collectionFacets,
@@ -2525,4 +2532,411 @@ test('the rail collection link is named in the page own language', (context) => 
   // Every fixture collection renders this link on every route, so a build that
   // emitted none is a defect rather than a corpus shape.
   assert.ok(checked > 0, 'no rail collection link was inspected');
+});
+
+// --- The graph (TK-17) --------------------------------------------------------
+
+/**
+ * The graph region on one built page, by the region it labels.
+ *
+ * Located by its `aria-labelledby` id for the same reason the relationship
+ * sections are: the two graphs are one component rendered twice and share every
+ * class, so the accessible name is what tells them apart — and it is what a
+ * screen reader uses, so a gate that could not find the region by its name
+ * would be checking something no reader meets.
+ */
+function graphSection(html: string, region: string): string | undefined {
+  const pattern = new RegExp(
+    `<section class="graph-region" aria-labelledby="${region}-title">[\\s\\S]*?</section>`,
+  );
+  return pattern.exec(html)?.[0];
+}
+
+/** The relationship word a node's accessible name states, from the contract. */
+function relationWord(node: GraphNode, t: Translation): string {
+  if (node.isSubject) return t.graphSubjectRelation;
+  switch (node.direction) {
+    case 'outgoing':
+      return t.graphOutgoingRelation;
+    case 'incoming':
+      return t.graphIncomingRelation;
+    case 'mutual':
+      return t.graphMutualRelation;
+    default:
+      return t.graphLinkedRelation;
+  }
+}
+
+/**
+ * **The acceptance criterion: the rendered graph's edges are the artifact's.**
+ *
+ * Proven over the *page* against the **artifact**, not against the model —
+ * `tests/graph.test.ts` already pins the model against synthetic corpora, and a
+ * gate that recomputed the model and compared it with itself would pass whatever
+ * the page rendered. The expected node set and edge count are both derived here
+ * from `entry.outgoing` and `entry.backlinks` directly.
+ *
+ * The node set is compared by content rather than by cardinality, so a figure
+ * drawing the right *number* of the wrong notes fails.
+ */
+test('the rendered neighbourhood draws exactly the artifact s edges over its nodes', () => {
+  let inspected = 0;
+
+  for (const { slug, html } of notePages()) {
+    const entry = getEntry(slug)!;
+    const section = graphSection(html, 'note-graph');
+    assert.ok(section, `${slug}: no graph region at all`);
+
+    // Every note one hop away, from the artifact rather than from the model.
+    const neighbours = [...new Set([...entry.outgoing, ...entry.backlinks])].sort();
+    if (neighbours.length === 0) {
+      // The published corpus's own shape. An honest sentence, not a figure of
+      // one circle and no lines — and no SVG at all, so nothing claims to draw
+      // a relationship that does not exist.
+      assert.match(section, /<p class="empty-state">/, `${slug}: no neighbourhood, but no empty state`);
+      assert.ok(!section.includes('<svg'), `${slug}: drew a graph for a note with no edges`);
+      inspected += 1;
+      continue;
+    }
+
+    // The bound truncates in title order, which is the reader's order and not
+    // the artifact's — so the drawn set is resolved through the same rule the
+    // page uses rather than by slicing the sorted slugs.
+    const drawn = new Set([
+      slug,
+      ...neighbours
+        .map((target) => getEntry(target)!)
+        .sort((a, b) => (a.title !== b.title ? (a.title < b.title ? -1 : 1) : a.slug < b.slug ? -1 : 1))
+        .slice(0, LOCAL_NODE_LIMIT)
+        .map((candidate) => candidate.slug),
+    ]);
+
+    // Every authored edge with both ends drawn, computed from the artifact.
+    const expected = new Set<string>();
+    for (const candidate of entries) {
+      if (!drawn.has(candidate.slug)) continue;
+      for (const target of candidate.outgoing) {
+        if (drawn.has(target)) expected.add([candidate.slug, target].sort().join(' '));
+      }
+    }
+
+    // A note whose only edges leave the drawn set renders the empty state, and
+    // that is correct rather than an omission: there is nothing to draw.
+    if (expected.size === 0) {
+      assert.match(section, /<p class="empty-state">/, `${slug}: no drawable edges, but no empty state`);
+      inspected += 1;
+      continue;
+    }
+
+    const lines = [...section.matchAll(/<line class="graph-edge[^"]*"/g)].length;
+    assert.equal(
+      lines,
+      expected.size,
+      `${slug}: draws ${lines} edges where the artifact has ${expected.size} between its drawn notes`,
+    );
+
+    const nodes = [...section.matchAll(/<a class="graph-node[^"]*" href="\/notes\/([^/"]+)\//g)].map(
+      ([, target]) => target!,
+    );
+    assert.deepEqual(
+      [...nodes].sort(),
+      [...drawn].sort(),
+      `${slug}: the drawn nodes are not the note and its one-hop neighbours`,
+    );
+    inspected += 1;
+  }
+
+  assert.ok(inspected > 0, 'no graph region was inspected');
+});
+
+/**
+ * The model the page renders is the model this repository computes.
+ *
+ * The gate above proves the figure against the artifact; this proves the
+ * *geometry* against `src/lib/graph.ts`, which the artifact cannot express. The
+ * two are complementary: without this a layout change that scrambled every
+ * coordinate while keeping the edge set would pass, and without the one above
+ * this would be the model compared with itself.
+ */
+test('every drawn node sits where the layout put it', () => {
+  let inspected = 0;
+
+  for (const { slug, html } of notePages()) {
+    const graph = localGraph(getEntry(slug)!, getEntry);
+    if (graph.edges.length === 0) continue;
+    const section = graphSection(html, 'note-graph')!;
+
+    assert.ok(
+      section.includes(`viewBox="${graph.viewBox}"`),
+      `${slug}: the rendered viewBox is not the computed one (${graph.viewBox})`,
+    );
+    for (const node of graph.nodes) {
+      assert.ok(
+        section.includes(`cx="${node.x}" cy="${node.y}"`),
+        `${slug}: no circle at the computed position of ${node.entry.slug} (${node.x}, ${node.y})`,
+      );
+    }
+    // The edge coordinates too, so a line drawn between the wrong pair of
+    // circles is caught rather than only a missing one.
+    for (const edge of graph.edges) {
+      assert.ok(
+        section.includes(`x1="${edge.x1}" y1="${edge.y1}" x2="${edge.x2}" y2="${edge.y2}"`),
+        `${slug}: no line from (${edge.x1}, ${edge.y1}) to (${edge.x2}, ${edge.y2})`,
+      );
+    }
+    inspected += 1;
+  }
+
+  assert.ok(
+    inspected > 0 || entries.every((entry) => localGraph(entry, getEntry).edges.length === 0),
+    'no laid-out graph was inspected and the corpus is not edge-free',
+  );
+});
+
+/**
+ * Incoming and outgoing edges are distinguished without colour.
+ *
+ * Requirements section 13.2 requires the distinction and section 17 forbids
+ * carrying it by colour alone, so the incoming edge is dashed — a shape, legible
+ * in monochrome. A node's accessible name carries the same fact in words, which
+ * the gate below checks.
+ *
+ * Asserted in both directions: a build that dashed everything, or nothing, fails.
+ */
+test('an incoming edge is drawn as a different shape, not a different colour', (context) => {
+  const withBoth = entries.filter((entry) => {
+    const directions = new Set(localGraph(entry, getEntry).edges.map((edge) => edge.direction));
+    return directions.has('incoming') && directions.has('outgoing');
+  });
+  context.skip(
+    withBoth.length === 0,
+    'no note has both an incoming and an outgoing drawn edge — run `pnpm run build:fixture`',
+  );
+
+  for (const entry of withBoth) {
+    const section = graphSection(
+      readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8'),
+      'note-graph',
+    )!;
+    const graph = localGraph(entry, getEntry);
+    const dashed = [...section.matchAll(/<line class="([^"]*)"/g)].filter(([, name]) =>
+      name!.includes('graph-edge-incoming'),
+    ).length;
+    assert.equal(
+      dashed,
+      graph.edges.filter((edge) => edge.direction === 'incoming').length,
+      `${entry.slug}: the dashed edges are not the incoming ones`,
+    );
+    assert.ok(dashed > 0, `${entry.slug}: has an incoming edge and dashed none of them`);
+    assert.ok(
+      dashed < [...section.matchAll(/<line /g)].length,
+      `${entry.slug}: dashed every edge, so the dash distinguishes nothing`,
+    );
+  }
+});
+
+/**
+ * Every node is a real link with an accessible name in the page's own language.
+ *
+ * The SVG is content, not decoration: a screen-reader user must be able to
+ * traverse it. So each node's `<a>` carries the untruncated title, the
+ * relationship in words, and the drawn degree — and the circle and the visible
+ * label are `aria-hidden`, because announcing a truncated title beside a full
+ * one reads the same note twice.
+ *
+ * The expected name is resolved from `translate()` and the artifact, never read
+ * off the page: comparing a page against itself passes whatever it renders.
+ */
+test('every graph node is a link whose accessible name states its relationship', () => {
+  let inspected = 0;
+
+  for (const { slug, html } of notePages()) {
+    const graph = localGraph(getEntry(slug)!, getEntry);
+    if (graph.edges.length === 0) continue;
+    const section = graphSection(html, 'note-graph')!;
+    const t = translate(declaredLanguage(html));
+
+    for (const node of graph.nodes) {
+      const expected = asInAttribute(
+        t.graphNodeLabel(node.entry.title, relationWord(node, t), node.degree),
+      );
+      assert.ok(
+        section.includes(`aria-label="${expected}"`),
+        `${slug}: no node named "${expected}" — the graph's accessible names are not this ` +
+          'page\'s own chrome, or do not state the relationship',
+      );
+      inspected += 1;
+    }
+
+    // The decorative halves are hidden, or the same note is announced twice.
+    for (const [tag] of section.matchAll(/<circle class="graph-dot"[^>]*>/g)) {
+      assert.match(tag, /aria-hidden="true"/, `${slug}: a node circle is exposed to assistive technology`);
+    }
+    for (const [tag] of section.matchAll(/<text class="graph-label"[^>]*>/g)) {
+      assert.match(tag, /aria-hidden="true"/, `${slug}: a truncated label is read beside its full title`);
+    }
+  }
+
+  assert.ok(
+    inspected > 0 || entries.every((entry) => localGraph(entry, getEntry).edges.length === 0),
+    'no graph node name was inspected and the corpus is not edge-free',
+  );
+});
+
+/**
+ * The equivalent table carries the same data as the figure.
+ *
+ * Requirements section 17: "graph data available as an equivalent list/table".
+ * Equivalent means the same node set, the same relationships, and the same drawn
+ * degrees — not a summary. Each is compared against the model rather than
+ * against the SVG beside it, so the two representations are each anchored to the
+ * contract instead of to each other.
+ */
+test('the graph table is the equivalent representation, not a summary', () => {
+  let inspected = 0;
+
+  for (const { slug, html } of notePages()) {
+    const graph = localGraph(getEntry(slug)!, getEntry);
+    if (graph.edges.length === 0) continue;
+    const section = graphSection(html, 'note-graph')!;
+    const table = /<details class="graph-table">[\s\S]*?<\/details>/.exec(section);
+    assert.ok(table, `${slug}: the graph has no equivalent table`);
+
+    const rows = [...table[0].matchAll(/<tr><th scope="row">[\s\S]*?<\/tr>/g)].map((match) => match[0]);
+    assert.equal(rows.length, graph.nodes.length, `${slug}: the table does not have a row per drawn node`);
+
+    const t = translate(declaredLanguage(html));
+    for (const node of graph.nodes) {
+      const row = rows.find((candidate) => candidate.includes(`href="/notes/${node.entry.slug}/"`));
+      assert.ok(row, `${slug}: the table omits ${node.entry.slug}, which the figure draws`);
+      // The full title, not the truncated label the SVG draws.
+      assert.ok(
+        row.includes(`>${asRendered(node.entry.title)}<`),
+        `${slug}: the table row for ${node.entry.slug} does not carry its full title`,
+      );
+      assert.ok(
+        row.includes(`<td>${asRendered(relationWord(node, t))}</td>`),
+        `${slug}: the table does not state ${node.entry.slug}'s relationship in this page's language`,
+      );
+      assert.ok(
+        row.includes(`<td>${node.degree}</td>`),
+        `${slug}: the table states a different drawn degree for ${node.entry.slug} than the figure`,
+      );
+      inspected += 1;
+    }
+  }
+
+  assert.ok(
+    inspected > 0 || entries.every((entry) => localGraph(entry, getEntry).edges.length === 0),
+    'no graph table row was inspected and the corpus is not edge-free',
+  );
+});
+
+/**
+ * `/graph/` renders the site-wide graph, or says why it does not.
+ *
+ * The route is in `SITE_MAP`, so the footer links it from every page and the
+ * route-set gate at the top of this file already requires it to exist. What is
+ * checked here is that it carries the same guarantees the per-note figure does —
+ * chiefly that every node is a real link, which is the whole difference from a
+ * canvas.
+ */
+test('the site graph route renders the corpus graph with real links', () => {
+  const html = readFileSync(new URL('graph/index.html', DIST), 'utf8');
+  const section = graphSection(html, 'site-graph');
+  assert.ok(section, '/graph/ has no graph region');
+  const graph = globalGraph(entries);
+
+  if (graph.edges.length === 0) {
+    assert.match(section, /<p class="empty-state">/, '/graph/ has no edges and no empty state');
+    assert.ok(!section.includes('<svg'), '/graph/ drew a graph with no edges in it');
+    return;
+  }
+
+  assert.ok(section.includes(`viewBox="${graph.viewBox}"`), '/graph/ renders a layout it did not compute');
+  const nodes = [...section.matchAll(/<a class="graph-node[^"]*" href="\/notes\/([^/"]+)\//g)].map(
+    ([, slug]) => slug!,
+  );
+  assert.deepEqual(
+    [...nodes].sort(),
+    graph.nodes.map((node) => node.entry.slug).sort(),
+    '/graph/ does not draw the ranked node set',
+  );
+  assert.equal(
+    [...section.matchAll(/<line class="graph-edge/g)].length,
+    graph.edges.length,
+    '/graph/ draws a different number of edges than the layout computed',
+  );
+});
+
+/**
+ * The bound is stated when it bites, and the expansion action is always there.
+ *
+ * Requirements section 13.2 asks for a bounded node count *with an explicit
+ * expansion action*. A bound applied silently is the failure mode this closes:
+ * the reader sees a figure and has no way to know it is partial. Checked in
+ * both directions, so a complete figure cannot claim to be truncated either.
+ *
+ * **The truncation half is not exercised by either corpus**, and that is
+ * recorded here rather than hidden: the fixture corpus's busiest note has 10
+ * neighbours against a bound of 12, and the published note has none. So no
+ * built page renders the truncation sentence, and this gate cannot prove that
+ * branch — `tests/graph.test.ts` proves the model's two states apart over a
+ * synthetic corpus on both sides of the bound, which is where the distinction
+ * is actually falsifiable. What is left here is the complete case, asserted as
+ * a positive: the bound element exists and carries the expansion link.
+ *
+ * A corpus that grows past `LOCAL_NODE_LIMIT` starts exercising the other
+ * branch here automatically, at which point this note stops being true and the
+ * gate gets stronger on its own.
+ */
+test('a truncated graph says so, and every graph offers the way to the rest', () => {
+  let complete = 0;
+  let truncated = 0;
+
+  for (const { slug, html } of notePages()) {
+    const graph = localGraph(getEntry(slug)!, getEntry);
+    if (graph.edges.length === 0) continue;
+    const section = graphSection(html, 'note-graph')!;
+    const t = translate(declaredLanguage(html));
+
+    assert.ok(
+      section.includes(`href="/${GRAPH_SEGMENT}/"`),
+      `${slug}: the graph offers no route to the whole site's graph`,
+    );
+    const bound = /<p class="graph-bound">([\s\S]*?)<\/p>/.exec(section);
+    assert.ok(bound, `${slug}: the graph states no bound line at all`);
+    const sentence = asRendered(
+      t.graphBoundedLocal(graph.nodes.length, graph.nodes.length + graph.omitted),
+    );
+    if (graph.omitted > 0) {
+      assert.ok(bound[1]!.includes(sentence), `${slug}: drops ${graph.omitted} notes without saying so`);
+      truncated += 1;
+    } else {
+      assert.ok(
+        !bound[1]!.includes(sentence),
+        `${slug}: draws every neighbour and still states a bound`,
+      );
+      // The complete case is where a deleted bound line would hide, since its
+      // sentence is legitimately absent — so what is asserted is that the
+      // *element* rendering it exists and holds only the expansion link. A
+      // mutation deleting the `{omitted > 0 && …}` branch passed this gate
+      // until this assertion existed.
+      assert.match(
+        bound[1]!,
+        /^\s*<a href=/,
+        `${slug}: the bound line carries something other than the expansion link`,
+      );
+      complete += 1;
+    }
+  }
+
+  // Neither corpus reaches the bound today, so the loop above must at least
+  // have judged the complete case rather than skipping every page. A corpus
+  // that grows past `LOCAL_NODE_LIMIT` starts exercising the other branch here
+  // automatically.
+  assert.ok(
+    complete + truncated > 0 || entries.every((entry) => localGraph(entry, getEntry).edges.length === 0),
+    'no graph bound line was inspected and the corpus is not edge-free',
+  );
 });

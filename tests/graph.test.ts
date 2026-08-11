@@ -241,6 +241,49 @@ test('the local graph is bounded, reports what it omitted, and truncates by titl
   );
 });
 
+/**
+ * `omitted` is zero exactly when nothing was dropped.
+ *
+ * The other half of the bound, and the one neither corpus exercises: the
+ * fixture corpus's busiest note has 10 neighbours against a bound of 12 and the
+ * published note has none, so **no built page renders the truncation
+ * sentence**. The gate over `dist/` therefore cannot prove that branch, and it
+ * says so; this is where the two states are told apart.
+ *
+ * It matters because the page renders the sentence on `omitted > 0` alone. A
+ * model that reported a non-zero count for a complete graph would put "Drawing
+ * 4 of 4 notes" under a figure drawing all four, and a model that reported zero
+ * for a truncated one would drop notes silently — which is the failure
+ * requirements section 13.2's explicit-expansion clause exists to prevent.
+ */
+test('a complete graph reports nothing omitted, and a truncated one reports the difference', () => {
+  const peers = (count: number) =>
+    withBacklinks([
+      entry('subject', {
+        outgoing: Array.from({ length: count }, (_, index) => `peer-${String(index).padStart(2, '0')}`),
+      }),
+      ...Array.from({ length: count }, (_, index) =>
+        entry(`peer-${String(index).padStart(2, '0')}`),
+      ),
+    ]);
+
+  for (const count of [1, LOCAL_NODE_LIMIT - 1, LOCAL_NODE_LIMIT]) {
+    const corpus = peers(count);
+    const graph = localGraph(corpus[0]!, lookupIn(corpus));
+    assert.equal(graph.omitted, 0, `${count} neighbours fit the bound but ${graph.omitted} were reported dropped`);
+    assert.equal(graph.nodes.length, count + 1);
+  }
+
+  for (const count of [LOCAL_NODE_LIMIT + 1, LOCAL_NODE_LIMIT + 7]) {
+    const corpus = peers(count);
+    const graph = localGraph(corpus[0]!, lookupIn(corpus));
+    assert.equal(graph.omitted, count - LOCAL_NODE_LIMIT, `${count} neighbours: wrong omitted count`);
+    // The two numbers the sentence interpolates must add up to the corpus's own
+    // neighbour count, or the page states a total that is not the total.
+    assert.equal(graph.nodes.length - 1 + graph.omitted, count);
+  }
+});
+
 test('the global graph is bounded to the most connected notes', () => {
   const corpus = withBacklinks([
     entry('hub', { title: 'Hub', outgoing: ['a', 'b', 'c'] }),
