@@ -24,6 +24,7 @@
 
 import type { ContentEntry } from './schema.ts';
 import { collectionFacets, collectionRoute } from './routes.ts';
+import { byTitleThenSlug } from './relations.ts';
 import { noteRoute, noteSlugFromPath } from './route-path.ts';
 
 /** One note, as the rail lists it. */
@@ -68,12 +69,6 @@ export interface ExplorerGroup {
  * fixture notes reach it; on the published one-note corpus it is the only group.
  */
 export const UNCOLLECTED_LABEL = 'Uncollected';
-
-/** Total order over notes: title, then the unique slug so no tie is left open. */
-function byTitleThenSlug(a: ContentEntry, b: ContentEntry): number {
-  if (a.title !== b.title) return a.title < b.title ? -1 : 1;
-  return a.slug < b.slug ? -1 : 1;
-}
 
 /**
  * The collection groups, in the order `/collections/` lists them, with the
@@ -121,6 +116,9 @@ export function collectionNavigation(
 
   const uncollected = entries.filter((entry) => entry.collection === undefined);
   if (uncollected.length > 0) {
+    // The same comparator `collectionFacets` gives a facet's members, imported
+    // rather than restated so the last group cannot come to read differently
+    // from every group above it.
     const notes = [...uncollected].sort(byTitleThenSlug).map(note);
     groups.push({
       label: UNCOLLECTED_LABEL,

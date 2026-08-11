@@ -20,7 +20,7 @@ import { test, type TestContext } from 'vitest';
 import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
-import { collectionNavigation } from '../src/lib/collection-tree.ts';
+import { UNCOLLECTED_LABEL } from '../src/lib/collection-navigation.ts';
 import {
   RELATED_DERIVATION,
   RELATED_LIMIT,
@@ -92,6 +92,11 @@ function expectedRoutes(): string[] {
 }
 
 const ROUTES = builtRoutes();
+
+/** The file in `dist/` a built route is served from. */
+function pageFor(route: string): string {
+  return route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+}
 
 test('the build emits exactly the expected route set, with no extras', () => {
   assert.deepEqual(ROUTES, expectedRoutes());
@@ -410,7 +415,7 @@ test('no page this repository authors describes how the private source is organi
   );
 
   for (const route of authored) {
-    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    const page = pageFor(route);
     const html = readFileSync(new URL(page, DIST), 'utf8');
     for (const [pattern, what] of forbidden) {
       assert.doesNotMatch(html, pattern, `${page}: discloses ${what} (${pattern})`);
@@ -853,7 +858,7 @@ test('no page outside the note route links the code stylesheet', () => {
   // catches.
   for (const route of ROUTES) {
     if (noteSlugFromPath(route) !== undefined) continue;
-    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    const page = pageFor(route);
     assert.doesNotMatch(
       readFileSync(new URL(page, DIST), 'utf8'),
       /href="\/_astro\/code\.[^"]*\.css"/,
@@ -1202,7 +1207,7 @@ test('the explorer lists every published note, on every route', (context) => {
   const expected = entries.map((entry) => entry.slug).sort();
 
   for (const route of ROUTES) {
-    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    const page = pageFor(route);
     const rail = explorer(readFileSync(new URL(page, DIST), 'utf8'));
     assert.ok(rail, `${route}: renders no collection explorer`);
     assert.deepEqual(
@@ -1216,10 +1221,10 @@ test('the explorer lists every published note, on every route', (context) => {
 /**
  * The rail's groups are the collection facets, plus the uncollected notes.
  *
- * Compared against `collectionNavigation` rather than against a literal list,
- * so the gate follows the model — and against `collectionFacets` inside that
- * model's own test, so neither can drift into agreeing with the other while
- * both disagree with `/collections/`.
+ * Built from `collectionFacets` and the artifact — deliberately *not* from
+ * `collectionNavigation`, which is the model that rendered the page. See the
+ * comment in the body: a page compared against its own model proves only
+ * faithful transcription, not correct grouping.
  */
 test('the explorer groups match the collection model, in its order', (context) => {
   requireMultiEntry(context);
@@ -1229,15 +1234,37 @@ test('the explorer groups match the collection model, in its order', (context) =
   const rendered = [...rail.matchAll(/<span class="explorer-label">([^<]*)<\/span>/g)].map(
     ([, label]) => label!,
   );
-  const model = collectionNavigation(entries, '/');
-  assert.deepEqual(rendered, model.map((group) => asRendered(group.label)));
-
-  // Each group's count is the group's own size, not a constant that happens to
-  // look plausible.
   const counts = [...rail.matchAll(/<span class="explorer-count">(\d+)<\/span>/g)].map(([, n]) =>
     Number(n),
   );
-  assert.deepEqual(counts, model.map((group) => group.notes.length));
+
+  // Against the artifact and `collectionFacets`, not against
+  // `collectionNavigation`. Comparing the page to the model that rendered it
+  // proves only that the component transcribed the model faithfully — a wrong
+  // grouping would be transcribed just as faithfully, and both this gate and
+  // the model's own unit test would stay green. The independent expectation is
+  // the collection index's own facet list, in its own order, plus one final
+  // group for the notes that carry no collection.
+  const facets = collectionFacets(entries);
+  const uncollected = entries.filter((entry) => entry.collection === undefined);
+  const expectedLabels = facets.map((facet) => asRendered(facet.label));
+  const expectedCounts = facets.map((facet) => facet.entries.length);
+  if (uncollected.length > 0) {
+    expectedLabels.push(asRendered(UNCOLLECTED_LABEL));
+    expectedCounts.push(uncollected.length);
+  }
+
+  assert.deepEqual(rendered, expectedLabels, 'the rail is not the collection index, in its order');
+  // Each count is the group's own size, derived from the artifact rather than
+  // from the number the page happens to print.
+  assert.deepEqual(counts, expectedCounts, 'a group count is not the number of notes in it');
+  // And every note is accounted for, so a group cannot be right while the whole
+  // is missing one.
+  assert.equal(
+    expectedCounts.reduce((total, count) => total + count, 0),
+    entries.length,
+    'the rail’s groups do not cover the corpus exactly once',
+  );
 });
 
 /**
@@ -1344,7 +1371,7 @@ test('the explorer is excluded from the search index', (context) => {
 test('a corpus with nothing to browse renders no explorer', (context) => {
   context.skip(entries.length > 1, 'corpus has more than one note — this is the published-corpus case');
   for (const route of ROUTES) {
-    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    const page = pageFor(route);
     assert.equal(
       explorer(readFileSync(new URL(page, DIST), 'utf8')),
       undefined,
@@ -1354,33 +1381,58 @@ test('a corpus with nothing to browse renders no explorer', (context) => {
 });
 
 /**
- * The rail costs no JavaScript, in the built output rather than in intent.
+ * The rail costs no JavaScript, measured in the shipped bundle.
  *
  * The whole design rests on this: `<details>` for collapse, `position: sticky`
  * for the follow, `aria-current` for the location. A script added later to
  * "improve" any of the three would be invisible to every other gate in this
  * file, since the markup would be unchanged.
+ *
+ * **Filename matching is not enough, and that is the whole reason this reads the
+ * bundle.** Astro concatenates the layout's `<script>` imports into one chunk
+ * named after `Layout.astro`, so an `import '../scripts/explorer.ts'` added to
+ * that existing block ships inside a file whose name says nothing about it — the
+ * exact path a name check would wave through. What is asserted instead is the
+ * property a reader pays for: no shipped script mentions the rail's markup, and
+ * the total JavaScript on the page has not grown a rail's worth. The byte
+ * ceiling is deliberately loose, because it is guarding against a *feature*
+ * appearing, not policing the existing scripts' size — TK-09 owns budgets.
  */
 test('no script is loaded for the explorer', () => {
-  const before = new Set(['preferences', 'search-dialog', 'link-preview', 'theme-init', 'diagram']);
+  /** Selectors and identifiers a rail script would have to name to do anything. */
+  const RAIL_MARKERS = /explorer|collection-navigation|details\[open\]|explorer-group/i;
+  /** Total shipped JavaScript, over which a rail script would be a visible jump. */
+  const SCRIPT_BUDGET_BYTES = 40_000;
+
+  let inspected = 0;
   for (const route of ROUTES) {
-    const page = route.endsWith('.html') ? route.slice(1) : `${route.slice(1)}index.html`;
+    const page = pageFor(route);
     const html = readFileSync(new URL(page, DIST), 'utf8');
+    let bytes = 0;
+
     for (const [, source] of html.matchAll(/<script\b[^>]*\ssrc="([^"]*)"/gi)) {
+      const file = new URL(source!.slice(1), DIST);
+      if (!exists(file)) continue;
+      const code = readFileSync(file, 'utf8');
+      bytes += code.length;
+      inspected += 1;
+      // The bundle's *contents*, not its name: this is what catches a rail
+      // script hidden inside the layout's existing chunk.
       assert.doesNotMatch(
-        source!,
-        /explorer|collection-tree/i,
-        `${route}: loads "${source}" — the explorer is meant to need no script`,
+        code,
+        RAIL_MARKERS,
+        `${route}: the shipped script "${source}" references the explorer — ` +
+          'the rail is meant to need no JavaScript at all',
       );
     }
+
+    assert.ok(
+      bytes <= SCRIPT_BUDGET_BYTES,
+      `${route}: ships ${bytes} B of JavaScript, over the ${SCRIPT_BUDGET_BYTES} B ceiling`,
+    );
   }
-  // Non-vacuity: the page does load *some* script, so a build that emitted none
-  // at all cannot pass this by having nothing to inspect.
-  const anyPage = readFileSync(new URL('index.html', DIST), 'utf8');
-  const loaded = [...anyPage.matchAll(/<script\b[^>]*\ssrc="([^"]*)"/gi)];
-  assert.ok(loaded.length > 0, 'no page loads any script, so this gate inspected nothing');
-  assert.ok(
-    loaded.some(([, source]) => [...before].some((name) => source!.includes(name))),
-    'none of the site’s known scripts was found, so the gate is matching against the wrong shape',
-  );
+
+  // Non-vacuity: some script was read and scanned, so a build that emitted none
+  // cannot pass this by having nothing to inspect.
+  assert.ok(inspected > 0, 'no shipped script was read, so this gate inspected nothing');
 });

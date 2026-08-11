@@ -885,11 +885,20 @@ test('the collection rail is complete and operable with scripting disabled', asy
           'so the collapse hides nothing',
       );
       await closed.click();
-      // Past the open animation, which starts at `opacity: 0` — measuring
-      // mid-flight would report a link the reader is about to see as hidden.
-      await page.waitForTimeout(400);
+      // Polled from Node, **not** `page.waitForFunction`, and that is a
+      // correctness fix rather than a style choice: `waitForFunction` schedules
+      // its predicate inside the page, so with `javaScriptEnabled: false` it
+      // never runs and the call always times out. Measured — it timed out after
+      // 5,005 ms on a document where `page.evaluate` reported all 12 links
+      // visible. Polling is also what keeps the assertion off a fixed sleep
+      // against a transition duration the stylesheet owns.
+      let revealed = 0;
+      for (let attempt = 0; attempt < 25 && revealed === 0; attempt += 1) {
+        revealed = await visibleLinksIn('nav.explorer details[open] a[href]');
+        if (revealed === 0) await page.waitForTimeout(40);
+      }
       assert.ok(
-        (await visibleLinksIn('nav.explorer details[open] a[href]')) > 0,
+        revealed > 0,
         `at ${width}px: opening a group with scripting disabled revealed no links — ` +
           'the collapse is not the native disclosure',
       );

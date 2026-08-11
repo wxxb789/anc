@@ -242,15 +242,31 @@ main:focus:not(:focus-visible) {
  * A `transition`, deliberately **not** an `animation`, and that distinction is a
  * WCAG fix rather than a stylistic one. An `animation` on `[open]` runs when the
  * page *loads*, because the reader's own group is already open in the served
- * HTML — so the rail faded in from `opacity: 0` on every navigation, and axe
- * caught the links mid-fade at a computed **4.44:1** against the 4.5 threshold,
- * on 245 nodes across both corpora. A transition fires only on a state change,
- * so an already-open group is simply open at first paint and there is no
- * partial-opacity frame for anything to measure. Measured, not reasoned: the
- * violation count went 245 → 0 on this change alone.
+ * HTML — so the rail faded in from `opacity: 0` on every navigation, and the
+ * out-of-band axe audit caught the links mid-fade at a computed 4.44:1 against
+ * the 4.5 threshold, on 245 nodes across both corpora. A transition fires only
+ * on a state change, so an already-open group is simply open at first paint and
+ * there is no partial-opacity frame for anything to measure. That audit is run
+ * from `.tmp/axe-audit.mjs` against an `axe.min.js` on disk — axe-core is in
+ * neither `dependencies` nor `devDependencies`, so no gate in this repository
+ * recomputes the number and TK-09 owns whether one should.
  *
- * A browser without `interpolate-size` snaps open exactly as `<details>` always
- * has, and the global `prefers-reduced-motion` block turns the transition off.
+ * `::details-content` rather than Quartz's `grid-template-rows: 0fr → 1fr`,
+ * which was the shape L5 named. Both are transitions and either would have
+ * fixed the contrast defect; the reason to prefer this one is that
+ * `grid-template-rows` needs a wrapper element to be the single grid row, and
+ * a `<details>` given `display: grid` loses the browser's own open/closed box
+ * behaviour — so that shape costs a `<div>` per group whose only job is to be
+ * animated. The trade is browser support: `interpolate-size` is Chromium-only
+ * today, where `grid-template-rows` is not. That is why the whole block sits
+ * behind `@supports` and the collapse itself is the native `<details>` — a
+ * browser that skips this snaps open exactly as it always has, which is a
+ * missing animation rather than a missing feature.
+ *
+ * The `prefers-reduced-motion` block at the end of this file turns the
+ * transition off. It needs `*::details-content` in its selector list to do so:
+ * a type selector matches elements and never a pseudo-element, so `*` alone
+ * left this transition running at its full duration under `reduce`.
  */
 @supports (interpolate-size: allow-keywords) {
   .explorer-group {
@@ -1377,6 +1393,16 @@ main:focus:not(:focus-visible) {
   display: none;
 }
 
+/*
+ * And the two-column track goes with it. `:has(> .explorer)` still matches a
+ * `display: none` child, so without this reader mode would keep a 240 px column
+ * reserved for a rail it just hid, and push the article off centre — the same
+ * defect the `:has()` guard exists to prevent on a corpus with no rail.
+ */
+:root[data-reader='on'] .page-shell {
+  display: block;
+}
+
 :root[data-reader='on'] .site-header {
   position: static;
   border-bottom-color: transparent;
@@ -1450,6 +1476,15 @@ main:focus:not(:focus-visible) {
 /*
  * Desktop: the article and its rail, side by side.
  *
+ * `:has(> .explorer)` is load-bearing, not a flourish. The rail renders nothing
+ * on a corpus with fewer than two notes and nothing in reader mode, and an
+ * unconditional two-column grid then reserves a 240 px track for an element
+ * that is not there — measured on the *published* build, which is exactly that
+ * corpus: the article sat 136 px left of centre at 1440 px with an empty column
+ * beside it. The requirement says "centered article", so the grid engages only
+ * when there is a rail to put in it, and every other case keeps the centred
+ * single column it had before this ticket.
+ *
  * `minmax(0, …)` on the article track rather than `1fr` alone: a `1fr` track has
  * an automatic minimum of its content's min-content width, so one long unbroken
  * token inside the article would push the whole grid wider than the viewport
@@ -1457,7 +1492,7 @@ main:focus:not(:focus-visible) {
  * to catch, arriving at 1280 px instead.
  */
 @media (min-width: 64rem) {
-  .page-shell {
+  .page-shell:has(> .explorer) {
     display: grid;
     grid-template-columns: minmax(0, 1fr) var(--width-rail);
     gap: var(--gutter);
@@ -1469,7 +1504,7 @@ main:focus:not(:focus-visible) {
   /* `main` is centred inside its own track rather than by the shell, so the
      article keeps the measure it has at every other width and the rail does not
      shift the prose off centre relative to itself. */
-  .page-shell > main {
+  .page-shell:has(> .explorer) > main {
     width: 100%;
   }
 
@@ -1478,7 +1513,12 @@ main:focus:not(:focus-visible) {
        article at zero JavaScript. The offset clears the sticky header. */
     position: sticky;
     top: 5rem;
+    /* The gutter goes: it is the page's own edge padding, and inside a grid
+       track the shell's `gap` already separates the rail from the article.
+       Keeping it would spend roughly a quarter of `--width-rail` on whitespace
+       and wrap titles that would otherwise fit. */
     margin: var(--space-16) 0 0;
+    padding: 0;
     /* Its own scroll container, so a rail longer than the viewport scrolls
        within itself instead of stretching the grid row and stranding the
        bottom of the list where no scroll can reach it. */
@@ -1505,7 +1545,13 @@ main:focus:not(:focus-visible) {
 
   *,
   *::before,
-  *::after {
+  *::after,
+  /* A type selector matches elements, never a pseudo-element, so `*` alone does
+     not reach `::details-content` — the one thing on this site that animates
+     through it. Measured: with `prefers-reduced-motion: reduce` the explorer's
+     open transition still computed to 0.12s until this selector was added, so
+     the reset was silently exempting the newest animation on the site. */
+  *::details-content {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;

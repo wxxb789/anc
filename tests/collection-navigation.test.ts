@@ -14,7 +14,7 @@ import {
   UNCOLLECTED_LABEL,
   collectionNavigation,
   type ExplorerGroup,
-} from '../src/lib/collection-tree.ts';
+} from '../src/lib/collection-navigation.ts';
 import { collectionFacets, collectionRoute } from '../src/lib/routes.ts';
 import type { ContentEntry } from '../src/lib/schema.ts';
 
