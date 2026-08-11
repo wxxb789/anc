@@ -116,16 +116,25 @@ const total = drawn + graph.omitted;
       <figure class="graph">
         <div class="graph-canvas" tabindex="0">
           {/*
-            `role="img"` with a name, and `focusable="false"` on the SVG itself:
-            without the latter, IE-era focus behaviour and some AT still put the
-            `<svg>` element in the tab order ahead of the links inside it, which
-            would give every graph one dead stop before its first node.
+            `role="group"`, **not** `role="img"`.
 
-            The name states the counts because the figure's size is the first
-            thing a sighted reader takes in and the one thing a non-visual
-            reader cannot. `aria-label` rather than `aria-labelledby`: the
-            string exists only for this purpose and pointing at another element
-            would make the name depend on that element continuing to exist.
+            An `img` is a leaf: the accessibility API presents it as a single
+            graphic, so a focusable descendant inside one is a contradiction —
+            axe reports it as `nested-interactive` (serious), 56 times across
+            the fixture corpus in both themes, which is how this was found. And
+            it is not a lint technicality: under `role="img"` the node links are
+            in the tab order while being inside a subtree a screen reader
+            announces as one image, so a reader can focus links their own screen
+            reader has flattened away.
+
+            `group` is what this actually is — a named set of related elements
+            that may contain interactive descendants. The name still states the
+            counts, because the figure's size is the first thing a sighted
+            reader takes in and the one thing a non-visual reader cannot.
+
+            `focusable="false"` keeps the `<svg>` element itself out of the tab
+            order, so the group is a container rather than one more stop before
+            its first node.
 
             `width` and `height` are attributes rather than CSS so the figure has
             an intrinsic size and an aspect ratio before the stylesheet arrives —
@@ -136,7 +145,7 @@ const total = drawn + graph.omitted;
             viewBox={graph.viewBox}
             width={graph.width}
             height={graph.height}
-            role="img"
+            role="group"
             focusable="false"
             aria-label={t.graphFigureLabel(drawn, graph.edges.length)}
           >

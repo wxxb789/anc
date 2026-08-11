@@ -2940,3 +2940,43 @@ test('a truncated graph says so, and every graph offers the way to the rest', ()
     'no graph bound line was inspected and the corpus is not edge-free',
   );
 });
+
+/**
+ * The graph's SVG is a group, not an image.
+ *
+ * `role="img"` is a leaf role: the accessibility API presents the subtree as
+ * one graphic, so a focusable descendant inside it is a contradiction. Every
+ * node here is a real `<a>` in the tab order, so under `img` a reader could
+ * focus links their own screen reader had flattened into a single image.
+ *
+ * Found by axe — `nested-interactive`, serious, 56 occurrences across the
+ * fixture corpus in both themes — and pinned here because that audit runs out
+ * of band from `.tmp/tk16/axe-audit.mjs` against an `axe.min.js` on disk and is
+ * not part of `pnpm test`. TK-09 owns whether it becomes an enforced gate; until
+ * then this is the assertion that keeps the specific defect from returning.
+ */
+test('the graph SVG is a group rather than a leaf image role', () => {
+  let inspected = 0;
+
+  for (const file of [...notePages().map(({ html }) => html), readFileSync(new URL('graph/index.html', DIST), 'utf8')]) {
+    for (const [tag] of file.matchAll(/<svg class="graph-svg"[^>]*>/g)) {
+      assert.ok(
+        tag.includes('role="group"'),
+        'a graph SVG containing focusable links does not carry role="group"',
+      );
+      assert.ok(
+        !tag.includes('role="img"'),
+        'a graph SVG carries the leaf role "img" while containing focusable node links (axe nested-interactive)',
+      );
+      // The group still needs a name, or a screen reader announces an unnamed
+      // container and the counts go unsaid.
+      assert.match(tag, /aria-label="[^"]+"/, 'a graph SVG has no accessible name');
+      inspected += 1;
+    }
+  }
+
+  assert.ok(
+    inspected > 0 || entries.every((entry) => localGraph(entry, getEntry).edges.length === 0),
+    'no graph SVG was inspected and the corpus is not edge-free',
+  );
+});
