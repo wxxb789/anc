@@ -9,11 +9,15 @@
  * Requirements section 13.3 admits a global graph only on four conditions, and
  * this page meets them by construction rather than by intent:
  *
- * - *Legible at current node count* — `GLOBAL_NODE_LIMIT` bounds the figure, and
- *   the bound is stated on the page rather than applied silently.
- * - *Keyboard-accessible, or an equivalent searchable list* — both: every node
- *   is a real `<a>` in the tab order, and the table under the figure carries the
- *   same data and is indexed by the site search like any other text.
+ * - *Legible at current node count* — `GLOBAL_NODE_LIMIT` bounds the figure, the
+ *   bound is stated on the page rather than applied silently, and the figure
+ *   scrolls below `min-width` rather than shrinking its labels past reading size.
+ * - *Keyboard-accessible, or an equivalent searchable list* — keyboard: every
+ *   node is a real `<a>` in the tab order, and the table under the figure lists
+ *   the same notes with the notes each is linked to. It is **not** in the site
+ *   search index: only `/notes/<slug>/` carries `data-pagefind-body`, so
+ *   Pagefind indexes note bodies alone. The requirement is satisfied by the
+ *   keyboard half, which is why that is the half this says.
  * - *JS and database budgets* — there is no JavaScript and no database. TK-21
  *   owns the layer that would have either, and it enhances this rather than
  *   replacing it.
@@ -47,6 +51,7 @@ const graph = globalGraph(entries);
     derivation={t.graphGlobalDerivation}
     empty={t.graphSiteEmpty}
     bounded={t.graphBounded}
+    countsSubject
     expand={{ href: '/#notes', text: t.graphExpand, label: t.graphExpandLabel }}
     lang={NAV_LANGUAGE}
   />

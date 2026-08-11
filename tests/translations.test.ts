@@ -190,6 +190,40 @@ test('every key resolves to something a reader can read, in both locales', () =>
   }
 });
 
+/**
+ * A control's accessible name contains its visible text (WCAG 2.5.3).
+ *
+ * Speech-input users say what they see: a link reading "See the whole graph"
+ * whose name is "See the graph of the whole site" cannot be activated by
+ * voice, because the words spoken are not in the name. The rule is *contains*,
+ * not equals — a name may add context, and both of these do.
+ *
+ * Asserted in both locales, because the pairing is per string and a Chinese
+ * name assembled from a different clause order fails it independently. This
+ * caught exactly that on `graphExpandLocal` in review.
+ */
+test('an accessible name contains the visible text of its own control', () => {
+  const PAIRS = [
+    ['graphExpand', 'graphExpandLabel'],
+    ['graphExpandLocal', 'graphExpandLocalLabel'],
+  ] as const;
+
+  for (const language of LANGUAGES) {
+    const locale = translate(language);
+    for (const [visibleKey, nameKey] of PAIRS) {
+      // The trailing arrow is decoration the name has no reason to carry, and a
+      // screen reader does not announce it as a word.
+      const visible = locale[visibleKey].replace(/\s*→\s*$/, '').trim();
+      assert.ok(visible !== '', `${language}.${visibleKey} renders no visible text`);
+      assert.ok(
+        locale[nameKey].includes(visible),
+        `${language}: the accessible name "${locale[nameKey]}" does not contain the visible label ` +
+          `"${visible}" — a speech-input user cannot activate it by saying what they see (WCAG 2.5.3)`,
+      );
+    }
+  }
+});
+
 test('the two locales are genuinely different, not one copied over the other', () => {
   const en = translate('en');
   const zh = translate('zh-CN');

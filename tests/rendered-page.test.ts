@@ -218,7 +218,14 @@ beforeAll(async () => {
 afterAll(async () => {
   if (launched !== undefined && 'browser' in launched) await launched.browser.close();
   server?.close();
-});
+  // Vitest's default hook timeout is 10 s, and closing Chromium is a process
+  // teardown whose cost grows with how many contexts the suite opened — this
+  // file now opens sixteen. Every *test* here already carries an explicit
+  // timeout for the same reason; the hook had none, so it was the one step
+  // that could redden a run in which all sixteen tests passed. Observed doing
+  // exactly that. Matching `beforeAll`'s budget rather than raising the global
+  // `hookTimeout`, which would relax every hook in the repository to fix one.
+}, 120_000);
 
 /** Skip with the install command when no browser is available. */
 function requireBrowser(context: TestContext): Browser {
@@ -316,9 +323,33 @@ function measureOverflow(page: Page, limit: number, exempt: string | undefined):
       const overflowing = [...document.querySelectorAll<HTMLElement>('*')].filter(
         (element) => element.getBoundingClientRect().right > edge + 1,
       );
+      /**
+       * Whether a scrolling ancestor clips this element.
+       *
+       * An element inside `overflow-x: auto` **cannot** widen the document —
+       * the container clips it and scrolls instead, which is the entire point
+       * of a scroll container and the treatment a wide code fence, a wide
+       * diagram, and a wide graph all get. Counting such an element as a
+       * culprit reports the feature as the defect.
+       *
+       * This is not an exemption and does not weaken the gate: the container
+       * itself is still measured, so a scroll region that genuinely pushes the
+       * page wide still fails. What it removes is the case where the *content*
+       * of a correctly-clipping container is named as the cause.
+       */
+      const isClipped = (element: HTMLElement): boolean => {
+        for (let parent = element.parentElement; parent !== null; parent = parent.parentElement) {
+          const overflowX = getComputedStyle(parent).overflowX;
+          if (overflowX === 'auto' || overflowX === 'scroll' || overflowX === 'hidden') {
+            return parent.getBoundingClientRect().right <= edge + 1;
+          }
+        }
+        return false;
+      };
       const isExempt = (element: HTMLElement) =>
-        exemptSelector !== undefined &&
-        (element.matches(exemptSelector) || element.closest(exemptSelector) !== null);
+        isClipped(element) ||
+        (exemptSelector !== undefined &&
+          (element.matches(exemptSelector) || element.closest(exemptSelector) !== null));
 
       const culprits = overflowing
         .filter((element) => !isExempt(element))

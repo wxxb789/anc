@@ -40,7 +40,14 @@
  * animate, which is the requirement satisfied by construction rather than by a
  * media query.
  */
-import type { Graph } from '../lib/graph.ts';
+import {
+  NODE_RADIUS,
+  SUBJECT_RADIUS,
+  drawnNeighbours,
+  hasDrawableGraph,
+  type Graph,
+  type GraphNode,
+} from '../lib/graph.ts';
 import { noteRoute } from '../lib/routes.ts';
 import { partLanguage, translate } from '../lib/translations.ts';
 
@@ -57,13 +64,33 @@ interface Props {
   expand: { href: string; text: string; label: string };
   /** Stated when the bound dropped notes. Takes drawn and total counts. */
   bounded: (shown: number, total: number) => string;
+  /**
+   * Whether the bound sentence counts the subject among its total.
+   *
+   * `/graph/` says "notes" and counts every node; the neighbourhood says
+   * "neighbouring notes" and a note is not its own neighbour. A prop rather
+   * than a derivation, so the arithmetic follows the sentence being filled in
+   * rather than a coincidence of the data.
+   */
+  countsSubject?: boolean;
   /** The page's own language, which decides every string's grammar. */
   lang: string;
   /** Heading level, so the region sits correctly in each page's outline. */
   level?: 1 | 2;
 }
 
-const { graph, region, heading, derivation, empty, expand, bounded, lang, level = 2 } = Astro.props;
+const {
+  graph,
+  region,
+  heading,
+  derivation,
+  empty,
+  expand,
+  bounded,
+  countsSubject = false,
+  lang,
+  level = 2,
+} = Astro.props;
 const t = translate(lang);
 
 const titleId = `${region}-title`;
@@ -86,13 +113,33 @@ function relationOf(node: Graph['nodes'][number]): string {
 }
 
 /** The class carrying a node's role. Shape and weight, never colour alone. */
-function nodeClass(node: Graph['nodes'][number]): string {
+function nodeClass(node: GraphNode): string {
   return node.isSubject ? 'graph-node graph-node-subject' : 'graph-node';
 }
 
-const isDrawable = graph.edges.length > 0;
+const isDrawable = hasDrawableGraph(graph);
 const drawn = graph.nodes.length;
-const total = drawn + graph.omitted;
+
+/**
+ * The two numbers the bound sentence interpolates.
+ *
+ * **Counted over what the sentence says it counts**, which is not the same on
+ * the two graphs: the neighbourhood's sentence says "neighbouring notes" and
+ * the subject is not one of its own neighbours, so it is excluded — while
+ * `/graph/`'s says "notes" and every drawn node is one. Passing the raw node
+ * count to both was the first version, and it made a truncated neighbourhood
+ * read "Drawing 13 of 16 neighbouring notes" where the truth was 12 of 15.
+ *
+ * `countsSubject` rather than reading `graph.nodes.some(isSubject)`: an
+ * unbounded `/graph/` legitimately draws no subject, and a neighbourhood always
+ * has one, so deriving it from the data would make the arithmetic depend on a
+ * coincidence rather than on which sentence is being filled in.
+ */
+const shown = countsSubject ? drawn : drawn - graph.nodes.filter((node) => node.isSubject).length;
+const total = shown + graph.omitted;
+
+/** Which notes each drawn node is joined to, for the table's fourth column. */
+const joined = drawnNeighbours(graph);
 ---
 
 <section class="graph-region" aria-labelledby={titleId}>
@@ -214,7 +261,13 @@ const total = drawn + graph.omitted;
                 aria-label={t.graphNodeLabel(node.entry.title, relationOf(node), node.degree)}
                 lang={partLanguage(node.entry.language, lang)}
               >
-                <circle class="graph-dot" cx={node.x} cy={node.y} r={node.isSubject ? 9 : 6} aria-hidden="true" />
+                <circle
+                  class="graph-dot"
+                  cx={node.x}
+                  cy={node.y}
+                  r={node.isSubject ? SUBJECT_RADIUS : NODE_RADIUS}
+                  aria-hidden="true"
+                />
                 {/* `dy` places the label below the circle by an em rather than
                     by a pixel count, so it follows the reader's own text size. */}
                 <text class="graph-label" x={node.x} y={node.y} dy="1.9em" aria-hidden="true">{node.label}</text>
@@ -227,8 +280,13 @@ const total = drawn + graph.omitted;
 
       {/*
         Requirements section 17: "graph data available as an equivalent
-        list/table". Equivalent, so it carries the same node set, the same
-        relationships, and the same drawn degrees — not a summary of them.
+        list/table". **Equivalent**, so the fourth column exists: it names the
+        notes each row is joined to, which is the edge set itself. A table of
+        node, relationship, and a *degree* states how many lines touch a node
+        while withholding which notes they run to — and on `/graph/`, where no
+        node has a relationship to a subject, that would leave the whole edge
+        set unavailable to a non-visual reader. A count is the summary section
+        17 excludes.
 
         It is a `<details>` rather than an always-open table: the same data in
         two forms one after the other is a long page, and native disclosure
@@ -244,6 +302,7 @@ const total = drawn + graph.omitted;
               <th scope="col">{t.graphColumnNote}</th>
               <th scope="col">{t.graphColumnRelation}</th>
               <th scope="col">{t.graphColumnLinks}</th>
+              <th scope="col">{t.graphColumnLinkedTo}</th>
             </tr>
           </thead>
           <tbody>
@@ -255,6 +314,27 @@ const total = drawn + graph.omitted;
                 </th>
                 <td>{relationOf(node)}</td>
                 <td>{node.degree}</td>
+                <td>
+                  {/* The notes at the other end of every line this node
+                      carries, each a link — so the table is a way *through* the
+                      graph and not only a description of it. A node the figure
+                      draws with no line to another drawn node says so rather
+                      than rendering an empty cell, which reads as missing data. */}
+                  {(joined.get(node.entry.slug) ?? []).length === 0 ? (
+                    <span class="graph-none">{t.graphNoLinks}</span>
+                  ) : (
+                    <ul class="graph-joined">
+                      {(joined.get(node.entry.slug) ?? []).map((other) => (
+                        <li>
+                          <a
+                            href={noteRoute(other.slug)}
+                            lang={partLanguage(other.language, lang)}
+                          >{other.title}</a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

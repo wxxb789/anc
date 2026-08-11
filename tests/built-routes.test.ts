@@ -36,8 +36,10 @@ import {
 } from '../src/lib/relations.ts';
 import {
   LOCAL_NODE_LIMIT,
+  drawnNeighbours,
   globalGraph,
   localGraph,
+  truncateLabel,
   type GraphNode,
 } from '../src/lib/graph.ts';
 import {
@@ -2635,6 +2637,49 @@ test('the rendered neighbourhood draws exactly the artifact s edges over its nod
       `${slug}: draws ${lines} edges where the artifact has ${expected.size} between its drawn notes`,
     );
 
+    // **Which pairs, not just how many.** A count alone passes for a figure
+    // that drew the right number of the wrong edges, and an edge is the one
+    // thing on this page with no text to give it away. The rendered geometry is
+    // resolved back to a pair of slugs through the *node* positions the same
+    // HTML carries, so the comparison stays page-against-artifact rather than
+    // model-against-model.
+    const positions = new Map(
+      [...section.matchAll(/<circle class="graph-dot" cx="(-?[\d.]+)" cy="(-?[\d.]+)"/g)].map(
+        (match, index) => [`${match[1]},${match[2]}`, index],
+      ),
+    );
+    const nodeOrder = [...section.matchAll(/<a class="graph-node[^"]*" href="\/notes\/([^/"]+)\//g)].map(
+      ([, target]) => target!,
+    );
+    const drawnPairs = new Set<string>();
+    for (const [, x1, y1, x2, y2] of section.matchAll(
+      /<line class="graph-edge[^"]*" x1="(-?[\d.]+)" y1="(-?[\d.]+)" x2="(-?[\d.]+)" y2="(-?[\d.]+)"/g,
+    )) {
+      // An edge is trimmed to stop short of both circles, so its endpoints are
+      // not the node centres: the nearest node to each end is the one it
+      // touches. Nearest rather than exact, and the assertion below is what
+      // keeps "nearest" from silently matching the wrong circle.
+      const nearest = (x: string, y: string): string => {
+        let best = '';
+        let bestDistance = Infinity;
+        for (const [key, index] of positions) {
+          const [cx, cy] = key.split(',').map(Number) as [number, number];
+          const distance = Math.hypot(cx - Number(x), cy - Number(y));
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            best = nodeOrder[index]!;
+          }
+        }
+        return best;
+      };
+      drawnPairs.add([nearest(x1!, y1!), nearest(x2!, y2!)].sort().join(' '));
+    }
+    assert.deepEqual(
+      [...drawnPairs].sort(),
+      [...expected].sort(),
+      `${slug}: the lines the figure draws are not the artifact's edges between its drawn notes`,
+    );
+
     const nodes = [...section.matchAll(/<a class="graph-node[^"]*" href="\/notes\/([^/"]+)\//g)].map(
       ([, target]) => target!,
     );
@@ -2775,6 +2820,26 @@ test('every graph node is a link whose accessible name states its relationship',
     for (const [tag] of section.matchAll(/<text class="graph-label"[^>]*>/g)) {
       assert.match(tag, /aria-hidden="true"/, `${slug}: a truncated label is read beside its full title`);
     }
+
+    // The drawn text itself, which nothing else checks: it is the only string
+    // in the figure a sighted reader actually reads, and `truncateLabel` cuts
+    // by code point precisely so an astral title cannot end in a lone
+    // surrogate. Expected from the artifact's title through the rule, never
+    // read off the page.
+    const labels = [...section.matchAll(/<text class="graph-label"[^>]*>([^<]*)<\/text>/g)].map(
+      ([, text]) => text!,
+    );
+    assert.deepEqual(
+      labels,
+      graph.nodes.map((node) => asRendered(truncateLabel(node.entry.title))),
+      `${slug}: the drawn labels are not this corpus's titles under the truncation rule`,
+    );
+    for (const label of labels) {
+      assert.ok(
+        !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/.test(label),
+        `${slug}: the drawn label ${JSON.stringify(label)} ends in a lone surrogate`,
+      );
+    }
   }
 
   assert.ok(
@@ -2801,17 +2866,27 @@ test('the graph table is the equivalent representation, not a summary', () => {
     const section = graphSection(html, 'note-graph')!;
     const table = /<details class="graph-table">[\s\S]*?<\/details>/.exec(section);
     assert.ok(table, `${slug}: the graph has no equivalent table`);
+    const joined = drawnNeighbours(graph);
 
     const rows = [...table[0].matchAll(/<tr><th scope="row">[\s\S]*?<\/tr>/g)].map((match) => match[0]);
     assert.equal(rows.length, graph.nodes.length, `${slug}: the table does not have a row per drawn node`);
 
     const t = translate(declaredLanguage(html));
     for (const node of graph.nodes) {
-      const row = rows.find((candidate) => candidate.includes(`href="/notes/${node.entry.slug}/"`));
+      // Matched on the row's **own** `<th>`, not on the row containing the
+      // slug anywhere: since the fourth column links every note a row is joined
+      // to, a substring search finds the first row that *mentions* this note
+      // rather than the row that is about it. That mismatch made this gate
+      // compare one node's relationship against another node's row.
+      const row = rows.find((candidate) =>
+        new RegExp(`^<tr><th scope="row"><a href="/notes/${node.entry.slug}/"`).test(candidate),
+      );
       assert.ok(row, `${slug}: the table omits ${node.entry.slug}, which the figure draws`);
-      // The full title, not the truncated label the SVG draws.
+      // The full title, not the truncated label the SVG draws. Read from the
+      // row's own `<th>` for the same reason the row is matched there.
+      const heading = /^<tr><th scope="row">([\s\S]*?)<\/th>/.exec(row)![1]!;
       assert.ok(
-        row.includes(`>${asRendered(node.entry.title)}<`),
+        heading.includes(`>${asRendered(node.entry.title)}<`),
         `${slug}: the table row for ${node.entry.slug} does not carry its full title`,
       );
       assert.ok(
@@ -2821,6 +2896,17 @@ test('the graph table is the equivalent representation, not a summary', () => {
       assert.ok(
         row.includes(`<td>${node.degree}</td>`),
         `${slug}: the table states a different drawn degree for ${node.entry.slug} than the figure`,
+      );
+      // **The fourth column is what makes the table equivalent** rather than a
+      // summary (requirements section 17): a degree says how many lines touch a
+      // node while withholding which notes they run to. Compared by content
+      // against the model's own adjacency.
+      const linked = joined.get(node.entry.slug) ?? [];
+      const listed = [...row.matchAll(/<li><a\s+href="\/notes\/([^/"]+)\//g)].map(([, target]) => target!);
+      assert.deepEqual(
+        listed,
+        linked.map((other) => other.slug),
+        `${slug}: the table's linked-to column for ${node.entry.slug} is not the edges the figure draws`,
       );
       inspected += 1;
     }

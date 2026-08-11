@@ -287,10 +287,10 @@ export interface Translation {
   /**
    * Accessible name of the figure itself, naming what it draws.
    *
-   * An `<svg role="img">` needs a name or a screen reader announces "graphic"
-   * and moves on. It states the counts because the picture's size is the first
-   * thing a sighted reader takes in and the one thing a non-visual reader
-   * cannot.
+   * An `<svg role="group">` needs a name or a screen reader announces an
+   * unnamed container and the counts go unsaid. It states them because the
+   * picture's size is the first thing a sighted reader takes in and the one
+   * thing a non-visual reader cannot.
    */
   graphFigureLabel: (nodes: number, edges: number) => string;
   /**
@@ -314,6 +314,18 @@ export interface Translation {
   graphColumnNote: string;
   graphColumnRelation: string;
   graphColumnLinks: string;
+  /**
+   * The column naming the notes at the other end of each row's lines.
+   *
+   * This column is what makes the table *equivalent* rather than a summary
+   * (requirements section 17): without it a non-visual reader gets each node's
+   * degree — how many lines touch it — and never which notes they run to. On
+   * `/graph/`, where no node has a relationship to a subject, it is the only
+   * place the edge set appears at all.
+   */
+  graphColumnLinkedTo: string;
+  /** A drawn node joined to nothing else drawn. Said, not left blank. */
+  graphNoLinks: string;
   /**
    * The bound, stated on its face, with the expansion action beside it.
    *
@@ -474,12 +486,14 @@ const EN = {
   graphColumnNote: 'Note',
   graphColumnRelation: 'Relationship',
   graphColumnLinks: 'Links drawn',
+  graphColumnLinkedTo: 'Linked to',
+  graphNoLinks: 'Nothing else drawn here',
   graphBoundedLocal: (shown, total) =>
     `Drawing ${shown} of ${total} neighbouring notes, in alphabetical order. The lists above name ` +
     'every one of them.',
   graphBounded: (shown, total) => `Drawing ${shown} of ${total} notes, the most linked first.`,
   graphExpandLocal: 'See the whole graph →',
-  graphExpandLocalLabel: 'See the graph of the whole site',
+  graphExpandLocalLabel: 'See the whole graph of every published note',
   graphExpand: 'See every published note →',
   graphExpandLabel: 'See every published note, including those this graph does not draw',
   graphEmpty:
@@ -637,11 +651,13 @@ const ZH_CN = {
   graphColumnNote: '笔记',
   graphColumnRelation: '关系',
   graphColumnLinks: '图中链接数',
+  graphColumnLinkedTo: '链接到',
+  graphNoLinks: '图中没有与它相连的笔记',
   graphBoundedLocal: (shown, total) =>
     `共有 ${total} 篇相邻笔记，此处按字母顺序画出其中 ${shown} 篇。上文的列表已列出全部。`,
   graphBounded: (shown, total) => `共 ${total} 篇笔记，此处画出链接最多的 ${shown} 篇。`,
   graphExpandLocal: '查看整站关系图 →',
-  graphExpandLocalLabel: '查看整个站点的关系图',
+  graphExpandLocalLabel: '查看整站关系图，包含全部公开笔记',
   graphExpand: '查看全部公开笔记 →',
   graphExpandLabel: '查看全部公开笔记，包括本图未画出的部分',
   graphEmpty: '没有公开笔记链接到这篇，这篇也没有链接到其他笔记，因此没有可绘制的相邻关系。',

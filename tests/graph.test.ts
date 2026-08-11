@@ -25,6 +25,7 @@ import type { ContentEntry } from '../src/lib/schema.ts';
 import {
   GLOBAL_NODE_LIMIT,
   LOCAL_NODE_LIMIT,
+  drawnNeighbours,
   edgeDirection,
   globalGraph,
   hasDrawableGraph,
@@ -431,6 +432,57 @@ test('a drawn degree counts only edges the figure actually shows', () => {
   const delta = graph.nodes.find((node) => node.entry.slug === 'delta')!;
   const authored = new Set([...delta.entry.outgoing, ...delta.entry.backlinks]).size;
   assert.ok(authored > delta.degree, 'the fixture no longer has an edge leaving the drawn set');
+});
+
+/**
+ * The adjacency the equivalent table renders is the drawn edge set.
+ *
+ * Requirements section 17 asks for the graph *data* as a list or table, and
+ * this is the function that supplies the column carrying it. A table of node,
+ * relationship, and degree states how many lines touch a node while withholding
+ * which notes they run to — and on `/graph/`, where no node has a relationship
+ * to a subject, that leaves the whole edge set unavailable to a non-visual
+ * reader. Review found exactly that.
+ */
+test('the table adjacency names both ends of every drawn edge, and nothing else', () => {
+  const corpus = neighbourhoodCorpus();
+  for (const graph of [localGraph(corpus[0]!, lookupIn(corpus)), globalGraph(corpus)]) {
+    const joined = drawnNeighbours(graph);
+
+    // Every drawn node has an entry, so a row never renders an absent list.
+    assert.deepEqual(
+      [...joined.keys()].sort(),
+      graph.nodes.map((node) => node.entry.slug).sort(),
+    );
+
+    // Reconstructing the edge set from the adjacency gives back the edges.
+    const fromAdjacency = new Set<string>();
+    for (const [slug, others] of joined) {
+      for (const other of others) fromAdjacency.add([slug, other.slug].sort().join(' '));
+    }
+    assert.deepEqual(
+      [...fromAdjacency].sort(),
+      [...new Set(graph.edges.map((edge) => [edge.from, edge.to].sort().join(' ')))].sort(),
+      'the table adjacency is not the drawn edge set',
+    );
+
+    // And it agrees with the degree the same node reports, or the two columns
+    // of the same row would contradict each other.
+    for (const node of graph.nodes) {
+      assert.equal(
+        joined.get(node.entry.slug)!.length,
+        node.degree,
+        `${node.entry.slug}: the adjacency and the drawn degree disagree`,
+      );
+    }
+  }
+});
+
+test('a graph with no edges gives every node an empty adjacency rather than none', () => {
+  const alone = [entry('only')];
+  const joined = drawnNeighbours(localGraph(alone[0]!, lookupIn(alone)));
+  assert.deepEqual([...joined.keys()], ['only']);
+  assert.deepEqual(joined.get('only'), []);
 });
 
 // --- The empty cases ----------------------------------------------------------

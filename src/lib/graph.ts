@@ -150,9 +150,17 @@ const LABEL_SPACE = 136;
  */
 const LABEL_CHARS = 18;
 
-/** Radius of the note the reader is on, and of every other note. */
-const SUBJECT_RADIUS = 9;
-const NODE_RADIUS = 6;
+/**
+ * Radius of the note the reader is on, and of every other note.
+ *
+ * Exported because the markup draws the circles and this module trims every
+ * edge to stop short of them: two numbers that must agree or an arrowhead lands
+ * inside a circle instead of beside it. They were literals in the component
+ * until a review found them, which is exactly the divergence that would ship
+ * looking correct.
+ */
+export const SUBJECT_RADIUS = 9;
+export const NODE_RADIUS = 6;
 
 /** How much of the line the arrowhead occupies, so an edge stops short of it. */
 const MARKER_LENGTH = 9;
@@ -175,9 +183,9 @@ function round(value: number): number {
  * A title shortened to fit beside its node.
  *
  * The ellipsis is one character, so the drawn string is never longer than
- * {@link LABEL_CHARS}. Exported because the gate over `dist/` has to derive the
- * expected label from the artifact rather than read it off the page it is
- * checking.
+ * {@link LABEL_CHARS}. Exported so `tests/graph.test.ts` can exercise the
+ * truncation rule directly — the code-point boundary is the part that would
+ * otherwise fail silently, by emitting a lone surrogate into the markup.
  */
 export function truncateLabel(title: string): string {
   const characters = [...title];
@@ -468,6 +476,30 @@ function withDegrees(graph: Graph): Graph {
   }
   for (const node of graph.nodes) node.degree = degrees.get(node.entry.slug) ?? 0;
   return graph;
+}
+
+/**
+ * The notes each drawn node is joined to, within the figure.
+ *
+ * The edge set as a per-node adjacency, which is what the equivalent table
+ * needs: requirements section 17 asks for the *graph data* as a list or table,
+ * and a table carrying only each node's degree states how many lines touch it
+ * while withholding which notes they run to. On `/graph/` that is the whole
+ * edge set missing, because no node there has a relationship to a subject to
+ * describe instead.
+ *
+ * Keyed by slug and ordered by title then slug, so the row reads in the same
+ * order as every other list of notes on the site.
+ */
+export function drawnNeighbours(graph: Graph): Map<string, ContentEntry[]> {
+  const byslug = new Map(graph.nodes.map((node) => [node.entry.slug, node.entry]));
+  const joined = new Map<string, ContentEntry[]>(graph.nodes.map((node) => [node.entry.slug, []]));
+  for (const edge of graph.edges) {
+    joined.get(edge.from)?.push(byslug.get(edge.to)!);
+    joined.get(edge.to)?.push(byslug.get(edge.from)!);
+  }
+  for (const list of joined.values()) list.sort(byTitleThenSlug);
+  return joined;
 }
 
 /**

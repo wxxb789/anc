@@ -6,6 +6,12 @@
  * `diagram.css` reach only the pages that need them. A note with no
  * neighbourhood requests nothing.
  *
+ * **The region's own frame is in `global.css`, not here**, and that split is a
+ * fix rather than a preference: the region renders on every note page, with an
+ * empty state where there is no neighbourhood, so a frame in this conditional
+ * sheet left that empty state unstyled on every page of the published site.
+ * What lives here is only what a page that actually draws a figure needs.
+ *
  * **Nothing here carries information by colour alone** (WCAG 1.4.1,
  * requirements section 17). The three edge directions are three line *shapes*:
  * an outgoing edge is solid with one arrowhead, an incoming one dashed, a
@@ -22,14 +28,6 @@
  * Colour comes from the same tokens as everything else, so both themes follow
  * `light-dark()` with no second palette and no script.
  */
-
-.graph-region {
-  max-width: var(--measure);
-  margin-inline: auto;
-  margin-top: var(--space-12);
-  padding-top: var(--space-6);
-  border-top: 1px solid var(--color-line);
-}
 
 .graph {
   margin-block: var(--space-6);
@@ -52,13 +50,24 @@
 }
 
 /*
- * The SVG carries `width` and `height` attributes holding its intrinsic size,
- * so the figure has an aspect ratio before this stylesheet arrives and nothing
- * shifts when it does. `max-width: 100%` lets it shrink to a 320 px viewport
- * while the `viewBox` preserves the ratio; without `height: auto` the browser
- * keeps the attribute height and distorts it.
+ * The figure scrolls rather than shrinking past legibility.
+ *
+ * `min-width` is what makes the scroll container real. With `max-width: 100%`
+ * alone the SVG always fits its parent, so `overflow-x: auto` could never
+ * trigger and the `tabindex="0"` beside it was a focus stop that did nothing —
+ * while a 60-node `/graph/` squeezed into 320 px rendered its labels at about
+ * five CSS pixels. Below this width the figure scrolls sideways instead, which
+ * is the same treatment a wide diagram and a wide code fence already get.
+ *
+ * `max-width: 100%` still caps it on a wide viewport, and without `height:
+ * auto` the browser keeps the attribute height and distorts the aspect ratio.
+ * The `width` and `height` attributes hold the intrinsic size, so the figure
+ * has a ratio before this stylesheet arrives and nothing shifts when it does.
  */
 .graph-svg {
+  display: block;
+  margin-inline: auto;
+  min-width: 22rem;
   max-width: 100%;
   height: auto;
 }
@@ -162,8 +171,9 @@
   stroke: var(--color-link);
 }
 
-.graph figcaption,
-.graph-derivation {
+/* The figcaption carries the derivation — how the layout was built, which a
+   reader cannot see by looking at it. */
+.graph figcaption {
   max-width: var(--measure);
   margin-top: var(--space-2);
   color: var(--color-muted);
@@ -221,9 +231,26 @@
   font-weight: 400;
 }
 
-.graph-table td:last-child {
+/* The degree column, which is the one cell holding a bare number. */
+.graph-table td:nth-child(3) {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.graph-table td:last-child {
+  text-align: left;
+}
+
+/* The notes at the other end of a row's lines: a list, not a sentence, so a
+   screen reader announces how many there are before reading them. */
+.graph-joined {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.graph-none {
+  color: var(--color-muted);
 }
 
 .graph-bound {
