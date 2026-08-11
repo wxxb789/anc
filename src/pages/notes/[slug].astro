@@ -93,6 +93,12 @@ const lang = entry.language ?? NAV_LANGUAGE;
 const { html, toc, hasCode, hasMath, hasMermaid } = await renderMarkdown(entry.markdown, {
   pageTitle: entry.title,
   routeForSlug: (slug) => (getEntry(slug) ? noteRoute(slug) : undefined),
+  // The two strings the renderer writes into the article that are this
+  // repository's words rather than the author's: a heading anchor's accessible
+  // name and an untitled diagram's caption. They are chrome, so they follow the
+  // document like every other chrome string — a Chinese article had English
+  // accessible names on every heading before TK-16 threaded this through.
+  chrome: t,
 });
 
 /**

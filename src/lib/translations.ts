@@ -78,6 +78,21 @@ export interface Translation {
   siteDescription: string;
   /** The printed page's own address, since a printed page has no address bar. */
   publishedAt: (url: string) => string;
+  /**
+   * The feed's name, as the `<link rel="alternate">` in every page's head states
+   * it. A reader's feed client shows this when subscribing, so it is chrome that
+   * reaches a person even though no page renders it visibly.
+   */
+  feedTitle: (siteName: string) => string;
+  /**
+   * Alternative text for the social card image.
+   *
+   * The card is one rendering of the site's own mark, identical on every route,
+   * so the text says what it *is* rather than describing the page. It is read
+   * aloud by a client that cannot show the image, which makes it chrome a person
+   * meets in whatever language the document is in.
+   */
+  socialCardAlt: (siteName: string) => string;
 
   // --- Navigation labels -----------------------------------------------------
   // `routes.ts` holds the hrefs and names one of these keys per item; the label
@@ -161,6 +176,24 @@ export interface Translation {
   metaCollection: string;
   metaTags: string;
   tocHeading: string;
+  /**
+   * Accessible name of a heading's own anchor link.
+   *
+   * Rendered by the Markdown pipeline into the *article*, once per heading, and
+   * it is chrome rather than content: the heading text inside it is the
+   * author's, the words around it are this repository's. `renderMarkdown` takes
+   * it as an option, which is why it reaches a per-document locale at all.
+   */
+  headingAnchorLabel: (heading: string) => string;
+  /**
+   * A diagram's caption when the diagram declares no title of its own.
+   *
+   * The kind — "Flowchart", "Sequence" — comes from the Mermaid fence and stays
+   * as written; only the noun after it is chrome. A page with three untitled
+   * diagrams would otherwise give a screen reader three identically named
+   * figures, which is the defect the caption exists to avoid.
+   */
+  diagramCaption: (kind: string) => string;
   outgoingHeading: string;
   outgoingEmpty: string;
   backlinksHeading: string;
@@ -193,6 +226,8 @@ const EN = {
   siteSubtitle: 'A reviewed public projection from a private knowledge garden.',
   siteDescription: 'A static public projection from thoughtscape.',
   publishedAt: (url) => `Published at ${url}`,
+  feedTitle: (siteName) => `${siteName} — all notes`,
+  socialCardAlt: (siteName) => `${siteName} — a public knowledge garden`,
 
   navHome: 'Home',
   navNotes: 'Notes',
@@ -271,6 +306,8 @@ const EN = {
   metaCollection: 'Collection',
   metaTags: 'Tags',
   tocHeading: 'On this page',
+  headingAnchorLabel: (heading) => `Link to section: ${heading}`,
+  diagramCaption: (kind) => `${kind} diagram`,
   outgoingHeading: 'Links to',
   outgoingEmpty: 'This note links to no other published note.',
   backlinksHeading: 'Linked from',
@@ -323,6 +360,8 @@ const ZH_CN = {
   siteSubtitle: '一份经过审阅、从私有知识花园生成的公开投影。',
   siteDescription: 'thoughtscape 的静态公开投影。',
   publishedAt: (url) => `本页地址：${url}`,
+  feedTitle: (siteName) => `${siteName} — 全部笔记`,
+  socialCardAlt: (siteName) => `${siteName} — 一座公开的知识花园`,
 
   navHome: '首页',
   navNotes: '笔记',
@@ -397,6 +436,8 @@ const ZH_CN = {
   metaCollection: '所属合集',
   metaTags: '标签',
   tocHeading: '本页目录',
+  headingAnchorLabel: (heading) => `跳转到章节：${heading}`,
+  diagramCaption: (kind) => `${kind} 图示`,
   outgoingHeading: '链出笔记',
   outgoingEmpty: '这篇笔记没有链接到其他公开笔记。',
   backlinksHeading: '链入笔记',
@@ -431,6 +472,22 @@ const ZH_CN = {
  */
 export type NavLabelKey = Extract<keyof Translation, `nav${string}`>;
 
+/**
+ * The locale each tag resolves to, keyed by the lowercased tag.
+ *
+ * The bare `zh` key is **not** redundant with the `zh-cn` one, and removing it
+ * was tried: {@link translate} falls back to the *primary subtag*, so `zh-TW`,
+ * `zh-Hant`, and `zh-Hans-CN` all reduce to `zh` — which without a key of its
+ * own falls through to English, putting English chrome around a Chinese
+ * document. That is the exact defect this ticket exists to close, reached from a
+ * schema-valid artifact.
+ *
+ * What it means is that a Traditional-script document renders Simplified chrome.
+ * A known limit, stated rather than hidden: this projection publishes two
+ * locales, and Simplified chrome around a Traditional document is a closer
+ * answer than English. A Traditional locale is one more entry here and nothing
+ * else.
+ */
 const LOCALES: Readonly<Record<string, Translation>> = { en: EN, 'zh-cn': ZH_CN, zh: ZH_CN };
 
 /**
@@ -467,5 +524,11 @@ export function partLanguage(
   pageLanguage: string,
 ): string | undefined {
   const own = entryLanguage ?? NAV_LANGUAGE;
-  return own === pageLanguage ? undefined : own;
+  // Compared case-insensitively, as BCP 47 says language tags are: `zh-CN` and
+  // `zh-cn` name one language, so an artifact that spells one entry's tag
+  // differently from another's must not make the two look foreign to each other
+  // and put a redundant `lang` on every title. `translate` lowercases for the
+  // same reason, and the two must agree or a page resolves Chinese chrome while
+  // marking its own Chinese titles as foreign.
+  return own.toLowerCase() === pageLanguage.toLowerCase() ? undefined : own;
 }

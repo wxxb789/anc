@@ -30,6 +30,7 @@ import prismComponents from 'prismjs/components.json' with { type: 'json' };
 import { renderMath } from './math.ts';
 import { renderDiagram } from './mermaid-render.ts';
 import { DIAGRAM_MODE } from './diagram-mode.ts';
+import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
 
 /** A heading authored in the Markdown body, in document order. */
 export interface Heading {
@@ -102,6 +103,21 @@ export interface RenderOptions {
    * this transform.
    */
   routeForSlug?: (slug: string) => string | undefined;
+  /**
+   * The chrome this renderer emits *into* the article, in the document's own
+   * language.
+   *
+   * Two strings qualify and only two: a heading anchor's accessible name and an
+   * untitled diagram's caption. Everything else this module writes is the
+   * author's Markdown. They are injected rather than resolved here for the same
+   * reason `routeForSlug` is: this module stays pure and corpus-free, and the
+   * caller is the one that knows which document is being rendered — which since
+   * TK-16 is also the only thing that knows its language.
+   *
+   * Omitted, they fall back to the navigation language, so a caller with no
+   * document in hand renders exactly what it did before.
+   */
+  chrome?: Pick<Translation, 'headingAnchorLabel' | 'diagramCaption'>;
 }
 
 /**
@@ -480,7 +496,11 @@ function rawHtmlIds(html: string): string[] {
  * `h1` whose text matches is removed — and nothing else changes, because every
  * alternative to removal rearranges an outline the author wrote.
  */
-function headingPlugin(collected: Collected, pageTitle: string | undefined): HastPluginDefinition {
+function headingPlugin(
+  collected: Collected,
+  pageTitle: string | undefined,
+  label: Translation['headingAnchorLabel'],
+): HastPluginDefinition {
   const slugger = new Slugger();
   let isFirstHeading = true;
   return {
@@ -527,7 +547,7 @@ function headingPlugin(collected: Collected, pageTitle: string | undefined): Has
           properties: {
             className: ['heading-anchor'],
             href: `#${id}`,
-            'aria-label': `Link to section: ${text}`,
+            'aria-label': label(text),
           },
           children: [{ type: 'text', value: '#' }],
         });
@@ -614,7 +634,11 @@ function calloutPlugin(): HastPluginDefinition {
  * `pre > code.language-math` with no fence language — and is handled by
  * `mathPlugin` rather than here, so it never acquires a highlighting shell.
  */
-function codePlugin(collected: Collected, diagrams: DiagramRequest[]): HastPluginDefinition {
+function codePlugin(
+  collected: Collected,
+  diagrams: DiagramRequest[],
+  caption: Translation['diagramCaption'],
+): HastPluginDefinition {
   return {
     name: 'thoughtscape-code',
     element: [
@@ -632,7 +656,7 @@ function codePlugin(collected: Collected, diagrams: DiagramRequest[]): HastPlugi
 
           if (language === MERMAID_LANGUAGE) {
             collected.hasMermaid = true;
-            return diagramFigure(source, diagrams);
+            return diagramFigure(source, diagrams, caption);
           }
           collected.hasCode = true;
 
@@ -686,8 +710,12 @@ function codePlugin(collected: Collected, diagrams: DiagramRequest[]): HastPlugi
  * no-JavaScript rendering: a reader without scripting sees the diagram's source,
  * which is legible and honest, rather than an empty box.
  */
-function diagramFigure(source: string, diagrams: DiagramRequest[]): DiagramNode {
-  const caption = diagramCaption(source);
+function diagramFigure(
+  source: string,
+  diagrams: DiagramRequest[],
+  format: Translation['diagramCaption'],
+): DiagramNode {
+  const caption = diagramCaption(source, format);
 
   if (DIAGRAM_MODE === 'build-time') {
     const token = `${DIAGRAM_TOKEN_PREFIX}${diagrams.length}${DIAGRAM_TOKEN_SUFFIX}`;
@@ -754,13 +782,13 @@ function diagramFigure(source: string, diagrams: DiagramRequest[]): DiagramNode 
  * would give a screen reader three identically named figures, which is the same
  * defect as an unnamed one.
  */
-function diagramCaption(source: string): string {
+function diagramCaption(source: string, caption: Translation['diagramCaption']): string {
   const declared = /^\s*(?:---[\s\S]*?\btitle:\s*(.+?)$|(?:pie|gantt|journey|xychart-beta|quadrantChart|radar-beta)\s+title\s+(.+?)$)/m.exec(source);
   const title = (declared?.[1] ?? declared?.[2])?.trim().replace(/^["']|["']$/g, '');
   if (title !== undefined && title !== '') return boundLabel(title);
 
   const kind = /^\s*(?:---[\s\S]*?---\s*)?([A-Za-z][\w-]*)/.exec(source)?.[1] ?? 'Mermaid';
-  return `${DIAGRAM_KIND_NAMES[kind.toLowerCase()] ?? kind} diagram`;
+  return caption(DIAGRAM_KIND_NAMES[kind.toLowerCase()] ?? kind);
 }
 
 /**
@@ -1365,6 +1393,9 @@ function buildToc(headings: readonly Heading[]): TocEntry[] {
  */
 export async function renderMarkdown(markdown: string, options: RenderOptions = {}): Promise<RenderedNote> {
   const routeForSlug = options.routeForSlug ?? defaultRouteForSlug;
+  // The document's own chrome, or the navigation language for a caller that
+  // renders no particular document. See `RenderOptions.chrome`.
+  const chrome = options.chrome ?? translate(NAV_LANGUAGE);
   const collected: Collected = {
     headings: [],
     rawIds: new Map(),
@@ -1378,10 +1409,10 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
   const { html } = await markdownToHtml(markdown, {
     features: FEATURES,
     hastPlugins: [
-      headingPlugin(collected, options.pageTitle),
+      headingPlugin(collected, options.pageTitle, chrome.headingAnchorLabel),
       calloutPlugin(),
       mathPlugin(collected, maths),
-      codePlugin(collected, diagrams),
+      codePlugin(collected, diagrams, chrome.diagramCaption),
       taskListPlugin(),
       tablePlugin(),
     ],
@@ -1408,7 +1439,11 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
     ...(await Promise.all(
       diagrams.map(async (request, index) => ({
         token: request.token,
-        markup: await renderDiagram(request.source, `diagram-${index}`, diagramCaption(request.source)),
+        markup: await renderDiagram(
+          request.source,
+          `diagram-${index}`,
+          diagramCaption(request.source, chrome.diagramCaption),
+        ),
       })),
     )),
   ];

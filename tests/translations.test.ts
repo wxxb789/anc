@@ -17,7 +17,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,10 @@ const TEXT_KEYS = [
   'collectionPageDescription',
   'moreInCollection',
   'canonicalUrlLine',
+  'headingAnchorLabel',
+  'diagramCaption',
+  'feedTitle',
+  'socialCardAlt',
 ] as const;
 const THEME_KEYS = ['themeLabel'] as const;
 
@@ -81,8 +85,13 @@ test('a document with no language falls back to the navigation language', () => 
 
 test('an unlisted region falls back to its primary subtag, not to a key name', () => {
   // `zh-Hans-CN` and `zh-TW` name no locale here. Falling back to `zh` is a
-  // reader seeing Chinese chrome on a Chinese document; falling back to the key
-  // name, or to English, is the defect the `satisfies` shape exists to prevent.
+  // reader seeing Chinese chrome on a Chinese document; falling back to English
+  // is the defect this ticket exists to close, reached from a valid artifact.
+  //
+  // This is what makes the bare `zh` key in `LOCALES` load-bearing rather than a
+  // shadow of `zh-cn`: `translate` reduces to the *primary* subtag, so all three
+  // of these become `zh` and nothing else would catch them. Deleting that key on
+  // a reviewer's advice was tried, and this assertion is what reported it.
   for (const tag of ['zh-Hans-CN', 'zh-TW', 'zh-Hant']) {
     assert.equal(translate(tag).uncollected, '未归入合集', `${tag} did not resolve to a zh locale`);
   }
@@ -281,6 +290,12 @@ test('a listed title is marked with its own language only when it differs', () =
   // listing its own note emits no attribute rather than a redundant `lang="en"`.
   assert.equal(partLanguage(undefined, NAV_LANGUAGE), undefined);
   assert.equal(partLanguage(undefined, 'zh-CN'), NAV_LANGUAGE);
+  // BCP 47 tags are case-insensitive, and `translate` lowercases before
+  // resolving — so these must agree, or a page renders Chinese chrome while
+  // marking its own Chinese titles as foreign on every row of every list.
+  assert.equal(partLanguage('ZH-CN', 'zh-CN'), undefined);
+  assert.equal(partLanguage('zh-cn', 'zh-CN'), undefined);
+  assert.equal(partLanguage('EN', 'en'), undefined);
 });
 
 // --- The compile-time gate -----------------------------------------------------
@@ -364,40 +379,53 @@ test('a locale missing a key, or carrying an unknown one, fails type checking', 
 /**
  * The contract is the only place a chrome string is written down.
  *
- * A second copy is how the two languages drift: a sentence edited in a component
+ * A second copy is how the two languages drift: a sentence edited in one place
  * and not in the locale renders one language correctly and the other silently
  * stale — and nothing else in the suite would notice, because the English page
- * would still read correctly.
+ * would still read correctly. A live instance existed until review found it,
+ * `UNCOLLECTED_LABEL` in `collection-navigation.ts`, which an earlier version of
+ * this gate could not see because it walked a hand-kept list of files.
+ *
+ * So it walks the tree instead. `src/` minus this contract, minus the two static
+ * prose pages: `about.astro` and `privacy.astro` are documents rather than
+ * chrome — long-form text this repository wrote, on two navigation-language
+ * routes, that no locale key describes. They are excluded by name and with a
+ * reason rather than by being left off a list nobody would notice was short.
  *
  * Matched as a *complete* literal — `'Collection'`, `"Collection"`, or the JSX
- * text `>Collection<` — rather than as a substring, because a bare substring
- * reports `import CollectionExplorer from './CollectionExplorer.astro'` as a
- * hardcoded "Collection". The cost of that precision is that a sentence
- * reintroduced as JSX text broken across several lines would slip through; the
- * form this actually guards against is the one every string here had before
- * TK-16, which is a literal on one line.
+ * text `>Collection<` — never as a substring, because a bare substring reports
+ * `import CollectionExplorer from './CollectionExplorer.astro'` as a hardcoded
+ * "Collection". The cost of that precision is that a sentence reintroduced as
+ * JSX text broken across several lines would slip through; the form this guards
+ * against is the one every string here had before TK-16, which is a literal on
+ * one line.
  */
-test('no component or page holds a chrome string of its own', () => {
+test('no module outside the contract holds a chrome string of its own', () => {
   const root = new URL('../src/', import.meta.url);
-  const files = [
-    'layouts/Layout.astro',
-    'components/NoteList.astro',
-    'components/LinkedNotes.astro',
-    'components/CollectionExplorer.astro',
-    'components/FacetIndex.astro',
-    'components/TableOfContents.astro',
-    'components/SiteMetadata.astro',
-    'pages/index.astro',
-    'pages/recent.astro',
-    'pages/404.astro',
-    'pages/tags/index.astro',
-    'pages/tags/[tag].astro',
-    'pages/collections/index.astro',
-    'pages/collections/[slug].astro',
-    'pages/notes/[slug].astro',
-    'scripts/preferences.ts',
-    'scripts/search-dialog.ts',
-  ];
+
+  /**
+   * Long-form prose pages, not chrome.
+   *
+   * Excluded by name so adding a third is a deliberate act. Both are static
+   * documents on navigation-language routes; translating them is a content
+   * decision this ticket does not own.
+   */
+  const PROSE_PAGES = new Set(['about.astro', 'privacy.astro']);
+
+  const files: string[] = [];
+  const walk = (directory: URL, prefix: string): void => {
+    for (const name of readdirSync(directory)) {
+      const child = new URL(name, directory);
+      if (statSync(child).isDirectory()) walk(new URL(`${name}/`, directory), `${prefix}${name}/`);
+      // The contract itself, obviously, and the artifact it would otherwise read.
+      else if (name === 'translations.ts' || PROSE_PAGES.has(name)) continue;
+      else if (/\.(astro|ts)$/.test(name)) files.push(`${prefix}${name}`);
+    }
+  };
+  walk(root, '');
+  // The `src/data/` artifact is exporter-generated content, not chrome.
+  const scanned = files.filter((name) => !name.startsWith('data/'));
+  assert.ok(scanned.length > 20, `only ${scanned.length} modules were scanned`);
 
   const en = translate('en');
   // Every string-valued key, not a hand-kept list of the ones that moved: a list
@@ -408,18 +436,19 @@ test('no component or page holds a chrome string of its own', () => {
     .filter((pair): pair is readonly [string, string] => typeof pair[1] === 'string');
   assert.ok(literals.length > 30, 'the contract has fewer string keys than expected');
 
-  for (const name of files) {
+  for (const name of scanned) {
     const source = readFileSync(new URL(name, root), 'utf8');
     // Comments are prose about the code and legitimately quote a string — this
     // file's own reasoning does exactly that — so the check is over what the
-    // file *renders*. Block comments cover both `/* */` in the frontmatter and
+    // module *renders*. Block comments cover both `/* */` in a frontmatter and
     // `{/* */}` in markup.
     const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     for (const [key, value] of literals) {
       for (const form of [`'${value}'`, `"${value}"`, `\`${value}\``, `>${value}<`]) {
         assert.ok(
           !code.includes(form),
-          `${name} holds the literal for "${key}" (${JSON.stringify(value)}) — resolve it from the contract instead`,
+          `src/${name} holds the literal for "${key}" (${JSON.stringify(value)}) — ` +
+            'resolve it from the contract instead',
         );
       }
     }

@@ -34,6 +34,7 @@ import {
   rfc3339,
   socialTitle,
 } from '../lib/site.ts';
+import { translate } from '../lib/translations.ts';
 
 interface Props {
   title: string;
@@ -58,6 +59,10 @@ const card = canonicalUrl(Astro.site, SOCIAL_CARD_PATH);
 const slug = noteSlugFromPath(Astro.url.pathname);
 const note = slug === undefined ? undefined : getEntry(slug);
 const locale = openGraphLocale(lang);
+// This component renders into the head of whichever document the layout is
+// building, so its one reader-facing string follows that document like every
+// other chrome string. A feed client shows the title when subscribing.
+const t = translate(lang);
 ---
 
 {/* The 404 document has no address of its own — the host serves its body for
@@ -90,7 +95,7 @@ const locale = openGraphLocale(lang);
 <meta property="og:image" content={card} />
 {/* The card is a rendering of the site's own mark, identical on every route, so
     the alternative text says what it is rather than describing the page. */}
-<meta property="og:image:alt" content={`${SITE_NAME} — a public knowledge garden`} />
+<meta property="og:image:alt" content={t.socialCardAlt(SITE_NAME)} />
 
 {/* Widened to the full RFC 3339 form Open Graph's DateTime type requires; the
     artifact may carry a bare calendar date. The `<time datetime>` on the page
@@ -113,6 +118,6 @@ const locale = openGraphLocale(lang);
 <link
   rel="alternate"
   type="application/atom+xml"
-  title={`${SITE_NAME} — all notes`}
+  title={t.feedTitle(SITE_NAME)}
   href={canonicalUrl(Astro.site, FEED_PATH)}
 />

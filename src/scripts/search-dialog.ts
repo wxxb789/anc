@@ -484,6 +484,17 @@ if (trigger != null && dialog != null) {
     instance.add(new ui.ResultList({ containerElement: '#search-results', showImages: false }));
     for (const region of FILTER_REGIONS) {
       if (Object.keys(filters[region.filter] ?? {}).length === 0) continue;
+      // ponytail: Pagefind writes this component's own two strings itself — an
+      // sr-only "Filter results by <filter>" label and an "All" pill — and they
+      // are English literals inside its bundle, with no option to supply them.
+      // So a pill that mounted on a zh-CN page would carry English chrome the
+      // TK-16 contract cannot reach. Not reachable today and measured, not
+      // assumed: `pagefind` reports "Indexed 0 filters" on both corpora, because
+      // nothing in the built HTML carries `data-pagefind-filter`, so this branch
+      // never runs. It becomes live the moment a ticket adds that attribute —
+      // at which point the fix is to relabel the two nodes after mounting, or to
+      // render the pills from the artifact's own facets rather than from
+      // Pagefind's.
       instance.add(new ui.FilterPills({ ...region }));
     }
     return instance;

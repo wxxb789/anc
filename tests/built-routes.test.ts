@@ -20,7 +20,6 @@ import { test, type TestContext } from 'vitest';
 import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
-import { UNCOLLECTED_LABEL } from '../src/lib/collection-navigation.ts';
 import { NAV_LANGUAGE, translate } from '../src/lib/translations.ts';
 import {
   RELATED_LIMIT,
@@ -1282,7 +1281,7 @@ test('the explorer groups match the collection model, in its order', (context) =
   const expectedLabels = facets.map((facet) => asRendered(facet.label));
   const expectedCounts = facets.map((facet) => facet.entries.length);
   if (uncollected.length > 0) {
-    expectedLabels.push(asRendered(UNCOLLECTED_LABEL));
+    expectedLabels.push(asRendered(translate(NAV_LANGUAGE).uncollected));
     expectedCounts.push(uncollected.length);
   }
 
@@ -1488,6 +1487,19 @@ function declaredLanguage(html: string): string {
 }
 
 /** The locale a page in `language` must not render anything from. */
+/**
+ * A string as it appears inside a built *attribute* value.
+ *
+ * Distinct from {@link asRendered}, which is the element-text form: a double
+ * quote is legal raw in text and must be `&quot;` in an attribute, so one
+ * escaper cannot serve both. The fixture corpus has a heading carrying quotes,
+ * and comparing its anchor's `aria-label` with the text form reported a
+ * mismatch on a page that was correct.
+ */
+function asInAttribute(value: string): string {
+  return asRendered(value).replaceAll('"', '&quot;');
+}
+
 function otherLocale(language: string) {
   return translate(language.toLowerCase().startsWith('zh') ? 'en' : 'zh-CN');
 }
@@ -1710,7 +1722,12 @@ test('every route that is not a single document renders the navigation language'
  * keeps this from being a fixture-only gate.
  */
 test('every rendered count uses the grammar of the page it is on', () => {
-  let checked = 0;
+  // Counted per surface rather than in one total: a single counter is satisfied
+  // by whichever surface always renders something, and the other two could then
+  // contribute nothing while the guard still reported success.
+  let corpusSizes = 0;
+  let facetCounts = 0;
+  let relationCounts = 0;
 
   // The corpus size, on the two routes that state it. Both are non-document
   // routes, so both are in the navigation language.
@@ -1721,7 +1738,7 @@ test('every rendered count uses the grammar of the page it is on', () => {
     const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
     const expected = asRendered(translate(declaredLanguage(html)).publishedCount(size));
     assert.ok(html.includes(expected), `${route}: does not state the corpus size as ${JSON.stringify(expected)}`);
-    checked += 1;
+    corpusSizes += 1;
   }
 
   // The per-facet counts, which are note counts however the facet is grouped.
@@ -1739,7 +1756,7 @@ test('every rendered count uses the grammar of the page it is on', () => {
       facets.map((facet) => asRendered(locale.noteCount(facet.entries.length))),
       `${indexRoute}: a facet count is not this page's own grammar`,
     );
-    checked += rendered.length;
+    facetCounts += rendered.length;
   }
 
   // The three relations sections, each of which states a count only when it has
@@ -1759,10 +1776,21 @@ test('every rendered count uses the grammar of the page it is on', () => {
       .filter((size) => size > 0)
       .map((size) => asRendered(locale.noteCount(size)));
     assert.deepEqual(counts, expected, `${entry.slug}: a relations count is not this page's own grammar`);
-    checked += counts.length;
+    relationCounts += counts.length;
   }
 
-  assert.ok(checked > 0, 'no count was rendered anywhere, so this gate checked nothing');
+  // The corpus size is on every corpus; the other two need a corpus that has
+  // facets or edges, and the published one has neither — so those are asserted
+  // as "checked something on a corpus that has something to check".
+  assert.equal(corpusSizes, 2, 'the home and recent pages did not both state a corpus size');
+  assert.ok(
+    facetCounts > 0 || tagFacets(entries).length + collectionFacets(entries).length === 0,
+    'the corpus has facets but no facet count was inspected',
+  );
+  assert.ok(
+    relationCounts > 0 || entries.every((entry) => entry.outgoing.length + entry.backlinks.length === 0),
+    'the corpus has edges but no relations count was inspected',
+  );
 });
 
 /**
@@ -1802,6 +1830,12 @@ test('English renders both a singular and a plural count, and Chinese renders on
   // Chinese renders the invariant form, whatever the number. Asserted on what
   // shipped rather than on the formatter, so a template that pluralised in the
   // markup instead of in the locale would still be caught.
+  //
+  // Counted, because a loop with a `continue` at the top reports "there are no
+  // Chinese counts" and "every Chinese count is correct" identically — and a
+  // count renders only where a section has members, so a corpus whose Chinese
+  // notes happened to have no edges would silently check nothing.
+  let chineseCounts = 0;
   for (const [language, counts] of byLanguage) {
     if (!language.toLowerCase().startsWith('zh')) continue;
     for (const text of counts) {
@@ -1810,8 +1844,14 @@ test('English renders both a singular and a plural count, and Chinese renders on
         /^\d+ 篇笔记$/,
         `a ${language} page rendered the count "${text}", which is not the invariant Chinese form`,
       );
+      chineseCounts += 1;
     }
   }
+  assert.ok(
+    chineseCounts > 0,
+    'no Chinese page rendered a count, so the invariant form was never checked — ' +
+      'the corpus needs a zh note with a relations section',
+  );
 });
 
 /**
@@ -1952,4 +1992,64 @@ test('no shipped script carries a translation table', () => {
     }
   }
   assert.ok(inspected > 0, 'no shipped script was read, so this gate inspected nothing');
+});
+
+/**
+ * The chrome the Markdown renderer writes *into* the article follows the
+ * document too.
+ *
+ * Two strings, and both were English on every Chinese page until review found
+ * them: a heading anchor's accessible name, emitted once per heading on every
+ * note, and an untitled diagram's caption. They are the ticket's hardest case
+ * because they are produced by a module that renders content — so the boundary
+ * between "the author's words" and "ours" runs through one element.
+ *
+ * The anchor is the one worth gating: a Chinese article had `aria-label="Link to
+ * section: 这个花园是怎么搭起来的"` on every heading, which is a screen reader
+ * reading an English preposition into a Chinese sentence, on every note.
+ */
+test('the article chrome the renderer emits is in the document own language', () => {
+  let anchors = 0;
+  for (const entry of entries) {
+    const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
+    const language = declaredLanguage(html);
+    const own = translate(language);
+    const other = otherLocale(language);
+
+    // Whole heading elements, then the anchor inside each. Matching from `<h`
+    // straight to the first `heading-anchor` instead spans from the page's own
+    // `<h1 class="note-title">` — which carries no anchor — through every
+    // element between it and the first one that does, so the "heading text" it
+    // captured was most of the article. That version failed, which is how it was
+    // found.
+    for (const [, headingText] of html.matchAll(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/g)) {
+      const label = /<a class="heading-anchor" href="#[^"]*" aria-label="([^"]*)"/.exec(headingText!)?.[1];
+      // The note title has no anchor, and neither does a relations heading.
+      if (label === undefined) continue;
+      // The heading's own text: the anchor sits at the end of its heading, so
+      // everything before it is the author's words. The label is then *rebuilt*
+      // around exactly that text and compared whole, which is what avoids ever
+      // pattern-matching translated prose.
+      const heading = headingText!.slice(0, headingText!.indexOf('<a class="heading-anchor"')).trim();
+      // `asInAttribute`, not `asRendered`: a heading containing a double quote
+      // renders raw in the element's text and as `&quot;` inside the attribute,
+      // so comparing the two forms with one escaper reports a mismatch on a
+      // correct page. The fixture corpus has such a heading — `Two: an answer to
+      // "what is public"` — and it is what caught this.
+      assert.equal(
+        label,
+        asInAttribute(own.headingAnchorLabel(heading)),
+        `${entry.slug} (lang="${language}"): a heading anchor is not named in this page's own language`,
+      );
+      assert.notEqual(
+        label,
+        asInAttribute(other.headingAnchorLabel(heading)),
+        `${entry.slug} (lang="${language}"): a heading anchor is named in the other language`,
+      );
+      anchors += 1;
+    }
+  }
+  // Every note in both corpora has headings, so a build that emitted no anchor
+  // at all is a defect rather than a corpus shape to tolerate.
+  assert.ok(anchors > 0, 'no heading anchor was inspected, so this gate checked nothing');
 });

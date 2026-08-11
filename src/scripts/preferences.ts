@@ -10,10 +10,11 @@
  * absence degrades to the system theme rather than to a broken page.
  */
 
-/* Astro concatenates these scripts into one bundle. `export {}` makes this file
-   a module with its own top-level scope, so TK-06 and TK-07 can each declare
-   `root`, `dialog`, or `preview` without colliding with the other's file. */
-export {};
+/* Astro concatenates these scripts into one bundle. An import makes this file a
+   module with its own top-level scope, so TK-06 and TK-07 can each declare
+   `root`, `dialog`, or `preview` without colliding with the other's file. It was
+   a bare `export {}` until TK-16 gave the file a real import. */
+import { THEME_NAMES, type ThemeName } from '../lib/translations.ts';
 
 /*
  * These two keys are also read by `src/scripts/theme-init.js`, which cannot
@@ -25,9 +26,33 @@ export {};
 const THEME_KEY = 'thoughtscape:theme';
 const READER_KEY = 'thoughtscape:reader';
 
-/** `system` is the absence of a stored value, which is what lets CSS decide. */
-const THEMES = ['system', 'light', 'dark'] as const;
-type Theme = (typeof THEMES)[number];
+/**
+ * `system` is the absence of a stored value, which is what lets CSS decide.
+ *
+ * Imported rather than restated. This is a *client* module, so an import here
+ * ships whatever it pulls in — but `THEME_NAMES` is a three-string array with no
+ * dependencies, and Rollup tree-shakes the locale tables beside it out of the
+ * bundle. `tests/built-routes.test.ts` proves no chrome string reaches a shipped
+ * script, so the claim is measured rather than assumed.
+ */
+const THEMES = THEME_NAMES;
+type Theme = ThemeName;
+
+/**
+ * The `dataset` key carrying each theme's label.
+ *
+ * Written out rather than built from the theme name, and that is a fix rather
+ * than a style: `dataset['label' + capitalize(theme)]` is a key nothing checks,
+ * so a rename on either side produced `undefined` and the toggle silently fell
+ * back to rendering the raw English state name inside Chinese chrome. Naming the
+ * keys makes that a type error instead. `search-dialog.ts` carries the same
+ * table for the same reason, two files over.
+ */
+const THEME_DATASET: Readonly<Record<Theme, string>> = {
+  system: 'labelSystem',
+  light: 'labelLight',
+  dark: 'labelDark',
+};
 
 const root = document.documentElement;
 
@@ -59,7 +84,7 @@ function currentTheme(): Theme {
  * operable rather than blank if the markup and this file ever disagree.
  */
 function showTheme(theme: Theme, button: HTMLButtonElement): void {
-  button.textContent = button.dataset[`label${theme[0]!.toUpperCase()}${theme.slice(1)}`] ?? theme;
+  button.textContent = button.dataset[THEME_DATASET[theme]] ?? theme;
 }
 
 function showReader(on: boolean, button: HTMLButtonElement): void {

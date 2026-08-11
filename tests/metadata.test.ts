@@ -695,9 +695,20 @@ test('a note page types itself as an article and states the dates the artifact c
 
 test('every page offers the feed, and the card image was actually built', () => {
   for (const { route, html } of PAGES) {
+    // The feed's title is chrome, so since TK-16 it is in the page's own
+    // language — a Chinese note offers "thoughtscape — 全部笔记". The href and
+    // the type are what make the link a feed and are the same everywhere; the
+    // title is resolved from the document rather than restated in English, or
+    // this gate would fail on every Chinese page for a reason that has nothing
+    // to do with feed discovery.
+    const lang = /<html lang="([^"]+)"/.exec(html)?.[1];
+    assert.ok(lang !== undefined, `${route}: declares no language`);
     assert.ok(
-      html.includes(`<link rel="alternate" type="application/atom+xml" title="${SITE_NAME} — all notes" href="${ORIGIN}${FEED_PATH}">`),
-      `${route}: does not offer the feed`,
+      html.includes(
+        `<link rel="alternate" type="application/atom+xml" ` +
+          `title="${translate(lang).feedTitle(SITE_NAME)}" href="${ORIGIN}${FEED_PATH}">`,
+      ),
+      `${route}: does not offer the feed in its own language (lang="${lang}")`,
     );
   }
   // `og:image` names a file, so the file has to exist: a card that 404s is worse

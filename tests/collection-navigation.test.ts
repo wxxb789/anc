@@ -10,11 +10,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import {
-  UNCOLLECTED_LABEL,
-  collectionNavigation,
-  type ExplorerGroup,
-} from '../src/lib/collection-navigation.ts';
+import { collectionNavigation, type ExplorerGroup } from '../src/lib/collection-navigation.ts';
 import { collectionFacets, collectionRoute } from '../src/lib/routes.ts';
 import type { ContentEntry } from '../src/lib/schema.ts';
 
@@ -39,6 +35,23 @@ const CORPUS: ContentEntry[] = [
   note('adrift', 'Adrift', undefined),
 ];
 
+/**
+ * The label this module gives the notes carrying no `collection`.
+ *
+ * A fixture value, not the production string: `collectionNavigation` takes the
+ * label as a parameter since TK-16 — the rail on a Chinese note reads
+ * "未归入合集" and on an English one "Uncollected" — so what this file can assert
+ * is that the parameter reaches the last group, and a value that is obviously
+ * not either locale's is what makes that assertion mean something. The rendered
+ * wording is `tests/translations.test.ts`'s and `tests/built-routes.test.ts`'s.
+ */
+const UNCOLLECTED = 'test-uncollected';
+
+/** Every call in this file passes the same label; only the corpus and path vary. */
+function navigationFor(entries: readonly ContentEntry[], path: string): ExplorerGroup[] {
+  return collectionNavigation(entries, path, UNCOLLECTED);
+}
+
 function labels(groups: readonly ExplorerGroup[]): string[] {
   return groups.map((group) => group.label);
 }
@@ -52,12 +65,12 @@ test('every published note appears exactly once', () => {
   // reader can reach any published note from any page. A note with no
   // collection is the case that would silently vanish, and four of the
   // thirty-two fixture notes are in it.
-  const listed = collectionNavigation(CORPUS, '/').flatMap(slugs).sort();
+  const listed = navigationFor(CORPUS, '/').flatMap(slugs).sort();
   assert.deepEqual(listed, CORPUS.map((entry) => entry.slug).sort());
 });
 
 test('groups are the collection facets, in the collection index order', () => {
-  const groups = collectionNavigation(CORPUS, '/');
+  const groups = navigationFor(CORPUS, '/');
   const facets = collectionFacets(CORPUS);
   assert.ok(facets.length > 0, 'the corpus has no collection, so the ordering proved nothing');
 
@@ -80,9 +93,9 @@ test('groups are the collection facets, in the collection index order', () => {
 });
 
 test('the uncollected group is last, and carries no route', () => {
-  const groups = collectionNavigation(CORPUS, '/');
+  const groups = navigationFor(CORPUS, '/');
   const last = groups.at(-1)!;
-  assert.equal(last.label, UNCOLLECTED_LABEL);
+  assert.equal(last.label, UNCOLLECTED);
   assert.deepEqual(slugs(last), ['adrift', 'loose'], 'not in title order');
   // Nothing in the route model addresses "notes with no collection", so linking
   // one would point at a page the build never emits. `built-routes.test.ts`
@@ -91,24 +104,21 @@ test('the uncollected group is last, and carries no route', () => {
 });
 
 test('a corpus where every note has a collection has no uncollected group', () => {
-  const groups = collectionNavigation(
-    [note('a', 'A', 'engineering'), note('b', 'B', 'engineering')],
-    '/',
-  );
+  const groups = navigationFor([note('a', 'A', 'engineering'), note('b', 'B', 'engineering')], '/');
   assert.deepEqual(labels(groups), ['engineering']);
 });
 
 test('a corpus with no collection at all is one uncollected group', () => {
   // The published artifact's shape, scaled up: `collection` is one of the nine
   // optional fields the exporter has never produced.
-  const groups = collectionNavigation([note('a', 'A'), note('b', 'B')], '/');
-  assert.deepEqual(labels(groups), [UNCOLLECTED_LABEL]);
+  const groups = navigationFor([note('a', 'A'), note('b', 'B')], '/');
+  assert.deepEqual(labels(groups), [UNCOLLECTED]);
   assert.deepEqual(slugs(groups[0]!), ['a', 'b']);
 });
 
 test('every group carries the route its collection index is served from', () => {
-  for (const group of collectionNavigation(CORPUS, '/')) {
-    if (group.label === UNCOLLECTED_LABEL) continue;
+  for (const group of navigationFor(CORPUS, '/')) {
+    if (group.label === UNCOLLECTED) continue;
     // Compared against the route model rather than a literal, so the two cannot
     // disagree about the segment or the trailing slash.
     assert.equal(group.route, collectionRoute(group.label));
@@ -116,7 +126,7 @@ test('every group carries the route its collection index is served from', () => 
 });
 
 test('a note route marks the note and opens its own group', () => {
-  const groups = collectionNavigation(CORPUS, '/notes/alpha/');
+  const groups = navigationFor(CORPUS, '/notes/alpha/');
   const open = groups.filter((group) => group.isCurrent);
   assert.deepEqual(labels(open), ['engineering'], 'the reader’s own group is not the open one');
 
@@ -129,12 +139,12 @@ test('a note route marks the note and opens its own group', () => {
 });
 
 test('a note with no collection opens the uncollected group', () => {
-  const groups = collectionNavigation(CORPUS, '/notes/loose/');
-  assert.deepEqual(labels(groups.filter((group) => group.isCurrent)), [UNCOLLECTED_LABEL]);
+  const groups = navigationFor(CORPUS, '/notes/loose/');
+  assert.deepEqual(labels(groups.filter((group) => group.isCurrent)), [UNCOLLECTED]);
 });
 
 test('a collection index marks its own group and no note', () => {
-  const groups = collectionNavigation(CORPUS, collectionRoute('garden-log'));
+  const groups = navigationFor(CORPUS, collectionRoute('garden-log'));
   assert.deepEqual(labels(groups.filter((group) => group.isCurrent)), ['garden-log']);
   assert.deepEqual(
     groups.flatMap((group) => group.notes).filter((member) => member.isCurrent),
@@ -148,7 +158,7 @@ test('a route with no collection context marks nothing', () => {
   // opening one would present a guess as a location — and every `<details>`
   // renders closed, which is what keeps the rail one screen tall.
   for (const path of ['/', '/tags/', '/recent/', '/404.html', '/notes/not-published/']) {
-    const groups = collectionNavigation(CORPUS, path);
+    const groups = navigationFor(CORPUS, path);
     assert.deepEqual(
       labels(groups.filter((group) => group.isCurrent)),
       [],
@@ -172,7 +182,7 @@ test('at most one group is ever open', () => {
     ...collectionFacets(CORPUS).map((facet) => collectionRoute(facet.key)),
   ];
   for (const path of paths) {
-    const open = collectionNavigation(CORPUS, path).filter((group) => group.isCurrent);
+    const open = navigationFor(CORPUS, path).filter((group) => group.isCurrent);
     assert.ok(open.length <= 1, `${path}: ${open.length} groups are open at once`);
   }
 });
@@ -181,7 +191,7 @@ test('the model is a pure function of the corpus and the path', () => {
   // Same inputs, same answer — and a second corpus does not disturb the first.
   // `collectionFacets` is memoised per corpus elsewhere in the tree, so this is
   // the property that would break if a cache were ever keyed less tightly.
-  const first = collectionNavigation(CORPUS, '/notes/alpha/');
-  collectionNavigation([note('x', 'X', 'other')], '/notes/x/');
-  assert.deepEqual(collectionNavigation(CORPUS, '/notes/alpha/'), first);
+  const first = navigationFor(CORPUS, '/notes/alpha/');
+  navigationFor([note('x', 'X', 'other')], '/notes/x/');
+  assert.deepEqual(navigationFor(CORPUS, '/notes/alpha/'), first);
 });

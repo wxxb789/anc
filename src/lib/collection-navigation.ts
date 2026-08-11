@@ -70,22 +70,6 @@ export interface ExplorerGroup {
 }
 
 /**
- * The label for notes carrying no `collection`, in the navigation language.
- *
- * The default rather than the only value: `collectionNavigation` takes the
- * resolved label as a parameter so the rail on a Chinese note reads
- * "未归入合集" while the same group on an English note reads "Uncollected", in
- * one build. This constant keeps the module pure — it imports no locale table,
- * so it stays exercisable against synthetic fixtures — and gives a caller with
- * no opinion the navigation language. `Layout.astro` always has an opinion,
- * because it has resolved the document's own.
- *
- * Four of the thirty-two fixture notes reach this group; on the published
- * one-note corpus it is the only group.
- */
-export const UNCOLLECTED_LABEL = 'Uncollected';
-
-/**
  * The collection groups, in the order `/collections/` lists them, with the
  * uncollected notes last.
  *
@@ -101,11 +85,23 @@ export const UNCOLLECTED_LABEL = 'Uncollected';
  * `entry.collection`, so a group here is exactly a page under `/collections/`:
  * same members, same order, same key. A private second grouping would let the
  * rail show a collection the site does not publish.
+ *
+ * `uncollectedLabel` is required rather than defaulted, and it is the one string
+ * a reader meets that this module does not get from the artifact. Taking it as a
+ * parameter is what keeps the module pure — it imports no locale table, so every
+ * rule here stays exercisable against synthetic fixtures — while letting the rail
+ * on a Chinese note read "未归入合集" and the same group on an English note read
+ * "Uncollected", in one build. A default would have been a second copy of a
+ * translated string living outside the contract, which is exactly the drift
+ * `tests/translations.test.ts` exists to prevent.
+ *
+ * Four of the thirty-two fixture notes land in that group; on the published
+ * one-note corpus it is the only group.
  */
 export function collectionNavigation(
   entries: readonly ContentEntry[],
   currentPath: string,
-  uncollectedLabel: string = UNCOLLECTED_LABEL,
+  uncollectedLabel: string,
 ): ExplorerGroup[] {
   const currentSlug = noteSlugFromPath(currentPath);
   // The collection holding the note being read, when a note is being read.

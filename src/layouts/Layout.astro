@@ -116,9 +116,9 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncol
           id="theme-toggle"
           type="button"
           data-js-only
-          data-label-system={t.themeLabel('system')}
-          data-label-light={t.themeLabel('light')}
-          data-label-dark={t.themeLabel('dark')}
+          {...Object.fromEntries(
+            THEME_NAMES.map((theme) => [`data-label-${theme}`, t.themeLabel(theme)]),
+          )}
         >{t.themeLabel(THEME_NAMES[0])}</button>
         <button id="reader-toggle" type="button" aria-pressed="false" data-js-only>{t.readerToggle}</button>
       </nav>
