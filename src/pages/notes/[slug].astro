@@ -20,7 +20,7 @@
  * | 8 outgoing public links | here |
  * | 9 static backlinks | here |
  * | 10 related-note fallback | here, derived by `relations.ts` |
- * | 11 local-graph island | slot — TK-17 |
+ * | 11 local-graph island | here, via `NoteGraph.astro`, laid out by `graph.ts` |
  * | 12 previous/next or collection navigation | here |
  * | 13 footer with provenance and canonical URL | here; the absolute URL is TK-08 |
  *
@@ -29,8 +29,10 @@
  */
 import Layout from '../../layouts/Layout.astro';
 import LinkedNotes from '../../components/LinkedNotes.astro';
+import NoteGraph from '../../components/NoteGraph.astro';
 import TableOfContents from '../../components/TableOfContents.astro';
 import { entries, getEntry } from '../../lib/content.ts';
+import { localGraph } from '../../lib/graph.ts';
 import { renderMarkdown } from '../../lib/markdown.ts';
 import {
   collectionNeighbours,
@@ -38,7 +40,13 @@ import {
   notesForSlugs,
   relatedNotes,
 } from '../../lib/relations.ts';
-import { collectionRoute, noteRoute, routeKey, tagRoute } from '../../lib/routes.ts';
+import {
+  GRAPH_SEGMENT,
+  collectionRoute,
+  noteRoute,
+  routeKey,
+  tagRoute,
+} from '../../lib/routes.ts';
 import { canonicalUrl, TITLE_SUFFIX } from '../../lib/site.ts';
 import { translate, NAV_LANGUAGE, partLanguage } from '../../lib/translations.ts';
 // Loaded as a URL rather than imported, so the stylesheet becomes its own
@@ -48,6 +56,7 @@ import { translate, NAV_LANGUAGE, partLanguage } from '../../lib/translations.ts
 import codeStylesheet from '../../styles/code.css?url';
 import mathStylesheet from '../../styles/math.css?url';
 import diagramStylesheet from '../../styles/diagram.css?url';
+import graphStylesheet from '../../styles/graph.css?url';
 import { DIAGRAM_MODE } from '../../lib/diagram-mode.ts';
 
 export function getStaticPaths() {
@@ -192,6 +201,17 @@ const pager =
   collection !== undefined && (neighbours.previous !== undefined || neighbours.next !== undefined)
     ? { ...neighbours, label: t.moreInCollection(collection) }
     : undefined;
+
+/**
+ * § 9.2.11's neighbourhood, laid out during the build.
+ *
+ * The same edges the two lists above render, drawn as a figure — plus the edges
+ * *between* those neighbours, which is what makes it a graph rather than a
+ * picture of a list. `checkCorpus` has already proven every one of them
+ * resolves, which is why the layout is affordable here and structurally
+ * unavailable to a whole-vault renderer.
+ */
+const graph = localGraph(entry, getEntry);
 ---
 
 <Layout
@@ -215,6 +235,10 @@ const pager =
   {hasCode && <link slot="head" rel="stylesheet" href={codeStylesheet} />}
   {hasMath && <link slot="head" rel="stylesheet" href={mathStylesheet} />}
   {hasMermaid && <link slot="head" rel="stylesheet" href={diagramStylesheet} />}
+  {/* The graph sheet reaches only a note that actually draws one — a note with
+      no neighbourhood renders a sentence and requests nothing. The published
+      corpus's single note is exactly that case. */}
+  {graph.edges.length > 0 && <link slot="head" rel="stylesheet" href={graphStylesheet} />}
   {/*
     Client mode only, and only on a page that has a diagram.
 
@@ -366,9 +390,24 @@ const pager =
     lang={lang}
   />
 
-  {/* § 9.2.11 — the local-graph neighborhood. TK-17 owns it, as build-time
-      inline SVG with real `<a>` elements plus the equivalent list section 17
-      requires. TK-21's interactive layer must not be stubbed in here. */}
+  {/* § 9.2.11 — the local-graph neighborhood: build-time inline SVG with real
+      `<a>` elements plus the equivalent table section 17 requires. TK-21's
+      interactive layer must not be stubbed in here — this is the baseline that
+      survives when that enhancement fails. */}
+  <NoteGraph
+    graph={graph}
+    region="note-graph"
+    heading={t.graphHeading}
+    derivation={t.graphLocalDerivation}
+    empty={t.graphEmpty}
+    bounded={t.graphBoundedLocal}
+    expand={{
+      href: `/${GRAPH_SEGMENT}/`,
+      text: t.graphExpandLocal,
+      label: t.graphExpandLocalLabel,
+    }}
+    lang={lang}
+  />
 
   {/* § 9.2.12 — collection navigation, "where meaningful": only inside a
       collection that has another note, and in the same order

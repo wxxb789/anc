@@ -1,0 +1,249 @@
+/*
+ * The graph.
+ *
+ * Loaded on every page that draws one, via a conditional `<link>` gated on the
+ * graph having edges — owner decision 7's pattern, the same way `code.css` and
+ * `diagram.css` reach only the pages that need them. A note with no
+ * neighbourhood requests nothing.
+ *
+ * **Nothing here carries information by colour alone** (WCAG 1.4.1,
+ * requirements section 17). The three edge directions are three line *shapes*:
+ * an outgoing edge is solid with one arrowhead, an incoming one dashed, a
+ * mutual one solid with an arrowhead at each end. The subject node is larger
+ * and ringed. Every one of those distinctions survives a monochrome print and a
+ * reader who cannot see hue at all — and each node's accessible name states its
+ * relationship in words regardless.
+ *
+ * **No animation, so `prefers-reduced-motion` needs no rule.** The layout is
+ * computed at build time and never moves; there is no force simulation to
+ * settle and no transition to suppress. The global reduce block in `global.css`
+ * still covers the focus transitions this file inherits.
+ *
+ * Colour comes from the same tokens as everything else, so both themes follow
+ * `light-dark()` with no second palette and no script.
+ */
+
+.graph-region {
+  max-width: var(--measure);
+  margin-inline: auto;
+  margin-top: var(--space-12);
+  padding-top: var(--space-6);
+  border-top: 1px solid var(--color-line);
+}
+
+.graph {
+  margin-block: var(--space-6);
+  /* `figure` carries a user-agent `margin-inline: 40px` that would indent the
+     graph relative to the prose around it. */
+  margin-inline: 0;
+}
+
+.graph-canvas {
+  /* A graph wider than the measure scrolls rather than widening the page.
+     `tabindex="0"` is on the element in the markup: a scrollable region must be
+     reachable by keyboard, and the browser then scrolls it with the arrows. */
+  overflow-x: auto;
+  text-align: center;
+}
+
+.graph-canvas:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/*
+ * The SVG carries `width` and `height` attributes holding its intrinsic size,
+ * so the figure has an aspect ratio before this stylesheet arrives and nothing
+ * shifts when it does. `max-width: 100%` lets it shrink to a 320 px viewport
+ * while the `viewBox` preserves the ratio; without `height: auto` the browser
+ * keeps the attribute height and distorts it.
+ */
+.graph-svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.graph-edge {
+  stroke: var(--color-line-strong);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+/*
+ * An edge the reader's note *receives* is dashed; one it *sends* is solid.
+ *
+ * Shape, not hue — this is the whole of requirements section 13.2's "incoming
+ * and outgoing edges visually distinguished" and section 17's "no information
+ * encoded by color alone". The dash pattern is coarse enough to read at the
+ * scale a 320 px viewport shrinks the figure to.
+ *
+ * Only the subject's own neighbourhood has a direction at all: `/graph/` has no
+ * subject, so its edges are all plain solid, which is honest — there is no
+ * "incoming" without a somewhere to come in to.
+ */
+.graph-edge-incoming {
+  stroke-dasharray: 6 4;
+}
+
+/* A mutual edge carries an arrowhead at both ends, which is its distinction.
+   It is drawn slightly heavier so the pair reads as one relationship rather
+   than as a line somebody drew twice. */
+.graph-edge-mutual {
+  stroke-width: 2;
+}
+
+.graph-arrow {
+  fill: var(--color-line-strong);
+  stroke: none;
+}
+
+.graph-dot {
+  fill: var(--color-surface);
+  stroke: var(--color-link);
+  stroke-width: 2;
+}
+
+/*
+ * The note the reader is on: larger, filled, and ringed.
+ *
+ * Three distinctions rather than one, because a reader who cannot see the fill
+ * colour still meets a bigger circle with a heavier edge. Requirements section
+ * 13.2 asks for the current page emphasized; the node's accessible name also
+ * says "this note" in words.
+ */
+.graph-node-subject .graph-dot {
+  fill: var(--color-accent);
+  stroke: var(--color-accent);
+  stroke-width: 3;
+}
+
+.graph-label {
+  fill: var(--color-text);
+  /* `px` rather than `rem`: the label is positioned in the SVG's own user units
+     and the `viewBox` scales the whole figure with the reader's text size
+     already, so a `rem` here would scale it twice and push labels over their
+     neighbours. */
+  font-size: 13px;
+  font-family: var(--font-sans);
+  text-anchor: middle;
+}
+
+.graph-node-subject .graph-label {
+  font-weight: 650;
+}
+
+/*
+ * The focus ring, on the node rather than on the anchor's bounding box.
+ *
+ * An `<a>` wrapping SVG shapes has a bounding box that spans the circle and its
+ * label, so the default ring is a wide rectangle that overlaps its neighbours'.
+ * Ringing the circle itself puts the indicator on the thing the reader is
+ * actually on. `outline` on an SVG child is honoured by every current engine;
+ * the stroke change is what carries it where it is not, so the indicator can
+ * never be absent (WCAG 2.4.7).
+ */
+.graph-node:focus-visible {
+  outline: none;
+}
+
+.graph-node:focus-visible .graph-dot {
+  stroke: var(--color-focus);
+  stroke-width: 4;
+}
+
+.graph-node:focus-visible .graph-label,
+.graph-node:hover .graph-label {
+  fill: var(--color-link);
+  text-decoration: underline;
+}
+
+.graph-node:hover .graph-dot {
+  fill: var(--color-wash);
+  stroke: var(--color-link);
+}
+
+.graph figcaption,
+.graph-derivation {
+  max-width: var(--measure);
+  margin-top: var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+/*
+ * The equivalent table, in a native disclosure.
+ *
+ * `<details>` rather than an always-open table: the same data twice in a row is
+ * a long page, and the native element is keyboard-operable, announced as one
+ * control, and costs no script. No `interpolate-size` transition here — the
+ * explorer's collapse animates because it is navigation a reader opens
+ * repeatedly; this one is opened once, and an animation would be motion with no
+ * purpose to justify it.
+ */
+.graph-table {
+  margin-top: var(--space-6);
+}
+
+.graph-table summary {
+  padding: var(--space-2) 0;
+  color: var(--color-link);
+  cursor: pointer;
+}
+
+.graph-table summary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.graph-table table {
+  width: 100%;
+  margin-top: var(--space-2);
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.graph-table th,
+.graph-table td {
+  padding: var(--space-2);
+  border-bottom: 1px solid var(--color-line-strong);
+  text-align: left;
+  /* A title is the one cell that can be long; letting it wrap is what keeps the
+     table inside a 320 px viewport without a scroll container. */
+  overflow-wrap: break-word;
+}
+
+.graph-table thead th {
+  color: var(--color-muted);
+  font-weight: 650;
+}
+
+.graph-table tbody th {
+  font-weight: 400;
+}
+
+.graph-table td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.graph-bound {
+  max-width: var(--measure);
+  margin-top: var(--space-4);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+}
+
+@media print {
+  /* A scroll container prints as its visible window, cutting the figure off at
+     the page edge. Letting it size itself prints the whole graph. */
+  .graph-canvas {
+    overflow-x: visible;
+  }
+
+  /* The table is the graph's equivalent representation, so a printed page must
+     carry it rather than a collapsed summary of it. */
+  .graph-table[open] > summary,
+  .graph-table > summary {
+    list-style: none;
+  }
+}

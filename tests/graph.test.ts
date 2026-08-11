@@ -174,6 +174,46 @@ test('a two-hop note is not drawn, and an unresolvable edge is skipped', () => {
   assert.deepEqual(slugsOf(localGraph(dangling[0]!, lookupIn(dangling))), ['subject']);
 });
 
+/**
+ * An edge touching the subject carries the subject's own view of it.
+ *
+ * This is what the stylesheet draws as a dash rather than a colour, so it is
+ * the data behind requirements section 13.2's "incoming and outgoing edges
+ * visually distinguished" and section 17's ban on colour-only encoding. An edge
+ * between two neighbours has no direction relative to a subject and must carry
+ * none — labelling it would be stating a relationship the artifact does not
+ * express.
+ */
+test('an edge touching the subject carries its direction, and one between neighbours does not', () => {
+  const corpus = withBacklinks([
+    entry('subject', { title: 'Subject', outgoing: ['both', 'out'] }),
+    entry('out', { title: 'Out', outgoing: ['in'] }),
+    entry('in', { title: 'In', outgoing: ['subject'] }),
+    entry('both', { title: 'Both', outgoing: ['subject'] }),
+  ]);
+  const graph = localGraph(corpus[0]!, lookupIn(corpus));
+
+  const directionOf = (a: string, b: string) =>
+    graph.edges.find(
+      (edge) => (edge.from === a && edge.to === b) || (edge.from === b && edge.to === a),
+    )?.direction;
+
+  assert.equal(directionOf('subject', 'out'), 'outgoing');
+  assert.equal(directionOf('subject', 'in'), 'incoming');
+  assert.equal(directionOf('subject', 'both'), 'mutual');
+  // `out → in` joins two neighbours: a real drawn edge, with no direction.
+  assert.equal(directionOf('out', 'in'), undefined, 'an edge between neighbours claims a direction');
+  assert.ok(
+    graph.edges.some((edge) => edge.from !== 'subject' && edge.to !== 'subject'),
+    'the fixture has no edge between two neighbours',
+  );
+
+  // `/graph/` has no subject at all, so no edge on it may claim one.
+  for (const edge of globalGraph(corpus).edges) {
+    assert.equal(edge.direction, undefined, 'a global-graph edge claims a direction with no subject');
+  }
+});
+
 // --- Bounds ------------------------------------------------------------------
 
 test('the local graph is bounded, reports what it omitted, and truncates by title', () => {

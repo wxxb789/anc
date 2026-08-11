@@ -34,6 +34,8 @@ export { NOTES_SEGMENT, noteRoute, noteSlugFromPath };
 export const TAGS_SEGMENT = 'tags';
 /** The top-level segment collection pages live under. Reserved by TK-01. */
 export const COLLECTIONS_SEGMENT = 'collections';
+/** The site-wide graph route. Reserved by TK-01, filled by TK-17. */
+export const GRAPH_SEGMENT = 'graph';
 
 export function tagRoute(key: string): string {
   return `/${TAGS_SEGMENT}/${key}/`;
@@ -386,6 +388,7 @@ export const SITE_MAP: readonly NavItem[] = [
   { href: '/recent/', label: 'navRecent' },
   { href: `/${TAGS_SEGMENT}/`, label: 'navTags' },
   { href: `/${COLLECTIONS_SEGMENT}/`, label: 'navCollections' },
+  { href: `/${GRAPH_SEGMENT}/`, label: 'navGraph' },
   { href: '/about/', label: 'navAbout' },
   { href: '/privacy/', label: 'navPrivacy' },
 ];

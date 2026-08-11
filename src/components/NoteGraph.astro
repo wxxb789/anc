@@ -1,0 +1,266 @@
+---
+/**
+ * The graph, as real HTML.
+ *
+ * This is the component the whole ticket is about, and its shape is the
+ * argument: **inline SVG containing real `<a>` elements, laid out at build
+ * time**. It is crawlable, keyboard-navigable, and complete with scripting
+ * disabled — none of which Quartz's graph is, because `Graph.tsx` emits three
+ * empty `<div>`s and everything else arrives as roughly 525 KB brotli of d3 and
+ * PixiJS from a third-party CDN.
+ *
+ * Six properties are load-bearing:
+ *
+ * 1. **No JavaScript, and none to load.** `src/lib/graph.ts` computed every
+ *    coordinate during the build. TK-21's interactive layer enhances this and
+ *    must not be stubbed in here — what ships must be what survives when that
+ *    enhancement fails.
+ * 2. **No inline `style`, anywhere.** An SVG is exactly where they creep in, and
+ *    the CSP is `style-src 'self'`. Every visual property is a class in
+ *    `src/styles/graph.css` or an SVG presentation attribute; geometry travels
+ *    in `cx`, `cy`, `x1`, and the rest, which are attributes rather than styles.
+ * 3. **Direction is never carried by colour.** Requirements section 17 forbids
+ *    it and section 13.2 requires the distinction. An outgoing edge is solid, an
+ *    incoming one dashed, a mutual one solid with an arrowhead at both ends —
+ *    three different *shapes*, legible in monochrome — and each node's
+ *    accessible name says the relationship in words.
+ * 4. **Every node is a link with a real accessible name.** The circle and the
+ *    label are `aria-hidden`, because a screen reader reading a truncated label
+ *    beside a full one is reading the same note twice; the `<a>` carries the
+ *    untruncated title, the relationship, and the drawn degree through
+ *    `graphNodeLabel`. Decorative parts hidden, content parts named.
+ * 5. **The table is the equivalent representation**, not a fallback. It carries
+ *    the same notes, the same relationships, and the same drawn degrees, in the
+ *    same order, and it is present whether or not the SVG rendered.
+ * 6. **Chrome is per document.** Every string comes from `translate()`, so a
+ *    zh-CN note's graph is in Chinese — including the accessible names, which
+ *    are the strings a reader never sees and a screen reader always does.
+ *
+ * `prefers-reduced-motion` needs no rule here: a static layout has nothing to
+ * animate, which is the requirement satisfied by construction rather than by a
+ * media query.
+ */
+import type { Graph } from '../lib/graph.ts';
+import { noteRoute } from '../lib/routes.ts';
+import { partLanguage, translate } from '../lib/translations.ts';
+
+interface Props {
+  graph: Graph;
+  /** Identifies the region: the heading takes `<region>-title`. */
+  region: string;
+  heading: string;
+  /** How the layout was derived, since a reader cannot see a layout rule. */
+  derivation: string;
+  /** Rendered in place of the figure when there is nothing to draw. */
+  empty: string;
+  /** Where "show me the rest" goes, and what it says. */
+  expand: { href: string; text: string; label: string };
+  /** Stated when the bound dropped notes. Takes drawn and total counts. */
+  bounded: (shown: number, total: number) => string;
+  /** The page's own language, which decides every string's grammar. */
+  lang: string;
+  /** Heading level, so the region sits correctly in each page's outline. */
+  level?: 1 | 2;
+}
+
+const { graph, region, heading, derivation, empty, expand, bounded, lang, level = 2 } = Astro.props;
+const t = translate(lang);
+
+const titleId = `${region}-title`;
+const Heading = `h${level}` as 'h1' | 'h2';
+
+/** The relationship word a node's accessible name and the table both use. */
+function relationOf(node: Graph['nodes'][number]): string {
+  if (node.isSubject) return t.graphSubjectRelation;
+  switch (node.direction) {
+    case 'outgoing':
+      return t.graphOutgoingRelation;
+    case 'incoming':
+      return t.graphIncomingRelation;
+    case 'mutual':
+      return t.graphMutualRelation;
+    // `/graph/` has no subject, so its nodes have no direction relative to one.
+    default:
+      return t.graphLinkedRelation;
+  }
+}
+
+/** The class carrying a node's role. Shape and weight, never colour alone. */
+function nodeClass(node: Graph['nodes'][number]): string {
+  return node.isSubject ? 'graph-node graph-node-subject' : 'graph-node';
+}
+
+const isDrawable = graph.edges.length > 0;
+const drawn = graph.nodes.length;
+const total = drawn + graph.omitted;
+---
+
+<section class="graph-region" aria-labelledby={titleId}>
+  <div class="section-heading">
+    <Heading id={titleId}>{heading}</Heading>
+    {isDrawable && <span>{t.graphFigureLabel(drawn, graph.edges.length)}</span>}
+  </div>
+
+  {!isDrawable ? (
+    <p class="empty-state">{empty}</p>
+  ) : (
+    <>
+      {/* The scroll container is a keyboard stop, for the reason a `<pre>` and a
+          diagram canvas are: a graph wider than the measure scrolls
+          horizontally at 320 px, and a scrollable region must be reachable by
+          keyboard (axe `scrollable-region-focusable`, WCAG 2.1.1).
+
+          The `<figure>` takes no `aria-labelledby`: a figure with a figcaption
+          is already named by it, and naming it twice is how an element ends up
+          announced twice. */}
+      <figure class="graph">
+        <div class="graph-canvas" tabindex="0">
+          {/*
+            `role="img"` with a name, and `focusable="false"` on the SVG itself:
+            without the latter, IE-era focus behaviour and some AT still put the
+            `<svg>` element in the tab order ahead of the links inside it, which
+            would give every graph one dead stop before its first node.
+
+            The name states the counts because the figure's size is the first
+            thing a sighted reader takes in and the one thing a non-visual
+            reader cannot. `aria-label` rather than `aria-labelledby`: the
+            string exists only for this purpose and pointing at another element
+            would make the name depend on that element continuing to exist.
+
+            `width` and `height` are attributes rather than CSS so the figure has
+            an intrinsic size and an aspect ratio before the stylesheet arrives —
+            no layout shift, and the `viewBox` scales it down to fit.
+          */}
+          <svg
+            class="graph-svg"
+            viewBox={graph.viewBox}
+            width={graph.width}
+            height={graph.height}
+            role="img"
+            focusable="false"
+            aria-label={t.graphFigureLabel(drawn, graph.edges.length)}
+          >
+            {/* The arrowhead, declared once and referenced by every edge. It is
+                pure decoration — direction is stated in words on each node's
+                accessible name — so the whole `<defs>` is hidden. */}
+            <defs aria-hidden="true">
+              <marker
+                id={`${region}-arrow`}
+                class="graph-arrow"
+                viewBox="0 0 10 10"
+                refX="9"
+                refY="5"
+                markerWidth="5"
+                markerHeight="5"
+                orient="auto-start-reverse"
+              >
+                <path d="M 0 1 L 9 5 L 0 9 z" />
+              </marker>
+            </defs>
+
+            {/* Edges first, so a node's circle paints over the line that reaches
+                it. `aria-hidden` on the whole group: an edge is not separately
+                reachable, and the relationship it draws is already in the name
+                of the node at its end and in the table below. */}
+            <g class="graph-edges" aria-hidden="true">
+              {graph.edges.map((edge) => (
+                <line
+                  class={[
+                    'graph-edge',
+                    edge.isMutual && 'graph-edge-mutual',
+                    // An edge the subject *receives* is dashed and one it sends
+                    // is solid, so the distinction is a shape rather than a
+                    // colour. `/graph/` has no subject, so its edges carry no
+                    // direction and are drawn plain — there is no "incoming"
+                    // without a somewhere to come in to.
+                    edge.direction === 'incoming' && 'graph-edge-incoming',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                  x1={edge.x1}
+                  y1={edge.y1}
+                  x2={edge.x2}
+                  y2={edge.y2}
+                  marker-end={`url(#${region}-arrow)`}
+                  marker-start={edge.isMutual ? `url(#${region}-arrow)` : undefined}
+                />
+              ))}
+            </g>
+
+            {graph.nodes.map((node) => (
+              /*
+               * A real `<a href>`, which is the whole point: this is a link in
+               * the HTML, so a crawler follows it, the keyboard reaches it, and
+               * it works with scripting disabled.
+               *
+               * `aria-label` on the anchor and `aria-hidden` on everything
+               * inside it: the circle is decoration and the visible label is a
+               * truncation of the title the anchor already states. Without the
+               * hiding, a screen reader announces the shortened title and then
+               * the full one.
+               */
+              <a
+                class={nodeClass(node)}
+                href={noteRoute(node.entry.slug)}
+                aria-label={t.graphNodeLabel(node.entry.title, relationOf(node), node.degree)}
+                lang={partLanguage(node.entry.language, lang)}
+              >
+                <circle class="graph-dot" cx={node.x} cy={node.y} r={node.isSubject ? 9 : 6} aria-hidden="true" />
+                {/* `dy` places the label below the circle by an em rather than
+                    by a pixel count, so it follows the reader's own text size. */}
+                <text class="graph-label" x={node.x} y={node.y} dy="1.9em" aria-hidden="true">{node.label}</text>
+              </a>
+            ))}
+          </svg>
+        </div>
+        <figcaption>{derivation}</figcaption>
+      </figure>
+
+      {/*
+        Requirements section 17: "graph data available as an equivalent
+        list/table". Equivalent, so it carries the same node set, the same
+        relationships, and the same drawn degrees — not a summary of them.
+
+        It is a `<details>` rather than an always-open table: the same data in
+        two forms one after the other is a long page, and native disclosure
+        costs no script, is keyboard-operable, and is announced as one. The
+        summary states what is inside, so nobody has to open it to find out.
+      */}
+      <details class="graph-table">
+        <summary>{t.graphTableCaption}</summary>
+        <table>
+          <caption class="sr-only">{t.graphTableCaption}</caption>
+          <thead>
+            <tr>
+              <th scope="col">{t.graphColumnNote}</th>
+              <th scope="col">{t.graphColumnRelation}</th>
+              <th scope="col">{t.graphColumnLinks}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {graph.nodes.map((node) => (
+              <tr>
+                <th scope="row">
+                  <a href={noteRoute(node.entry.slug)} lang={partLanguage(node.entry.language, lang)}
+                  >{node.entry.title}</a>
+                </th>
+                <td>{relationOf(node)}</td>
+                <td>{node.degree}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
+
+      {/* The bound, and the expansion action beside it — requirements section
+          13.2. Rendered only when the bound actually dropped something, so a
+          graph drawing everything does not claim to be partial. The link is
+          unconditional: "see the whole graph" is useful whether or not this one
+          was truncated. */}
+      <p class="graph-bound">
+        {graph.omitted > 0 && <span>{bounded(drawn, total)} </span>}
+        <a href={expand.href} aria-label={expand.label}>{expand.text}</a>
+      </p>
+    </>
+  )}
+</section>

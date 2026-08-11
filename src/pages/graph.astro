@@ -1,0 +1,53 @@
+---
+/**
+ * `/graph/` — the site-wide graph, requirements section 9.1's reserved route.
+ *
+ * A corpus route rather than a document route, so its chrome is the navigation
+ * language. The note titles it draws are their authors' own words and carry
+ * their own `lang`; `NoteGraph` handles that.
+ *
+ * Requirements section 13.3 admits a global graph only on four conditions, and
+ * this page meets them by construction rather than by intent:
+ *
+ * - *Legible at current node count* — `GLOBAL_NODE_LIMIT` bounds the figure, and
+ *   the bound is stated on the page rather than applied silently.
+ * - *Keyboard-accessible, or an equivalent searchable list* — both: every node
+ *   is a real `<a>` in the tab order, and the table under the figure carries the
+ *   same data and is indexed by the site search like any other text.
+ * - *JS and database budgets* — there is no JavaScript and no database. TK-21
+ *   owns the layer that would have either, and it enhances this rather than
+ *   replacing it.
+ * - *Decision value beyond visual novelty* — the ranked packing puts the most
+ *   linked notes at the centre, so the figure answers "what is this site mostly
+ *   about" at a glance, and the table answers it exactly.
+ */
+import Layout from '../layouts/Layout.astro';
+import NoteGraph from '../components/NoteGraph.astro';
+import { entries } from '../lib/content.ts';
+import { globalGraph } from '../lib/graph.ts';
+import { TITLE_SUFFIX } from '../lib/site.ts';
+import { NAV_LANGUAGE, translate } from '../lib/translations.ts';
+// Loaded as a URL rather than imported, so the stylesheet becomes its own
+// content-hashed asset and the `<link>` below can be emitted conditionally —
+// owner decision 7. A page with nothing to draw requests nothing.
+import graphStylesheet from '../styles/graph.css?url';
+
+const t = translate(NAV_LANGUAGE);
+const graph = globalGraph(entries);
+---
+
+<Layout title={`${t.graphTitle}${TITLE_SUFFIX}`} description={t.graphDescription}>
+  {graph.edges.length > 0 && <link slot="head" rel="stylesheet" href={graphStylesheet} />}
+
+  <NoteGraph
+    graph={graph}
+    region="site-graph"
+    level={1}
+    heading={t.graphTitle}
+    derivation={t.graphGlobalDerivation}
+    empty={t.graphSiteEmpty}
+    bounded={t.graphBounded}
+    expand={{ href: '/#notes', text: t.graphExpand, label: t.graphExpandLabel }}
+    lang={NAV_LANGUAGE}
+  />
+</Layout>

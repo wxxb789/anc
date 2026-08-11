@@ -64,6 +64,18 @@ const TEXT_KEYS = [
   'footnoteBackLabel',
 ] as const;
 const THEME_KEYS = ['themeLabel'] as const;
+/**
+ * Entries taking two counts: a drawn number and a total.
+ *
+ * Their own list rather than folded into {@link COUNT_KEYS}, because a
+ * single-argument call leaves the second interpolation `undefined` — and the
+ * "renders undefined" assertion below would then be the only thing standing
+ * between a half-exercised key and a page reading "Drawing 3 of undefined
+ * notes". Sampling the pairs is what makes the coverage real.
+ */
+const COUNT_PAIR_KEYS = ['graphFigureLabel', 'graphBounded', 'graphBoundedLocal'] as const;
+/** The one entry taking a title, a relationship, and a count. */
+const NODE_KEYS = ['graphNodeLabel'] as const;
 
 // --- Resolution ----------------------------------------------------------------
 
@@ -126,6 +138,18 @@ function formsOf(locale: Translation, key: string): string[] {
   if ((THEME_KEYS as readonly string[]).includes(key)) {
     return THEME_NAMES.map((theme) => String((value as (t: ThemeName) => string)(theme)));
   }
+  if ((COUNT_PAIR_KEYS as readonly string[]).includes(key)) {
+    // Both singular and plural on each side, and the 1-of-1 case, which is the
+    // one an English rule gets wrong in two places at once.
+    return ([[1, 1], [1, 9], [9, 12], [0, 3]] as const).map(([shown, total]) =>
+      String((value as (a: number, b: number) => string)(shown, total)),
+    );
+  }
+  if ((NODE_KEYS as readonly string[]).includes(key)) {
+    return ([1, 0, 4] as const).map((degree) =>
+      String((value as (a: string, b: string, c: number) => string)('Ops & SRE', 'linked', degree)),
+    );
+  }
   assert.ok(
     (TEXT_KEYS as readonly string[]).includes(key),
     `"${key}" is a function-valued entry in no sample list — add it to one, or it is exercised by nothing`,
@@ -134,7 +158,13 @@ function formsOf(locale: Translation, key: string): string[] {
 }
 
 test('every function-valued key is classified, so none goes unexercised', () => {
-  const named = new Set<string>([...COUNT_KEYS, ...TEXT_KEYS, ...THEME_KEYS]);
+  const named = new Set<string>([
+    ...COUNT_KEYS,
+    ...TEXT_KEYS,
+    ...THEME_KEYS,
+    ...COUNT_PAIR_KEYS,
+    ...NODE_KEYS,
+  ]);
   const actual = Object.entries(translate('en'))
     .filter(([, value]) => typeof value === 'function')
     .map(([key]) => key);

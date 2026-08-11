@@ -150,6 +150,7 @@ export interface Translation {
   navRecent: string;
   navTags: string;
   navCollections: string;
+  navGraph: string;
   navAbout: string;
   navPrivacy: string;
 
@@ -273,6 +274,67 @@ export interface Translation {
   noteProvenance: string;
   canonicalUrlLine: (url: string) => string;
 
+  // --- Graph -----------------------------------------------------------------
+  // The figure is inline SVG with real links, so every one of these is read by
+  // somebody: as a heading, as an accessible name inside the SVG, or as a
+  // column in the equivalent table requirements section 17 requires.
+  graphHeading: string;
+  graphTitle: string;
+  graphDescription: string;
+  /** How the picture was built, since a reader cannot see a layout rule. */
+  graphLocalDerivation: string;
+  graphGlobalDerivation: string;
+  /**
+   * Accessible name of the figure itself, naming what it draws.
+   *
+   * An `<svg role="img">` needs a name or a screen reader announces "graphic"
+   * and moves on. It states the counts because the picture's size is the first
+   * thing a sighted reader takes in and the one thing a non-visual reader
+   * cannot.
+   */
+  graphFigureLabel: (nodes: number, edges: number) => string;
+  /**
+   * A node's accessible name: the note, how it relates, and how many links the
+   * figure draws touching it.
+   *
+   * `relation` is one of the three direction words below, already resolved.
+   * Assembled by the locale rather than concatenated at the call site because
+   * Chinese puts the relation before the title and English after it.
+   */
+  graphNodeLabel: (title: string, relation: string, degree: number) => string;
+  /** The note the reader is on, which has no direction relative to itself. */
+  graphSubjectRelation: string;
+  graphOutgoingRelation: string;
+  graphIncomingRelation: string;
+  graphMutualRelation: string;
+  /** No direction at all: `/graph/` has no subject to be relative to. */
+  graphLinkedRelation: string;
+  /** The equivalent table's caption and column headers. */
+  graphTableCaption: string;
+  graphColumnNote: string;
+  graphColumnRelation: string;
+  graphColumnLinks: string;
+  /**
+   * The bound, stated on its face, with the expansion action beside it.
+   *
+   * Two sentences because the two graphs truncate on different rules and a
+   * shared one would misdescribe whichever it was not written for: the
+   * neighbourhood keeps the alphabetically first notes, and `/graph/` keeps the
+   * most linked. Each names its own rule, and each links to the surface that
+   * has no bound at all — the neighbourhood to `/graph/`, and `/graph/` to the
+   * home page's complete listing. That is requirements section 13.2's explicit
+   * expansion action.
+   */
+  graphBoundedLocal: (shown: number, total: number) => string;
+  graphBounded: (shown: number, total: number) => string;
+  graphExpandLocal: string;
+  graphExpandLocalLabel: string;
+  graphExpand: string;
+  graphExpandLabel: string;
+  /** Nothing to draw: the published corpus's own case. */
+  graphEmpty: string;
+  graphSiteEmpty: string;
+
   // --- 404 -------------------------------------------------------------------
   notFoundTitle: string;
   notFoundDescription: string;
@@ -295,6 +357,7 @@ const EN = {
   navRecent: 'Recent',
   navTags: 'Tags',
   navCollections: 'Collections',
+  navGraph: 'Graph',
   navAbout: 'About',
   navPrivacy: 'Privacy',
 
@@ -389,6 +452,42 @@ const EN = {
     'approval list, and it carries only what that projection includes.',
   canonicalUrlLine: (url) => `Canonical URL: ${url}`,
 
+  graphHeading: 'Nearby notes',
+  graphTitle: 'Graph',
+  graphDescription: 'How the published notes link to each other.',
+  graphLocalDerivation:
+    'Every note one link away from this one, drawn with the links between them. Laid out when the ' +
+    'site was built, so it needs no scripting.',
+  graphGlobalDerivation:
+    'The most linked notes on the site, most connected at the centre. Laid out when the site was ' +
+    'built, so it needs no scripting.',
+  graphFigureLabel: (nodes, edges) =>
+    `Link graph: ${nodes} ${nodes === 1 ? 'note' : 'notes'}, ${edges} ${edges === 1 ? 'link' : 'links'}`,
+  graphNodeLabel: (title, relation, degree) =>
+    `${title} — ${relation}, ${degree} ${degree === 1 ? 'link' : 'links'} drawn`,
+  graphSubjectRelation: 'this note',
+  graphOutgoingRelation: 'linked from this note',
+  graphIncomingRelation: 'links to this note',
+  graphMutualRelation: 'linked both ways',
+  graphLinkedRelation: 'published note',
+  graphTableCaption: 'The same notes and links, as a table',
+  graphColumnNote: 'Note',
+  graphColumnRelation: 'Relationship',
+  graphColumnLinks: 'Links drawn',
+  graphBoundedLocal: (shown, total) =>
+    `Drawing ${shown} of ${total} neighbouring notes, in alphabetical order. The lists above name ` +
+    'every one of them.',
+  graphBounded: (shown, total) => `Drawing ${shown} of ${total} notes, the most linked first.`,
+  graphExpandLocal: 'See the whole graph →',
+  graphExpandLocalLabel: 'See the graph of the whole site',
+  graphExpand: 'See every published note →',
+  graphExpandLabel: 'See every published note, including those this graph does not draw',
+  graphEmpty:
+    'No published note links to this one and it links to none, so there is no neighbourhood to draw.',
+  graphSiteEmpty:
+    'No two published notes link to each other yet, so there is no graph to draw. This page fills ' +
+    'in as the projection grows.',
+
   notFoundTitle: 'Page not found',
   notFoundDescription: 'That page is not part of this site.',
   notFoundBody:
@@ -431,6 +530,7 @@ const ZH_CN = {
   navRecent: '最近更新',
   navTags: '标签',
   navCollections: '合集',
+  navGraph: '关系图',
   navAbout: '关于',
   navPrivacy: '隐私',
 
@@ -518,6 +618,34 @@ const ZH_CN = {
     '一份经过审阅的公开投影。本页之所以公开，是因为它被明确列入了批准清单，' +
     '并且只包含该投影所涵盖的内容。',
   canonicalUrlLine: (url) => `规范链接：${url}`,
+
+  graphHeading: '相邻笔记',
+  graphTitle: '关系图',
+  graphDescription: '公开笔记之间的链接关系。',
+  graphLocalDerivation:
+    '与这篇笔记相隔一条链接的全部笔记，并画出它们彼此之间的链接。' + '布局在构建站点时完成，因此无需脚本。',
+  graphGlobalDerivation:
+    '站内链接最多的笔记，连接越多越靠近中心。布局在构建站点时完成，因此无需脚本。',
+  graphFigureLabel: (nodes, edges) => `链接关系图：${nodes} 篇笔记，${edges} 条链接`,
+  graphNodeLabel: (title, relation, degree) => `${title} — ${relation}，图中有 ${degree} 条链接`,
+  graphSubjectRelation: '本篇',
+  graphOutgoingRelation: '本篇链接到它',
+  graphIncomingRelation: '它链接到本篇',
+  graphMutualRelation: '互相链接',
+  graphLinkedRelation: '公开笔记',
+  graphTableCaption: '同样的笔记与链接，以表格呈现',
+  graphColumnNote: '笔记',
+  graphColumnRelation: '关系',
+  graphColumnLinks: '图中链接数',
+  graphBoundedLocal: (shown, total) =>
+    `共有 ${total} 篇相邻笔记，此处按字母顺序画出其中 ${shown} 篇。上文的列表已列出全部。`,
+  graphBounded: (shown, total) => `共 ${total} 篇笔记，此处画出链接最多的 ${shown} 篇。`,
+  graphExpandLocal: '查看整站关系图 →',
+  graphExpandLocalLabel: '查看整个站点的关系图',
+  graphExpand: '查看全部公开笔记 →',
+  graphExpandLabel: '查看全部公开笔记，包括本图未画出的部分',
+  graphEmpty: '没有公开笔记链接到这篇，这篇也没有链接到其他笔记，因此没有可绘制的相邻关系。',
+  graphSiteEmpty: '目前还没有两篇公开笔记互相链接，因此没有可绘制的关系图。随着投影增长，本页会逐步充实。',
 
   notFoundTitle: '页面未找到',
   notFoundDescription: '该页面不属于本站。',

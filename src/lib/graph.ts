@@ -61,12 +61,22 @@ export interface GraphNode {
 
 /** One authored relationship between two drawn notes. */
 export interface GraphEdge {
-  /** The note the arrow leaves. For a mutual edge, the lexicographically smaller slug. */
+  /** The note the arrow leaves. For a mutual edge, whichever end was seen first. */
   from: string;
   /** The note the arrow points at. */
   to: string;
   /** Whether each note links to the other, so the line carries two arrowheads. */
   isMutual: boolean;
+  /**
+   * How this edge runs relative to the subject, when it touches the subject.
+   *
+   * Absent on an edge between two neighbours, and on every edge of `/graph/` —
+   * which has no subject, so there is no "incoming" without a somewhere to come
+   * in to. The stylesheet draws an incoming edge dashed and an outgoing one
+   * solid, which is requirements section 13.2's "visually distinguished" done as
+   * a *shape* rather than a colour.
+   */
+  direction?: EdgeDirection;
   x1: number;
   y1: number;
   x2: number;
@@ -243,10 +253,16 @@ export function edgeDirection(subject: ContentEntry, other: string): EdgeDirecti
  * edges over this node set" is a real claim about a star only in the trivial
  * sense.
  *
+ * `subject` is the note the figure is about, when it has one. An edge touching
+ * it takes that note's own view of the relationship, which is what lets the
+ * stylesheet draw an incoming edge differently from an outgoing one without
+ * using colour. Edges between two neighbours have no direction relative to a
+ * subject and carry none.
+ *
  * Ordered by the pair of slugs, which is total because a slug is unique, so the
  * emitted markup does not depend on the order the artifact listed anything in.
  */
-function inducedEdges(nodes: readonly GraphNode[]): GraphEdge[] {
+function inducedEdges(nodes: readonly GraphNode[], subject?: ContentEntry): GraphEdge[] {
   const drawn = new Map(nodes.map((node) => [node.entry.slug, node]));
   const pairs = new Map<string, { from: string; to: string; isMutual: boolean }>();
 
@@ -282,8 +298,18 @@ function inducedEdges(nodes: readonly GraphNode[]): GraphEdge[] {
       // pointing the wrong way is a defect nobody would look for, so it is
       // clamped rather than trusted.
       const scale = Math.min(startTrim, Math.max(0, (length - endTrim) / 2));
+      // The far end of an edge touching the subject, seen from the subject.
+      const other =
+        subject === undefined
+          ? undefined
+          : pair.from === subject.slug
+            ? pair.to
+            : pair.to === subject.slug
+              ? pair.from
+              : undefined;
       return {
         ...pair,
+        direction: other === undefined ? undefined : edgeDirection(subject!, other),
         x1: round(from.x + (dx / length) * scale),
         y1: round(from.y + (dy / length) * scale),
         x2: round(to.x - (dx / length) * Math.min(endTrim, length - scale)),
@@ -297,12 +323,12 @@ function radiusOf(node: GraphNode): number {
 }
 
 /** Wrap placed nodes and their edges in a box that contains every label. */
-function frame(nodes: GraphNode[], omitted: number): Graph {
+function frame(nodes: GraphNode[], omitted: number, subject?: ContentEntry): Graph {
   const reach = Math.max(0, ...nodes.map((node) => Math.hypot(node.x, node.y)));
   const half = Math.ceil(reach + LABEL_SPACE);
   return {
     nodes,
-    edges: inducedEdges(nodes),
+    edges: inducedEdges(nodes, subject),
     viewBox: `${-half} ${-half} ${half * 2} ${half * 2}`,
     width: half * 2,
     height: half * 2,
@@ -365,7 +391,7 @@ export function localGraph(
     })),
   ];
 
-  return withDegrees(frame(nodes, neighbours.length - drawn.length));
+  return withDegrees(frame(nodes, neighbours.length - drawn.length, entry));
 }
 
 /**
