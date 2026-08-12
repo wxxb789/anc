@@ -1,5 +1,9 @@
 # build output
 dist/
+# packaged CLI staging (bin/thoughtscape-publish.mjs; one per run, removed after)
+.thoughtscape-build-*/
+# `npm pack` output, written to the repository root unless --pack-destination
+*.tgz
 # generated types
 .astro/
 

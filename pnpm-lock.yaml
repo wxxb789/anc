@@ -17,6 +17,15 @@ importers:
       github-slugger:
         specifier: ^2.0.0
         version: 2.0.0
+      happy-dom:
+        specifier: 20.11.2
+        version: 20.11.2
+      mermaid:
+        specifier: 11.16.1
+        version: 11.16.1
+      pagefind:
+        specifier: ^1.4.0
+        version: 1.5.2
       prismjs:
         specifier: ^1.30.0
         version: 1.30.0
@@ -26,6 +35,9 @@ importers:
       satteri:
         specifier: ^0.9.5
         version: 0.9.5
+      temml:
+        specifier: 0.13.4
+        version: 0.13.4
     devDependencies:
       '@astrojs/check':
         specifier: ^0.9.10
@@ -36,24 +48,12 @@ importers:
       '@types/sanitize-html':
         specifier: ^2.16.1
         version: 2.16.1
-      happy-dom:
-        specifier: 20.11.2
-        version: 20.11.2
-      mermaid:
-        specifier: 11.16.1
-        version: 11.16.1
       oxlint:
         specifier: ^1.77.0
         version: 1.77.0
-      pagefind:
-        specifier: ^1.4.0
-        version: 1.5.2
       playwright:
         specifier: ^1.62.1
         version: 1.62.1
-      temml:
-        specifier: 0.13.4
-        version: 0.13.4
       typescript:
         specifier: ^5.9.3
         version: 5.9.3

@@ -19,34 +19,48 @@
 
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import { REDIRECT_RULES, renderRedirects } from '../src/lib/routes.ts';
 import { loadArtifact, readArtifact } from '../src/lib/artifact-source.ts';
 import { contentVersion } from './validate-content.ts';
 
-const OUTPUT = new URL('../dist/_redirects', import.meta.url);
+const DIST = fileURLToPath(new URL('../dist', import.meta.url));
+
+/**
+ * Write `_redirects` into a built site.
+ *
+ * @param outDirectory Where the build actually wrote. Defaults to this
+ *   repository's own `dist/`, which is where `pnpm run build` puts it. The
+ *   packaged CLI builds into a staging directory instead — Astro renames assets
+ *   out of `<root>/.astro` and a rename cannot cross a device — so the emitter
+ *   must be told, rather than assuming the one path that used to be the only
+ *   possibility.
+ */
+export function emitRedirects(outDirectory: string = DIST): number {
+  // Re-validated rather than imported through `src/lib/content.ts`: the
+  // accessor is written for the Astro build, and reading the artifact here
+  // keeps this script runnable on its own. It reads whichever artifact the
+  // build read, so a fixture build's redirect map describes the fixture.
+  //
+  // The validated result is discarded: the rule set is a literal, so nothing
+  // emitted here is derived from the entries. The call is the validation.
+  loadArtifact();
+  writeFileSync(
+    join(outDirectory, '_redirects'),
+    renderRedirects(REDIRECT_RULES, {
+      schema: SCHEMA_VERSION,
+      content: contentVersion(readArtifact()),
+    }),
+    'utf8',
+  );
+  return REDIRECT_RULES.length;
+}
 
 function main(): number {
   try {
-    // Re-validated rather than imported through `src/lib/content.ts`: the
-    // accessor is written for the Astro build, and reading the artifact here
-    // keeps this script runnable on its own. It reads whichever artifact the
-    // build read, so a fixture build's redirect map describes the fixture.
-    //
-    // The validated result is discarded: the rule set is a literal, so nothing
-    // emitted here is derived from the entries. The call is the validation.
-    loadArtifact();
-    writeFileSync(
-      OUTPUT,
-      renderRedirects(REDIRECT_RULES, {
-        schema: SCHEMA_VERSION,
-        content: contentVersion(readArtifact()),
-      }),
-      'utf8',
-    );
-    console.log(
-      `redirects ok: ${REDIRECT_RULES.length} permanent rule${REDIRECT_RULES.length === 1 ? '' : 's'}`,
-    );
+    const rules = emitRedirects();
+    console.log(`redirects ok: ${rules} permanent rule${rules === 1 ? '' : 's'}`);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

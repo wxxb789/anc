@@ -38,7 +38,13 @@ const STEPS: readonly (readonly [string, ...string[]])[] = [
   ['node', 'scripts/validate-content.ts'],
   ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/emit-redirects.ts'],
-  ['pnpm', 'exec', 'pagefind', '--site', 'dist'],
+  // `scripts/run-pagefind.ts` rather than `pnpm exec pagefind --site dist`,
+  // which is what this line used to be. The two are not the same command: the
+  // script passes `excludeSelectors: ['.heading-anchor']` and the bare CLI
+  // invocation passed nothing, so the fixture corpus was indexed with every
+  // heading anchor's `#` in it while the published build was not — a difference
+  // between the corpus the search gates measure and the one that ships.
+  ['node', 'scripts/run-pagefind.ts'],
 ];
 
 /** Run one step with the fixture artifact selected; returns its exit status. */

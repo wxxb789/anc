@@ -1,11 +1,31 @@
 {
-  "name": "thoughtscape-publish",
+  "name": "@thoughtscape/publish",
   "type": "module",
-  "version": "0.0.1",
+  "version": "0.1.0",
+  "description": "Build a static, privacy-preserving site from a directory of Markdown",
+  "private": true,
   "packageManager": "pnpm@11.18.0",
   "engines": {
     "node": ">=22.18.0"
   },
+  "bin": {
+    "thoughtscape-publish": "bin/thoughtscape-publish.mjs"
+  },
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "astro.config.mjs",
+    "bin",
+    "public",
+    "scripts",
+    "src",
+    "tsconfig.json",
+    "!src/data/content.json",
+    "!public/content-index.json",
+    "!scripts/build-fixture.ts",
+    "!scripts/render-og-card.ts"
+  ],
   "scripts": {
     "dev": "astro dev",
     "sync:content": "python ../thoughtscape/ob-flow/.harness/publish/export.py --target .",
@@ -15,7 +35,8 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "pnpm run validate:content && astro build && pnpm run emit:redirects && pagefind --site dist --exclude-selectors \".heading-anchor\" && pnpm run scan:residue",
+    "index:search": "node scripts/run-pagefind.ts",
+    "build": "pnpm run validate:content && astro build && pnpm run emit:redirects && pnpm run index:search && pnpm run scan:residue",
     "build:fixture": "node scripts/build-fixture.ts",
     "scan:residue": "node scripts/scan-residue.ts",
     "verify": "pnpm run lint && pnpm run check && pnpm run build && pnpm run test",
@@ -26,20 +47,20 @@
     "@astrojs/prism": "^4.0.2",
     "astro": "^7.1.6",
     "github-slugger": "^2.0.0",
+    "happy-dom": "20.11.2",
+    "mermaid": "11.16.1",
+    "pagefind": "^1.4.0",
     "prismjs": "^1.30.0",
     "sanitize-html": "^2.17.0",
-    "satteri": "^0.9.5"
+    "satteri": "^0.9.5",
+    "temml": "0.13.4"
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
     "@types/node": "^26.1.2",
     "@types/sanitize-html": "^2.16.1",
-    "happy-dom": "20.11.2",
-    "mermaid": "11.16.1",
     "oxlint": "^1.77.0",
-    "pagefind": "^1.4.0",
     "playwright": "^1.62.1",
-    "temml": "0.13.4",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
   }

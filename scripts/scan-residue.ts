@@ -288,15 +288,35 @@ export function scanResidue(root: string = DIST): { findings: string[]; scannedC
   return { findings, scannedCount: scannedPaths.length };
 }
 
-function main(): number {
-  const { findings, scannedCount } = scanResidue();
+/**
+ * Scan a built site and fail loudly if it carries residue.
+ *
+ * The reporting half of {@link scanResidue}, exported so the packaged CLI does
+ * not restate it. Two callers formatting the same findings is two places the
+ * wording, the plural, and — the one that matters — the decision that a finding
+ * is fatal can drift apart.
+ *
+ * @throws {Error} listing every finding, when the scan is not clean.
+ */
+export function assertNoResidue(root: string = DIST): number {
+  const { findings, scannedCount } = scanResidue(root);
   if (findings.length > 0) {
-    console.error(`residue scan: ${findings.length} finding${findings.length === 1 ? '' : 's'} in dist/`);
-    for (const finding of findings) console.error(`  - ${finding}`);
+    throw new Error(
+      `residue scan: ${findings.length} finding${findings.length === 1 ? '' : 's'} in ${root}\n` +
+        findings.map((finding) => `  - ${finding}`).join('\n'),
+    );
+  }
+  return scannedCount;
+}
+
+function main(): number {
+  try {
+    console.log(`residue scan ok: ${assertNoResidue()} files, 0 findings`);
+    return 0;
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
-  console.log(`residue scan ok: ${scannedCount} files, 0 findings`);
-  return 0;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) process.exit(main());
