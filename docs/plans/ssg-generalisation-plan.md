@@ -1146,41 +1146,38 @@ under a whole-repository producer than it did under a curated one; and the decis
 replace only the producer, leaving the rendering pipeline, design system, graph, and search
 untouched, drew no substantiated objection from the over-engineering reviewer.
 
-## 9. Open decisions for the owner
+## 9. Decisions, settled 2026-08-12
 
-Short, because the owner has settled default-publish, the five link forms, the no-Python
-constraint, deployment-time origin, and the report's location already.
+All three forks are closed. Recorded here so the reasoning survives the ticket that
+implements each.
 
-### D1 — What happens when a link is ambiguous
+### D1 — Link ambiguity warns; it does not fail
 
-M6 killed hard-fail-with-no-override: unbounded, unoverridable, and worst exactly where it
-is most likely — two root-level notes sharing a basename. But silent resolution is the
-Quartz defect this plan exists to beat, where zero matches and five matches fall through
-identically with no warning.
+Resolve using the researched Obsidian order, render the link, and record the ambiguity in
+`content-report.json` naming every candidate. Fail the build only under an opt-in strict
+mode.
 
-**Recommendation:** resolve using the researched Obsidian order, render the link, and record
-the ambiguity as a warning in `content-report.json` with every candidate named. Fail the
-build only under an opt-in strict mode. That keeps a stranger's first build working while
-making the ambiguity visible and actionable.
+Hard-fail was rejected (M6) as unbounded and unoverridable, and worst exactly where it is
+most likely — two root-level notes sharing a basename, which a stranger cannot act on from
+their own repository. Silent resolution was rejected equally: that is Quartz's defect, where
+zero matches and five matches fall through identically with no warning. Owned by TK-27.
 
-### D2 — Whether this repository keeps publishing a site at all
+### D2 — This repository is the tool only
 
-S10 found the tool/site split incomplete: `content-index.json`, `SITE_NAME`, and the
-localStorage namespace still carry this owner's identity. The cleanest split is that this
-repository is only the tool, with a synthetic demo corpus, and the owner's site lives in
-`ob-flow` as the tool's first consumer.
+No site of its own. The demo corpus becomes synthetic; the owner's site lives in `ob-flow`
+as the tool's first consumer.
 
-**Recommendation:** make it only the tool. A repository that is both is where "documentation
-written for one user" keeps coming from.
+This closes the incomplete split S10 found, where `content-index.json`, `SITE_NAME`, and the
+localStorage namespace still carried one owner's identity — including the personal note
+still in `src/data/content.json`. Every remaining ticket treats this repository's content as
+fixture rather than as publication. Owned by TK-31.
 
-### D3 — Whether to run a second design pass before implementing
+### D3 — TK-24 ships before any second design pass
 
-§1 states this plan is not implementable as drafted: three fatal findings, and 22 more
-behind them. TK-24, TK-25, and TK-26 are written to absorb the three, but they were written
-by an orchestrator reading review output rather than by a designer with the whole surface in
-view.
+The plan is not implementable as drafted: three fatal findings and 22 behind them. TK-24 is
+small, mechanical, independently valuable, and its acceptance test — `npm pack` into an empty
+directory holding three Markdown files, run the binary, get a site — is the fastest way to
+learn whether the rest of the design survives contact.
 
-**Recommendation:** implement TK-24 first — it is small, mechanical, independently valuable,
-and its acceptance test (`npm pack` into an empty directory, get a site) is the fastest way
-to learn whether the rest of the design survives contact. Decide on a second design pass
-after seeing that result rather than before.
+TK-25 and TK-26, which absorb the other two fatal findings, wait until TK-24 reports. Whether
+a second design pass is needed is decided on that evidence rather than in advance.
