@@ -276,8 +276,8 @@ Two structural facts drive the order:
 | TK-18 | Measured benchmark against Quartz v5 | TK-09 | P0 | 4 |
 | TK-10 | ADRs and deferred-scope documentation | all above | P0 | 4 |
 | TK-21 | Interactive graph via SQLite WASM | TK-17, TK-09 | P1 | 5 |
-| TK-23 | Generalisation and distribution | TK-16, TK-17 | P0 | 3c |
-| TK-19 | Formalise the artifact contract | TK-23 | P0 | 3c |
+| TK-23 | Generalisation and distribution | TK-16, TK-17 | P0 | superseded — see [`ssg-generalisation-plan.md`](ssg-generalisation-plan.md) |
+| TK-19 | Formalise the artifact contract | TK-23 | P0 | superseded — see [`ssg-generalisation-plan.md`](ssg-generalisation-plan.md) |
 | TK-20 | Oxfmt | TK-13 | P1 | isolated |
 | TK-22 | Migrate from npm to pnpm | TK-13 | P1 | done `ddc9b71` |
 
@@ -319,6 +319,19 @@ files.
    grant. Cloudflare Pages runs `build` alone, so a residue scan attached only to `verify`
    would mean the host that publishes the artifact is not the host that scans it. Flagged
    by the agent rather than assumed.
+
+### Superseded in part
+
+TK-23 and TK-19 in the table below were written when "generalisation" was one ticket and a
+contract specification. The direction has since been settled further — the project is a
+**general-purpose SSG** whose input is a git repository of Markdown, publish is the default
+with explicit exclusion, and this repository is the tool only, with no site of its own.
+
+Both tickets are replaced by [`ssg-generalisation-plan.md`](ssg-generalisation-plan.md),
+which decomposes them into TK-24 through TK-35 after two adversarial reviews returned 25
+substantiated findings against the first design. **Read that document for anything to do
+with generalisation.** Everything else here — the parity matrix, the delivered work, and the
+wave-4 tickets TK-09, TK-18, and TK-10 — remains current.
 
 ### The project is becoming a reusable publisher
 
