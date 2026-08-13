@@ -1,10 +1,12 @@
 # General-Purpose SSG — Plan
 
-**Status:** Planning baseline, not yet implementable — see §1
+**Status:** Active backlog — 2 of 12 tickets delivered, 1 of 3 fatal findings open (C3, TK-26)
 **Document type:** Architecture decision + revised backlog
 **Derived from:** three research agents, three drafted sections, and two adversarial reviews that returned 25 substantiated findings
-**Describes:** `main` at `7dfd94f`, 505 tests, 18 tickets delivered
+**Describes:** `main` at `11b7cf2`, 497 tests, 20 tickets delivered
 **Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md) §4 and §10.3
+**Note:** §2 through §5 are the design as first drafted. Where a delivered ticket contradicts
+them, that ticket's specification under `.tmp/` is canonical and the section says so.
 
 ## 1. Verdict
 
@@ -26,18 +28,27 @@ search index. The owner accepted that trade. The replacement is not a weaker ver
 same guarantee; it is a different one, moved from read time to the publication event, and it
 only works if the gates that enforce it can be watched failing.
 
-**This plan is not yet implementable.** Two adversarial reviews returned 25 substantiated
-findings against the drafted design, three of them fatal: the `npx` distribution model
-cannot run because every renderer is a devDependency (S1); the exclusion report is published
-to the world on the documented free adoption path, because GitHub Pages from a private
-repository requires a paid plan and workflow logs on a public repository are readable by
-anyone (C1); and the shipped default exclusion patterns fail every real repository on first
-push, because `fs.globSync` structurally cannot match a dotfile while the zero-match rule
-fails the build for exactly that (C3). Sections 2 through 5 record the design as drafted;
-§8 records what the reviews killed. **The next step is not implementation — it is a second
-design pass on the three fatal findings.** Shipping from this document as it stands would
-reproduce, in a tool other people run, the class of defect this project has spent eighteen
-tickets learning to catch.
+**This plan was not implementable as drafted, and two of the three reasons are now gone.** Two
+adversarial reviews returned 25 substantiated findings, three of them fatal: the `npx`
+distribution model could not run because every renderer was a devDependency (S1); the
+exclusion report was published to the world on the documented free adoption path, because
+GitHub Pages from a private repository requires a paid plan and workflow logs on a public
+repository are readable by anyone (C1); and the shipped default exclusion patterns fail every
+real repository on first push, because `fs.globSync` structurally cannot match a dotfile while
+the zero-match rule fails the build for exactly that (C3).
+
+**S1 is closed by TK-24 (`5db558c`, `8127c26`) and C1 by TK-25 (`11b7cf2`). C3 remains, and
+TK-26 owns it.** Sections 2 through 5 record the design as drafted, which in places the
+delivered tickets have since overtaken; §8 records what the reviews killed. Where a delivered
+ticket contradicts a drafted section, the ticket's own specification under `.tmp/` is
+canonical and the section carries a note saying so — §2.5's report destination is the
+instructive case, because the drafted answer reads safe and is destroyed by an ordinary `git
+clean`.
+
+The bet §1 opened with paid off: eighteen tickets built the reader against an *artifact
+interface* rather than against a vault, and a stranger's three Markdown files now produce a
+complete site with nothing downstream of `src/lib/schema.ts` changed. What remains is the
+producer.
 
 ---
 
@@ -256,10 +267,10 @@ the images.
 `version` or `entries` (`src/lib/schema.ts:528`), so there is nowhere inside the artifact to
 put corpus-level output. The answer is not to bump `SCHEMA_VERSION`:
 
-> The report is a **second output file**, `content-report.json`, written beside whatever
-> path `CONTENT_ARTIFACT` names (`src/lib/artifact-source.ts:38`). It is never an artifact
-> key, never imported by anything under `src/`, and never copied into `dist/`. Schema stays
-> at version 1 and `validateArtifact:528` is untouched.
+> The report is a **second output file**, `content-report.json`, written to
+> `<git-dir>/publish-report/content-report.json` — inside the git directory, which nothing
+> can stage. It is never an artifact key, never imported by anything under `src/`, and never
+> copied into `dist/`. Schema stays at version 1 and `validateArtifact:528` is untouched.
 
 That is the lazy answer and also the correct one. The report's contents are *precisely* the
 strings the privacy model exists to keep out of the artifact: excluded file paths,
@@ -270,17 +281,41 @@ of a leaked field. Putting an exclusion report inside the artifact would put the
 things the user chose not to publish inside the file the site renders from. A separate file
 that nothing in `src/` can import cannot leak into a page by accident.
 
+**The destination is the git directory, and this paragraph originally said otherwise.** It
+first specified the report "beside whatever path `CONTENT_ARTIFACT` names", and then a
+draft of TK-25 specified a self-ignoring `<cwd>/.thoughtscape/`. Both are wrong, and the
+second is wrong in a way that reads safe: a worktree directory carrying a `.gitignore` whose
+body is `*` is **deleted entirely by `git clean -xfd`** — the command a user runs after a
+failed build, which is exactly when the report is the only diagnostic they have. Measured, as
+is its converse: a report under `.git/` survives that command, and `git add -A` stages
+nothing of it. TK-25's `.tmp/tk-25-spec.md` §1 carries the full analysis, including the
+no-git fallback and the linked-worktree and submodule paths.
+
+The segment is `publish-report/`, not this project's name. A stranger runs this tool on their
+own notes repository, and a directory carrying the tool author's name inside their `.git/` is
+the single-owner residue decision D2 exists to remove.
+
 The report carries, per finding: source path, 1-indexed line, the link exactly as written,
 the outcome, and for `ambiguous` the sorted candidate list. Plus one section listing every
 discovered file with its verdict and **which rule decided it** — that is the evidence
 `tests/built-routes.test.ts:117-118` structurally cannot supply, because `expectedRoutes()`
 is derived from the same entries the producer chose and so proves consistency, never
-authorisation. Everything is also printed to stderr, because a GitHub Action log is what a
-user actually reads.
+authorisation.
 
-**Never counts.** "0 unresolved because I never looked" and "0 unresolved because there were
-none" are the same number. Report the link text and position for each, and let the gate
-assert on those.
+**None of it is printed.** This paragraph used to end "Everything is also printed to stderr,
+because a GitHub Action log is what a user actually reads" — which is finding C1 stated as a
+feature. The free adoption path is a public notes repository, whose workflow logs are
+world-readable and retained 90 days, so a printed path list is an index to the private set
+published to the world. The stream carries counts and closed-set rule identifiers; the file
+carries names. TK-25 §2 states the rule an implementer applies to a line before writing it,
+and `tests/disclosure.test.ts` gates it.
+
+**Never counts — in the report.** "0 unresolved because I never looked" and "0 unresolved
+because there were none" are the same number, so the *file* records the link text and
+position for each finding and the gates assert on those. The *stream* is the opposite case
+and carries counts precisely because they name nobody; TK-25 §4.2's `status` field is what
+keeps a count honest there, distinguishing "nothing to report" from "I stopped before I could
+look."
 
 ### 2.6 Backlinks from all five forms
 
@@ -420,11 +455,26 @@ Two structural prerequisites, both cheap, both blocking:
 Three destinations, three different audiences, three different disclosure rules. Conflating
 them is how the report itself becomes the leak.
 
+> **Superseded by TK-25, and the row that was wrong is kept here because it is instructive.**
+> The first row below rested on "it is the user's own private repository", which is false on
+> the documented free path: GitHub Pages from a private repository requires a paid plan, so
+> the zero-secret adoption path is a **public** notes repository whose logs anyone can read
+> for 90 days. Finding C1 killed it. The stream now carries counts and closed-set rule
+> identifiers and never a name; the file carries names and lives where nothing can stage it.
+> `.tmp/tk-25-spec.md` §2 is the current rule, and `published.txt` is gone — S6, M1 and M2
+> killed it separately, and §8 records why.
+
 | Destination | Contents | Committed? | May name an excluded file? |
 | --- | --- | --- | --- |
-| Run log + Action step summary | every exclusion pattern with its match count; every excluded file and the rule that excluded it; every ambiguous link with all candidates; published/excluded/ambiguous counts | no | **yes** — it is the user's own private repository |
-| `published.txt` at the notes-repo root | sorted published slugs, one per line, nothing else | **yes** | **no** — structurally cannot |
+| ~~Run log + Action step summary~~ | ~~every exclusion pattern with its match count; every excluded file and the rule that excluded it; every ambiguous link with all candidates~~ | no | ~~**yes** — it is the user's own private repository~~ **NO — C1** |
+| Run log + Action step summary (current) | counts, and rule identifiers from a closed set. Never a path, never a basename, never a link's text | no | **no** — gated by `tests/disclosure.test.ts` |
+| `<git-dir>/publish-report/content-report.json` | every excluded file and the rule that excluded it; every ambiguous link with all candidates; counts | **cannot be** — nothing under `<git-dir>` can enter the index | **yes** — that is what it is for |
+| ~~`published.txt` at the notes-repo root~~ | ~~sorted published slugs~~ | — | killed by S6, M1, M2 — see §8 |
 | `dist/` | nothing | n/a | **never** — gated, see G3 |
+
+The paragraphs below argue for `published.txt`, which no longer exists. They are left in
+place because the *reasoning* about what a publication ledger may carry survives the ledger,
+and TK-29 will face the same question about the report's own diff.
 
 `published.txt` carries slugs and no paths, no titles, no counts and no hash. That is
 deliberate three ways. A body edit does not touch it, so its diff is the publication
@@ -927,7 +977,7 @@ allowed only where the fence is a directory boundary rather than an argument.
 
 | Wave | Runs together | Why they do not collide |
 | --- | --- | --- |
-| A | TK-24, TK-25 | TK-24 owns `package.json` and the packaging entry point; TK-25 owns the workflow surface and `.gitignore` seeding. Disjoint. |
+| A | TK-24, TK-25 | ~~TK-24 owns `package.json` and the packaging entry point; TK-25 owns the workflow surface and `.gitignore` seeding. Disjoint.~~ **Both delivered, and they were not disjoint.** TK-25's `prepack` fix is a `package.json` script, which TK-24 owns — the two ran serially and the second read the first's manifest. Had they run together, the merge would have been the `quartz-parity-plan.md:352` collision again. The lesson holds: file ownership is the fence, and "the workflow surface" was not a file. |
 | B | TK-26, TK-30 | TK-26 owns the new producer modules under `src/producer/`; TK-30 owns the config module and `astro.config.mjs`. Neither touches `schema.ts` or the gates. |
 | C | TK-27, then TK-28 | Serial. TK-28 consumes the typed resolution outcome TK-27 defines; splitting them across agents would mean defining the type twice. |
 | D | TK-29, TK-31, TK-33 | TK-29 owns `scan-residue.ts` and the gate tests; TK-31 owns `src/pages/`, `src/components/`, `translations.ts`, `site.ts`; TK-33 owns preview config only. **TK-29 and TK-31 both touch `site.ts`** — serialise those two on that file, TK-31 last. |
@@ -969,6 +1019,26 @@ repository rather than this one.
   by a test rather than by inspection.
 - This repository's own `pnpm run verify` and `pnpm run build:fixture` are unchanged.
 
+**Delivered** — `5db558c`, then `8127c26` for the follow-up. Report at `.tmp/tk-24-report.md`.
+The acceptance gate ran for real: `npm pack`, install into an empty directory holding three
+`.md` files, run the binary, get a site.
+
+Two blockers this ticket found that the text above does not mention, both invisible from
+reading and immediate on running:
+
+- **Node refuses to strip types under `node_modules`** (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`),
+  and every module here is TypeScript run directly by Node. No flag lifts it, and pnpm's
+  layout does not help — a tarball install resolves to `node_modules/.pnpm/…`, still under
+  `node_modules`. Closed by compiling at publish time (`8127c26`): the tarball carries no
+  `.ts`, no `.map`, no `.d.ts`, so the restriction is not on the path at all.
+- **`astro build --root` does not work from a foreign cwd.** `getOutDirWithinCwd`
+  (`astro/dist/core/build/common.js:76-82`) discards an `outDir` that is not under cwd and
+  stages prerender output at `<cwd>/.astro/` instead, which `ssrMoveAssets` then `rename`s —
+  and a rename cannot cross a device. cwd must be the package (for module resolution) and
+  `outDir` must be under cwd (for the rename), so staging-then-copy is the only shape
+  available, not a workaround. A test imports the function and asserts the redirect, so an
+  Astro upgrade that changes this is a red gate rather than a mysterious `EXDEV`.
+
 ---
 
 #### TK-25 — Redesign the report disclosure surface
@@ -1004,6 +1074,37 @@ published.
   token present in the local report and absent from every published surface, both halves
   asserted.
 - `init` output, committed with `git add -A`, contains none of the three generated artifacts.
+
+**Delivered** — `11b7cf2`, specification at `.tmp/tk-25-spec.md`, report at
+`.tmp/tk-25-report.md`. `pnpm run verify` 497 passed / 26 skipped.
+
+Three things the ticket learned that the text above got wrong:
+
+- **The destination.** Both the draft's `<cwd>/.thoughtscape/` and §2.5's "beside the
+  artifact" are destroyed or committable. The report lives at
+  `<git-dir>/publish-report/content-report.json` — measured: `git clean -xfd` deletes a
+  self-ignoring worktree directory whole, and nothing under `<git-dir>` can be staged.
+- **`init` does not exist**, so scope item 3 landed as `ensureIgnored()` plus its gates, and
+  the seeding command itself is TK-32's. Acceptance criterion 3 is therefore a specification
+  today, not a gate, and is labelled so rather than given an invented test.
+- **The `npm pack` gap, which this ticket did not know it had.** A bare `npm pack` shipped 29
+  `.ts` files because the compile step lived in a `pack` script npm's lifecycle never runs.
+  Closed with a `prepack` that refuses and names the real script.
+
+Also delivered against the standing constraint that this tool is nobody's in particular: the
+seeded marker is `# added by the publish tool`, not the project's name, and the report
+segment is `publish-report/`. A stranger's `.gitignore` and `.git/` carry no trace of who
+wrote the tool.
+
+Two defects in existing code fell out of the gates: the CLI's workspace cleanup could replace
+the build's own failure (Windows `EBUSY` discarding five residue findings), and the
+`no Markdown found` path threw before counts were recorded, leaving a report claiming
+`aborted` with three zeroes.
+
+One gate does not run in CI and says so in its own source: the `check-ignore -v` parser's
+negated-global-ignore fixture is Windows-only, because a POSIX path splits into exactly the
+three fields a naive parser expects and cannot distinguish a correct parser from a broken
+one. CI is `ubuntu-latest`.
 
 ---
 
@@ -1172,12 +1273,26 @@ localStorage namespace still carried one owner's identity — including the pers
 still in `src/data/content.json`. Every remaining ticket treats this repository's content as
 fixture rather than as publication. Owned by TK-31.
 
-### D3 — TK-24 ships before any second design pass
+### D3 — TK-24 ships before any second design pass — **answered**
 
-The plan is not implementable as drafted: three fatal findings and 22 behind them. TK-24 is
+The plan was not implementable as drafted: three fatal findings and 22 behind them. TK-24 was
 small, mechanical, independently valuable, and its acceptance test — `npm pack` into an empty
-directory holding three Markdown files, run the binary, get a site — is the fastest way to
+directory holding three Markdown files, run the binary, get a site — was the fastest way to
 learn whether the rest of the design survives contact.
 
-TK-25 and TK-26, which absorb the other two fatal findings, wait until TK-24 reports. Whether
-a second design pass is needed is decided on that evidence rather than in advance.
+**It survived, and no second design pass followed.** TK-24 shipped, then TK-25. What the
+evidence changed was narrower than a redesign and sharper than a guess: the packaging problem
+was *understated* by the plan rather than overstated — two blockers appear nowhere in it and
+both were invisible from reading — while the rendering pipeline, design system, graph and
+search needed no change at all, because they were built against an artifact interface.
+
+The method that replaced the second design pass is worth keeping. TK-25 was designed by three
+independent designs, each attacked by two adversaries — one trying to extract the excluded
+list from published surfaces, one attacking the gates for vacuity. All three designs were
+broken; the survivors' pieces were converged against measurement, and the measurement decided
+every case where two sections disagreed on a fact. That found, on paper and before any code:
+a report destination that an ordinary `git clean -xfd` destroys, a gate whose only falsifiable
+half was the one that could not fire, and a published site leaking excluded names through
+wikilink display text. Cheaper than finding any of them in review.
+
+C3 remains open, and TK-26 owns it.
