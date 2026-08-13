@@ -41,7 +41,14 @@ import { DIAGRAM_MODE } from './src/lib/diagram-mode.ts';
  */
 function diagramRuntimePlugin(mode) {
   const stub = fileURLToPath(new URL('src/scripts/diagram-disabled.ts', import.meta.url));
-  const target = /[\\/]src[\\/]scripts[\\/]diagram\.ts$/;
+  // The extension is matched loosely because it is not the same in both trees:
+  // this repository runs `diagram.ts` directly, while the packaged tarball ships
+  // it compiled to `diagram.js` (`scripts/compile-package.ts`). Pinning `.ts`
+  // here meant the redirect silently stopped firing once installed — Mermaid's
+  // whole runtime was then bundled into a `build-time` site, which the residue
+  // scan caught on `[[` byte sequences inside the parser. Matching either
+  // extension keeps one rule true of both trees.
+  const target = /[\\/]src[\\/]scripts[\\/]diagram\.(?:ts|js)$/;
   return {
     name: 'thoughtscape:diagram-mode',
     // Ahead of Vite's own resolver, so the redirect happens before the module

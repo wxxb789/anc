@@ -26,12 +26,14 @@
  * asked: what does the build load?
  */
 
-import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import ts from 'typescript';
+import { compilePackage } from '../scripts/compile-package.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -67,7 +69,6 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
  */
 const ENTRY_POINTS: readonly string[] = [
   'bin/thoughtscape-publish.mjs',
-  'bin/typescript-hook.mjs',
   'astro.config.mjs',
   'src/scripts/diagram-disabled.ts',
 ];
@@ -191,7 +192,9 @@ function traceImports(): { files: Set<string>; packages: Map<string, string> } {
 
   const pending = ENTRY_POINTS.map((entry) => join(ROOT, entry));
   for (const directory of ['src/pages', 'src/layouts', 'src/components']) {
-    pending.push(...sourceFilesUnder(join(ROOT, directory)));
+    pending.push(
+      ...sourceFilesUnder(join(ROOT, directory), (path) => path.endsWith('.astro') || path.endsWith('.ts')),
+    );
   }
 
   while (pending.length > 0) {
@@ -217,13 +220,13 @@ function traceImports(): { files: Set<string>; packages: Map<string, string> } {
   return { files, packages };
 }
 
-function sourceFilesUnder(directory: string): string[] {
+function sourceFilesUnder(directory: string, matches: (path: string) => boolean): string[] {
   if (!existsSync(directory)) return [];
   const found: string[] = [];
   for (const name of readdirSync(directory)) {
     const path = join(directory, name);
-    if (statSync(path).isDirectory()) found.push(...sourceFilesUnder(path));
-    else if (path.endsWith('.astro') || path.endsWith('.ts')) found.push(path);
+    if (statSync(path).isDirectory()) found.push(...sourceFilesUnder(path, matches));
+    else if (matches(path)) found.push(path);
   }
   return found;
 }
@@ -401,6 +404,161 @@ test('the tarball carries what the build reads and none of this owner\'s content
       'separately approved action (AGENTS.md, Boundaries)',
   );
 });
+
+test('Astro still redirects prerender staging for an outDir outside cwd', async () => {
+  // The mechanism `bin/thoughtscape-publish.mjs` builds its root decision on,
+  // reproduced as a check so an Astro upgrade that changes it is a red test
+  // rather than a mysterious EXDEV in a user's build.
+  //
+  // `getOutDirWithinCwd` (astro 7.1.6, `dist/core/build/common.js:76-82`) is
+  // four lines: if `outDir` is not under `process.cwd()`, prerender output is
+  // staged at `<cwd>/.astro/` instead. That directory reaches the build through
+  // `getServerOutputDirectory` (`dist/prerender/utils.js:10`) →
+  // `getPrerenderOutputDirectory` → `static-build.js:114`, and `ssrMoveAssets`
+  // (`static-build.js:249-285`) then `fs.promises.rename`s assets from there to
+  // the real `outDir` — a rename that cannot cross a device.
+  //
+  // What this gate asserts is the *redirect*, which is the reason the rename
+  // exists at all. It deliberately does not assert that an out-of-cwd `outDir`
+  // fails: measured, a same-drive one builds a complete site, because the rename
+  // stays on one device. EXDEV is the operative blocker and it is
+  // device-specific — see the CLI's header, which states it that way.
+  //
+  // Reached through `import.meta.resolve('astro/package.json')` because the deep
+  // path is not in Astro's `exports` map: importing
+  // `astro/dist/core/build/common.js` directly is `ERR_PACKAGE_PATH_NOT_EXPORTED`.
+  // Resolving the one entry Astro *does* export and walking relative from it
+  // gets the real file without asking the exports map for permission.
+  const astroPackageJson = import.meta.resolve('astro/package.json');
+  const { getOutDirWithinCwd } = (await import(
+    /* @vite-ignore */ new URL('./dist/core/build/common.js', astroPackageJson).href
+  )) as { getOutDirWithinCwd: (outDir: URL) => URL };
+
+  const asOutDir = (path: string): URL => pathToFileURL(`${path}${sep}`);
+  const resolved = (path: string): string => fileURLToPath(getOutDirWithinCwd(asOutDir(path)));
+
+  // Honoured: the shape the CLI actually uses — a staging directory inside the
+  // package, which is cwd for the duration of the build.
+  const inside = join(process.cwd(), '.thoughtscape-build-probe', 'dist');
+  assert.equal(
+    resolved(inside),
+    `${inside}${sep}`,
+    'an outDir under cwd is no longer honoured, so the staging directory the CLI builds into is ' +
+      'not where Astro writes — re-read `getOutDirWithinCwd` before trusting the CLI comment',
+  );
+
+  // Redirected: anything outside cwd, which is where a user's directory always
+  // is. Both cases are ordinary absolute paths on the *same* device as cwd,
+  // which is the point — the redirect is a containment test and knows nothing
+  // about devices. What makes it matter is the rename that follows it: staging
+  // lands under cwd, the assets are renamed to `outDir`, and that rename is what
+  // fails when the two are on different drives.
+  const fallback = join(process.cwd(), '.astro') + sep;
+  for (const [what, path] of [
+    ['a sibling of cwd', join(process.cwd(), '..', 'probe-sibling', 'dist')],
+    ['a path at the filesystem root', join(resolve(sep), 'probe-elsewhere', 'dist')],
+  ] as const) {
+    assert.equal(
+      resolved(path),
+      fallback,
+      `Astro no longer redirects an outDir at ${what}. If it now stages prerender output in ` +
+        '`outDir` itself, the cross-device rename that forces staging in ' +
+        '`bin/thoughtscape-publish.mjs` may be gone — re-measure a cross-drive build before ' +
+        'trusting that file\'s root-decision comment, and delete both together if it has lapsed.',
+    );
+  }
+});
+
+test('the tarball ships compiled JavaScript and no TypeScript, source maps, or declarations', () => {
+  // The property TK-24a exists for. Node **refuses** to strip types from any
+  // file under `node_modules`
+  // (`ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`), so a `.ts` file in the
+  // tarball is not untidy — it is a build that dies at its first import in
+  // somebody else's repository. An earlier version worked around that with a
+  // `registerHooks` loader; compiling removes the restriction from the path
+  // instead of circumventing it.
+  //
+  // Staged rather than packed, so this gate needs no network and no `npm pack`:
+  // `compilePackage` produces exactly the directory `npm pack` is run in, so
+  // what is measured here is what ships. Three absences, each its own failure:
+  //
+  // - `.ts` — the package does not run at all.
+  // - `.map` — this repository's absolute paths and original sources would be
+  //   published into a stranger's `node_modules`. `scripts/scan-residue.ts:89`
+  //   already treats a `sourceMappingURL` in *built output* as fatal residue;
+  //   shipping maps from the package is the same defect one layer up.
+  // - `.d.ts` — dead weight. Nothing consumes this package as a library, which
+  //   is why `exports` deliberately exposes only `./package.json`.
+  const staging = mkdtempSync(join(tmpdir(), 'thoughtscape-pack-'));
+  try {
+    const { compiled } = compilePackage(staging);
+    assert.ok(compiled > 0, 'nothing was compiled, so the absences below hold vacuously');
+
+    const forbidden: Record<string, string[]> = { '.ts': [], '.map': [], '.d.ts': [] };
+    for (const file of sourceFilesUnder(staging, () => true)) {
+      const path = relative(staging, file).replaceAll('\\', '/');
+      // `.d.ts` first: it also ends in `.ts`, and reporting it as both would
+      // name one file twice under two different reasons.
+      const kind = path.endsWith('.d.ts') ? '.d.ts' : path.endsWith('.ts') ? '.ts' : path.endsWith('.map') ? '.map' : undefined;
+      if (kind !== undefined) forbidden[kind]!.push(path);
+    }
+
+    for (const [extension, found] of Object.entries(forbidden)) {
+      assert.deepEqual(
+        found,
+        [],
+        `the tarball carries ${found.length} ${extension} file(s), which it must not: ${found.slice(0, 5).join(', ')}`,
+      );
+    }
+
+    // Non-vacuity, and the other half of the property: the compiled output has
+    // to actually be there. A staging directory that emitted nothing would
+    // satisfy all three absences perfectly.
+    const emitted = sourceFilesUnder(staging, (path) => path.endsWith('.js'));
+    assert.ok(
+      emitted.length >= compiled,
+      `${compiled} TypeScript files were compiled but only ${emitted.length} .js files reached the ` +
+        'package, so something was compiled and then lost',
+    );
+
+    // And **no file in the tarball** may still name a `.ts` file. `tsc` rewrites
+    // the specifiers in what it compiles; the `.astro` components and the two
+    // `.mjs` files are rewritten by `compile-package.ts` because no compiler
+    // sees them. Measured: with only a `.js` sibling present, Vite does *not*
+    // fall back from a `.ts` specifier — the build fails outright — so an
+    // unrewritten specifier is a broken packaged build rather than a cosmetic
+    // inconsistency.
+    //
+    // Every file, not a list of extensions. An earlier version of this gate
+    // filtered to `.astro|.mjs|.js` and so could not see `package.json`, whose
+    // `scripts` named six `.ts` files the tarball does not carry — the exact
+    // defect this gate exists to catch, sitting in the one file every consumer
+    // reads, invisible because of the filter. A gate that measures a subset of
+    // its stated property is worse than none, because it reports success.
+    //
+    // Two forms are excluded, because naming a `.ts` path is their job rather
+    // than a stale reference to one: an entry in `package.json`'s `files` that
+    // *excludes* a source (`"!scripts/build-fixture.ts"`), and a `.d.ts`
+    // declaration reference in `tsconfig.json`, which describes types and
+    // resolves nothing at run time.
+    const stale: string[] = [];
+    for (const file of sourceFilesUnder(staging, () => true)) {
+      for (const [, specifier] of readFileSync(file, 'utf8').matchAll(/['"]([^'"`\n]*?\.ts)['"]/g)) {
+        if (specifier.startsWith('!') || specifier.endsWith('.d.ts')) continue;
+        stale.push(`${relative(staging, file).replaceAll('\\', '/')} → ${specifier}`);
+      }
+    }
+    assert.deepEqual(stale, [], `these specifiers still name a .ts file the tarball does not carry:\n  ${stale.join('\n  ')}`);
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+  // A full type-checked compile of 29 files: ~13 s alone, and this suite runs a
+  // worker per file, so it competes with `math-and-diagrams.test.ts` laying out
+  // real Mermaid diagrams. Measured, both then exceeded `vitest.config.ts`'s
+  // 30 s default and failed as timeouts rather than on any assertion. The bound
+  // is generous rather than tight because what it must catch is a hang, not a
+  // slow machine.
+}, 120_000);
 
 test('the site identity a packaged build ships is this owner\'s, and TK-31 is what fixes it', () => {
   // A site built from a stranger's Markdown currently carries this repository's

@@ -24,6 +24,7 @@
     "!src/data/content.json",
     "!public/content-index.json",
     "!scripts/build-fixture.ts",
+    "!scripts/compile-package.ts",
     "!scripts/render-og-card.ts"
   ],
   "scripts": {
@@ -38,6 +39,7 @@
     "index:search": "node scripts/run-pagefind.ts",
     "build": "pnpm run validate:content && astro build && pnpm run emit:redirects && pnpm run index:search && pnpm run scan:residue",
     "build:fixture": "node scripts/build-fixture.ts",
+    "pack": "node scripts/compile-package.ts",
     "scan:residue": "node scripts/scan-residue.ts",
     "verify": "pnpm run lint && pnpm run check && pnpm run build && pnpm run test",
     "preview": "astro preview",

@@ -19,10 +19,13 @@ Build a static, privacy-preserving public projection from an explicit allowlist 
 pnpm run sync:content   # local-only: read allowlist from the sibling private vault
 pnpm run build          # Astro static build + Pagefind + residue scan
 pnpm run verify         # every gate: lint, type check, build, residue scan, tests
+pnpm run pack           # compile TypeScript and produce the installable tarball
 pnpm run preview        # local verification
 ```
 
-pnpm is the only supported package manager; `packageManager` in `package.json` pins the version. Its symlinked `node_modules` is a boundary, not a preference: a module that imports a package absent from `package.json` fails to resolve rather than silently borrowing it from a transitive dependency.
+pnpm is the only supported package manager **for this repository's own install**; `packageManager` in `package.json` pins the version. Its symlinked `node_modules` is a boundary, not a preference: a module that imports a package absent from `package.json` fails to resolve rather than silently borrowing it from a transitive dependency.
+
+`pnpm run pack` is the one command that shells `npm`, and deliberately: it invokes `npm pack` inside the staging directory it has just built, which is no longer part of this workspace, and npm is what a consumer installs the result with. That is a carve-out for producing an artifact, not for managing this repository's dependencies.
 
 Cloudflare Pages builds this repository only and never receives access to the private vault.
 
@@ -52,6 +55,7 @@ CI (`.github/workflows/verify.yml`) runs `pnpm run verify` rather than restating
 - Post-deploy smoke tests (stage 14), which need a deployed origin.
 - Secret scanning (section 19.1's Gitleaks item), non-allowlisted titles and slugs, and unexpected routes or assets. The residue scan closes six of section 19.1's nine items; these are the other three. The last two are route-model properties that TK-09's deny-by-default assets gate owns.
 - `pnpm run build:fixture`, the 32-note corpus that un-skips the five multi-entry gates. Not in `verify` because it builds the site twice.
+- `pnpm run pack`, which compiles this package's TypeScript to JavaScript and packs the tarball. Not in `verify` because the artifact is a release step, not a gate — but the compile itself *is* gated: `tests/packaging.test.ts` stages a package on every run and asserts it carries no `.ts`, `.map`, or `.d.ts`, and no surviving `.ts` specifier.
 - `git diff --check`, which reads the working tree rather than the artifact and so belongs to the commit step, not the build.
 - `pnpm run sync:content`, which reads the private vault and by design never runs anywhere but a trusted host.
 

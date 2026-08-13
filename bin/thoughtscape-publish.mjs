@@ -28,36 +28,64 @@
  * contract instead of fighting it.
  *
  * **`--root` was implemented first and rejected on measurement.** It is the
- * option the plan names, it looks cleaner, and it does not work. Two failures,
- * both from a real spike rather than from reading:
+ * option the plan names, it looks cleaner, and it cannot work here. Not on
+ * taste, and not on a hunch about Astro being cwd-sensitive in general: two
+ * constraints compose, and between them they leave exactly one shape available.
  *
- * 1. With cwd in the user's directory and `--root` at the package, Astro emits
- *    its prerender chunks relative to `--outDir` and Node then resolves their
- *    bare imports from *there*: `Cannot find package 'github-slugger' imported
- *    from …/rootprobe/dist/.prerender/chunks/site_*.mjs`. The build gets as far
- *    as "generating static routes" and dies. Node's resolution walks up from the
+ * 1. **cwd must be inside this package.** With cwd in the user's directory and
+ *    `--root` at the package, Astro emits its prerender chunks relative to
+ *    `--outDir` and Node then resolves their bare imports from *there*: `Cannot
+ *    find package 'github-slugger' imported from
+ *    …/rootprobe/dist/.prerender/chunks/site_*.mjs`. The build gets as far as
+ *    "generating static routes" and dies. Node's resolution walks up from the
  *    importing file, and the user's directory has no `node_modules` containing
  *    this package's dependency tree — under pnpm it emphatically does not.
- * 2. Pointing `--outDir` back inside the package instead trades that for
- *    `EXDEV: cross-device link not permitted` out of Astro's `ssrMoveAssets`,
- *    because Astro stages assets in `<cwd>/.astro` and renames them into
- *    `outDir` — a rename that cannot cross a device. The user's repository and
- *    the package are routinely on different drives; on this machine `C:` and
- *    `Q:` reproduce it every time.
+ * 2. **`outDir` must be on the same device as cwd.** The mechanism is one
+ *    function — `getOutDirWithinCwd`, four lines, in
+ *    `astro/dist/core/build/common.js:76-82` (read at astro 7.1.6):
  *
- * Both are the same underlying fact: Astro treats cwd as load-bearing in places
- * `--root` does not reach. Fighting that means guessing which of them will be
- * reached next. Setting cwd to the root — so cwd and root agree, as they do in
- * every ordinary Astro build — makes the whole class unreachable rather than
- * handling its members.
+ *        if (fileURLToPath(outDir).startsWith(process.cwd())) return outDir;
+ *        else return new URL('./.astro/', pathToFileURL(process.cwd() + sep));
  *
- * Astro's JavaScript API, the plan's other candidate, was not tried and is not
- * needed: it takes `root` as an inline config option, so it lands on exactly the
- * same divergence between cwd and root that failure 2 comes out of. It would
- * also mean this file assembling an Astro config in code, giving the project two
- * places a config lives. `astro.config.mjs` staying the only one is worth more
- * than the subprocess this avoids — and there is no subprocess either way, since
- * `astro` exports `build` directly.
+ *    An `outDir` that fails that containment test is discarded *for the
+ *    prerender staging directory*, which is placed at `<cwd>/.astro/` instead —
+ *    reaching the build through `getServerOutputDirectory`
+ *    (`astro/dist/prerender/utils.js:10`) → `getPrerenderOutputDirectory` →
+ *    `static-build.js:114`. `ssrMoveAssets` (`static-build.js:249-285`) then
+ *    `fs.promises.rename`s the assets from that staging directory to the real
+ *    `outDir`, and **a rename cannot cross a device**.
+ *
+ * Be precise about what constraint 2 does and does not say, because the obvious
+ * reading is wrong and was measured to be wrong. The containment test governs
+ * only where prerender output is *staged*; the finished pages still reach
+ * `config.outDir`. So an out-of-cwd `outDir` is not fatal by itself — measured,
+ * `astro build --outDir Q:/probe-sibling/dist` from this repository produces a
+ * complete site, redirected staging and all, because the rename stays on one
+ * drive. The identical run to `C:/…` dies at `static-build.js` with
+ * `EXDEV: cross-device link not permitted`. **EXDEV is the operative blocker,
+ * and it is device-specific.** Configuring `build.client` does not reach it
+ * either — in static mode `clientRoot` is `config.outDir` directly
+ * (`static-build.js:254`).
+ *
+ * That is enough, because a publishing tool cannot know what device a user's
+ * repository is on: this package may sit on `Q:` while the notes it builds are
+ * on `C:`, which reproduces the EXDEV every run. Constraint 1 already forces cwd
+ * inside the package, so the only `outDir` guaranteed to share a device with cwd
+ * is one inside the package too — and the user's `dist/` can then only be
+ * reached by copying afterwards, which `cp` does across devices and `rename`
+ * does not. Staging then copying is not the blunt option chosen over a subtler
+ * one; it is the shape that holds wherever the user's directory happens to live.
+ *
+ * `tests/packaging.test.ts` imports `getOutDirWithinCwd` and asserts the
+ * redirect, so an Astro upgrade that changes this behaviour arrives as a failing
+ * test naming this decision rather than as an EXDEV nobody can place.
+ *
+ * Astro's JavaScript API, the plan's other candidate, is what runs the build
+ * (`import('astro')`, no subprocess) — but its `root` *option* is rejected for
+ * the same reason: passing `root` inline still leaves cwd elsewhere, which is
+ * constraint 1. It would also mean this file assembling an Astro config in code,
+ * giving the project two places a config lives. `astro.config.mjs` staying the
+ * only one is worth more.
  *
  * ## What it does not do
  *
@@ -84,8 +112,6 @@
  * cannot accidentally point a crawler at somebody else's server" — which is what
  * makes shipping it the safe interim state rather than a leak.
  */
-
-import './typescript-hook.mjs';
 
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
@@ -214,16 +240,17 @@ async function build(options) {
   if (!existsSync(contentDirectory)) throw new Error(`content directory not found: ${contentDirectory}`);
   assertSafeOutput(outDirectory, contentDirectory, userDirectory);
 
-  // Build inside the package, then copy out. Astro stages assets in
-  // `<root>/.astro` and *renames* them into `outDir`, and a rename cannot cross
-  // a device — so writing straight to a user directory on another drive fails
-  // with EXDEV. Staging keeps the rename within one filesystem and makes the
-  // copy the only cross-device step, which `cp` performs as a real copy.
+  // Build inside the package, then copy out. Not an ad-hoc workaround but the
+  // shape the two constraints in this file's header force: cwd must be inside
+  // the package for prerender chunks to resolve their imports, Astro stages
+  // prerender output under cwd and *renames* it to `outDir`, and a rename cannot
+  // cross a device. A user's notes may be on any drive, so the only `outDir`
+  // guaranteed to share one with cwd is one inside the package. `cp` then
+  // performs the cross-device step as a real copy, which `rename` cannot.
   //
-  // Inside the package rather than in the OS temp directory, because that is the
-  // filesystem the rename has to stay on: `mkdtemp` in `os.tmpdir()` is on `C:`
-  // while a checkout may be on `Q:`, which reproduces the EXDEV this staging
-  // exists to avoid.
+  // Inside the package rather than in the OS temp directory for the same
+  // reason: `mkdtemp` in `os.tmpdir()` is on `C:` while a checkout may be on
+  // `Q:`, which reproduces the very EXDEV this staging exists to avoid.
   //
   // Per-run rather than a fixed name, so two builds cannot delete each other's
   // intermediate output — the `finally` below removes the whole workspace, and

@@ -1,5 +1,18 @@
 {
   "extends": "astro/tsconfigs/strict",
+  "compilerOptions": {
+    // Every script here runs under `node --experimental-strip-types`, which
+    // erases annotations and cannot emit code, so a TypeScript-only construct
+    // that *does* emit — `enum`, `namespace`, a parameter property — fails at
+    // run time rather than at check time. `src/lib/math.ts:150-157` records a
+    // parameter property being rejected for exactly this reason.
+    //
+    // It is also what keeps the two ways this code runs from diverging:
+    // `scripts/compile-package.ts` compiles these same sources for the tarball
+    // and inherits this file, so a construct Node would reject cannot slip into
+    // the published package by being merely compilable.
+    "erasableSyntaxOnly": true
+  },
   "include": [".astro/types.d.ts", "**/*"],
   "exclude": ["dist"]
 }
