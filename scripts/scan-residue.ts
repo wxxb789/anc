@@ -46,6 +46,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
+import { BuildFailure } from './write-report.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 
@@ -231,19 +232,55 @@ function walk(directory: string): string[] {
 /**
  * Scan the built site.
  *
- * @returns Every finding, as a printable line. Empty means the artifact is
- *   clean — which the caller may only trust because `scannedCount` proves
- *   something was read.
+ * @returns Every finding, as a printable line, plus the same findings with the
+ *   matched text appended. `findings` is the half that may be printed: a route
+ *   this build was about to serve, and a rule name from this file's own source.
+ *   `detailed` carries the bytes that were actually matched and belongs in the
+ *   report, never on a stream — measured, for the home-directory rule the match
+ *   is `/home/<user>/`. `scannedCount` is what lets a caller trust that "no
+ *   findings" means something was read.
  */
-export function scanResidue(root: string = DIST): { findings: string[]; scannedCount: number } {
+export function scanResidue(root: string = DIST): {
+  findings: string[];
+  detailed: string[];
+  scannedCount: number;
+} {
   const findings: string[] = [];
+  const detailed: string[] = [];
   const scannedPaths: string[] = [];
+
+  /**
+   * Record one finding.
+   *
+   * Two arrays and one call site per finding, because the split is only safe if
+   * it is exhaustive: an earlier version of this change redacted the matched
+   * text on the one line that obviously carried it and left `${root}` on the
+   * three that also did — the missing-directory line, and both vacuity guards.
+   * Under the packaged CLI `root` is the per-run `mkdtemp` workspace, whose
+   * random suffix differs between two runs of the same corpus, so those three
+   * were a host path on a public surface and a rename differential that could
+   * never be byte-equal.
+   *
+   * @param message The public half: a route this build was about to serve, and
+   *   literals of this file's own source.
+   * @param detail The same finding with whatever must not be printed — the
+   *   scanned root, the bytes that matched. Defaults to `message` when there is
+   *   nothing to withhold.
+   */
+  const report = (message: string, detail: string = message): void => {
+    findings.push(message);
+    detailed.push(detail);
+  };
 
   let files: string[];
   try {
     files = walk(root);
   } catch {
-    return { findings: [`${root} is missing or unreadable — run \`pnpm run build\` first`], scannedCount: 0 };
+    report(
+      'the built site is missing or unreadable — run `pnpm run build` first',
+      `${root} is missing or unreadable — run \`pnpm run build\` first`,
+    );
+    return { findings, detailed, scannedCount: 0 };
   }
 
   for (const path of files) {
@@ -255,7 +292,7 @@ export function scanResidue(root: string = DIST): { findings: string[]; scannedC
     const extension = extname(name).toLowerCase();
     if (BINARY_EXTENSIONS.has(extension)) continue;
     if (!TEXT_EXTENSIONS.has(extension) && !TEXT_NAMES.has(name)) {
-      findings.push(
+      report(
         `${where}: is neither declared text nor declared binary, so it shipped unscanned — ` +
           `add its extension to TEXT_EXTENSIONS or BINARY_EXTENSIONS in scripts/scan-residue.ts`,
       );
@@ -271,7 +308,14 @@ export function scanResidue(root: string = DIST): { findings: string[]; scannedC
       const match = normalizedForms(text)
         .map((form) => pattern.exec(form))
         .find((found) => found !== null);
-      if (match) findings.push(`${where}: contains ${what} (${JSON.stringify(match[0])})`);
+      if (match) {
+        // `where` is a route and `what` is a literal, but `match[0]` is whatever
+        // was found — measured, `/home/<user>/` for the home-directory rule, a
+        // real disclosure on a surface a workflow log inherits. One rule leaking
+        // is enough to withhold the echo for all nine rather than maintain a
+        // per-rule table.
+        report(`${where}: contains ${what}`, `${where}: contains ${what} (${JSON.stringify(match[0])})`);
+      }
     }
   }
 
@@ -280,12 +324,18 @@ export function scanResidue(root: string = DIST): { findings: string[]; scannedC
   // holding one stray file satisfies it. Requiring the site's entry point ties
   // the clean result to a build that actually produced a site.
   if (scannedPaths.length === 0) {
-    findings.push(`${root}: no scannable file was found, so this scan proved nothing`);
+    report(
+      'no scannable file was found in the built site, so this scan proved nothing',
+      `${root}: no scannable file was found, so this scan proved nothing`,
+    );
   } else if (!scannedPaths.includes('index.html')) {
-    findings.push(`${root}: has no index.html at its root, so this is not a complete built site`);
+    report(
+      'the built site has no index.html at its root, so this is not a complete built site',
+      `${root}: has no index.html at its root, so this is not a complete built site`,
+    );
   }
 
-  return { findings, scannedCount: scannedPaths.length };
+  return { findings, detailed, scannedCount: scannedPaths.length };
 }
 
 /**
@@ -296,25 +346,42 @@ export function scanResidue(root: string = DIST): { findings: string[]; scannedC
  * wording, the plural, and — the one that matters — the decision that a finding
  * is fatal can drift apart.
  *
- * @throws {Error} listing every finding, when the scan is not clean.
+ * The message carries no `root`: measured, the packaged build's `root` is a
+ * `mkdtemp` workspace whose random suffix differs between two runs of the same
+ * corpus, so it is a host path the user never typed. The full detail, matched
+ * bytes and scanned root included, is on the thrown error for the report.
+ *
+ * @throws {BuildFailure} listing every finding, when the scan is not clean.
  */
 export function assertNoResidue(root: string = DIST): number {
-  const { findings, scannedCount } = scanResidue(root);
+  const { findings, detailed, scannedCount } = scanResidue(root);
   if (findings.length > 0) {
-    throw new Error(
-      `residue scan: ${findings.length} finding${findings.length === 1 ? '' : 's'} in ${root}\n` +
-        findings.map((finding) => `  - ${finding}`).join('\n'),
+    const count = `${findings.length} finding${findings.length === 1 ? '' : 's'}`;
+    throw new BuildFailure(
+      'residue-scan-failed',
+      `residue scan: ${count}\n${findings.map((finding) => `  - ${finding}`).join('\n')}`,
+      `residue scan: ${count} in ${root}\n${detailed.map((finding) => `  - ${finding}`).join('\n')}`,
     );
   }
   return scannedCount;
 }
 
+/**
+ * This repository scanning its own `dist/`, from `pnpm run build`.
+ *
+ * The detail is printed here and only here. This path never runs in a user's
+ * repository — the packaged CLI imports {@link assertNoResidue} directly — and
+ * its `root` is this repository's own `dist/`, on a host whose operator is the
+ * person reading the output. A maintainer fixing residue needs the bytes that
+ * matched; a stranger's workflow log must not have them, and that caller takes
+ * the public half off the same error.
+ */
 function main(): number {
   try {
     console.log(`residue scan ok: ${assertNoResidue()} files, 0 findings`);
     return 0;
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(error instanceof BuildFailure ? error.detail : error instanceof Error ? error.message : String(error));
     return 1;
   }
 }

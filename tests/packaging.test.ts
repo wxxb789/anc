@@ -29,6 +29,7 @@
 import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
@@ -286,9 +287,58 @@ test('the trace reaches the modules whose devDependency imports broke the adopti
     'src/scripts/search-dialog.ts',
     'src/scripts/link-preview.ts',
     'src/scripts/preferences.ts',
+    // The report writer, which the gate below exempts by name from a string
+    // scan. Without this line that allowlist would exempt a module the trace
+    // never visits, and the scan would reduce to a search over files that were
+    // going to be clean anyway.
+    'scripts/write-report.ts',
   ]) {
     assert.ok(reached.has(module), `the import trace never reached ${module}, so it gates nothing`);
   }
+});
+
+test('no module the build loads reads the report', () => {
+  // The report holds exactly the strings the privacy model exists to keep out
+  // of the built site: the names of files the build did not publish. Nothing
+  // that renders a page may read it — not to show an "N notes withheld" figure,
+  // not for anything — because a module that *reads* it is one layer from a
+  // module that prints it, and this fires on the read rather than on the output.
+  //
+  // Exactly one exemption, and it is not a loophole: `traceImports` adds every
+  // entry point to the closure before scanning it, and `bin/…mjs` is
+  // `ENTRY_POINTS[0]`, so an unexempted scan forbids TK-25's own writer. An
+  // allowlist of one is honest; a rule that forbids its own implementation is
+  // not. `specifiersIn` follows dynamic imports, so there is nowhere in the
+  // producer to hide the read either.
+  //
+  // The corollary is an implementation constraint the writer already meets:
+  // because `bin/` may not carry the string, it names `scripts/write-report.ts`
+  // and never `content-report` or `publish-report`, and the writer derives the
+  // full path itself.
+  const owner = join(ROOT, 'scripts', 'write-report.ts').replaceAll('/', sep);
+  const { files } = traceImports();
+
+  const readers = [...files]
+    .filter((file) => file !== owner)
+    .filter((file) => readFileSync(file, 'utf8').includes('content-report'))
+    .map((file) => relative(ROOT, file).replaceAll('\\', '/'));
+
+  assert.deepEqual(
+    readers,
+    [],
+    'these modules are loaded by the build and name the report, which is how the list of files a ' +
+      `user withheld reaches dist/:\n  ${readers.join('\n  ')}`,
+  );
+
+  // Non-vacuity for the exemption itself: the owner must be in the closure, or
+  // the filter above removes nothing and this scan runs over a set that was
+  // always going to be clean.
+  assert.ok(files.has(owner), 'the trace never reached the report writer, so the exemption is inert');
+  assert.ok(
+    readFileSync(owner, 'utf8').includes('content-report'),
+    'the exempted module does not name the report, so the exemption hides nothing and the scan ' +
+      'would pass without it',
+  );
 });
 
 test('the packaged build runs the same chain as `pnpm run build`', () => {
@@ -402,6 +452,73 @@ test('the tarball carries what the build reads and none of this owner\'s content
     true,
     'package.json is not private, so `npm publish` would succeed — and publication is a ' +
       'separately approved action (AGENTS.md, Boundaries)',
+  );
+});
+
+test('a bare pack is refused, and the refusal names the script that works', () => {
+  // The second publication guard, beside `private: true` above. A bare `npm
+  // pack` in this repository ships 29 `.ts` files Node refuses to strip under
+  // `node_modules` — so the tarball dies at its first import in a consumer's
+  // repository — and a `package.json` byte-identical to this one, including
+  // `sync:content`'s path into the private vault, which this repository may not
+  // carry to a consumer. The compiled path strips both.
+  //
+  // The cause is *not* that `npm pack` skips lifecycle hooks. Measured on npm
+  // 12.0.2 and pnpm 11.18.0, `prepack` fires for `npm pack`, `npm pack
+  // --dry-run`, `pnpm pack`, and both publish dry runs, and does not fire for
+  // any install. The slot was simply empty.
+  assert.ok(MANIFEST.scripts['prepack'], 'nothing guards a bare `npm pack`');
+  assert.equal(
+    MANIFEST.scripts['pack:tarball'],
+    'node scripts/compile-package.ts',
+    'the refusal points at a command that is not there',
+  );
+
+  // The rename is mandatory rather than cosmetic: npm runs `pre`/`post` hooks
+  // around *any* script name, so a `prepack` hook fires for `npm run pack` too.
+  // Measured on a probe whose `prepack` printed a marker and exited 3, `npm run
+  // pack` fired the hook and never reached the `pack` body, while `npm run
+  // pack:tarball` ran its body and fired no hook. A refusing hook and a script
+  // named `pack` cannot coexist.
+  assert.equal(
+    Object.hasOwn(MANIFEST.scripts, 'pack'),
+    false,
+    'a `pack` script is shadowed by the `prepack` hook and can never run its own body',
+  );
+
+  // The quoting form, asserted statically because the spawn below is blind to
+  // it. npm runs a script through `cmd.exe` on Windows and `sh` on POSIX, and
+  // only one form survives both: outer double quotes, inner single quotes, no
+  // backticks. Measured, the outer-single-quote form works fine under `sh` — so
+  // a spawn-based gate on `ubuntu-latest` is **green** on that mutation — while
+  // under `cmd.exe` it dies with `SyntaxError: Invalid or unexpected token`,
+  // because cmd.exe does not strip single quotes, and the intended message never
+  // appears at all.
+  assert.match(
+    MANIFEST.scripts['prepack']!,
+    /^node -e "/,
+    'the refusal is not in the one quoting form that survives both cmd.exe and sh',
+  );
+  assert.doesNotMatch(
+    MANIFEST.scripts['prepack']!,
+    /`/,
+    'a backtick in the refusal is command-substituted by `sh` before node sees the string',
+  );
+
+  // And the body itself: run it once through a shell, and assert it fails while
+  // naming the script that works, in bare text. The regex is the mutation
+  // surface, and the mutation is backquoting the script name — the form a
+  // maintainer reaches for because it reads better in a terminal. Red on both
+  // platforms for two different reasons: under `sh` the backticks are
+  // substituted and the name disappears entirely, under `cmd.exe` the name
+  // survives wearing backticks the regex rejects.
+  const refusal = spawnSync(MANIFEST.scripts['prepack']!, { shell: true, encoding: 'utf8' });
+  assert.notEqual(refusal.status, 0, 'the prepack hook exits 0, so it refuses nothing');
+  assert.match(
+    `${refusal.stdout}${refusal.stderr}`,
+    /(^|[^`])run pnpm run pack:tarball/,
+    'the refusal does not name `pnpm run pack:tarball` in bare text, so the user is told to stop ' +
+      'without being told what to run',
   );
 });
 

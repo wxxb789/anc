@@ -251,7 +251,7 @@ function manifestFiles(): { roots: string[]; excluded: string[] } {
  * An in-place `prepack` would delete the `.ts` sources it had just compiled.
  *
  * The result is a directory `npm pack` can be run in directly, which is what
- * `pnpm run pack` does.
+ * `pnpm run pack:tarball` does.
  */
 export function compilePackage(destination: string): { compiled: number; rewritten: number } {
   rmSync(destination, { recursive: true, force: true });
@@ -267,7 +267,14 @@ export function compilePackage(destination: string): { compiled: number; rewritt
   // are; a `.ts` file is deliberately never staged, so there is no window in
   // which the staging directory holds sources that must be remembered and
   // deleted again.
-  for (const entry of [...roots, 'package.json']) {
+  //
+  // `README.md` is staged explicitly because npm includes it implicitly — even
+  // when `files` omits it — and this function stages only the `files` roots.
+  // Measured before it was added: the bare tarball carried `README.md` and the
+  // compiled one did not, 65 files against 64. That was a difference between two
+  // tarballs; once `prepack` refuses the bare pack, the compiled one is the only
+  // tarball, and the omission would be the shipped state.
+  for (const entry of [...roots, 'package.json', 'README.md']) {
     const from = join(ROOT, entry);
     if (!existsSync(from)) continue;
     cpSync(from, join(destination, entry), {
@@ -329,6 +336,13 @@ export function compilePackage(destination: string): { compiled: number; rewritt
  * this workspace, and npm is what a consumer installs the result with. The
  * carve-out from `AGENTS.md`'s pnpm-only rule is recorded there, in the
  * contract, rather than argued here.
+ *
+ * The inner `npm pack` does **not** trip `package.json`'s `prepack` refusal,
+ * and that is structural rather than lucky: it runs inside `.package/`, whose
+ * staged manifest has had its `scripts` key deleted above. The refusal exists to
+ * stop a bare `npm pack` at the repository root, which would ship 29 `.ts` files
+ * Node refuses to strip under `node_modules` — and, measured, a `package.json`
+ * byte-identical to this one, private-vault path in `sync:content` included.
  */
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const staging = join(ROOT, '.package');

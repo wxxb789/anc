@@ -23,24 +23,35 @@
 
 import { createIndex, close } from 'pagefind';
 import { fileURLToPath } from 'node:url';
+import { BuildFailure } from './write-report.ts';
 
 /** The selector whose text must not enter the index. */
 const EXCLUDE_SELECTORS = ['.heading-anchor'];
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 
+/**
+ * Pagefind's own error strings are third-party, of opaque provenance, and are
+ * composed over the directory being indexed — so they go to the report rather
+ * than to a stream a workflow log inherits. The public half is which of the
+ * three calls failed, which is a literal of this file's own source.
+ */
+function pagefindFailed(what: string, errors: readonly unknown[]): BuildFailure {
+  return new BuildFailure('pagefind-failed', `pagefind ${what}`, `pagefind ${what}: ${errors.join('; ')}`);
+}
+
 export async function indexWithPagefind(siteDirectory: string): Promise<number> {
   const { index, errors } = await createIndex({ excludeSelectors: EXCLUDE_SELECTORS });
   if (errors.length > 0 || index === undefined) {
-    throw new Error(`pagefind could not start: ${errors.join('; ')}`);
+    throw pagefindFailed('could not start', errors);
   }
 
   try {
     const added = await index.addDirectory({ path: siteDirectory });
-    if (added.errors.length > 0) throw new Error(`pagefind failed to index: ${added.errors.join('; ')}`);
+    if (added.errors.length > 0) throw pagefindFailed('failed to index', added.errors);
 
     const written = await index.writeFiles({ outputPath: `${siteDirectory}/pagefind` });
-    if (written.errors.length > 0) throw new Error(`pagefind failed to write: ${written.errors.join('; ')}`);
+    if (written.errors.length > 0) throw pagefindFailed('failed to write', written.errors);
 
     return added.page_count;
   } finally {

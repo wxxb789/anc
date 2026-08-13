@@ -117,6 +117,7 @@ import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { failureFor, isDisclosureChecked, openReport, BuildFailure } from '../scripts/write-report.ts';
 
 /** This package's own root — the directory holding `astro.config.mjs`. */
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -139,6 +140,26 @@ Options
  * would otherwise get a successful build writing to a place they did not ask
  * for, which for a publishing tool is the failure that matters: silently correct
  * output in the wrong location reads as success.
+ *
+ * **The rejected token is never echoed.** "The user typed it" is not a safety
+ * argument on a surface a workflow log inherits — the user typed their withheld
+ * filenames too, and measured before this changed, `build
+ * clients/acme/2026-renewal` printed that path back verbatim. The rule is that a
+ * printed argv token must be byte-equal to a spelling this tool's own table
+ * declares, and an *unrecognised* token is by definition not one of those, so
+ * there is nothing left that may be printed.
+ *
+ * A shape test was tried first and rejected on measurement: echoing whatever
+ * matches `/^--?[A-Za-z][A-Za-z0-9-]*$/` still prints `--clients-acme-renewal`,
+ * which is a withheld note's stem wearing two dashes. A rule that admits a class
+ * of tokens has to be right about the whole class; this one admits none.
+ *
+ * The token is carried on the error's private half, which on this path reaches
+ * nobody: parsing happens before `build` opens a report, so an argument refusal
+ * has no file to write it to. That is accepted rather than repaired — the user is
+ * looking at the command they just typed, so the one string they do not need
+ * repeated back is the one they can see. It is recorded here so a later reader
+ * does not take the third argument as a promise that it is stored somewhere.
  */
 function parseArguments(argv) {
   const options = { content: undefined, out: undefined };
@@ -146,9 +167,16 @@ function parseArguments(argv) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') return 'help';
     const key = argument === '--content' ? 'content' : argument === '--out' ? 'out' : undefined;
-    if (key === undefined) throw new Error(`unknown option "${argument}"\n\n${USAGE}`);
+    if (key === undefined) {
+      throw new BuildFailure('unknown-option', `unrecognised option\n\n${USAGE}`, argument);
+    }
     const value = argv[index + 1];
-    if (value === undefined || value.startsWith('--')) throw new Error(`${argument} needs a directory\n\n${USAGE}`);
+    // `argument` is `--content` or `--out` by construction here — the ternary
+    // above has already rejected everything else — so it is a literal of this
+    // tool's own source rather than a user-supplied string.
+    if (value === undefined || value.startsWith('--')) {
+      throw new BuildFailure('missing-value', `${argument} needs a directory\n\n${USAGE}`);
+    }
     options[key] = value;
     index += 1;
   }
@@ -210,14 +238,32 @@ function assertSafeOutput(outDirectory, contentDirectory, userDirectory) {
     [userDirectory, 'the working directory'],
   ]) {
     if (contains(output, real(directory))) {
-      throw new Error(
-        `refusing to build into ${outDirectory}: it is, or contains, ${what} ` +
-          `(${directory}), and the build replaces its output directory wholesale. ` +
-          'Name a subdirectory instead — the default is `dist`.',
+      // Three host paths used to be in this message and now none is: the public
+      // half is the error code and which containment relation tripped, and the
+      // paths go to the report, where the person who can act on them reads them.
+      throw new BuildFailure(
+        'unsafe-output-directory',
+        `unsafe-output-directory: refusing to build into the directory named by --out, ` +
+          `because it is, or contains, ${what}, and the build replaces its output ` +
+          'directory wholesale. Name a subdirectory instead — the default is `dist`.',
+        `--out ${outDirectory} is, or contains, ${what} (${directory}); ` +
+          `the command was run in ${userDirectory}`,
       );
     }
   }
 }
+
+/**
+ * The report this run opened, so the boundary below can print its two lines
+ * however the run ended.
+ *
+ * A module-level binding because the boundary is a top-level `try`, and there is
+ * exactly one `build` per process — `main` returns after it, and the binary has
+ * no path that calls it twice. It is cleared at the top of `build` regardless,
+ * so that a hypothetical second call which failed to open a report could not
+ * announce the first call's.
+ */
+let openedReport;
 
 /**
  * Run the build.
@@ -230,16 +276,52 @@ function assertSafeOutput(outDirectory, contentDirectory, userDirectory) {
  * mirror is a property rather than a promise.
  *
  * Every path is resolved to an absolute one *before* cwd changes, since a
- * relative `--out` means "relative to where the user typed it".
+ * relative `--out` means "relative to where the user typed it". The report's
+ * destination is resolved here for a sharper reason: `git rev-parse --git-path`
+ * answers **relative to cwd**, so resolving it after the `chdir` below would
+ * land it inside this package under `node_modules`.
  */
 async function build(options) {
+  openedReport = undefined;
   const userDirectory = process.cwd();
   const contentDirectory = resolve(userDirectory, options.content ?? '.');
   const outDirectory = resolve(userDirectory, options.out ?? 'dist');
 
-  if (!existsSync(contentDirectory)) throw new Error(`content directory not found: ${contentDirectory}`);
-  assertSafeOutput(outDirectory, contentDirectory, userDirectory);
+  // Opened before anything can fail, and it writes its stub immediately. The
+  // diagnostic is worth most on the run that failed, and a report written where
+  // the counts are convenient — after validation — cannot exist on the run that
+  // failed validation, which is the likeliest throw in this function.
+  const report = openReport(userDirectory);
+  openedReport = report;
+  try {
+    if (!existsSync(contentDirectory)) {
+      throw new BuildFailure(
+        'content-directory-not-found',
+        'content directory not found: the directory named by --content does not exist',
+        contentDirectory,
+      );
+    }
+    assertSafeOutput(outDirectory, contentDirectory, userDirectory);
 
+    await buildInto(contentDirectory, outDirectory, report);
+    return report;
+  } catch (error) {
+    // Recording the failure must not *replace* it. If this second write throws —
+    // a full disk, a `.git` that turned read-only mid-run — the build's own
+    // error is what the user needs, and a report nobody can write is the lesser
+    // loss. The same argument governs the workspace cleanup below; stating it
+    // twice is cheaper than a reader finding the two treated differently and
+    // wondering which was deliberate.
+    try {
+      report.failed(failureFor(error));
+    } catch {
+      // Deliberately empty: see above. The original error is rethrown intact.
+    }
+    throw error;
+  }
+}
+
+async function buildInto(contentDirectory, outDirectory, report) {
   // Build inside the package, then copy out. Not an ad-hoc workaround but the
   // shape the two constraints in this file's header force: cwd must be inside
   // the package for prerender chunks to resolve their imports, Astro stages
@@ -270,10 +352,19 @@ async function build(options) {
   try {
     const staging = join(workspace, 'dist');
 
-    const { writeArtifact } = await import('../scripts/markdown-to-artifact.ts');
+    const { discover, writeArtifact } = await import('../scripts/markdown-to-artifact.ts');
     const artifact = join(workspace, 'content.json');
-    const count = await writeArtifact(contentDirectory, artifact);
-    console.log(`content: ${count} note${count === 1 ? '' : 's'} from ${contentDirectory}`);
+
+    // Discovery, then the report, then validation — in that order and not the
+    // convenient one. The report stops saying `aborted` the moment discovery
+    // finishes, which is *before* the content contract runs over what was
+    // discovered and before an empty corpus is refused. That is what puts the
+    // names of the dropped files in a readable file on the two runs that need
+    // them most: the one the contract rejects, and the one where every file was
+    // dropped and there is nothing left to publish.
+    const discovery = await discover(contentDirectory);
+    report.discovered(discovery.counts, discovery.dropped);
+    await writeArtifact(discovery, artifact);
 
     // From here on the process runs as if it had been started in the package, so
     // every consumer that resolves against cwd — `artifact-source.ts` first among
@@ -316,9 +407,24 @@ async function build(options) {
     await rm(outDirectory, { recursive: true, force: true });
     await mkdir(outDirectory, { recursive: true });
     await cp(staging, outDirectory, { recursive: true });
-    console.log(`site written to ${outDirectory}`);
+    // No path. `site written to <outDirectory>` put a host path on a surface a
+    // workflow log inherits, and restoring it as `options.out` would not help —
+    // a user-typed argv value is not a safety class.
+    console.log('site written');
   } finally {
-    await rm(workspace, { recursive: true, force: true });
+    // `maxRetries` because this is Windows: measured, removing the staging
+    // directory intermittently fails with `EBUSY: resource busy or locked` on a
+    // file the just-finished build wrote, which is a scanner or indexer still
+    // holding it rather than anything this process did.
+    //
+    // And caught, because a cleanup failure must not *replace* the build's own
+    // failure. It did: on the run that reproduced the EBUSY, the residue scan's
+    // five findings were thrown away and the user got the unlink error instead —
+    // so the same corpus printed two different things on two runs, and the one
+    // it printed on the bad run said nothing about what was actually wrong. A
+    // left-behind workspace is a wasted directory; a swallowed diagnostic is a
+    // build nobody can debug.
+    await rm(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
   }
 }
 
@@ -329,7 +435,12 @@ async function main(argv) {
     return command === undefined ? 1 : 0;
   }
   if (command !== 'build') {
-    console.error(`unknown command "${command}"\n\n${USAGE}`);
+    // Same treatment as an unrecognised option, for the reason
+    // `parseArguments` gives at length: an unrecognised token is by definition
+    // not one of this tool's own spellings, and measured before this changed,
+    // `deploy-to-clients-acme` was printed back verbatim. A shape test does not
+    // help — that token matches every plausible one.
+    console.error(`unrecognised command\n\n${USAGE}`);
     return 1;
   }
 
@@ -343,9 +454,57 @@ async function main(argv) {
   return 0;
 }
 
+/**
+ * The two report lines, emitted exactly once per `build` however it ended.
+ *
+ * Unconditional is the decision, and the alternative is worth naming so it is
+ * not re-proposed: a line emitted only when something was dropped reaches
+ * exactly the user who already had a signal, while the user who needs the report
+ * is by definition the one who did not know they would. The file's existence is
+ * not self-announcing.
+ *
+ * Both are rename-invariant by construction — three integers and two source
+ * literals — so requiring them strengthens the disclosure differential rather
+ * than fighting it.
+ */
+function announce(report) {
+  if (report === undefined) return;
+  console.log(report.summary);
+  console.log(report.pointer);
+}
+
+/**
+ * The boundary, and the one place a string nobody here composed could reach a
+ * world-readable log.
+ *
+ * `console.error(error.message)` used to print every throw in the process
+ * verbatim, which is how a `readdir` `ENOTDIR` reached stderr with an absolute
+ * path already inside a message this project never wrote — and how the residue
+ * scanner, whose whole job is keeping an absolute path out of `dist/`, announced
+ * that path on the one run where it existed. So only an error constructed under
+ * the disclosure rule prints its own message; everything else prints its code,
+ * and its real message is in the report's `failure.detail`.
+ */
 try {
   process.exitCode = await main(process.argv.slice(2));
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
+  // Three cases, not two, and the third is why this is not one ternary.
+  //
+  // An error composed under the disclosure rule prints its own message. Anything
+  // else prints a fixed literal — including `error.name`, which reads like a
+  // harmless literal of this tool's own source and is not one: it is whatever a
+  // library or the runtime chose, so it is a third-party string of opaque
+  // provenance on the same surface as everything else this rule governs.
+  //
+  // And an error thrown *before a report was opened* must not point at one. That
+  // is not hypothetical: `parseArguments` runs before `build`, so every argument
+  // refusal takes this path, as does a failure to open the report itself. A
+  // message reading "see the report for the detail" when no report exists sends
+  // the user to a file they will not find, which is worse than saying less.
+  if (isDisclosureChecked(error)) console.error(error.message);
+  else if (openedReport === undefined) console.error('build failed');
+  else console.error('build failed — see the report for the detail');
   process.exitCode = 1;
+} finally {
+  announce(openedReport);
 }
