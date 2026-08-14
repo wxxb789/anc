@@ -102,6 +102,73 @@ export interface DroppedFile {
   collidedWith?: string;
 }
 
+/**
+ * What a link turned out to be, for the rows that are worth a reader's time.
+ *
+ * A closed set, like {@link DropReason} and for the same reason: a free-text
+ * outcome cannot be gated on and cannot be switched on. `resolved` and
+ * `external` are deliberately absent — a report listing every working link is a
+ * report nobody reads, and the two that are not findings are the two that
+ * needed no action.
+ *
+ * - `ambiguous` — several files could have been meant. The link **still
+ *   renders**; this is a warning, because failing is worst exactly where it is
+ *   most likely and a stranger cannot always act on it.
+ * - `unpublished` — the target is a real file this build did not publish. Not a
+ *   broken link: it is the publication boundary seen from the other side, and
+ *   the most useful line in the report.
+ * - `unresolved` — nothing of that name exists.
+ * - `embed-not-transcluded` — an `![[note]]` embed became an ordinary link,
+ *   because nothing here transcludes a note's content into another.
+ */
+export type LinkOutcome = 'ambiguous' | 'unpublished' | 'unresolved' | 'embed-not-transcluded';
+
+/**
+ * One link the build wants a human to look at.
+ *
+ * **Rows, never counts.** "Zero unresolved because there were none" and "zero
+ * because I never looked" are the same number, so each row carries the text and
+ * the position a user can act on. `ContentReport.status` is what keeps the
+ * *stream's* counts honest; this is the file's half.
+ *
+ * Every field here is a string the stream may not carry: a repository-relative
+ * source path, a link naming a note that may have been withheld, and for
+ * `unpublished` the path of a file the user chose not to publish. That is
+ * precisely why the report lives under the git directory, where nothing can
+ * stage it, and why nothing under `src/` imports this module.
+ */
+export interface LinkFindingRow {
+  /** The writing file's path, relative to the content directory. */
+  source: string;
+  /** 1-indexed line within that file. */
+  line: number;
+  /** The link exactly as authored, so it can be searched for. */
+  link: string;
+  outcome: LinkOutcome;
+  /**
+   * Every candidate considered, sorted. Present for `ambiguous` and
+   * `unpublished`; **absent** for the other two rather than empty, because an
+   * empty list reads as "looked and found none" where there was nothing to look
+   * at.
+   */
+  candidates?: string[];
+  /** For `ambiguous` only: which candidate the tier order picked. */
+  resolvedTo?: string;
+}
+
+/**
+ * Where a reader would look for a finding: by file, then down the file.
+ *
+ * Exported because the producer sorts its own findings before handing them over
+ * and this module sorts them again on the way to disk — and two copies of one
+ * comparator is one edit away from two different orders. `line` is compared
+ * numerically: as a string, 10 sorts before 9.
+ */
+export function bySourceThenLine(a: LinkFindingRow, b: LinkFindingRow): number {
+  if (a.source !== b.source) return a.source < b.source ? -1 : 1;
+  return a.line - b.line;
+}
+
 export interface ContentReport {
   version: typeof REPORT_SCHEMA_VERSION;
   /** `package.json`'s version, so a report found later names the tool that wrote it. */
@@ -125,6 +192,16 @@ export interface ContentReport {
   counts: { discovered: number; published: number; dropped: number };
   /** Sorted by `path`. Empty when nothing was dropped — never omitted, so `jq '.dropped | length'` is meaningful on every report. */
   dropped: DroppedFile[];
+  /**
+   * Every link worth a human's attention, sorted by source then line. Empty
+   * rather than omitted, for the same reason `dropped` is: a reader's access to
+   * it must not depend on whether this run happened to find anything.
+   *
+   * Adding this field does not bump {@link REPORT_SCHEMA_VERSION} — a reader
+   * that does not know it still parses the file, which is the rule stated on
+   * {@link DropReason}.
+   */
+  links: LinkFindingRow[];
   /** `null` on a successful build. */
   failure: { code: string; detail: string } | null;
 }
@@ -281,8 +358,19 @@ export interface OpenReport {
   readonly pointer: string;
   /** The counts line, which is three integers and a source literal. */
   readonly summary: string;
-  /** Discovery finished: the counts are real and `dropped` is exhaustive. */
-  discovered(counts: ContentReport['counts'], dropped: readonly DroppedFile[]): void;
+  /**
+   * Discovery finished: the counts are real and `dropped` is exhaustive.
+   *
+   * `links` is optional because discovery and link resolution are two steps,
+   * and a caller may record what was discovered before the second runs — which
+   * is the ordering that puts the dropped files in a readable file on the run
+   * that fails afterwards. Omitting it leaves whatever was recorded before.
+   */
+  discovered(
+    counts: ContentReport['counts'],
+    dropped: readonly DroppedFile[],
+    links?: readonly LinkFindingRow[],
+  ): void;
   /** The run threw: record the code and the private detail, leaving the rest. */
   failed(failure: { code: string; detail: string }): void;
 }
@@ -313,6 +401,7 @@ export function openReport(userDirectory: string): OpenReport {
     status: 'aborted',
     counts: { discovered: 0, published: 0, dropped: 0 },
     dropped: [],
+    links: [],
     failure: null,
   };
 
@@ -341,10 +430,14 @@ export function openReport(userDirectory: string): OpenReport {
       const { discovered, published, dropped } = report.counts;
       return `content: ${discovered} discovered, ${published} published, ${dropped} dropped`;
     },
-    discovered(counts, dropped): void {
+    discovered(counts, dropped, links): void {
       report.status = 'complete';
       report.counts = counts;
       report.dropped = [...dropped].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+      // Sorted where a reader would look, and left alone when the caller has
+      // nothing yet — link resolution is a second step, and a caller recording
+      // discovery first must not have that read as "no findings".
+      if (links !== undefined) report.links = [...links].sort(bySourceThenLine);
       flush();
     },
     failed(failure): void {

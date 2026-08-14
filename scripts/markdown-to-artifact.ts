@@ -59,19 +59,29 @@
  *
  * ## What this file still does not do, and who owns each
  *
- * No link resolution, no backlink derivation, no ambiguity reporting — TK-27 and
- * TK-28. No git commit dates, no `tags`, no `collection`, no `aliases` — every
- * one is a derived field that needs a decision of its own, and this ticket's
- * scope is discovery, exclusion, and the frontmatter publish flag. `title:` is
- * read because the frontmatter had to be parsed and stripped regardless, and a
- * note whose title lived only in frontmatter would otherwise lose it.
+ * No backlink derivation — TK-28. No git commit dates, no `tags`, no
+ * `collection`, no `aliases` — every one is a derived field that needs a
+ * decision of its own, and this ticket's scope is discovery, exclusion, the
+ * frontmatter publish flag, and the link traversal below. `title:` is read
+ * because the frontmatter had to be parsed and stripped regardless, and a note
+ * whose title lived only in frontmatter would otherwise lose it.
+ *
+ * ## Link resolution runs after the whole walk, and that ordering is forced
+ *
+ * TK-27 resolves links against the **full** file set — every discovered file,
+ * published or not — because a link to a note the user excluded and a link to
+ * nothing at all are different events with different fixes, and resolving
+ * against the published set only would merge them. The full set does not exist
+ * until the walk finishes, so the traversal cannot run inside the loop that
+ * builds it. See {@link resolveCorpusLinks}.
  */
 
 import { readFile, readdir, mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { validateArtifact } from '../src/lib/schema.ts';
-import { BuildFailure, type DroppedFile } from './write-report.ts';
+import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
+import { BuildFailure, bySourceThenLine, type DroppedFile, type LinkFindingRow } from './write-report.ts';
 
 /**
  * Names the walk never descends into or enumerates, tested against one path
@@ -442,10 +452,11 @@ function excludes(
  * it. That ordering is the whole reason a run which fails the contract still
  * leaves a report naming the files it dropped.
  *
- * `outgoing` and `backlinks` are empty for every entry: the contract requires
- * backlinks to be the exact inverse of outgoing links, and deriving either needs
- * the link resolution TK-27 specifies. Empty is the only pair that is honest and
- * that validates.
+ * `backlinks` is the mechanical inverse of `outgoing`, derived in
+ * {@link resolveCorpusLinks} because `checkCorpus` rejects any artifact where it
+ * is not — so a producer emitting only one direction makes every repository with
+ * an internal link unbuildable. Deriving the array is all this ticket does with
+ * it; what a page *renders* from it is TK-28's.
  *
  * **Enumerate first, classify inside.** Every path {@link walk} returned is
  * `discovered`, and leaves with either an entry or a `DroppedFile` row — so
@@ -459,13 +470,20 @@ function excludes(
  * glob rules are rank 2. The mechanism pointing toward *not* publishing is the
  * three words inside the file itself, nearest the content, and it always wins.
  */
-export async function discover(contentDirectory: string, options: ExclusionOptions = {}): Promise<Discovery> {
+export async function discover(
+  contentDirectory: string,
+  options: ExclusionOptions = {},
+): Promise<Discovery> {
   const patterns = options.exclude ?? [];
   const matched = patterns.map(() => false);
   const paths = await walk(contentDirectory);
 
   /** Slug to the path that claimed it, so a collision can name its winner. */
   const claimed = new Map<string, string>();
+  /** Slug to the path that produced it, for the link traversal. */
+  const sources = new Map<string, string>();
+  /** Slugs whose title the author wrote in frontmatter rather than a heading. */
+  const declaredTitles = new Set<string>();
   const dropped: DroppedFile[] = [];
   const entries = [];
 
@@ -551,12 +569,30 @@ export async function discover(contentDirectory: string, options: ExclusionOptio
     const title = typeof parsed.data?.['title'] === 'string' ? parsed.data['title'].trim() : '';
     entries.push({
       slug,
+      // Derived from the body as authored, and derived **again** from the
+      // rewritten body by {@link resolveCorpusLinks}. Not merely deferred:
+      // deriving them only here was measured wrong in the loudest possible way —
+      // the excerpt of a note containing `[[b]]` still carried the two brackets
+      // after the body no longer did, and `schema.ts`'s unresolved-wikilink rule
+      // rejected the artifact naming the entry rather than the field. Deriving
+      // them only *there* would leave a caller that never runs the traversal
+      // with an untitled entry, which is a second way to be wrong. So both, and
+      // the second overwrites the first.
       title: title || titleFor(parsed.body, slug),
       excerpt: excerptFor(parsed.body),
       markdown: parsed.body,
       outgoing: [],
       backlinks: [],
     });
+    // The frontmatter title, kept apart from the derived one: the traversal
+    // re-derives a title from the rewritten body, and it must not overwrite a
+    // title the author wrote down.
+    if (title !== '') declaredTitles.add(slug);
+    // The path a link resolves *from*, kept beside the entry it produced rather
+    // than inside it: `slug` is a public route and `path` is a host-relative
+    // filename, and `schema.ts` rejects an artifact carrying an unknown field
+    // precisely so a source path cannot ride into `dist/` on one.
+    sources.set(slug, path);
   }
 
   // After the walk, because a pattern's verdict is "did it match any discovered
@@ -584,7 +620,157 @@ export async function discover(contentDirectory: string, options: ExclusionOptio
     entries,
     counts: { discovered: paths.length, published: entries.length, dropped: dropped.length },
     dropped,
+    paths,
+    sources,
+    declaredTitles,
   };
+}
+
+/**
+ * The route a published slug is served at.
+ *
+ * A parameter with a default rather than a constant, so the shape lives in one
+ * place and a ticket that moves notes under a prefix changes one default instead
+ * of hunting for string concatenation. Mirrors `defaultRouteForSlug` in
+ * `src/lib/markdown.ts`, which is what rewrites these same hrefs at render time.
+ */
+export type RouteForSlug = (slug: string) => string;
+
+const defaultRouteForSlug: RouteForSlug = (slug) => `/${slug}/`;
+
+/**
+ * Discoveries this process has already resolved links for.
+ *
+ * A `WeakSet` rather than a flag on {@link Discovery}: the flag would be a field
+ * of the returned shape, which every caller can see and set, and this is an
+ * invariant of the module rather than a property of the data. Weak so a
+ * long-running process holding many discoveries does not retain them.
+ */
+const resolved = new WeakSet<Discovery>();
+
+/**
+ * Resolve every link in every published note, in one traversal per note.
+ *
+ * **A separate exported step rather than the tail of {@link discover}, for the
+ * same reason {@link writeArtifact} is one: a caller has to be able to put its
+ * own work between the two.** It also keeps the walk free of a parser — see the
+ * dynamic import below — which TK-26's cross-platform gate depends on.
+ *
+ * **Resolution runs over the full file set**, every path the walk classified and
+ * not only the published ones, so a link to an excluded note resolves to *that
+ * note* and is reported as a publication-boundary event rather than as a broken
+ * link. Those are different mistakes with different fixes, and the excluded-note
+ * case is the mistyped-exclusion hazard seen from the other side. The full set
+ * does not exist until the walk finishes, which is why this cannot run inside
+ * the loop that builds it.
+ *
+ * Entries are rewritten **in place**, and each `outgoing` comes from the same
+ * traversal that produced its rewrite — see `scripts/resolve-links.ts` for why
+ * that is one walk rather than two. `backlinks` is derived here as the exact
+ * inverse, because `checkCorpus` rejects an artifact where it is not.
+ *
+ * @returns Every link that did not simply resolve, sorted by source then line.
+ */
+export async function resolveCorpusLinks(
+  discovery: Discovery,
+  routeForSlug: RouteForSlug = defaultRouteForSlug,
+): Promise<LinkFindingRow[]> {
+  const { entries, sources, paths: allPaths, declaredTitles } = discovery;
+
+  // **Called twice, this would silently corrupt the corpus**, so it refuses.
+  // Measured: a second pass over an already-rewritten body reads `[b](/b/)` as a
+  // link to a route rather than to a file, resolves it to nothing, degrades it
+  // to the text `b`, empties `outgoing` and `backlinks`, and reports a spurious
+  // `unresolved` finding. Every one of those is silent. Rewriting is not
+  // idempotent because it cannot be — the output syntax is the input syntax —
+  // so the guard is the honest shape rather than a defensive flourish.
+  if (resolved.has(discovery)) {
+    throw new BuildFailure(
+      'links-already-resolved',
+      'link resolution ran twice over one discovery. It rewrites bodies in place, so a ' +
+        'second pass would read its own output as new links and drop them.',
+    );
+  }
+  resolved.add(discovery);
+  // Every discovered file, carrying its slug where it has one. A file with no
+  // slug is discoverable and unpublishable, which is exactly what makes
+  // `unpublished` distinguishable from `unresolved`.
+  const slugByPath = new Map([...sources].map(([slug, path]) => [path, slug]));
+  const corpus: CorpusFile[] = allPaths.map((path) => ({ path, slug: slugByPath.get(path) }));
+  const index = indexCorpus(corpus);
+
+  // **Imported here rather than at the top of the file, and this is measured
+  // rather than stylistic.** `resolve-links.ts` imports `satteri`, whose parser
+  // is a native binding installed per platform — a win32 install carries
+  // `@bruits/satteri-win32-x64-msvc` and nothing else. TK-26's cross-platform
+  // gate loads *this module* under WSL to compare the two walks, and a static
+  // import made that load throw `Cannot find native binding` before discovery
+  // ran at all, turning a green gate red on a property this ticket does not
+  // touch. The walk needs no parser; only the traversal does.
+  const { resolveLinksIn } = await import('./resolve-links.ts');
+
+  const findings: LinkFindingRow[] = [];
+  for (const entry of entries) {
+    const path = sources.get(entry.slug);
+    // Unreachable by construction — `sources` is written for every entry pushed
+    // — but an entry with no path cannot be resolved *from* anywhere, and
+    // resolving it from the corpus root would silently answer tiers 2 and 5
+    // wrong rather than not answering.
+    if (path === undefined) continue;
+
+    let result;
+    try {
+      result = resolveLinksIn(entry.markdown, path, index, entry.slug, routeForSlug);
+    } catch (error) {
+      // `applyEdits` refuses overlapping spans, which is a rewritten body that
+      // would be neither of the two things it was built from. The public half
+      // stays nameless — a withheld note's path is the disclosure — and the
+      // report gets the file.
+      throw new BuildFailure(
+        'link-rewrite-conflict',
+        'a note\'s links could not be rewritten unambiguously. See the report for the file.',
+        `${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
+    entry.markdown = result.markdown;
+    entry.outgoing = [...result.outgoing];
+    // Re-derived from the rewritten body. A title and an excerpt are
+    // projections of what was published, and taking them from the pre-traversal
+    // text put an unresolved `[[wikilink]]` into the excerpt of a body that no
+    // longer had one — which `schema.ts` rejects, correctly. A title the author
+    // wrote in frontmatter is never overwritten; only a derived one is.
+    if (!declaredTitles.has(entry.slug)) entry.title = titleFor(entry.markdown, entry.slug);
+    entry.excerpt = excerptFor(entry.markdown);
+    findings.push(...result.findings);
+  }
+
+  // **The mechanical inverse, and why it is here rather than left to TK-28.**
+  // `checkCorpus` requires `backlinks` to be the exact inverse of `outgoing`
+  // and computes precisely this list to compare against. So the moment
+  // `outgoing` stopped being empty, an artifact without this was rejected —
+  // measured on two notes and one link: `backlinks: must be the exact inverse
+  // of outgoing links (expected [a], got [])`. A producer emitting half an edge
+  // set makes every repository with a link between two notes unbuildable, which
+  // is the ordinary case for the corpora this tool exists to serve.
+  //
+  // This is the derivation only. What a *page* does with a backlink — the
+  // aside, the hover preview, the "links to this note" heading — is TK-28's,
+  // and none of it is decided here.
+  //
+  // Sorted, because the contract compares sorted lists and an unsorted one
+  // would make the artifact's bytes depend on entry order for no visible reason.
+  const backlinks = new Map(entries.map((entry) => [entry.slug, [] as string[]]));
+  for (const entry of entries) {
+    for (const target of entry.outgoing) backlinks.get(target)?.push(entry.slug);
+  }
+  for (const entry of entries) entry.backlinks = (backlinks.get(entry.slug) ?? []).sort();
+
+  // Sorted by where a reader would look for them, so a report reads identically
+  // however the walk found the notes. One comparator, exported by the module
+  // that owns the row type, because the report sorts them again on the way to
+  // disk.
+  return findings.sort(bySourceThenLine);
 }
 
 /**
@@ -600,10 +786,32 @@ export interface Discovery {
   entries: ContentEntryInput[];
   counts: { discovered: number; published: number; dropped: number };
   dropped: DroppedFile[];
+  /**
+   * Every path the walk classified as a file, published or not.
+   *
+   * Carried because link resolution runs over the **full** set: a link to an
+   * excluded note and a link to nothing at all are different events with
+   * different fixes, and resolving against the published entries alone would
+   * merge them.
+   */
+  paths: readonly string[];
+  /** Each published slug to the path that produced it, for tiers 2 and 5. */
+  sources: ReadonlyMap<string, string>;
+  /**
+   * Slugs whose title came from frontmatter, so re-deriving a title after the
+   * link traversal cannot overwrite one the author wrote down.
+   */
+  declaredTitles: ReadonlySet<string>;
 }
 
-/** One candidate entry, before the contract has judged it. */
-interface ContentEntryInput {
+/**
+ * One candidate entry, before the contract has judged it.
+ *
+ * Exported because the link traversal rewrites these in place and TK-28 derives
+ * backlinks from the same shape; an unexported type would make both consumers
+ * restate it, and two restatements of one shape drift.
+ */
+export interface ContentEntryInput {
   slug: string;
   title: string;
   excerpt: string;
