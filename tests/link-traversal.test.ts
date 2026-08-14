@@ -30,6 +30,7 @@ import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import { resolveLinksIn } from '../scripts/resolve-links.ts';
 import { discover, resolveCorpusLinks, writeArtifact } from '../scripts/markdown-to-artifact.ts';
 import { openReport } from '../scripts/write-report.ts';
+import { renderMarkdown } from '../src/lib/markdown.ts';
 
 /** A scratch directory removed when the callback returns, however it returns. */
 async function scratch<T>(prefix: string, body: (directory: string) => Promise<T>): Promise<T> {
@@ -543,17 +544,104 @@ test('a linked image builds, which is the badge every README opens with', () => 
   );
 });
 
-test('an unpublished target path does not enter the body, even undisplayed', () => {
-  // Plan §2.5: "the link's **display text only**, as plain text. The resolved
-  // path never enters `markdown`." An undisplayed wikilink is where that was
-  // false: the parser gives such a link its own *target* as its label, so
-  // `[[drafts/secret plan]]` degraded to the literal text `drafts/secret plan` —
-  // the folder a user excluded and the stem of a note they withheld — and the
-  // excerpt is re-derived from that body, so it reached `excerpt` too.
+test('no withheld path reaches the body or the excerpt, in any link form', async () => {
+  // **The property, not a list of forms.** Plan §2.5: "the resolved path never
+  // enters `markdown`." Two earlier versions of this gate enumerated the
+  // spellings their author happened to think of, and both were green while a
+  // spelling nobody listed leaked — first the undisplayed wikilink, then a
+  // label that *equals* the withheld path, which the "an authored label is
+  // untouched" exemption swallowed:
   //
-  // The corpus here uses a *nested* excluded note deliberately: a bare
-  // `[[secret]]` has no folder in it and cannot show the defect, which is
-  // exactly why the earlier gate was green over it.
+  //     [[drafts/secret plan|drafts/secret plan]]     -> "drafts/secret plan"
+  //     [drafts/secret plan](drafts/secret%20plan.md) -> "drafts/secret plan"
+  //
+  // So this asserts over the *corpus*: every file the build did not publish,
+  // against every form that can name one, checking the whole artifact rather
+  // than one field. A form-by-form gate cannot catch the next spelling, and
+  // there has now been a next spelling twice.
+  await scratch('tk27-withheld-', async (root) => {
+    // Every segment is a distinctive token, so an assertion that finds one has
+    // found a real disclosure rather than an English word that happens to occur
+    // in the fixture prose.
+    const withheld = ['zzqclients/zzqacme/zzqrenewal.md', 'zzqprivate/zzqchart.png'];
+    put(root, 'zzqclients/zzqacme/zzqrenewal.md', '---\npublish: false\n---\n\n# Renewal\n\nprose\n');
+    put(root, 'zzqprivate/zzqchart.png', 'not really a png\n');
+    put(root, 'target.md', '# Target\n\nprose\n');
+
+    // Every form that can name a file, including the two that leaked and the
+    // nested one, written so each appears in a body that also has ordinary
+    // prose around it.
+    put(
+      root,
+      'src.md',
+      [
+        '# Source',
+        '',
+        'Bare wikilink [[zzqclients/zzqacme/zzqrenewal]] here.',
+        'Anchored [[/zzqclients/zzqacme/zzqrenewal]] here.',
+        'Subpath [[zzqclients/zzqacme/zzqrenewal#Some Heading]] here.',
+        'Embed ![[zzqclients/zzqacme/zzqrenewal]] here.',
+        'Label equals target [[zzqclients/zzqacme/zzqrenewal|zzqclients/zzqacme/zzqrenewal]] here.',
+        'Markdown [text](zzqclients/zzqacme/zzqrenewal.md) here.',
+        'Encoded [text](zzqclients/zzqacme/zzqrenewal%2Emd) here.',
+        'Label equals href [zzqclients/zzqacme/zzqrenewal](zzqclients/zzqacme/zzqrenewal.md) here.',
+        'Image ![chart](zzqprivate/zzqchart.png) here.',
+        'Image embed ![[zzqprivate/zzqchart.png]] here.',
+        'Nested [![chart](zzqprivate/zzqchart.png)](target.md) here.',
+        'Nested to nothing [![chart](zzqprivate/zzqchart.png)](gone.md) here.',
+      ].join('\n'),
+    );
+
+    const discovery = await discover(root);
+    const findings = await resolveCorpusLinks(discovery);
+    await writeArtifact(discovery, join(root, 'out', 'content.json'));
+    const artifact = readFileSync(join(root, 'out', 'content.json'), 'utf8');
+
+    // **Non-vacuity, and it is two halves.** The tokens must be present in the
+    // *input* — otherwise an empty corpus passes the absence check — and the
+    // build must have seen them as real files, which the findings prove. Both
+    // are asserted before any absence is.
+    const source = readFileSync(join(root, 'src.md'), 'utf8');
+    for (const path of withheld) {
+      const directory = path.slice(0, path.indexOf('/'));
+      assert.ok(source.includes(directory), `the fixture never mentions ${directory}`);
+    }
+    assert.ok(
+      findings.filter((finding) => finding.outcome === 'unpublished').length >= 10,
+      `the corpus reached ${findings.length} findings, so most forms resolved to nothing ` +
+        'instead of to a withheld file and the absence assertions below prove little',
+    );
+
+    // The property. Every directory segment of every withheld file, absent from
+    // the whole artifact — which covers `markdown`, `excerpt`, and `title` at
+    // once, so a field added later is covered without editing this gate.
+    for (const path of withheld) {
+      for (const segment of path.split('/').slice(0, -1)) {
+        assert.ok(
+          !artifact.includes(segment),
+          `the artifact carries "${segment}", a directory of a file this build withheld`,
+        );
+      }
+    }
+
+    // And the reader still gets the *name*, which is what makes this a
+    // reduction rather than a deletion. Without it, "delete every label" passes
+    // every assertion above.
+    const entry = discovery.entries.find((candidate) => candidate.slug === 'src')!;
+    assert.ok(
+      entry.markdown.includes('zzqrenewal'),
+      `the withheld note's own name was deleted rather than reduced: ${entry.markdown}`,
+    );
+    assert.ok(entry.markdown.includes('zzqchart.png'), 'the image lost its filename');
+    // The author's surrounding prose is untouched.
+    assert.ok(entry.markdown.includes('Bare wikilink'), "the author's prose was deleted");
+    assert.ok(entry.markdown.includes('here.'), "the author's prose was truncated");
+  });
+});
+
+test('an unpublished target path does not enter the body, even undisplayed', () => {
+  // The narrow case the property gate above generalises, kept because it names
+  // the two spellings that actually leaked and what each degrades to.
   const corpus: readonly CorpusFile[] = [
     { path: 'src.md', slug: 'src' },
     { path: 'drafts/secret plan.md', slug: undefined },
@@ -575,16 +663,88 @@ test('an unpublished target path does not enter the body, even undisplayed', () 
     assert.ok(markdown.includes('secret plan'), `${body} lost the author's own words: ${markdown}`);
   }
 
-  // An authored label is never touched — it is a string the author chose to
-  // publish — and this is what stops the rule above from being "delete the
-  // text". The label deliberately *contains a slash*: with one that does not,
-  // reducing every label to its last segment is a no-op and this assertion
-  // cannot tell the two rules apart. Measured — that is exactly how the first
-  // version of this gate stayed green under the mutation.
+  // The two spellings that leaked past a syntax-based rule, and the one whose
+  // label is the author's own words. All three are decided by comparing against
+  // the resolved path now, so there is no exemption for a spelling to hide in.
+  //
+  // Each keeps the form the author wrote: a wikilink names the note without its
+  // extension and reduces to `secret plan`, while a Markdown href names the
+  // file and reduces to `secret plan.md`. The directory is gone from both,
+  // which is the property; the extension is not disclosing and the author's own
+  // spelling is what a reader recognises.
+  assert.equal(run('E [[drafts/secret plan|drafts/secret plan]] end').markdown, 'E secret plan end');
   assert.equal(
-    run('E [[drafts/secret plan|see notes/the draft]] end').markdown,
-    'E see notes/the draft end',
+    run('F [drafts/secret plan](drafts/secret%20plan.md) end').markdown,
+    'F secret plan end',
   );
+  assert.equal(
+    run('G [see notes/the draft](drafts/secret%20plan.md) end').markdown,
+    'G see notes/the draft end',
+  );
+
+  // The two spellings the same path can wear, each of which needs its own entry
+  // in the reduction list. Added after mutations removing them stayed green:
+  // the corpus above never wrote a `/`-anchored link whose label was its own
+  // target, nor a percent-encoded one, so both list entries were unasserted.
+  assert.equal(
+    run('H [[/drafts/secret plan|/drafts/secret plan]] end').markdown,
+    'H secret plan end',
+    'the /-anchored spelling of a withheld path was not reduced',
+  );
+  assert.equal(
+    run('I [drafts/secret%20plan.md](drafts/secret%20plan.md) end').markdown,
+    'I secret plan.md end',
+    'the percent-encoded spelling of a withheld path was not reduced',
+  );
+});
+
+test('a bracket in a label cannot truncate the link it lands in', () => {
+  // Text moved from one construct into another has to be re-escaped for the one
+  // it lands in. A wikilink's display half and an image's `alt` are not
+  // link-label syntax, so a `[` or `]` inside either is ordinary text there and
+  // a delimiter here. Measured before `escapeLabel` existed — the anchor ended
+  // at the author's bracket and the rest became prose:
+  //
+  //     ![[t|before ] after]]  ->  [before ] after](/t/)
+  //
+  // Asserted through the *renderer* as well as on the Markdown, because the
+  // escape is only correct if it disappears again: a reader must see the
+  // bracket, not a backslash.
+  const corpus: readonly CorpusFile[] = [
+    { path: 'src.md', slug: 'src' },
+    { path: 't.md', slug: 't' },
+  ];
+  const run = (body: string) =>
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
+
+  assert.equal(run('![[t|has ] bracket]]'), '[has \\] bracket](/t/)');
+  assert.equal(run('![[t|has [ bracket]]'), '[has \\[ bracket](/t/)');
+  // A label with no bracket gains no backslash, so the escape is not applied
+  // indiscriminately.
+  assert.equal(run('![[t|plain label]]'), '[plain label](/t/)');
+});
+
+test('an escaped bracket renders as one anchor, with the bracket in its text', async () => {
+  // The other half of the escape, and the half that matters to a reader: the
+  // backslash must disappear again. Asserted through the shipped renderer
+  // rather than by inspecting Markdown, because "correctly escaped" is a claim
+  // about what the next stage does with it — and the escape would be worse than
+  // the defect if it shipped a visible backslash.
+  const corpus: readonly CorpusFile[] = [
+    { path: 'src.md', slug: 'src' },
+    { path: 't.md', slug: 't' },
+  ];
+  const markdown = resolveLinksIn(
+    'See ![[t|has ] bracket]] here.',
+    'src.md',
+    indexCorpus(corpus),
+    'src',
+    (slug) => `/${slug}/`,
+  ).markdown;
+
+  const { html } = await renderMarkdown(markdown);
+  assert.match(html, /<a href="\/t\/">has \] bracket<\/a>/);
+  assert.ok(!html.includes('\\'), `a backslash reached the reader: ${html}`);
 });
 
 test('an NFC link finds an NFD filename in every segment, not only the last', () => {
@@ -628,10 +788,14 @@ test('resolving one discovery twice is refused rather than silently corrupting i
 
     const refusal = await resolveCorpusLinks(discovery).then(
       () => undefined,
-      (error: unknown) => error as { code: string },
+      (error: unknown) => error as Error,
     );
     assert.ok(refusal, 'a second resolution pass was accepted');
-    assert.equal(refusal.code, 'links-already-resolved');
+    assert.match(refusal.message, /ran twice over one discovery/);
+    // A plain `Error`, not a `BuildFailure`: the closed failure-code set is for
+    // faults a user's repository can cause and a user can fix, and calling this
+    // twice is neither.
+    assert.equal(refusal.name, 'Error');
 
     // And it refused *before* touching anything, so the corpus still holds the
     // first pass's result rather than a half-applied second one.

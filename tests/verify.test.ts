@@ -304,6 +304,82 @@ test('the third-party exclusion covers the bundle and nothing that merely looks 
   }
 });
 
+test('a documented wikilink publishes, and a stray one is still residue', () => {
+  // The one rule that does not apply inside a code region, and both halves of
+  // why. `[[` is not a privacy marker — it discloses nothing — it is a producer
+  // self-check: TK-27 resolves every wikilink *node*, so a `[[` reaching output
+  // from prose means the degradation failed. The artifact-level version of this
+  // rule was deleted for the same reason, because a note documenting Obsidian
+  // syntax is content and its fence renders as
+  // `<code class="language-text">[[not a link]]</code>` — measured through the
+  // shipped renderer, brackets intact and unescaped.
+  //
+  // Narrowing a rule is exactly where a coverage illusion gets in, so this
+  // asserts three things rather than one: the exempt case passes, the
+  // non-exempt case still fails, and **every other rule still fires inside a
+  // code region**. A stripper that blanked too much would satisfy the first and
+  // quietly break the other two.
+  const scratch = mkdtempSync(join(tmpdir(), 'tk27-coderegion-'));
+  try {
+    const page = (body: string) => `<html><body>${body}</body></html>`;
+
+    // Exempt: the two shapes this pipeline emits for authored code.
+    for (const documented of [
+      '<pre tabindex="0"><code class="language-text">[[not a link]]</code></pre>',
+      '<p>See <code>[[inline]]</code> for the syntax.</p>',
+    ]) {
+      writeFileSync(join(scratch, 'index.html'), page(documented), 'utf8');
+      assert.deepEqual(
+        scanResidue(scratch).findings,
+        [],
+        `a documented wikilink in ${documented} was reported as residue, so a note about ` +
+          'Obsidian syntax cannot publish',
+      );
+    }
+
+    // Not exempt, and this is the half that keeps the rule worth having: a `[[`
+    // in prose means the traversal failed to degrade a link, which is a
+    // producer defect the user cannot see any other way.
+    writeFileSync(join(scratch, 'index.html'), page('<p>A stray [[wikilink]] escaped.</p>'), 'utf8');
+    assert.ok(
+      scanResidue(scratch).findings.some((finding) => finding.includes('wikilink')),
+      'a stray wikilink in prose was not reported, so the narrowed rule catches nothing',
+    );
+
+    // And the same page with both: the exemption must not swallow the prose
+    // occurrence merely because a code region exists elsewhere in the file.
+    writeFileSync(
+      join(scratch, 'index.html'),
+      page('<code>[[documented]]</code><p>and a stray [[one]] too</p>'),
+      'utf8',
+    );
+    assert.ok(
+      scanResidue(scratch).findings.some((finding) => finding.includes('wikilink')),
+      'a stray wikilink went unreported because the same file also had a code region',
+    );
+
+    // **Every other rule still applies inside code.** An absolute path or a
+    // `javascript:` URL in a fence is as much of a disclosure as one in a
+    // paragraph — more, since a reader is likelier to copy it. This is the
+    // assertion that a too-greedy stripper fails.
+    for (const [planted, expected] of [
+      ['<pre><code>built from C:\\Users\\someone\\vault</code></pre>', 'absolute local path'],
+      ['<code>see msw/internal</code>', 'msw/'],
+      ['<pre><code>/home/someone/vault/note.md</code></pre>', 'home-directory'],
+    ] as const) {
+      writeFileSync(join(scratch, 'index.html'), page(planted), 'utf8');
+      assert.ok(
+        scanResidue(scratch).findings.some((finding) =>
+          finding.toLowerCase().includes(expected.toLowerCase()),
+        ),
+        `${expected} inside a code region was not reported: the exemption is too wide`,
+      );
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
 test('the residue scan fails on each marker it exists to catch', () => {
   // A gate that has never failed is not evidence. Each marker is planted in a
   // scratch directory shaped like `dist/` and the scan is required to name it.

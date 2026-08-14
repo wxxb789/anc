@@ -143,37 +143,106 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
 }
 
 /**
- * The text an **unpublished** link degrades to, which is not the same rule.
+ * A label safe to place inside `[…]`, with the two delimiters escaped.
+ *
+ * Text taken from one construct and written into another has to be re-escaped
+ * for the construct it lands in, and this is the one place that happens: a
+ * wikilink's display half and an image's `alt` are *not* link-label syntax, so
+ * a `[` or `]` inside either is ordinary text there and a delimiter here.
+ * Measured, all three from the same defect:
+ *
+ * ```
+ * ![[t|before ] after]]  ->  [before ] after](/t/)     the link ends early
+ * [![[a.png]]](t.md)     ->  [[](t.md)](/t/)           and the rest is prose
+ * ```
+ *
+ * The second is the parser's own reading of an embed inside a link — it hands
+ * back one image whose `alt` is `](t.md)` — and it is not a shape worth
+ * special-casing, because escaping the delimiters fixes it and every other
+ * spelling at once.
+ *
+ * Only `[` and `]`. A `(` or `)` in a label is harmless — the parser closes the
+ * label at the `]` before the destination begins — and escaping more than the
+ * two characters that can break the construct would put visible backslashes
+ * into a reader's text.
+ */
+function escapeLabel(text: string): string {
+  return text.replace(/[[\]]/g, (character) => `\\${character}`);
+}
+
+/**
+ * The text a link to a **withheld** file degrades to.
  *
  * Plan §2.5: "the link's **display text only**, as plain text. The resolved path
- * never enters `markdown`." For an authored label that is exactly
- * {@link displayText}. For a wikilink with no label it is not, and the gap was a
- * real leak rather than a technicality: an undisplayed `[[drafts/secret plan]]`
- * has its own *target* as its label, so the body kept `drafts/secret plan` —
- * the directory a user excluded and the stem of a note they withheld. Measured,
- * and it reached `excerpt` too, because the excerpt is re-derived from this
- * body.
+ * never enters `markdown`." An authored label is ordinarily exactly that — a
+ * string the author chose to publish — so the rule is not "shorten every label".
+ * It is: **no part of the withheld path survives**, whatever produced the label.
  *
- * So a label that is merely the target is reduced to the target's last segment.
- * The reader still sees the name the author typed — which is the point of
- * degrading to text rather than dropping the node — and the folder path, which
- * is the part that says *where in the user's tree* the withheld note lives, does
- * not ship. An authored label is never touched: `[[drafts/x|the draft]]` keeps
- * `the draft`, because that is a string the author chose to publish.
+ * **Decided against the resolved path, never against the source syntax**, and
+ * that is the whole of this function's history. A first version asked "did the
+ * author write a label?" by reconstructing `[[…]]` from the label and comparing
+ * against the source. It worked for the case it was written for and left two
+ * spellings leaking, both measured:
  *
- * `#` is cut with it. A subpath names a heading inside a note that was not
+ * ```
+ * [[drafts/secret plan|drafts/secret plan]]     -> "drafts/secret plan"
+ * [drafts/secret plan](drafts/secret%20plan.md) -> "drafts/secret plan"
+ * ```
+ *
+ * Both have an authored label, so the "an authored label is untouched"
+ * exemption swallowed them — and the label happened to *be* the withheld path.
+ * A privacy decision made by reconstructing input syntax will keep having
+ * spellings nobody enumerated, and each one is a silent leak in a published
+ * body. Comparing against the path the resolver actually found has no such
+ * spellings: there is one path, and either the label discloses it or it does
+ * not.
+ *
+ * What survives is the target's last segment — the name a reader would
+ * recognise — with the directories removed, because the folder path is the part
+ * that says *where in the user's tree* the withheld note lives. Where the label
+ * merely *contains* the path, only that substring is reduced; the author's own
+ * surrounding words are theirs and are kept.
+ *
+ * A subpath goes with it. It names a heading inside a note that was not
  * published, and there is nothing on this site for it to mean.
  */
-function unpublishedText(label: string, written: string, isWikilink: boolean): string {
-  if (!isWikilink) return label;
-  // The parser gives an undisplayed wikilink its target as its only child, so
-  // "the label is the target" is decided by comparing against the source rather
-  // than by re-parsing: `[[a|b]]` reaches here as `b`, which is not in `[[a]]`'s
-  // shape.
-  const undisplayed = written === `[[${label}]]` || written === `![[${label}]]`;
-  if (!undisplayed) return label;
-  const withoutSubpath = label.split('#')[0] ?? label;
-  return withoutSubpath.slice(withoutSubpath.lastIndexOf('/') + 1);
+function withheldLabel(label: string, path: string): string {
+  // Every spelling the same file can be named by, longest first so a full path
+  // is reduced before its own stem matches inside it. A wikilink writes the raw
+  // form and usually without the extension; a Markdown href arrives
+  // percent-encoded and usually with it.
+  const stem = path.replace(/\.[^./]+$/, '');
+  // The `/`-anchored spellings too. A link may be written `[[/drafts/x]]` — the
+  // strict root anchor tier 4 documents — and reducing only the unanchored form
+  // left `/secret plan`, a leading slash with a directory's worth of meaning
+  // stripped out but its shape still announcing that one was there.
+  const spellings = [path, stem, `/${path}`, `/${stem}`, encodeURI(path), encodeURI(stem)]
+    .filter((form, index, all) => all.indexOf(form) === index)
+    .sort((a, b) => b.length - a.length);
+
+  // The **file's own name**, extension included. `a.png` reduces to `a.png` and
+  // not to `a`: the extension is part of what a reader recognises, and it is
+  // not the disclosing part — the directories are. `drafts/secret plan.md`
+  // reduces to `secret plan.md`, which says a note exists and not where in the
+  // user's tree it lives.
+  const name = basename(path);
+  let text = label;
+  for (const spelling of spellings) {
+    // The stem's replacement keeps whatever followed it, so `secret plan` inside
+    // `drafts/secret plan.md` does not lose the `.md` a longer spelling already
+    // handled.
+    const replacement = spelling === stem || spelling === `/${stem}` ? basename(stem) : name;
+    text = text.split(spelling).join(replacement);
+  }
+
+  // The subpath the target carried, if the label kept one — `note#Heading`
+  // reduces to `note`, because the heading is inside a note nobody can read.
+  return text.split('#')[0] ?? text;
+}
+
+/** POSIX basename, on the `/`-joined relative paths the walk produces. */
+function basename(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1);
 }
 
 /**
@@ -197,13 +266,20 @@ function isWikilinkNode(node: MdastNode, source: string): boolean {
 /**
  * Replace spans, last first, refusing any overlap.
  *
- * Last-first so an earlier replacement cannot shift a later offset. The overlap
- * check is not defensive noise: a link containing an image
- * (`[![alt](i.png)](../t.md)`) yields two nodes whose spans nest, and applying
- * both would splice the inner replacement into text the outer one already
- * replaced — producing a body that is neither. Failing loudly is the only
- * outcome that cannot ship silently wrong Markdown, and the caller turns it into
- * a build failure naming the file.
+ * Last-first so an earlier replacement cannot shift a later offset.
+ *
+ * **The overlap check no longer has a cause anyone can name, and that is the
+ * point of keeping it.** It used to: a link containing an image yielded two
+ * whole-node replacements over nested spans, and this threw — which meant a
+ * repository containing a README badge could not build. That is fixed at the
+ * source, by writing each rewrite as the two regions *around* a node's label
+ * rather than over it, so nothing this module emits overlaps.
+ *
+ * What remains is an invariant with no known way to violate it, kept because
+ * the cost of being wrong is asymmetric: a silent overlap splices one
+ * replacement into text another already replaced, and ships a body that is
+ * neither of the two things it was built from. A build that stops is
+ * recoverable; a published note nobody can trace back to its source is not.
  */
 function applyEdits(source: string, edits: readonly Edit[]): string {
   const ordered = [...edits].sort((a, b) => b.start - a.start);
@@ -212,8 +288,9 @@ function applyEdits(source: string, edits: readonly Edit[]): string {
   for (const edit of ordered) {
     if (edit.end > boundary) {
       throw new Error(
-        'two link nodes claimed overlapping source spans, so the rewritten body would be neither. ' +
-          'A link wrapping an image causes this.',
+        'two link nodes claimed overlapping source spans, so the rewritten body would be ' +
+          'neither. Every rewrite is written around a node label rather than over it, so no ' +
+          'input should reach this — the note that did is worth reporting.',
       );
     }
     result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
@@ -303,10 +380,22 @@ export function resolveLinksIn(
     // makes an outer node and a nested one both writable in one pass. A node
     // with no label span — an image, or a link the parser gave none — has
     // nothing nested to protect and is replaced whole.
+    //
+    // The whole-span form is also the only one that can escape its label: the
+    // split form leaves the label's own bytes in place, which is what preserves
+    // a nested node's rewrite. That is sound because a node *with* a label span
+    // has a label the parser read as link-label syntax already — its brackets
+    // are balanced by construction. An image's `alt` and a wikilink's display
+    // half were never link-label syntax, and those are exactly the nodes with
+    // no label span. See {@link escapeLabel}.
     const inner = node.type === 'link' ? labelSpan(node) : undefined;
     const rewrite = (before: string, after: string, fallbackLabel = label): void => {
       if (inner === undefined) {
-        edits.push({ start: span.start, end: span.end, text: before + fallbackLabel + after });
+        edits.push({
+          start: span.start,
+          end: span.end,
+          text: before + escapeLabel(fallbackLabel) + after,
+        });
         return;
       }
       edits.push({ start: span.start, end: inner.start, text: before });
@@ -318,15 +407,16 @@ export function resolveLinksIn(
       // *not* written into the body: it is a path to a file the user chose not
       // to publish, and the artifact is the one place it may not appear. It goes
       // to the report, which lives where nothing can commit it. See
-      // {@link unpublishedText} for the case where the *authored* text is itself
+      // {@link withheldLabel} for the case where the *authored* text is itself
       // that path.
       //
-      // A wikilink whose label the traversal must shorten cannot keep its label
-      // region — the shortening *is* an edit over that region — so it is
-      // replaced whole. It has no nested node to protect either: a wikilink's
-      // label is plain text.
+      // A label the traversal must shorten cannot keep its label region — the
+      // shortening *is* an edit over that region — so it is replaced whole.
+      // Nothing nested is lost by that: a node whose label discloses a withheld
+      // path has that path in its own text, not in a child the walk would
+      // rewrite separately.
       const shortened =
-        resolution.kind === 'unpublished' ? unpublishedText(label, written, isWikilink) : label;
+        resolution.kind === 'unpublished' ? withheldLabel(label, resolution.path) : label;
       if (shortened === label) rewrite('', '');
       else edits.push({ start: span.start, end: span.end, text: shortened });
       findings.push({

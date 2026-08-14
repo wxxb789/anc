@@ -127,7 +127,6 @@ const REJECTED: ReadonlyArray<readonly [string, RegExp]> = [
   ['backlinks-duplicate', /\.backlinks: must not contain duplicates/],
   ['alias-collides-with-other-entry', /alias "Shared Alias" is claimed by both/],
   ['privacy-msw-marker', /forbidden private "msw\/" path marker/],
-  ['privacy-unresolved-wikilink', /forbidden unresolved \[\[wikilink\]\]/],
   ['privacy-absolute-local-path', /forbidden absolute local path/],
   ['privacy-file-url', /forbidden file:\/\/ URL/],
   ['privacy-javascript-url', /forbidden javascript: URL/],
@@ -138,6 +137,29 @@ const REJECTED: ReadonlyArray<readonly [string, RegExp]> = [
   ['privacy-data-url-no-media-type', /forbidden non-image data: URL/],
   ['privacy-data-url-split-by-whitespace', /forbidden non-image data: URL/],
 ];
+
+test('a note documenting wikilink syntax passes the contract', () => {
+  // The inverse of a rule this contract used to carry. `[[` was rejected
+  // outright, which was safe only while the producer resolved every wikilink
+  // against a closed allowlist — and false under default-publish in both
+  // directions: a link that resolves to nothing now degrades to text by design,
+  // and a note *documenting* the syntax is content. Measured on the shipped
+  // binary before the rule went: a two-note corpus containing one fenced
+  // `[[documented syntax]]` exited 1 with "forbidden unresolved [[wikilink]]".
+  //
+  // The invariant that replaced it lives in `scripts/resolve-links.ts`, where
+  // every wikilink *node* is resolved — so a `[[` in `markdown` is by
+  // construction inside a fence, inside inline code, or escaped. The residue
+  // scan over `dist/` keeps a narrowed form, exempting code regions only, and
+  // `tests/link-traversal.test.ts` holds the producer's half.
+  //
+  // This fixture was `invalid/privacy-unresolved-wikilink.json` and is the same
+  // bytes on the other side of the line, which is the honest way to record that
+  // a rule was deleted rather than forgotten.
+  const artifact = validateArtifact(load(new URL('valid-documented-wikilink.json', FIXTURES)));
+  assert.equal(artifact.entries.length, 1);
+  assert.match(artifact.entries[0]!.markdown, /\[\[Some Private Note\]\]/);
+});
 
 for (const [name, expected] of REJECTED) {
   test(`rejects ${name}`, () => {
@@ -331,17 +353,20 @@ test('prose containing "data:" is not mistaken for a data URL', () => {
 });
 
 test('invisible characters cannot hide a structural marker', () => {
-  // These render as `msw/secret`, `[[link]]` and `C:\Users` in a browser, so the
-  // markers must be found with the invisible characters removed.
+  // These render as `msw/secret` and `C:\Users` in a browser, so the markers
+  // must be found with the invisible characters removed.
+  //
+  // A soft-hyphen case for `[[` used to sit here and went with the rule: `[[`
+  // is no longer a contract marker, because a note documenting the syntax is
+  // content. The hiding *mechanism* is still gated by the two that remain — it
+  // is one code path over every rule, not one per rule.
   const zwj = String.fromCharCode(0x200d);
   const zwsp = String.fromCharCode(0x200b);
-  const shy = String.fromCharCode(0x00ad);
   const bom = String.fromCharCode(0xfeff);
 
   for (const [markdown, expected] of [
     [`See msw${zwj}/secret for details.\n`, 'msw/'],
     [`See msw${zwsp}/secret for details.\n`, 'msw/'],
-    [`A [${shy}[Hidden Link]] here.\n`, 'wikilink'],
     [`Exported from C${bom}:\\Users\\me\\note.md\n`, 'absolute local path'],
   ] as const) {
     const error = expectRejection(() => validateArtifact(withMarkdown(markdown)));

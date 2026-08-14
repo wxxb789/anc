@@ -91,6 +91,51 @@ const RESIDUE_RULES: readonly Rule[] = [
 ];
 
 /**
+ * The one rule that does not apply inside a code region, and why exactly one.
+ *
+ * `[[` is not a privacy marker — it discloses nothing — it is a producer
+ * self-check: TK-27 resolves every wikilink *node*, so a `[[` reaching output
+ * from prose means the degradation failed. That reading is only true outside
+ * `<code>` and `<pre>`. A note documenting Obsidian syntax is content, and its
+ * fence renders as `<code class="language-text">[[not a link]]</code>` —
+ * measured through the shipped renderer, brackets intact and unescaped. The
+ * artifact-level version of this rule was deleted for that reason
+ * (`src/lib/schema.ts`); here it is narrowed instead, because over built output
+ * the rule still catches something real that nothing else does.
+ *
+ * Every other rule keeps applying everywhere. An absolute path or a
+ * `javascript:` URL inside a fence is exactly as much of a disclosure as one in
+ * a paragraph — more, if anything, because a reader is likelier to copy it.
+ */
+const CODE_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
+
+/**
+ * The same text with the contents of every `<code>` and `<pre>` element blanked.
+ *
+ * Blanked rather than removed, so byte offsets are unchanged and the text either
+ * side of a fence cannot be joined into a marker that neither half contains —
+ * the same reason `normalizedForms` refuses a whitespace-stripped form.
+ *
+ * Non-greedy, and tag-name-anchored on both ends: `<pre` matches `<pre>` and
+ * `<pre tabindex="0">` alike, which is what this pipeline actually emits, while
+ * `</pre>` closes only a `pre`. Nesting is not handled and does not need to be —
+ * `code` inside `pre` is the only nesting HTML permits here, and blanking the
+ * outer one covers the inner.
+ *
+ * A file with no such element comes back unchanged, so a stylesheet or a JSON
+ * file is scanned exactly as before.
+ */
+function withoutCodeRegions(text: string): string {
+  return text.replace(
+    /<(pre|code)(\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
+    (whole, tag: string, attributes: string | undefined, body: string) =>
+      whole.slice(0, whole.length - body.length - `</${tag}>`.length) +
+      ' '.repeat(body.length) +
+      `</${tag}>`,
+  );
+}
+
+/**
  * The forms of one file's text a browser could resolve a marker out of.
  *
  * Three, mirroring `checkPrivacy` in `src/lib/schema.ts` and for the same
@@ -301,11 +346,17 @@ export function scanResidue(root: string = DIST): {
 
     const text = readFileSync(path, 'utf8');
     scannedPaths.push(where);
+    // Computed once per file rather than per rule, and only when a file could
+    // hold a code region at all.
+    const outsideCode = text.includes('<code') || text.includes('<pre')
+      ? withoutCodeRegions(text)
+      : text;
     for (const [pattern, what] of RESIDUE_RULES) {
       // One finding per rule per file, not one per form: the same marker seen
       // raw and again decoded is one defect, and reporting it twice would make
       // a clean fix look half-done.
-      const match = normalizedForms(text)
+      const subject = CODE_EXEMPT.has(what) ? outsideCode : text;
+      const match = normalizedForms(subject)
         .map((form) => pattern.exec(form))
         .find((found) => found !== null);
       if (match) {

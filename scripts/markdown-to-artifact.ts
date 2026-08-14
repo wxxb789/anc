@@ -481,7 +481,7 @@ export async function discover(
   /** Slug to the path that claimed it, so a collision can name its winner. */
   const claimed = new Map<string, string>();
   /** Slug to the path that produced it, for the link traversal. */
-  const sources = new Map<string, string>();
+  const pathBySlug = new Map<string, string>();
   /** Slugs whose title the author wrote in frontmatter rather than a heading. */
   const declaredTitles = new Set<string>();
   const dropped: DroppedFile[] = [];
@@ -592,7 +592,7 @@ export async function discover(
     // than inside it: `slug` is a public route and `path` is a host-relative
     // filename, and `schema.ts` rejects an artifact carrying an unknown field
     // precisely so a source path cannot ride into `dist/` on one.
-    sources.set(slug, path);
+    pathBySlug.set(slug, path);
   }
 
   // After the walk, because a pattern's verdict is "did it match any discovered
@@ -621,7 +621,7 @@ export async function discover(
     counts: { discovered: paths.length, published: entries.length, dropped: dropped.length },
     dropped,
     paths,
-    sources,
+    pathBySlug,
     declaredTitles,
   };
 }
@@ -675,7 +675,7 @@ export async function resolveCorpusLinks(
   discovery: Discovery,
   routeForSlug: RouteForSlug = defaultRouteForSlug,
 ): Promise<LinkFindingRow[]> {
-  const { entries, sources, paths: allPaths, declaredTitles } = discovery;
+  const { entries, pathBySlug, paths: allPaths, declaredTitles } = discovery;
 
   // **Called twice, this would silently corrupt the corpus**, so it refuses.
   // Measured: a second pass over an already-rewritten body reads `[b](/b/)` as a
@@ -684,9 +684,15 @@ export async function resolveCorpusLinks(
   // `unresolved` finding. Every one of those is silent. Rewriting is not
   // idempotent because it cannot be — the output syntax is the input syntax —
   // so the guard is the honest shape rather than a defensive flourish.
+  //
+  // A plain `Error` rather than a `BuildFailure`: the closed set of failure
+  // codes exists so a *user's* build can put a stable identifier on a stream
+  // and a name in the report, and this is not a fault of any repository. It is
+  // this module's caller calling it twice, which no corpus can cause and no
+  // user can fix. `failureFor` files it as `unexpected-error` with the stack,
+  // which is what a programmer error should look like in the report.
   if (resolved.has(discovery)) {
-    throw new BuildFailure(
-      'links-already-resolved',
+    throw new Error(
       'link resolution ran twice over one discovery. It rewrites bodies in place, so a ' +
         'second pass would read its own output as new links and drop them.',
     );
@@ -695,7 +701,7 @@ export async function resolveCorpusLinks(
   // Every discovered file, carrying its slug where it has one. A file with no
   // slug is discoverable and unpublishable, which is exactly what makes
   // `unpublished` distinguishable from `unresolved`.
-  const slugByPath = new Map([...sources].map(([slug, path]) => [path, slug]));
+  const slugByPath = new Map([...pathBySlug].map(([slug, path]) => [path, slug]));
   const corpus: CorpusFile[] = allPaths.map((path) => ({ path, slug: slugByPath.get(path) }));
   const index = indexCorpus(corpus);
 
@@ -711,8 +717,8 @@ export async function resolveCorpusLinks(
 
   const findings: LinkFindingRow[] = [];
   for (const entry of entries) {
-    const path = sources.get(entry.slug);
-    // Unreachable by construction — `sources` is written for every entry pushed
+    const path = pathBySlug.get(entry.slug);
+    // Unreachable by construction — `pathBySlug` is written for every entry pushed
     // — but an entry with no path cannot be resolved *from* anywhere, and
     // resolving it from the corpus root would silently answer tiers 2 and 5
     // wrong rather than not answering.
@@ -796,7 +802,7 @@ export interface Discovery {
    */
   paths: readonly string[];
   /** Each published slug to the path that produced it, for tiers 2 and 5. */
-  sources: ReadonlyMap<string, string>;
+  pathBySlug: ReadonlyMap<string, string>;
   /**
    * Slugs whose title came from frontmatter, so re-deriving a title after the
    * link traversal cannot overwrite one the author wrote down.

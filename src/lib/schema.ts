@@ -201,10 +201,27 @@ type Rule = readonly [RegExp, string];
  * These are deliberately NOT matched against a whitespace-stripped form: doing so
  * would join unrelated lines and turn prose such as "Option A:" above "/usr/bin"
  * into an apparent drive path.
+ *
+ * **`[[` used to be on this list and is not, and the removal is TK-27's.** It was
+ * never a privacy rule — `[[` discloses nothing — it was a proxy for "the
+ * producer forgot to resolve something", and it was safe only while the producer
+ * resolved every wikilink against a closed allowlist. Under default-publish the
+ * proxy is false in both directions: a link that resolves to nothing now
+ * degrades to text by design, and a note *documenting* wikilink syntax inside a
+ * code fence is content that must publish. Measured on the shipped binary, a
+ * two-note corpus containing one fenced `[[documented syntax]]` failed the build
+ * with "forbidden unresolved [[wikilink]]".
+ *
+ * The invariant that replaces it lives where the information is, in
+ * `scripts/resolve-links.ts`: every wikilink *node* the parser found has a
+ * recorded resolution, so a `[[` surviving in `markdown` is by construction
+ * inside a fence, inside inline code, or escaped. The residue scan over `dist/`
+ * keeps a narrowed form of the old rule, because there a stray `[[` outside a
+ * code region means the degradation itself failed — a producer defect rather
+ * than a user's.
  */
 const STRUCTURAL_MARKERS: readonly Rule[] = [
   [/msw\//i, 'private "msw/" path marker'],
-  [/\[\[/, 'unresolved [[wikilink]]'],
   [/(?<![A-Za-z])[A-Za-z]:[\\/]/, 'absolute local path'],
 ];
 
