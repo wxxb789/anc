@@ -389,14 +389,47 @@ test('the pre-paint script and the toggle module agree on the storage keys', () 
   const init = readFileSync(new URL('theme-init.js', scripts), 'utf8');
   const toggles = readFileSync(new URL('preferences.ts', scripts), 'utf8');
 
+  // Any `word:word` storage key, not one spelled prefix. The earlier version
+  // matched `thoughtscape:` literally, which made it agree-or-vacuous: TK-31
+  // renamed the prefix to `publish:` in both files and this test went on
+  // passing while matching **zero keys in each**, comparing two empty sets. A
+  // gate that reports success when it can no longer see its own subject is
+  // worse than none. Widening the pattern and asserting the count below is what
+  // makes the comparison evidence rather than a coincidence.
   const keys = (source: string) =>
-    new Set([...source.matchAll(/'(thoughtscape:[a-z-]+)'/g)].map(([, key]) => key!));
+    new Set([...source.matchAll(/'([a-z][a-z-]*:[a-z][a-z-]*)'/g)].map(([, key]) => key!));
+
+  const stored = keys(toggles);
+  assert.equal(stored.size, 2, 'preferences.ts no longer declares the two storage keys this pairs');
 
   assert.deepEqual(
     [...keys(init)].sort(),
-    [...keys(toggles)].sort(),
+    [...stored].sort(),
     'theme-init.js and preferences.ts read and write different storage keys',
   );
+
+  // The identity half, which the pairing above cannot see: two files can agree
+  // perfectly on a key that carries this project's name into every visitor's
+  // browser storage. Plan decision D2 is that nothing a user's reader meets
+  // names the tool, and `localStorage` is partitioned by origin, so the prefix
+  // was never buying isolation to begin with.
+  //
+  // The token comes from `package.json` rather than being spelled, so a rename
+  // of the package cannot leave this matching nothing and passing for ever —
+  // the same reason `tests/config.test.ts` and `tests/site-identity.test.ts`
+  // both derive it.
+  const own = (
+    JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string }
+  ).name.replace(/^@/, '').split('/')[0]!;
+  assert.ok(own.length > 2, 'package.json declares no name for this gate to forbid');
+
+  for (const key of stored) {
+    assert.doesNotMatch(
+      key,
+      new RegExp(own, 'i'),
+      `the storage key "${key}" carries this project's name into a reader's own browser`,
+    );
+  }
 });
 
 test('reduced motion is honored globally, not per component', () => {

@@ -1,39 +1,74 @@
 ---
+/**
+ * What this site is, for a reader who did not build it.
+ *
+ * **Rewritten by TK-31, because every substantive claim it made was false.**
+ * The previous version told a reader that "every page here is a note that was
+ * reviewed and explicitly approved for publication, one item at a time" and
+ * that a note "appears here only because it was named on an explicit approval
+ * list". That described one owner's exporter. This tool publishes a directory
+ * of Markdown by default and withholds what the user's `publish.config.yaml`
+ * excludes — the opposite arrangement — so the sentence a reader consults *to
+ * find out whether the boundary is trustworthy* was the sentence that lied
+ * about which direction it runs.
+ *
+ * **A shipped page rather than a Markdown note the user seeds.** The plan
+ * (§4.4) proposes deleting both prose pages and having `init` write them into
+ * the notes repository. That is the better end state and it is not reachable
+ * from here: `init` does not exist yet — it is TK-32's — and deleting the pages
+ * now would remove `/about/` and `/privacy/` from `SITE_MAP` and from three
+ * gates, leaving a build with no privacy statement at all in the interval. A
+ * page that is true is worth more than a page that is absent, and the sentences
+ * below are true of *every* build this tool produces rather than of one corpus.
+ *
+ * **So it says only what the tool guarantees.** Every claim here is a property
+ * of the generator — static output, no analytics, no third-party requests,
+ * exclusion by configuration — and none of it describes the user's own
+ * editorial process, which this repository cannot know and must not narrate on
+ * their behalf. Where the honest answer depends on the operator, it says so and
+ * points at them rather than inventing a policy.
+ *
+ * The prose is in the navigation language and is not translated, which is the
+ * same treatment `tests/translations.test.ts` records for this file: it is a
+ * document rather than chrome, and translating a document is a content decision
+ * this ticket does not own.
+ */
 import Layout from '../layouts/Layout.astro';
+import { SITE_NAME, TITLE_SUFFIX } from '../lib/site.ts';
 ---
 
 <Layout
-  title="About · thoughtscape"
-  description="What this site is, and what it deliberately leaves out."
+  title={`About${TITLE_SUFFIX}`}
+  description="What this site is, and how its pages came to be here."
 >
   <article class="prose">
     <h1>About</h1>
 
     <p>
-      thoughtscape is a small public reading site. Every page here is a note that was reviewed
-      and explicitly approved for publication, one item at a time.
+      {SITE_NAME} is a reading site. Each page is a note written in Markdown and published as a
+      static page, generated ahead of time rather than assembled when you ask for it.
     </p>
 
-    <h2>The publication boundary</h2>
+    <h2>How pages get here</h2>
 
     <p>
-      These notes originate in a private knowledge base that is not published and is not part of
-      this site. Publication is not automatic and is never inferred: a note appears here only
-      because it was named on an explicit approval list, and nothing is published by being tagged,
-      by living in a particular place, or by any other convention.
-    </p>
-
-    <p>
-      What crosses the boundary is a generated, sanitized projection: a title, a summary, the note
-      body, and links between notes that are themselves published. A link whose target is not
-      published is not rendered as a link. Nothing about unpublished material — its existence, its
-      titles, its organization, or how much of it there is — is disclosed by this site.
+      The site is built from a set of notes written in Markdown. Publication is the default: a note
+      becomes a page unless it was explicitly excluded, and the person who runs the build chooses
+      what to exclude by listing patterns in a configuration file, or by marking an individual note.
+      An excluded note produces no page, no search entry, and no link, and none of its content
+      appears here.
     </p>
 
     <p>
-      The projection is regenerated deliberately, and each release is reviewed before it goes out.
-      A note can be withdrawn, and a note's address can change, in which case the old address
-      redirects to the new one.
+      Links between notes are resolved when the site is built. A link whose target is not published
+      is not rendered as a link, so following one cannot lead to something that is not here.
+    </p>
+
+    <p>
+      One thing this site can still show you about an unpublished note is the words a published note
+      used to refer to it. A link left pointing at an excluded note keeps its own link text, which
+      is the author's writing rather than anything read from the note it names. Nothing else about
+      unpublished notes — their content, their number, or that any exist — is represented here.
     </p>
 
     <h2>How it is built</h2>

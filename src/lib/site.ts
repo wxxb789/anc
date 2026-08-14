@@ -8,11 +8,13 @@
  *
  * Three properties are load-bearing:
  *
- * 1. **The origin is never written here.** It is `site:` in `astro.config.mjs`,
- *    and it arrives as the `URL` Astro derives from it. A module that hardcoded
- *    an origin would be a second answer to "where does this site live", and the
- *    site has no public domain assigned yet — so the placeholder must be
- *    changeable in exactly one place.
+ * 1. **Neither the origin nor the site name is written here.** The origin is
+ *    `site:` in `astro.config.mjs`, and it arrives as the `URL` Astro derives
+ *    from it; the name arrives through {@link SITE_TITLE_VARIABLE}. Both are the
+ *    *user's*, not this project's — a stranger builds their own notes with this
+ *    tool, and a module that hardcoded either would put one owner's identity on
+ *    every site built with it. That is plan decision D2, and it is why
+ *    {@link SITE_NAME} is a lookup rather than a literal.
  * 2. **Output is deterministic.** Nothing here reads a clock. Every timestamp
  *    comes from an artifact field, and the one case the artifact cannot supply
  *    is a named sentinel rather than "now" — see {@link UNDATED}.
@@ -33,8 +35,68 @@ import {
   tagRoute,
 } from './routes.ts';
 
-/** The site's own name. A proper noun, so it is not chrome TK-16 translates. */
-export const SITE_NAME = 'thoughtscape';
+/**
+ * The environment variable carrying the configured site title into the build.
+ *
+ * **A seam rather than an import, and the import was tried and measured to be
+ * impossible.** The obvious shape is
+ * `export const SITE_NAME = configForBuild().title`, reading
+ * `scripts/load-config.ts` directly. It fails the build, and not on style:
+ * Astro bundles this module into `dist/.prerender/`, so every module it pulls
+ * in is evaluated from *there*. `load-config.ts` imports `write-report.ts`,
+ * which reads `../package.json` at module scope through `import.meta.url` —
+ * and from inside the prerender directory that resolves to
+ * `dist/.prerender/package.json`, which does not exist. Measured: the build
+ * reaches "generating static routes" and dies with
+ * `ENOENT: … dist\.prerender\package.json`.
+ *
+ * That is the same hazard `src/lib/artifact-source.ts` documents for the
+ * artifact path and answers the same way, which is why this is the existing
+ * pattern rather than a new one: `CONTENT_ARTIFACT` crosses this boundary
+ * already, is read at module scope exactly like this, and is set by whoever
+ * starts the build. `astro.config.mjs` is where that happens, because it is the
+ * one place that has both the loaded configuration and a guarantee of running
+ * before any page module is evaluated.
+ */
+export const SITE_TITLE_VARIABLE = 'PUBLISH_SITE_TITLE';
+
+/**
+ * The site name a build gets when nothing has configured one.
+ *
+ * **This is a second copy of `scripts/load-config.ts`'s `DEFAULT_TITLE`, and
+ * the duplication is deliberate, measured, and gated.** That module owns the
+ * default for a *configured* build and cannot be imported here for the reason
+ * {@link SITE_TITLE_VARIABLE} records. The repository's own answer to that
+ * situation is already written down one directory away: `theme-init.js` and
+ * `preferences.ts` duplicate their storage keys because one of them cannot
+ * import, and `tests/design-tokens.test.ts` asserts the two agree. This follows
+ * it — `tests/config.test.ts` reads this constant out of this file and fails if
+ * it ever differs from the loader's, so a rename cannot be half-applied.
+ *
+ * **A generic noun, and it belongs to nobody.** It is not this project's name,
+ * which is the whole of plan decision D2: a stranger who has written notes and
+ * configured nothing gets a site that is honest about being unnamed rather than
+ * one that is confidently wrong about whose it is. `Notes` is legible, is
+ * obviously a placeholder to anyone who sees it in a browser tab, and names the
+ * thing on the page.
+ */
+export const DEFAULT_SITE_TITLE = 'Notes';
+
+/**
+ * The site's own name: the user's configured `title`, or the neutral default.
+ *
+ * A proper noun of the *user's* site rather than of this tool, so it is not
+ * chrome TK-16 translates — a site called `Notes` is called that on its Chinese
+ * pages too, exactly as a site called `Foundry` would be.
+ *
+ * `||` rather than `??`, and `src/lib/artifact-source.ts` records the same
+ * choice for the same measured reason: an *empty* environment variable is how a
+ * shell unsets one for a single command, and `??` would accept `''` as a title —
+ * producing `<title> · </title>` and an Atom feed whose required `atom:title`
+ * is blank. The loader has already refused an empty configured title; this
+ * refuses an empty *seam*, which is a different failure with the same output.
+ */
+export const SITE_NAME: string = process.env[SITE_TITLE_VARIABLE] || DEFAULT_SITE_TITLE;
 
 /**
  * A page's description, or the fallback its own language gives it.
@@ -467,16 +529,18 @@ export function renderSitemap(site: URL | undefined, routes: readonly PublicRout
 /**
  * `robots.txt`, generated rather than committed under `public/`.
  *
- * The `Sitemap:` directive takes an absolute URL, so a committed file would be a
- * second place the origin is written down — and this site has no public domain
- * assigned yet, which makes "the origin lives in exactly one place" the
- * difference between a one-line change and a search-and-replace.
+ * The `Sitemap:` directive takes an absolute URL, so a committed file would be
+ * a second place the origin is written down — and the origin is the *user's*,
+ * arriving from their configuration, which makes "the origin lives in exactly
+ * one place" the difference between a build that follows the config and one
+ * that ships a stale literal to every reader.
  *
- * The policy is to allow everything. Every page here is individually reviewed
- * and approved for publication, so there is no route that is public-but-private:
- * the projection boundary is the privacy boundary, and a `Disallow` would be
- * theatre. `/pagefind/` is left crawlable for the same reason — it is a search
- * index built from pages that are already public.
+ * The policy is to allow everything. Every page here is one the build was asked
+ * to publish: the corpus is what discovery found minus what the user excluded,
+ * so a page that exists is a page meant to be read, and a `Disallow` would be
+ * theatre — it withholds nothing, since a rule naming a route also names it.
+ * `/pagefind/` is left crawlable for the same reason: it is a search index
+ * built from pages that are already public.
  */
 export function renderRobots(site: URL | undefined): string {
   return ['User-agent: *', 'Allow: /', '', `Sitemap: ${canonicalUrl(site, SITEMAP_PATH)}`, ''].join('\n');
@@ -507,10 +571,9 @@ export const TITLE_SUFFIX = ` · ${SITE_NAME}`;
  * A page's `<title>` as `og:title` should state it: without the site suffix.
  *
  * A social card renders `og:title` directly above `og:site_name`, so a page
- * whose `og:title` is "About · thoughtscape" produces a card reading
- * "About · thoughtscape" over "thoughtscape". The suffix belongs in the
- * `<title>`, where it names the browser tab, and not in the card, where a
- * separate field already carries it.
+ * whose `og:title` is "About · Notes" produces a card reading "About · Notes"
+ * over "Notes". The suffix belongs in the `<title>`, where it names the browser
+ * tab, and not in the card, where a separate field already carries it.
  *
  * Stripped rather than threaded through as a second prop. Every page composes
  * its title from the same literal, so the suffix is a property of the convention

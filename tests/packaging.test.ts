@@ -677,45 +677,62 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
   // slow machine.
 }, 120_000);
 
-test('the site identity a packaged build ships is this owner\'s, and TK-31 is what fixes it', () => {
-  // A site built from a stranger's Markdown currently carries this repository's
-  // identity: the `.invalid` placeholder origin, the name `thoughtscape`, this
-  // owner's social card, and an `/about/` page describing an approval list that
-  // a TK-26 build does not have.
+test('the default origin a packaged build ships names nobody, and has one home', () => {
+  // **This gate's subject moved with TK-31, and what it asserts is stronger.**
   //
-  // This gate does not assert that is *right* — it is not, and TK-31 owns it. It
-  // asserts the two properties that make shipping it safe in the meantime, and
-  // it fails the day either stops holding:
+  // TK-24 wrote it as "the site identity a packaged build ships is this owner's,
+  // and TK-31 is what fixes it": it did not claim the shipped identity was
+  // right — it was not — only that shipping it was *safe*, because the origin
+  // was an RFC 2606 `.invalid` placeholder that could not misdirect a crawler.
+  // That interim is over. TK-31 replaced it with an RFC 6761 `.localhost`
+  // preview origin, so the assertion changes from "the placeholder is
+  // unresolvable" to the two properties that outlive it:
   //
-  // 1. The origin is unresolvable. RFC 2606 reserves `.invalid`, so a canonical
-  //    link, a feed id, or a sitemap entry built by a stranger points at nothing
-  //    rather than at somebody else's server. A real domain here would turn a
-  //    placeholder into a misattribution the moment anyone published.
-  // 2. It is written in exactly one place, so TK-31 changes one line rather than
-  //    hunting for copies. `tests/metadata.test.ts` already enforces this for the
-  //    site's own pages; this restates it as a packaging property.
+  // 1. **The default names nobody.** `.invalid` was safe and was still one
+  //    owner's name on every stranger's site, which is plan decision D2. A
+  //    reserved name is necessary and was never sufficient.
+  // 2. **It cannot resolve to somebody else's server.** RFC 6761 reserves
+  //    `.localhost` and requires resolvers to map it — and every subdomain of
+  //    it — to loopback, which is the same guarantee `.invalid` gave, plus a
+  //    preview build whose URLs a browser can actually follow.
   //
-  // TK-30 made the origin configurable and both properties survive unchanged.
-  // What moved is where the literal sits: `site:` is now
-  // `config.origin ?? DEFAULT_ORIGIN`, so the placeholder is read from that
-  // constant. The second assertion below is new and is what keeps this gate
-  // honest across that change — a `DEFAULT_ORIGIN` the `site:` line did not
-  // actually use would satisfy the first assertion while shipping something
-  // else entirely.
+  // The one-home assertion is unchanged and is what keeps the rest honest: a
+  // `DEFAULT_ORIGIN` the `site:` line did not use would satisfy every check here
+  // while shipping something else entirely.
   const config = readFileSync(join(ROOT, 'astro.config.mjs'), 'utf8');
   const site = /DEFAULT_ORIGIN = '([^']+)'/.exec(config)?.[1];
   assert.ok(site, 'astro.config.mjs declares no default origin, so canonical URLs have no origin');
   assert.match(
     config,
     /site:\s*config\.origin \?\? DEFAULT_ORIGIN/,
-    'astro.config.mjs does not derive `site:` from DEFAULT_ORIGIN, so the placeholder this gate ' +
+    'astro.config.mjs does not derive `site:` from DEFAULT_ORIGIN, so the default this gate ' +
       'checks is not the origin a packaged build actually ships',
   );
+
+  // The forbidden token is derived from the manifest rather than spelled, so a
+  // rename of the package cannot leave this matching nothing and passing for
+  // ever. `tests/config.test.ts` and `tests/design-tokens.test.ts` derive it the
+  // same way and for the same reason.
+  const own = MANIFEST.name.replace(/^@/, '').split('/')[0]!;
+  assert.ok(own.length > 2, 'package.json declares no name for this gate to forbid');
+
+  const host = new URL(site).hostname;
+  assert.doesNotMatch(
+    host,
+    new RegExp(own, 'i'),
+    `astro.config.mjs publishes ${site} to every consumer of this package, and it names this ` +
+      "project. A stranger's unconfigured build must carry nobody's identity — decision D2",
+  );
+
+  // A reserved name, still. `.localhost` and `.invalid` are both guaranteed
+  // never to reach a stranger's server; a real registrable domain here would put
+  // one owner's canonical links, feed ids, and sitemap entries on every site
+  // built with this tool, which is the failure the whole gate exists against.
   assert.match(
-    site,
-    /\.invalid(?:\/|$)/,
-    `astro.config.mjs publishes ${site} to every consumer of this package. Until TK-31 extracts ` +
-      'site identity into the user\'s own config, the origin must stay an RFC 2606 `.invalid` ' +
-      'placeholder — a real domain would put one owner\'s canonical links on every stranger\'s site',
+    host,
+    /(?:^|\.)(?:localhost|invalid)$/,
+    `astro.config.mjs publishes ${site}, whose host is registrable. The default origin must be a ` +
+      'reserved name (RFC 6761 `.localhost` or RFC 2606 `.invalid`) so that an unconfigured ' +
+      "build cannot point a crawler at somebody else's server",
   );
 });

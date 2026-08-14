@@ -160,25 +160,63 @@ test('a repository with no configuration file loads the documented defaults', as
 });
 
 /**
- * The default title belongs to nobody.
+ * The default title belongs to nobody, and both modules that own one agree.
  *
  * Plan decision D2 removes single-owner residue, and a stranger's browser tab
- * is where it would be most visible. Asserted against the *site module's* own
- * name rather than against a literal, so this cannot pass by both being changed
- * to the same thing.
+ * is where it would be most visible.
  *
- * **Mutation watched fail:** setting `DEFAULT_TITLE = SITE_NAME` turned this red
- * with `the default title is this project's own name`.
+ * **Its subject moved with TK-31, and the old form would now pass vacuously.**
+ * This used to read `src/lib/site.ts`'s `SITE_NAME` as a quoted literal and
+ * assert `DEFAULT_TITLE` differed from it. That module no longer holds a name to
+ * differ from — `SITE_NAME` is resolved from the user's configuration at build
+ * time — so the regex matches nothing, and the whole gate rests on a value it
+ * could no longer find.
+ *
+ * What replaces it is the property that actually needs holding now. `site.ts`
+ * carries `DEFAULT_SITE_TITLE`, a second copy of this module's `DEFAULT_TITLE`,
+ * because it cannot import the loader (Astro evaluates it out of
+ * `dist/.prerender/`, where the loader's own dependency fails to resolve its
+ * `package.json` — measured). So the two must agree, exactly as `theme-init.js`
+ * and `preferences.ts` must, and neither may be this project's name.
+ *
+ * **Mutations watched fail:** setting `DEFAULT_TITLE = 'thoughtscape'` turned
+ * the identity half red; changing `site.ts`'s `DEFAULT_SITE_TITLE` to `'Notebook'`
+ * turned the agreement half red naming both values.
  */
-test('the default title is not this project’s own name', async () => {
+test('the default title belongs to nobody, and the two modules holding one agree', async () => {
   const site = await readFile(join(ROOT, 'src/lib/site.ts'), 'utf8');
-  const own = /export const SITE_NAME = '([^']*)'/.exec(site)?.[1];
-  assert.ok(own, 'src/lib/site.ts declares no SITE_NAME');
-  assert.notEqual(
+  const fallback = /export const DEFAULT_SITE_TITLE = '([^']*)'/.exec(site)?.[1];
+  assert.ok(fallback, 'src/lib/site.ts declares no DEFAULT_SITE_TITLE, so this gate reads nothing');
+
+  assert.equal(
+    fallback,
     DEFAULT_TITLE,
-    own,
-    "the default title is this project's own name, which a stranger's browser tab would carry",
+    'src/lib/site.ts and the loader disagree about the title an unconfigured build gets, so a ' +
+      'build takes one and every gate reading the other measures a value nothing ships',
   );
+
+  // The identity half, with the forbidden token read from `package.json` rather
+  // than spelled here.
+  //
+  // **The first version spelled it `/thoughtscape/i` under a comment claiming it
+  // "stays true if the package is ever renamed", and the comment was wrong about
+  // its own code.** The *value* was read from the module; the token was a
+  // literal — so a rename would leave this matching nothing and passing for ever,
+  // which is exactly the vacuity the comment claimed immunity from. Deriving the
+  // token means the gate follows the package's identity instead of a memory of
+  // it.
+  const own = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string })
+    .name.replace(/^@/, '')
+    .split('/')[0]!;
+  assert.ok(own.length > 2, 'package.json declares no name for this gate to forbid');
+
+  for (const [what, value] of [['the loader', DEFAULT_TITLE], ['src/lib/site.ts', fallback]] as const) {
+    assert.doesNotMatch(
+      value,
+      new RegExp(own, 'i'),
+      `${what}'s default title is this project's own name, which a stranger's browser tab would carry`,
+    );
+  }
 });
 
 /**
@@ -532,7 +570,20 @@ test('an origin with a path, query, or fragment is refused', () => {
 
   // The bare forms are what a user should write, and both must be accepted —
   // otherwise the gate above is satisfied by refusing everything.
-  for (const origin of ['https://example.com', 'https://example.com/', 'http://publish.localhost/']) {
+  //
+  // The third is the *default* origin, read from `astro.config.mjs` rather than
+  // spelled here. Two reasons, and the second is why it is not simply dropped:
+  // `tests/metadata.test.ts` fails on any file outside that config naming the
+  // host, and this row must keep testing the exact value a build falls back to.
+  // A user who configures the origin their preview already uses must not be
+  // refused, and a literal copy would make that row stop tracking the default
+  // the moment the default moved. Reading it holds both.
+  const configured = /DEFAULT_ORIGIN = '([^']+)'/.exec(
+    readFileSync(join(ROOT, 'astro.config.mjs'), 'utf8'),
+  )?.[1];
+  assert.ok(configured, 'astro.config.mjs declares no default origin for this row to check');
+
+  for (const origin of ['https://example.com', 'https://example.com/', configured]) {
     assert.equal(parseConfig(`origin: ${JSON.stringify(origin)}\n`).origin, origin, `${origin}: was refused`);
   }
 });
@@ -1280,10 +1331,12 @@ test('a malformed config fails a raw astro build with no host path on the stream
  * gate a spelling rule; asserting what the loader *returns* covers every path a
  * default could hide on, including the ones a regex cannot see.
  *
- * **Mutation watched fail:** giving `DEFAULTS.origin` the value
- * `'http://publish.localhost/'` turned this red on all four rows — which is the
- * change plan §5.5 proposes, and it belongs in `astro.config.mjs` beside the
- * `site:` line, not here.
+ * **Mutation watched fail:** giving `DEFAULTS.origin` the default origin's own
+ * value turned this red on all four rows. That value is now
+ * `astro.config.mjs`'s, changed by TK-31 from an RFC 2606 `.invalid`
+ * placeholder to an RFC 6761 `.localhost` preview origin — and the mutation
+ * still goes red, which is the point of this gate: *whatever* the default is,
+ * the loader must not be a second place holding it.
  */
 test('the configuration loader declares no origin of its own', async () => {
   assert.equal(DEFAULTS.origin, undefined, 'the loader carries a default origin');

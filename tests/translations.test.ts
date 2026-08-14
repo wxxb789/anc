@@ -512,7 +512,24 @@ test('no module outside the contract holds a chrome string of its own', () => {
     // file's own reasoning does exactly that — so the check is over what the
     // module *renders*. Block comments cover both `/* */` in a frontmatter and
     // `{/* */}` in markup.
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    //
+    // `DEFAULT_SITE_TITLE` is stripped with them, and it is the one exclusion
+    // here that is not about comments. It is the site name an unconfigured
+    // build gets — a proper noun of the *user's* site, which `site.ts` records
+    // is deliberately not translated, exactly as a site called `Foundry` would
+    // not be. It collides with this contract only because the English label for
+    // the notes nav item happens to be the same word, and a value-matching gate
+    // cannot tell a name from a label that spells it the same way.
+    //
+    // Excluded as one declaration rather than by exempting the file, which
+    // matters: everything else in `site.ts` is still scanned, so a genuine
+    // chrome literal appearing there is still caught. `tests/config.test.ts`
+    // holds this constant's own property — that it equals the loader's default
+    // and names nobody.
+    const code = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+      .replace(/export const DEFAULT_SITE_TITLE = '[^']*';/, '');
     for (const [key, value] of literals) {
       for (const form of [`'${value}'`, `"${value}"`, `\`${value}\``, `>${value}<`]) {
         assert.ok(

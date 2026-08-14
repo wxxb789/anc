@@ -19,10 +19,15 @@
 
   // No attribute is the default: CSS then follows `prefers-color-scheme`
   // through `light-dark()`. These express only an explicit override.
-  var theme = stored('thoughtscape:theme');
+  //
+  // The `publish:` prefix is duplicated from `preferences.ts`, which this file
+  // cannot import; `tests/design-tokens.test.ts` asserts the two agree. It names
+  // what wrote the value rather than this project, so a stranger's visitor does
+  // not carry the tool's name in their own browser storage.
+  var theme = stored('publish:theme');
   if (theme === 'light' || theme === 'dark') root.dataset.theme = theme;
 
-  if (stored('thoughtscape:reader') === 'on') root.dataset.reader = 'on';
+  if (stored('publish:reader') === 'on') root.dataset.reader = 'on';
 
   // Reveals the controls that only work with scripting; without this they stay
   // hidden rather than rendering as buttons that do nothing.

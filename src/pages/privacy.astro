@@ -1,9 +1,47 @@
 ---
+/**
+ * What this site collects, which is nothing.
+ *
+ * **Rewritten by TK-31 for one false claim and one unsupportable one.** The
+ * previous version ended with "Every page here was individually reviewed and
+ * approved for publication. Material that was not approved is not represented
+ * on this site in any form." The first sentence describes one owner's exporter
+ * and is false of a build from a directory of Markdown; the second is *true*
+ * and had been resting on the first, so it read as a consequence of a review
+ * process rather than of what the build actually does.
+ *
+ * That distinction matters more here than on `/about/`. A privacy page is the
+ * document a reader consults to decide whether to trust the rest, so a claim in
+ * it that the tool cannot keep is worse than no page: it converts a technical
+ * guarantee into a promise about someone's diligence, and a reader has no way
+ * to tell which they were given.
+ *
+ * **Every claim below is a property this build enforces**, and each is scoped to
+ * what is actually held. `tests/built-output.test.ts` asserts every `<script>`
+ * in `dist/` is same-origin and none is inline; `public/_headers` sets a CSP
+ * whose `script-src`, `style-src`, `font-src`, and `connect-src` are all
+ * `'self'`. The absence of cookies and of analytics follows from there being no
+ * server and no such script.
+ *
+ * **`img-src` is the one directive that is not `'self'`** — it permits `https:`,
+ * so a note whose author embedded a remote image renders it, and that request
+ * reaches a third party. Measured, not inferred. The page therefore says
+ * "script, stylesheet, and font" where it once said "every asset", and names the
+ * image case separately: the earlier wording was a claim this build does not
+ * keep, on the page a reader consults to calibrate trust.
+ *
+ * The other thing this page cannot speak for is the host that serves the files,
+ * so it says who that is and stops rather than promising on their behalf.
+ *
+ * See `about.astro` for why this is still a shipped page rather than a note
+ * `init` seeds into the user's own repository.
+ */
 import Layout from '../layouts/Layout.astro';
+import { TITLE_SUFFIX } from '../lib/site.ts';
 ---
 
 <Layout
-  title="Privacy · thoughtscape"
+  title={`Privacy${TITLE_SUFFIX}`}
   description="No analytics, no comments, no third-party tracking."
 >
   <article class="prose">
@@ -23,9 +61,15 @@ import Layout from '../layouts/Layout.astro';
 
     <p>
       No third-party tracking runs here. There are no advertising or analytics scripts, no
-      tracking pixels, no social widgets, no embedded players, and no fonts, styles, or scripts
-      fetched from another company's servers. Every asset a page loads comes from this site's own
-      address.
+      tracking pixels, no social widgets, and no embedded players. Every script, stylesheet, and
+      font a page loads comes from this site's own address.
+    </p>
+
+    <p>
+      Images are the exception, and only where a note's author linked one. A note that embeds an
+      image hosted elsewhere renders that image from wherever it lives, so displaying it tells that
+      host you loaded the page — the same as following a link there. Nothing on this site does that
+      on its own; it happens only where the writing itself points outward.
     </p>
 
     <p>
@@ -46,16 +90,17 @@ import Layout from '../layouts/Layout.astro';
     <p>
       Requesting a page from any website necessarily reveals your IP address and browser details to
       whoever serves it. This site is served by a static hosting provider, which may keep
-      operational request logs of its own under its own policy. Nothing beyond that is collected,
-      and nothing identifying is stored by this site.
+      operational request logs of its own under its own policy. Nothing beyond that is collected by
+      this site, which has no server of its own to collect it with.
     </p>
 
     <h2>Content</h2>
 
     <p>
-      Every page here was individually reviewed and approved for publication. Material that was not
-      approved is not represented on this site in any form. See <a href="/about/">About</a> for how
-      that boundary works.
+      This site is generated from a set of notes, and a note excluded from it produces no page, no
+      search entry, and no link. None of its content appears here. What can still appear is the
+      words a published note used to refer to it: a link pointing at an excluded note keeps its own
+      link text, which the author wrote. See <a href="/about/">About</a> for how that works.
     </p>
 
     <p>

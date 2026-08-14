@@ -358,11 +358,11 @@ const EN = {
   skipToContent: 'Skip to content',
   primaryNavLabel: 'Primary',
   siteMapLabel: 'Site map',
-  siteSubtitle: 'A reviewed public projection from a private knowledge garden.',
-  siteDescription: 'A static public projection from thoughtscape.',
+  siteSubtitle: 'Notes, published as a static site.',
+  siteDescription: 'A collection of notes, published as static pages.',
   publishedAt: (url) => `Published at ${url}`,
   feedTitle: (siteName) => `${siteName} — all notes`,
-  socialCardAlt: (siteName) => `${siteName} — a public knowledge garden`,
+  socialCardAlt: (siteName) => `${siteName} — a collection of notes`,
 
   navHome: 'Home',
   navNotes: 'Notes',
@@ -395,39 +395,37 @@ const EN = {
   noNotesYet: 'No notes are published yet.',
   noteCount: (count) => `${count} ${count === 1 ? 'note' : 'notes'}`,
 
-  homeDescription: 'A curated static projection from a private Obsidian garden.',
-  homeEyebrow: 'PUBLIC PROJECTION',
-  homeHeading: 'Notes that earned their way out.',
+  homeDescription: 'A collection of notes, published as static pages.',
+  homeEyebrow: 'NOTES',
+  homeHeading: 'Notes, in the open.',
   homeIntro:
-    'A small, reviewed projection from a private Obsidian garden. The private vault stays private; ' +
-    'this site contains only explicitly allowlisted pages.',
+    'Written as plain Markdown and published as static pages. Notes link to each other, and every ' +
+    'link that appears here leads to a note that is published.',
   homeNotesHeading: 'Notes',
   publishedCount: (count) => `${count} published`,
 
   recentTitle: 'Recent',
   recentDescription: 'Published notes in order of when they last changed.',
   recentOrderedByDate:
-    'Ordered by when each note was last updated, most recent first. Notes the projection carries ' +
-    'no date for follow, in alphabetical order by slug.',
+    'Ordered by when each note was last updated, most recent first. Notes with no recorded date ' +
+    'follow, in alphabetical order by slug.',
   recentOrderedBySlug:
-    'The current projection carries no publication dates, so notes are listed in alphabetical ' +
-    'order by slug. This page will order by update date as soon as the projection includes one.',
+    'These notes carry no publication dates, so they are listed in alphabetical order by slug. ' +
+    'This page will order by update date as soon as any note records one.',
 
   tagsTitle: 'Tags',
-  tagsDescription: 'Every public tag in the projection.',
+  tagsDescription: 'Every tag on a published note.',
   tagCount: (count) => `${count} ${count === 1 ? 'tag' : 'tags'}`,
-  tagsEmpty:
-    'The current projection carries no tags. This page lists every public tag as soon as the ' +
-    'projection includes them.',
+  tagsEmpty: 'No published note carries a tag yet. This page lists every tag as soon as one does.',
   collectionsTitle: 'Collections',
-  collectionsDescription: 'Curated public collections in the projection.',
+  collectionsDescription: 'The collections published notes are grouped into.',
   collectionCount: (count) => `${count} ${count === 1 ? 'collection' : 'collections'}`,
   collectionsEmpty:
-    'The current projection carries no collections, so every published note lives in one flat ' +
-    'namespace. This page lists each curated collection as soon as the projection includes them.',
+    'No published note belongs to a collection yet, so every note lives in one flat namespace. ' +
+    'This page lists each collection as soon as one does.',
   collectionsNote:
-    'Collections are curated for this site. They are chosen for public reading and do not reflect ' +
-    'how anything is organized elsewhere.',
+    'Collections group notes for reading. They are a property of what is published here and do ' +
+    'not reflect how anything is organized elsewhere.',
 
   tagPageTitle: (tag) => `Tag: ${tag}`,
   tagPageDescription: (tag) => `Published notes tagged ${tag}.`,
@@ -460,8 +458,8 @@ const EN = {
   pagerPrevious: 'Previous',
   pagerNext: 'Next',
   noteProvenance:
-    'A reviewed public projection. This page was published because it was named on an explicit ' +
-    'approval list, and it carries only what that projection includes.',
+    'Published from a note written in Markdown, and served as a static page. Links here lead only ' +
+    'to notes that are published.',
   canonicalUrlLine: (url) => `Canonical URL: ${url}`,
 
   graphHeading: 'Nearby notes',
@@ -500,7 +498,7 @@ const EN = {
     'No published note links to this one and it links to none, so there is no neighbourhood to draw.',
   graphSiteEmpty:
     'No two published notes link to each other yet, so there is no graph to draw. This page fills ' +
-    'in as the projection grows.',
+    'in as more notes link to each other.',
 
   notFoundTitle: 'Page not found',
   notFoundDescription: 'That page is not part of this site.',
@@ -533,11 +531,11 @@ const ZH_CN = {
   skipToContent: '跳到正文',
   primaryNavLabel: '主导航',
   siteMapLabel: '站点地图',
-  siteSubtitle: '一份经过审阅、从私有知识花园生成的公开投影。',
-  siteDescription: 'thoughtscape 的静态公开投影。',
+  siteSubtitle: '笔记，以静态站点的形式发布。',
+  siteDescription: '一组以静态页面形式发布的笔记。',
   publishedAt: (url) => `本页地址：${url}`,
   feedTitle: (siteName) => `${siteName} — 全部笔记`,
-  socialCardAlt: (siteName) => `${siteName} — 一座公开的知识花园`,
+  socialCardAlt: (siteName) => `${siteName} — 一组笔记`,
 
   navHome: '首页',
   navNotes: '笔记',
@@ -569,36 +567,36 @@ const ZH_CN = {
   noNotesYet: '目前还没有公开的笔记。',
   noteCount: (count) => `${count} 篇笔记`,
 
-  homeDescription: '一份从私有 Obsidian 花园中精选生成的静态投影。',
-  homeEyebrow: '公开投影',
-  homeHeading: '值得公开的笔记。',
+  homeDescription: '一组以静态页面形式发布的笔记。',
+  homeEyebrow: '笔记',
+  homeHeading: '公开的笔记。',
   homeIntro:
-    '一份小而经过审阅的投影，来自一座私有的 Obsidian 花园。私有库始终保持私有；' +
-    '本站只包含明确列入允许清单的页面。',
+    '以纯 Markdown 写成，并以静态页面发布。笔记之间相互链接，站内出现的每一个链接都指向' +
+    '一篇已公开的笔记。',
   homeNotesHeading: '笔记',
   publishedCount: (count) => `已公开 ${count} 篇`,
 
   recentTitle: '最近更新',
   recentDescription: '按最后修改时间排列的公开笔记。',
   recentOrderedByDate:
-    '按每篇笔记最后更新的时间排列，最新的在前。投影中没有日期的笔记排在其后，' +
+    '按每篇笔记最后更新的时间排列，最新的在前。没有记录日期的笔记排在其后，' +
     '并按 slug 的字母顺序排列。',
   recentOrderedBySlug:
-    '当前投影不包含发布日期，因此笔记按 slug 的字母顺序排列。' +
-    '一旦投影包含日期，本页将改为按更新时间排序。',
+    '这些笔记没有记录发布日期，因此按 slug 的字母顺序排列。' +
+    '一旦有笔记记录了日期，本页将改为按更新时间排序。',
 
   tagsTitle: '标签',
-  tagsDescription: '投影中的全部公开标签。',
+  tagsDescription: '公开笔记上的全部标签。',
   tagCount: (count) => `${count} 个标签`,
-  tagsEmpty: '当前投影不包含标签。一旦投影包含标签，本页将列出全部公开标签。',
+  tagsEmpty: '目前还没有公开笔记带有标签。一旦有笔记带上标签，本页将逐个列出。',
   collectionsTitle: '合集',
-  collectionsDescription: '投影中经过策划的公开合集。',
+  collectionsDescription: '公开笔记所归入的合集。',
   collectionCount: (count) => `${count} 个合集`,
   collectionsEmpty:
-    '当前投影不包含合集，因此所有公开笔记都位于同一个扁平命名空间中。' +
-    '一旦投影包含合集，本页将逐个列出。',
+    '目前还没有公开笔记归入合集，因此所有笔记都位于同一个扁平命名空间中。' +
+    '一旦有笔记归入合集，本页将逐个列出。',
   collectionsNote:
-    '合集是为本站专门策划的。它们按公开阅读的需要划分，并不反映其他地方的组织方式。',
+    '合集用于组织阅读。它们只反映本站公开内容的归类方式，并不反映其他地方的组织方式。',
 
   tagPageTitle: (tag) => `标签：${tag}`,
   tagPageDescription: (tag) => `带有 ${tag} 标签的公开笔记。`,
@@ -629,8 +627,8 @@ const ZH_CN = {
   pagerPrevious: '上一篇',
   pagerNext: '下一篇',
   noteProvenance:
-    '一份经过审阅的公开投影。本页之所以公开，是因为它被明确列入了批准清单，' +
-    '并且只包含该投影所涵盖的内容。',
+    '本页由一篇以 Markdown 写成的笔记发布，并以静态页面提供。页内的链接只会指向' +
+    '已公开的笔记。',
   canonicalUrlLine: (url) => `规范链接：${url}`,
 
   graphHeading: '相邻笔记',
@@ -661,7 +659,7 @@ const ZH_CN = {
   graphExpand: '查看全部公开笔记 →',
   graphExpandLabel: '查看全部公开笔记，包括本图未画出的部分',
   graphEmpty: '没有公开笔记链接到这篇，这篇也没有链接到其他笔记，因此没有可绘制的相邻关系。',
-  graphSiteEmpty: '目前还没有两篇公开笔记互相链接，因此没有可绘制的关系图。随着投影增长，本页会逐步充实。',
+  graphSiteEmpty: '目前还没有两篇公开笔记互相链接，因此没有可绘制的关系图。随着笔记之间的链接增多，本页会逐步充实。',
 
   notFoundTitle: '页面未找到',
   notFoundDescription: '该页面不属于本站。',
@@ -692,10 +690,9 @@ export type NavLabelKey = Extract<keyof Translation, `nav${string}`>;
  * schema-valid artifact.
  *
  * What it means is that a Traditional-script document renders Simplified chrome.
- * A known limit, stated rather than hidden: this projection publishes two
- * locales, and Simplified chrome around a Traditional document is a closer
- * answer than English. A Traditional locale is one more entry here and nothing
- * else.
+ * A known limit, stated rather than hidden: this tool ships two locales, and
+ * Simplified chrome around a Traditional document is a closer answer than
+ * English. A Traditional locale is one more entry here and nothing else.
  */
 const LOCALES: Readonly<Record<string, Translation>> = {
   en: EN,

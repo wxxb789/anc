@@ -22,9 +22,24 @@ import { THEME_DATASET, THEME_NAMES, type ThemeName } from '../lib/translations.
  * blocking before first paint. Renaming either key here without changing it
  * there silently orphans the stored preference, so `tests/design-tokens.test.ts`
  * asserts the two files agree.
+ *
+ * **The prefix names the thing stored, not the tool that stored it**, which is
+ * plan decision D2 applied to the one identifier a reader's own browser keeps.
+ * It was `thoughtscape:` — this project's name, written into the local storage
+ * of every visitor to every site built with this tool, visible in any
+ * devtools pane. Nothing needed it: `localStorage` is partitioned by origin, so
+ * two sites' keys are already distinct whatever they are called, and the prefix
+ * was buying isolation the platform provides while carrying an identity the
+ * site does not have. `publish:` describes what wrote the value and belongs to
+ * nobody.
+ *
+ * **Deliberately not configurable**, for the reason the plan gives at §4.2:
+ * making it a config key would buy nothing the origin partition does not
+ * already give, and would cost the invariant the gate below holds — that these
+ * two files agree on a literal.
  */
-const THEME_KEY = 'thoughtscape:theme';
-const READER_KEY = 'thoughtscape:reader';
+const THEME_KEY = 'publish:theme';
+const READER_KEY = 'publish:reader';
 
 /**
  * `system` is the absence of a stored value, which is what lets CSS decide.

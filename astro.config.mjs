@@ -64,19 +64,32 @@ function diagramRuntimePlugin(mode) {
 }
 
 /**
- * THE ONE PLACE THIS SITE'S PUBLIC ORIGIN IS WRITTEN DOWN.
+ * THE ONE PLACE A SITE'S PUBLIC ORIGIN IS WRITTEN DOWN.
  *
- * `.invalid` is reserved by RFC 2606 and is guaranteed never to resolve, so
- * this is a placeholder that cannot be mistaken for a real domain and cannot
- * accidentally point a crawler at somebody else's server. No public domain has
- * been assigned yet.
+ * **`.localhost` rather than `.invalid`, and the change is the point of
+ * TK-31.** RFC 6761 reserves `.localhost` and requires resolvers to map the
+ * name *and all its subdomains* to loopback, so this is a name that cannot
+ * resolve to anybody else's server — the property `.invalid` was chosen for —
+ * and that additionally *works*: a preview build's canonical links, feed, and
+ * sitemap all point at a local origin a browser can actually follow.
  *
- * **To assign the real origin, change this line and nothing else.** Every
- * canonical link, Open Graph URL, feed id, sitemap `<loc>`, and the
- * `Sitemap:` line in `robots.txt` is derived from it at build time, and
- * `tests/metadata.test.ts` fails if any of them is ever written literally
- * somewhere else. Redeploying after the change is what publishes it; nothing
- * here deploys.
+ * The value it replaced was `https://thoughtscape.invalid`, which was safe and
+ * was still one owner's name on every stranger's site. That is the whole of
+ * plan decision D2. `.invalid` was never wrong about *safety* — TK-24's gate
+ * was right that a reserved name cannot misdirect a crawler — it was wrong
+ * about *whose*, and a default that belongs to nobody is what this ticket owes
+ * every user who configures nothing.
+ *
+ * **Deliberately no port**, per plan §5.5: a canonical URL, a feed id, and a
+ * `<loc>` should not carry a development port, and they are not deployable
+ * anyway. `astro dev` serves `http://localhost:4321/` regardless; what this
+ * governs is the absolute URLs written *into* the built documents.
+ *
+ * **This is a preview origin, not a publishable one, and nothing here can tell
+ * the difference.** A site built with it is complete and correct and obviously
+ * local at a glance — which is a property `.invalid` gave up by producing URLs
+ * that looked plausible. Refusing to *deploy* it belongs to the deploy step,
+ * which this repository does not have and does not perform.
  *
  * **A user's own `publish.config.yaml` overrides it, and this stays the
  * fallback rather than moving into the loader.** That is the point of the
@@ -84,10 +97,11 @@ function diagramRuntimePlugin(mode) {
  * a stranger's build before they have configured anything, both need an origin,
  * and there is exactly one place to read it from. `scripts/load-config.ts`
  * deliberately returns `undefined` for an unconfigured origin — a default there
- * would be a second home for this value, which is the property the test above
- * exists to hold.
+ * would be a second home for this value. `tests/metadata.test.ts` fails if the
+ * host appears in any file under `src/`, `scripts/`, `tests/`, or `public/`
+ * other than this one.
  */
-const DEFAULT_ORIGIN = 'https://thoughtscape.invalid';
+const DEFAULT_ORIGIN = 'http://publish.localhost/';
 
 /**
  * The user's configuration, read once at config evaluation.
@@ -132,6 +146,35 @@ function loadUserConfig() {
 }
 
 const config = loadUserConfig();
+
+/**
+ * Hand the configured title to the page modules.
+ *
+ * `src/lib/site.ts` reads it from here and cannot read it from anywhere else:
+ * importing `scripts/load-config.ts` from `src/lib/` breaks the build, because
+ * Astro evaluates that module out of `dist/.prerender/` and the loader's
+ * dependency reads `../package.json` relative to its own URL — measured,
+ * `ENOENT: … dist\.prerender\package.json` at "generating static routes". The
+ * variable is the same seam `CONTENT_ARTIFACT` already uses across the same
+ * boundary, and that module documents the mechanism at length.
+ *
+ * Set here rather than in `bin/thoughtscape-publish.mjs` because this is the
+ * one scope that runs for *every* way a build starts — the packaged binary,
+ * `astro build` in a checkout, and `astro dev` — and each of them needs the
+ * title. `config.title` always holds a value: `loadConfig` applies its own
+ * default when the user configured nothing, which is why there is no `??` here
+ * and why an unconfigured build still gets a legible name.
+ *
+ * **The name is spelled out rather than imported, deliberately.** Importing
+ * `SITE_TITLE_VARIABLE` from `src/lib/site.ts` would evaluate that module here,
+ * at config time, *before* this line runs — so its `SITE_NAME` would be
+ * computed from an unset variable, giving one process two module instances that
+ * disagree about the site's name. A literal has no such ordering. The cost is a
+ * second copy of the spelling, and it is paid the way this repository already
+ * pays it for `theme-init.js`: `tests/site-identity.test.ts` reads both files
+ * and fails if they name different variables, so a rename cannot half-apply.
+ */
+process.env['PUBLISH_SITE_TITLE'] = config.title;
 
 // https://astro.build/config
 export default defineConfig({

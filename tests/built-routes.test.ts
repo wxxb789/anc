@@ -343,14 +343,23 @@ function asRendered(label: string): string {
 }
 
 test('the tag and collection indexes render an honest empty state, never a 404', () => {
+  // The empty-state sentence is read from the contract rather than restated
+  // here. It used to be a hand-copied fragment — `'carries no tags'` — which
+  // TK-31 broke by rewriting both keys: they described "the current projection",
+  // one owner's exporter, rather than a build from a set of Markdown files. A
+  // copy has to be re-synchronised by whoever changes the prose, and the failure
+  // it produces names the *page* rather than the stale fragment, which is a long
+  // way from the actual mistake. Reading `translate` means the gate holds the
+  // property — the page explains its emptiness rather than 404ing — and follows
+  // the wording wherever it goes.
   for (const [route, marker] of [
-    ['tags', 'carries no tags'],
-    ['collections', 'carries no collections'],
+    ['tags', translate(NAV_LANGUAGE).tagsEmpty],
+    ['collections', translate(NAV_LANGUAGE).collectionsEmpty],
   ] as const) {
     const html = readFileSync(new URL(`${route}/index.html`, DIST), 'utf8');
     const facets = route === 'tags' ? tagFacets(entries) : collectionFacets(entries);
     if (facets.length === 0) {
-      assert.ok(html.includes(marker), `/${route}/ does not explain that the projection carries none`);
+      assert.ok(html.includes(asRendered(marker)), `/${route}/ does not explain that it lists none`);
       assert.doesNotMatch(html, /class="facet-list"/, `/${route}/ rendered a list with no facets`);
     } else {
       assert.match(html, /class="facet-list"/, `/${route}/ has facets but rendered no list`);
@@ -380,9 +389,50 @@ function mainOf(route: string): string {
 }
 
 test('the about and privacy pages state the publication and tracking boundary', () => {
+  // **The about claims changed with TK-31, and the change is the ticket.** They
+  // used to be `approved for publication` and `is not published` — an explicit
+  // approval list, which is how one owner's exporter worked and is the opposite
+  // of how this tool works. A build from a directory of Markdown publishes by
+  // default and withholds what the config excludes, so a gate pinning the old
+  // wording was holding the page to a claim the generator cannot keep.
+  //
+  // What is asserted instead is the direction of the boundary — that publication
+  // is the default and exclusion is the explicit act — plus the two properties
+  // that hold whatever the user configured: excluded notes are not represented,
+  // and the output is static.
   const about = mainOf('about/index.html').toLowerCase();
-  for (const claim of ['approved for publication', 'is not published', 'static file']) {
+  for (const claim of [
+    'publication is the default',
+    'explicitly excluded',
+    'not published',
+    'static file',
+  ]) {
     assert.ok(about.includes(claim), `/about/ does not state "${claim}"`);
+  }
+
+  // And what each page must no longer say. An approval list is a stronger
+  // promise than this tool makes, and a reader cannot tell a guarantee the build
+  // enforces from a claim about somebody's editorial diligence — so stating it
+  // on the page a reader consults to calibrate trust is the failure this half
+  // catches.
+  //
+  // **The forbidden phrase is per page, and that is not tidiness.** The first
+  // version asserted three phrases against both pages, and measured against
+  // `HEAD`, three of those six rows could never have gone red: neither page ever
+  // said "allowlist", and the privacy page never said "approval list". A row
+  // that could not fail is a row that measures nothing, and six green rows
+  // reported twice the evidence that existed. Each phrase below is one this
+  // ticket removed *from that page*, checked with `git show HEAD:<path>`.
+  for (const [route, main, stale] of [
+    ['about', about, ['approval list', 'approved for publication']],
+    ['privacy', mainOf('privacy/index.html').toLowerCase(), ['approved for publication']],
+  ] as const) {
+    for (const phrase of stale) {
+      assert.ok(
+        !main.includes(phrase),
+        `/${route}/ claims "${phrase}", but this tool publishes by default and excludes explicitly`,
+      );
+    }
   }
 
   const privacy = mainOf('privacy/index.html').toLowerCase();
@@ -1607,17 +1657,33 @@ test('a note page renders the chrome of its own language, and not the other', ()
    * `>text<` and `="value"` are the two forms, and both are anchored at each end
    * — which is what stops a chrome word matching inside a note title and what
    * stops a short label matching inside a longer one.
+   *
+   * **The brand link is removed before the search, and it is content rather
+   * than chrome.** `Layout.astro` renders the site's own name there — since
+   * TK-31 the *user's* configured title, defaulting to `Notes` — and a proper
+   * noun is not translated, exactly as a note's title is not. It collides here
+   * because the English label for the notes nav item spells the same word, so a
+   * Chinese page carrying the correct Chinese `笔记` in its navigation was
+   * reported as "renders navNotes in the OTHER language" on the strength of its
+   * own brand. That is the same class of false positive this function's anchored
+   * matching already exists to prevent — the comment above records `searchToggle`
+   * matching a note *title* — and it is excised the same way: by removing the
+   * element that carries content, not by weakening the match.
+   * Global rather than first-match: the layout renders one brand link today, and
+   * a gate that silently covers only the first would go half-blind the day a
+   * footer repeated it, in the direction that reports success.
    */
+  const withoutBrand = (html: string): string => html.replace(/<a class="brand"[^>]*>[\s\S]*?<\/a>/g, '');
+
   const renders = (html: string, value: string, as: 'text' | 'attribute'): boolean =>
     as === 'text'
-      ? html.includes(`>${asRendered(value)}<`)
-      : html.includes(`="${asRendered(value)}"`);
+      ? withoutBrand(html).includes(`>${asRendered(value)}<`)
+      : withoutBrand(html).includes(`="${asRendered(value)}"`);
 
   let inspected = 0;
   for (const entry of entries) {
     const html = readFileSync(new URL(`notes/${entry.slug}/index.html`, DIST), 'utf8');
     const language = declaredLanguage(html);
-
     // The page declares the language the artifact gave it, or the navigation
     // language where it gave none. A screen reader switches voice on this, so it
     // is an accessibility property rather than only a metadata one.
