@@ -72,14 +72,23 @@ export const REPORT_SCHEMA_VERSION = 1;
  * Why a discovered file produced no page.
  *
  * A closed set of stable identifiers, never prose: a free-text reason cannot be
- * gated on and cannot be switched on. Adding a member — TK-26 adds one for the
- * excluded set — does not bump {@link REPORT_SCHEMA_VERSION}, because a reader
- * that does not know it still parses the file. Renaming or removing one does.
+ * gated on and cannot be switched on. Adding a member — TK-26 added three, for
+ * the two exclusion mechanisms and the repository's own README — does not bump
+ * {@link REPORT_SCHEMA_VERSION}, because a reader that does not know it still
+ * parses the file. Renaming or removing one does.
+ *
+ * The two exclusion reasons are separate members rather than one `excluded`,
+ * because they are two different mistakes with two different fixes: a pattern
+ * the user can correct in their config, and three words inside the file itself.
+ * A reader who cannot tell them apart has to open the file to find out which.
  */
 export type DropReason =
   | 'slug-collision' // an earlier file already took this slug
   | 'empty-slug' // the filename yields no [a-z0-9-] characters
-  | 'not-markdown'; // the extension is not .md
+  | 'not-markdown' // the extension is not .md
+  | 'excluded-by-pattern' // a user exclusion glob matched it
+  | 'excluded-by-frontmatter' // the note itself carries `publish: false`
+  | 'repository-readme'; // the root README addresses the repository, not the reader
 
 export interface DroppedFile {
   /** Path relative to the content directory, in POSIX separators. */
