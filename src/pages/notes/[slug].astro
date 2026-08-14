@@ -157,16 +157,30 @@ const canonicalRoute = noteRoute(entry.slug);
  * derived and says so on the page. All three are computed here rather than in
  * the template so that the markup below reads as the anatomy it is.
  *
- * **A known incompleteness, stated rather than hidden.** The exporter derives
- * `outgoing` from wikilinks only, so the edge set and the body's own links can
- * disagree in both directions: a plain Markdown link in a body renders a live
- * `<a>` with no edge behind it, and — the direction the fixture corpus actually
- * contains, in three entries — an edge exists for a note the body never links
- * in prose. The corpus invariant sees neither: it proves the two edge sets are
- * inverses of *each other*, not that either matches the rendered links. Fixing
- * that is TK-19's exporter contract work, so the heading here says "links to"
- * rather than "every link on this page", and no gate below claims a
- * completeness the data cannot support.
+ * **The incompleteness this used to state is gone, and the heading still says
+ * "Links to".** The producer derived `outgoing` from wikilinks only, so a plain
+ * Markdown link rendered a live `<a>` with no edge behind it. Since TK-27 one
+ * traversal produces the rewritten href *and* the edge from a single
+ * resolution (`scripts/resolve-links.ts`), across all five link forms — so that
+ * direction of disagreement is now unrepresentable rather than merely untested.
+ *
+ * The heading is unchanged deliberately, because "every link on this page"
+ * would be a lie in three ways the data still cannot support. An external link
+ * is an anchor a reader can click and is never an edge. A link that resolved to
+ * nothing, and one to a note the user withheld, are both on the page as the
+ * author's own words — degraded to text rather than deleted — and neither
+ * reaches anything here. And a link to this page's own heading renders as a
+ * real anchor inside the article while contributing no edge, because an entry
+ * may not link to itself. "Links to" describes the list that is actually there:
+ * the published notes this one reaches.
+ *
+ * What did change is the *empty* state, from possibly-false to true.
+ * `outgoingEmpty` reads "This note links to no other published note", and
+ * before TK-27 that sentence was printed for a note whose body was full of
+ * Markdown-syntax links to published notes. Now it can only be printed when it
+ * holds. `tests/backlink-surfaces.test.ts` gates it over a built site, which
+ * nothing did before — an empty state that states a fact was the one region
+ * here with no gate on the fact.
  */
 const outgoing = notesForSlugs(entry.outgoing, getEntry);
 const backlinks = notesForSlugs(entry.backlinks, getEntry);
