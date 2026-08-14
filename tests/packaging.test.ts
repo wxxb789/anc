@@ -694,9 +694,23 @@ test('the site identity a packaged build ships is this owner\'s, and TK-31 is wh
   // 2. It is written in exactly one place, so TK-31 changes one line rather than
   //    hunting for copies. `tests/metadata.test.ts` already enforces this for the
   //    site's own pages; this restates it as a packaging property.
+  //
+  // TK-30 made the origin configurable and both properties survive unchanged.
+  // What moved is where the literal sits: `site:` is now
+  // `config.origin ?? DEFAULT_ORIGIN`, so the placeholder is read from that
+  // constant. The second assertion below is new and is what keeps this gate
+  // honest across that change — a `DEFAULT_ORIGIN` the `site:` line did not
+  // actually use would satisfy the first assertion while shipping something
+  // else entirely.
   const config = readFileSync(join(ROOT, 'astro.config.mjs'), 'utf8');
-  const site = /site:\s*'([^']+)'/.exec(config)?.[1];
-  assert.ok(site, 'astro.config.mjs declares no `site`, so canonical URLs have no origin');
+  const site = /DEFAULT_ORIGIN = '([^']+)'/.exec(config)?.[1];
+  assert.ok(site, 'astro.config.mjs declares no default origin, so canonical URLs have no origin');
+  assert.match(
+    config,
+    /site:\s*config\.origin \?\? DEFAULT_ORIGIN/,
+    'astro.config.mjs does not derive `site:` from DEFAULT_ORIGIN, so the placeholder this gate ' +
+      'checks is not the origin a packaged build actually ships',
+  );
   assert.match(
     site,
     /\.invalid(?:\/|$)/,

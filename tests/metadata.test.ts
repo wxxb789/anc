@@ -827,12 +827,21 @@ test('the built robots.txt points at the sitemap that was built', () => {
  * assigned, so the configured origin is a deliberate `.invalid` placeholder, and
  * what makes that safe is that nothing else in the tree writes an origin down.
  * If a second copy ever appears, this fails and names it.
+ *
+ * TK-30 made the origin configurable, and the property is unchanged: the value
+ * `astro.config.mjs` falls back to when a user has configured nothing is still
+ * the only place it is written. What moved is the spelling — `site:` is now
+ * `config.origin ?? DEFAULT_ORIGIN`, so the literal is read from that constant
+ * rather than from the key. `scripts/load-config.ts` deliberately returns
+ * `undefined` for an unconfigured origin rather than defaulting, which is what
+ * keeps the count at one; `tests/config.test.ts` holds that end.
  */
 test('no source file hardcodes the origin that astro.config.mjs configures', () => {
   const root = new URL('../', import.meta.url);
   const config = readFileSync(new URL('astro.config.mjs', root), 'utf8');
-  const configured = /site:\s*'([^']*)'/.exec(config)?.[1];
-  assert.ok(configured, 'astro.config.mjs declares no site: origin');
+  const configured = /DEFAULT_ORIGIN = '([^']*)'/.exec(config)?.[1];
+  assert.ok(configured, 'astro.config.mjs declares no default origin');
+  assert.match(config, /site:\s*config\.origin \?\? DEFAULT_ORIGIN/, 'site: is not derived from that default');
   assert.equal(new URL(configured).origin, ORIGIN, 'the built pages do not use the configured origin');
 
   const host = new URL(configured).host;

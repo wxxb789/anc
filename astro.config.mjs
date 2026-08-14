@@ -2,6 +2,7 @@
 import { defineConfig } from 'astro/config';
 import { fileURLToPath } from 'node:url';
 import { DIAGRAM_MODE } from './src/lib/diagram-mode.ts';
+import { configForBuild } from './scripts/load-config.ts';
 
 /**
  * Keep the diagram runtime out of the build unless client mode wants it.
@@ -62,22 +63,79 @@ function diagramRuntimePlugin(mode) {
   };
 }
 
+/**
+ * THE ONE PLACE THIS SITE'S PUBLIC ORIGIN IS WRITTEN DOWN.
+ *
+ * `.invalid` is reserved by RFC 2606 and is guaranteed never to resolve, so
+ * this is a placeholder that cannot be mistaken for a real domain and cannot
+ * accidentally point a crawler at somebody else's server. No public domain has
+ * been assigned yet.
+ *
+ * **To assign the real origin, change this line and nothing else.** Every
+ * canonical link, Open Graph URL, feed id, sitemap `<loc>`, and the
+ * `Sitemap:` line in `robots.txt` is derived from it at build time, and
+ * `tests/metadata.test.ts` fails if any of them is ever written literally
+ * somewhere else. Redeploying after the change is what publishes it; nothing
+ * here deploys.
+ *
+ * **A user's own `publish.config.yaml` overrides it, and this stays the
+ * fallback rather than moving into the loader.** That is the point of the
+ * arrangement rather than an accident of it: a build of *this* repository, and
+ * a stranger's build before they have configured anything, both need an origin,
+ * and there is exactly one place to read it from. `scripts/load-config.ts`
+ * deliberately returns `undefined` for an unconfigured origin — a default there
+ * would be a second home for this value, which is the property the test above
+ * exists to hold.
+ */
+const DEFAULT_ORIGIN = 'https://thoughtscape.invalid';
+
+/**
+ * The user's configuration, read once at config evaluation.
+ *
+ * `configForBuild` resolves the directory from `PUBLISH_CONFIG_DIR`, falling
+ * back to the working directory. A packaged build has already changed its
+ * working directory to the installed package by the time this runs, which is
+ * why the variable exists at all; `bin/thoughtscape-publish.mjs` documents the
+ * same boundary for `CONTENT_ARTIFACT`. For a build of *this* repository the
+ * fallback is the repository root — so a `publish.config.yaml` committed here
+ * would reconfigure this repository's own build, which is the honest
+ * description and not a bug: this repository is the tool, and there is no such
+ * file in it.
+ *
+ * A malformed config stops the build before a single page is generated — the
+ * ordering `docs/plans/ssg-generalisation-plan.md` §4.3 asks for, where a config
+ * error cannot be masked by a build that otherwise succeeded.
+ *
+ * **Caught rather than thrown, because this module scope has no boundary above
+ * it that knows how to print one.** `bin/thoughtscape-publish.mjs` prints a
+ * `BuildFailure`'s own message and nothing else; a `astro build` or `astro dev`
+ * run directly has only Astro's config loader, which was measured printing the
+ * composed message *plus* a stack trace carrying four absolute host paths —
+ * `at refuse (Q:/…/scripts/load-config.ts:313:8)` and three more. TK-25 §2.3
+ * forbids a discovered filesystem path on that stream, and `astro dev`
+ * evaluates this same scope, so the leak is not confined to the packaged path.
+ * Printing the message and exiting keeps the diagnostic and drops the trace.
+ */
+function loadUserConfig() {
+  try {
+    return configForBuild();
+  } catch (error) {
+    // Only a message composed under the disclosure rule may be printed. Anything
+    // else is a string this project did not write, on a world-readable stream.
+    if (error instanceof Error && error.name === 'BuildFailure') {
+      console.error(error.message);
+    } else {
+      console.error('the configuration file could not be read');
+    }
+    process.exit(1);
+  }
+}
+
+const config = loadUserConfig();
+
 // https://astro.build/config
 export default defineConfig({
-  // THE ONE PLACE THIS SITE'S PUBLIC ORIGIN IS WRITTEN DOWN.
-  //
-  // `.invalid` is reserved by RFC 2606 and is guaranteed never to resolve, so
-  // this is a placeholder that cannot be mistaken for a real domain and cannot
-  // accidentally point a crawler at somebody else's server. No public domain has
-  // been assigned yet.
-  //
-  // **To assign the real origin, change this line and nothing else.** Every
-  // canonical link, Open Graph URL, feed id, sitemap `<loc>`, and the
-  // `Sitemap:` line in `robots.txt` is derived from it at build time, and
-  // `tests/metadata.test.ts` fails if any of them is ever written literally
-  // somewhere else. Redeploying after the change is what publishes it; nothing
-  // here deploys.
-  site: 'https://thoughtscape.invalid',
+  site: config.origin ?? DEFAULT_ORIGIN,
   output: 'static',
   trailingSlash: 'always',
   vite: {
