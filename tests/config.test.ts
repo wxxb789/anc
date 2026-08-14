@@ -32,6 +32,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join, matchesGlob } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1194,9 +1195,29 @@ test('a configured exclusion withholds the file from dist/, end to end', async (
 
     // Half two: it reached nothing that ships. Every file, not just the pages —
     // the measured leak went through the Pagefind index too.
+    //
+    // **Inflated before scanning, because the search index is gzipped and a
+    // UTF-8 read cannot see into it.** Measured on a real build: a withheld
+    // note's name is absent from `dist/pagefind/fragment/*.pf_fragment` read as
+    // text and present after `gunzipSync` — so the byte-level scan this gate
+    // used to do reported the search index clean while every published body sat
+    // inside it compressed. That is the largest surface in `dist/` and it was
+    // the one surface this gate could not read.
+    //
+    // Not gzip-shaped files fall through to the raw read, so an ordinary page
+    // is scanned exactly as before.
+    const searchable = (file: string): string => {
+      const raw = readFileSync(file);
+      try {
+        return `${raw.toString('utf8')}\n${gunzipSync(raw).toString('utf8')}`;
+      } catch {
+        return raw.toString('utf8');
+      }
+    };
+
     const leaked = filesUnder(out).filter((file) => {
       try {
-        return readFileSync(file, 'utf8').includes('zzqexcludedleak');
+        return searchable(file).includes('zzqexcludedleak');
       } catch {
         return false;
       }
@@ -1205,6 +1226,38 @@ test('a configured exclusion withholds the file from dist/, end to end', async (
       leaked.map((file) => file.slice(out.length + 1).replaceAll('\\', '/')),
       [],
       'the excluded note reached the published site',
+    );
+
+    // **Non-vacuity for the inflate itself**, and without it adding `gunzipSync`
+    // above proves nothing: a scan that never decompresses anything reports the
+    // same empty list as one that decompresses everything, so the absence
+    // assertion cannot tell a working gate from a blind one. Measured — with
+    // the inflate removed, the assertion above stayed **green**.
+    //
+    // The control is a *positive* one rather than a planted needle. There is no
+    // token that lands only in a gzipped member: Pagefind indexes a published
+    // note's body, and that body is also in the note's own HTML, so anything
+    // reachable in the index is reachable in a page too. What can be proven is
+    // that the inflate genuinely reads a surface a UTF-8 read cannot — the
+    // published note's own words, recovered from a gzip member where the raw
+    // bytes do not contain them.
+    const gzipped = filesUnder(out).filter((file) => {
+      const bytes = readFileSync(file);
+      return bytes[0] === 0x1f && bytes[1] === 0x8b;
+    });
+    assert.ok(
+      gzipped.length > 0,
+      'the build produced no gzipped file, so the inflate branch never ran and this gate is ' +
+        'a plain text scan claiming to be more',
+    );
+    assert.ok(
+      gzipped.some(
+        (file) =>
+          !readFileSync(file, 'utf8').includes('An ordinary note') &&
+          searchable(file).includes('An ordinary note'),
+      ),
+      "no gzipped file yielded the published note's own text only after inflating, so the " +
+        'decompression is not reaching the search index this gate claims to cover',
     );
 
     // And the counts agree with the outcome, so a build that excluded the note
