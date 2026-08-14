@@ -37,19 +37,19 @@
  * that as its reason. The scratch build never touches this repository's own
  * `dist/`: `--out` names a directory inside the scratch root.
  *
- * ## The corpus's links are written in slug order, and that is not cosmetic
+ * ## The corpus is written in natural document order
  *
- * `entry.outgoing` is emitted in document order and `checkCorpus` requires it
- * sorted ascending, so a note whose first link points to a later-sorting slug
- * **fails the build**. Measured on the shipped binary: a body reading
- * `See [[zebra]] and [[apple]].` exits 1 with `entries[1] (slug "hub").outgoing:
- * must be sorted in ascending order`, and the same two links in the other order
- * exit 0. `tests/link-traversal.test.ts:375` cannot see it because it sorts the
- * actual value before comparing.
+ * It did not used to be, and the reason is worth keeping. `entry.outgoing` was
+ * emitted in document order while `checkCorpus` requires it sorted, so a note
+ * whose first link named a later-sorting slug **failed the build** — measured on
+ * the shipped binary, `See [[zebra]] and [[apple]].` exited 1 while the same two
+ * links swapped exited 0. This fixture was ordered by target slug to build at
+ * all, which is the opposite of what a hostile corpus should be.
  *
- * `HUB_LINKS` below is therefore ordered by target slug. When that defect is
- * fixed — one `.sort()` at `scripts/markdown-to-artifact.ts:743` — this
- * constraint disappears and the order here becomes free.
+ * `scripts/markdown-to-artifact.ts` now sorts, so the links below are written in
+ * the order a person introduces them and the ordering contract is asserted
+ * where it belongs — `tests/link-traversal.test.ts`, over a corpus whose
+ * document order deliberately opposes its slug order.
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -131,7 +131,8 @@ const NFC_NAME = 'caf\u00e9';
 /**
  * The links `hub.md` writes, as `[source form, target slug]`.
  *
- * **Ordered by target slug**, for the contract reason in this file's header.
+ * **In natural document order**, the way a person introduces the forms — see
+ * this file's header for why it was slug-ordered until the producer sorted.
  * The expected edge set is written out separately below rather than derived
  * from this table, per plan §2.6's second property: both the anchors and
  * `outgoing` are producer output, so comparing them only against each other is
@@ -139,10 +140,10 @@ const NFC_NAME = 'caf\u00e9';
  */
 const HUB_LINKS: readonly (readonly [string, string])[] = [
   ['Form 1, shortest path: [[alpha]].', 'alpha'],
-  ['Form 3, prefix-less multi-segment relative: [[deep/beta]].', 'deep-beta'],
   ['Form 2, vault root: [[/deep/beta]].', 'deep-beta'],
-  ['Form 4, standard Markdown: [delta](delta.md).', 'delta'],
   ['Form 3, explicit relative: [[./gamma]].', 'gamma'],
+  ['Form 3, prefix-less multi-segment relative: [[deep/beta]].', 'deep-beta'],
+  ['Form 4, standard Markdown: [delta](delta.md).', 'delta'],
   ['Form 5, display text: [[gamma|shown differently]].', 'gamma'],
   ['An ambiguous target: [[shared]].', 'one-shared'],
   // Written NFC, against a filename stored decomposed. The two are canonically
@@ -622,15 +623,25 @@ test('the outgoing empty state is printed only where it is true', () => {
  * real disclosure. So every file is decompressed first where its magic bytes
  * say to.
  *
- * **What is asserted is the path, not the stem**, and the difference is a
- * deliberate limit rather than an oversight. TK-27's `withheldLabel` keeps the
- * target's last segment on purpose — "the name a reader would recognise" — so
+ * **What is asserted is the path, not the stem, and that is a settled decision
+ * rather than an open question.** TK-27's `withheldLabel` keeps the target's
+ * last segment on purpose — "the name a reader would recognise" — so
  * `[[zzqclients/zzqacme/zzqrenewal]]` degrades to the text `zzqrenewal`, which
- * ships. Asserting the stem absent would be red on current, deliberate
- * behaviour. That the stem ships is in tension with the rule
- * `tests/disclosure.test.ts` states for streams — "the leaf *is* the
- * disclosure" — and reconciling the two is a product decision about whether a
- * word the author typed is theirs to publish. Named here, not decided here.
+ * ships. The owner ruled to keep it: the author typed that word into their own
+ * prose, `[[2026-renewal]]` is the author's sentence rather than the
+ * filesystem's, and a reader who meets "Withheld 2026-renewal" learns what the
+ * link pointed at without being able to follow it. The **path** is what the
+ * user did not choose to publish, and the path is what this asserts.
+ *
+ * The rule this sits against is real, and is also not wrong.
+ * `tests/disclosure.test.ts` says "the leaf *is* the disclosure", and that stays
+ * true **for a log line** — a workflow log is a list of filenames with no
+ * author's sentence around them, and a leaf there discloses that a note by that
+ * name exists and nothing else. A rendered body is a different surface with a
+ * different reader: the same leaf arrives inside prose the author wrote, as the
+ * text of a link they chose to write down. Two surfaces, two rules,
+ * deliberately. Recorded here so the inconsistency is found next to its
+ * reasoning rather than re-litigated.
  *
  * **Mutation watched fail:** in `scripts/resolve-links.ts`, making
  * `withheldLabel` return its `label` argument unchanged turned this red with
@@ -882,47 +893,84 @@ test('a backlink names its source by title and route, and carries nothing else',
         `own chrome: "${residue}"`,
     );
 
-    // Half two: the attributes, by name. Blanking a tag takes its attribute
-    // values with it, so the reduction above cannot see one — measured, an
-    // excerpt in a `title=` attribute reduced to `""` and passed.
+    // Half two: the attributes — **by name, and then by the shape of what each
+    // one holds.**
     //
-    // **The value syntax is matched in all four spellings HTML allows**, and a
-    // first version matched only `name="…"`. Measured against that one: a
-    // single-quoted `title='LEAK'`, an unquoted `title=LEAK`, and a bare
-    // boolean attribute were all invisible, and a `>` inside a quoted value cut
-    // the tag short. Astro emits double quotes today, so every miss was a leak
-    // this gate would have reported clean the day a renderer changed its
-    // quoting — which is the same "green because it could not look" shape the
-    // gunzip branch above refuses.
+    // The name check alone was measured insufficient, and it failed the same
+    // way the version before it did, one indirection down. Blanking tags hid
+    // attribute values entirely; checking names hid values wearing an allowed
+    // name. Measured: `class={entry.excerpt}` on the anchor ships the whole
+    // excerpt into the built page and **both halves stay green** — no
+    // disallowed name, and the text reduction never sees inside a tag.
+    //
+    // So each allowed attribute is checked against what it may *contain*. A
+    // value allowlist rather than a second name list, deliberately: a second
+    // list would be the same mistake a third time, closing this instance and
+    // leaving the class open. What these five may hold is knowable and narrow —
+    // a route this build produced, a BCP 47 tag, an identifier this template
+    // constructs, a class token from the stylesheet's vocabulary. An artifact
+    // field is free prose and matches none of them.
     const TAG = /<([a-z][a-z0-9-]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
-    const ATTRIBUTE = /([^\s=/>]+)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?/g;
-    const allowedAttributes = new Set(['class', 'id', 'href', 'lang', 'aria-labelledby']);
-    let scanned = 0;
+    const ATTRIBUTE = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+    /**
+     * What each attribute a backlink may carry is allowed to hold.
+     *
+     * `href` is compared against the routes this build actually produced rather
+     * than a route-shaped pattern, which is the sharper test: a well-formed
+     * route to a note that is not in this aside is still wrong.
+     */
+    const shapes: Readonly<Record<string, RegExp>> = {
+      // A note route, and the section's own links are checked against the edge
+      // set separately — this bounds the syntax so free text cannot pass.
+      href: /^\/notes\/[a-z0-9]+(?:-[a-z0-9]+)*\/$/,
+      // Space-separated class tokens, as the stylesheet spells them.
+      class: /^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/,
+      // The ids this template constructs are `<region>-title`, and
+      // `aria-labelledby` points at one of them.
+      id: /^[a-z][a-z0-9-]*$/,
+      'aria-labelledby': /^[a-z][a-z0-9-]*$/,
+      // A BCP 47 tag, which is what `partLanguage` returns.
+      lang: /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*$/,
+    };
+    const seen: string[] = [];
     for (const [, tag, attributes] of section.matchAll(TAG)) {
-      for (const [, attribute] of (attributes ?? '').matchAll(ATTRIBUTE)) {
+      for (const [, attribute, quoted, single, bare] of (attributes ?? '').matchAll(ATTRIBUTE)) {
         if (attribute === undefined || attribute === '/') continue;
-        scanned += 1;
+        const name = attribute.toLowerCase();
+        seen.push(name);
+        const shape = shapes[name];
         assert.ok(
-          allowedAttributes.has(attribute.toLowerCase()),
+          shape !== undefined,
           `the backlink aside carries a "${attribute}" attribute on <${tag}>, which is not one ` +
             'of the attributes a backlink may carry — an artifact field reaching an attribute ' +
             'is invisible to a text reduction',
+        );
+        // A boolean attribute has no value at all, which is its own answer.
+        const value = quoted ?? single ?? bare;
+        if (value === undefined) continue;
+        assert.ok(
+          shape.test(value),
+          `<${tag} ${name}="${value}"> in the backlink aside does not hold what a ${name} may ` +
+            'hold — an artifact field wearing an allowed attribute name is the leak a ' +
+            'name-only check cannot see',
         );
       }
     }
 
     // Non-vacuity, both halves. The reduction must have had something to
-    // reduce, and the attribute scan must have *found* attributes — a regexp
-    // matching nothing satisfies an inner loop that never runs, so the count is
-    // the instrument confirming it looked.
+    // reduce, and the attribute scan must have *found* the attributes this
+    // markup carries — a regexp matching nothing satisfies a loop that never
+    // runs, and `seen` is the instrument confirming it looked. `href` in
+    // particular: if the tag pattern ever stops parsing this markup, the anchor
+    // is the first thing it loses.
     assert.ok(
       section.includes('Hub') && section.includes(t.backlinksHeading),
       'the aside carried neither the title nor the heading, so the reduction proves nothing',
     );
     assert.ok(
-      scanned >= 4,
-      `the attribute scan found only ${scanned} attributes in an aside that carries at least ` +
-        'a class, two ids, and an href — so its pattern is not reading this markup',
+      seen.includes('href') && seen.includes('class') && seen.includes('aria-labelledby'),
+      `the attribute scan found ${JSON.stringify(seen)} in an aside that carries at least an ` +
+        'href, a class, and an aria-labelledby — so its pattern is not reading this markup',
     );
   });
 }, BUILD_TIMEOUT);
