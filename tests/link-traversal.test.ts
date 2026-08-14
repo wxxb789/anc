@@ -352,7 +352,12 @@ test('a repository resolves end to end, and the artifact it produces validates',
   // corpus-shaped: a link resolving against the full file set, the edge set
   // and its inverse, and an artifact the contract accepts.
   await scratch('tk27-corpus-', async (root) => {
-    put(root, 'index.md', '# Index\n\nSee [[notes/alpha]] and [beta](notes/beta.md).\n');
+    // Document order is deliberately the reverse of slug order — `notes-beta`
+    // is written first and sorts second. A corpus whose two orders agree cannot
+    // tell a sorted `outgoing` from an unsorted one, which is half of why the
+    // sort defect survived: the assertion normalised, and the fixture could not
+    // have exposed it even if it had not.
+    put(root, 'index.md', '# Index\n\nSee [beta](notes/beta.md) and [[notes/alpha]].\n');
     put(root, 'notes/alpha.md', '# Alpha\n\nBack to [[index]] and out to [[nowhere]].\n');
     put(root, 'notes/beta.md', '# Beta\n\nA [[../index]] relative link.\n');
     put(root, 'drafts/held.md', '---\npublish: false\n---\n\n# Held\n\nprose\n');
@@ -372,7 +377,22 @@ test('a repository resolves end to end, and the artifact it produces validates',
     assert.deepEqual([...bySlug.keys()].sort(), ['index', 'links', 'notes-alpha', 'notes-beta']);
 
     // Edges from every form, by content. `[[nowhere]]` contributes none.
-    assert.deepEqual(bySlug.get('index')!.outgoing.sort(), ['notes-alpha', 'notes-beta']);
+    //
+    // Compared **without** sorting the actual, which is the whole point of the
+    // assertion. This line used to read `.outgoing.sort()`, and that normalised
+    // away the property `checkCorpus` enforces: the traversal emits document
+    // order, `checkCorpus` requires ascending order, and a gate that sorts the
+    // value before comparing it cannot see the difference. This corpus happened
+    // to be in slug order too, so both halves of the vacuity were present at
+    // once — the gate normalised what it was checking, over a fixture that could
+    // not have exposed it either way.
+    //
+    // Measured on the shipped binary before the fix: `See [[zebra]] and
+    // [[apple]].` exited 1 with `outgoing: must be sorted in ascending order`,
+    // while the same corpus with the links swapped exited 0. Nobody writes prose
+    // in slug-alphabetical order, so this was a first build a stranger could not
+    // get past. `scripts/markdown-to-artifact.ts` sorts, and this asserts it.
+    assert.deepEqual(bySlug.get('index')!.outgoing, ['notes-alpha', 'notes-beta']);
     assert.deepEqual(bySlug.get('notes-alpha')!.outgoing, ['index']);
     assert.deepEqual(bySlug.get('notes-beta')!.outgoing, ['index']);
     assert.deepEqual(bySlug.get('links')!.outgoing, []);

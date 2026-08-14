@@ -740,7 +740,16 @@ export async function resolveCorpusLinks(
     }
 
     entry.markdown = result.markdown;
-    entry.outgoing = [...result.outgoing];
+    // Sorted, because `checkCorpus` requires ascending order and the traversal
+    // emits document order. Without this, `See [[zebra]] and [[apple]].` fails
+    // the build outright — measured on the shipped binary, exit 1 with
+    // `outgoing: must be sorted in ascending order`, while the same corpus with
+    // the two links swapped exits 0. Nobody writes prose in slug-alphabetical
+    // order, so this was a first build a stranger could not get past.
+    //
+    // The *page* still renders links in document order: this array is the edge
+    // set, not the body, and the body is `result.markdown` above.
+    entry.outgoing = [...result.outgoing].sort();
     // Re-derived from the rewritten body. A title and an excerpt are
     // projections of what was published, and taking them from the pre-traversal
     // text put an unresolved `[[wikilink]]` into the excerpt of a body that no
