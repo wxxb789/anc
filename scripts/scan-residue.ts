@@ -110,25 +110,50 @@ const RESIDUE_RULES: readonly Rule[] = [
 const CODE_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
 
 /**
- * The same text with the contents of every `<code>` and `<pre>` element blanked.
+ * The contents of every `<code>` and `<pre>` element blanked.
  *
  * Blanked rather than removed, so byte offsets are unchanged and the text either
  * side of a fence cannot be joined into a marker that neither half contains —
  * the same reason `normalizedForms` refuses a whitespace-stripped form.
  *
- * Non-greedy, and tag-name-anchored on both ends: `<pre` matches `<pre>` and
- * `<pre tabindex="0">` alike, which is what this pipeline actually emits, while
- * `</pre>` closes only a `pre`. Nesting is not handled and does not need to be —
- * `code` inside `pre` is the only nesting HTML permits here, and blanking the
- * outer one covers the inner.
+ * ## Why the tag alone, and not `class="language-…"` as well
  *
- * A file with no such element comes back unchanged, so a stylesheet or a JSON
- * file is scanned exactly as before.
+ * A `<code>` a *note body* wrote is exempted too, and that was tested rather
+ * than assumed. `sanitize-html` allows `code` as a raw tag, so a body containing
+ * `Text with a raw <code> tag then [[stray]] after.` renders as
+ * `<p>Text with a raw <code> tag …</code></p>` — a `<code>` element wrapping
+ * ordinary prose, with no language class. Requiring the class looked like the
+ * safer rule and is measurably worse:
+ *
+ * - **The escape it closes is unreachable.** Put that exact body through the
+ *   real producer and the traversal parses `[[stray]]` as a link node and
+ *   degrades it, so the artifact reads `then stray after.` and the rendered page
+ *   contains no `[[` at all. A note cannot carry a stray `[[` into prose in the
+ *   first place — that is what this rule is checking for, and it is checking for
+ *   a *producer* defect, not for anything a body can arrange.
+ * - **It breaks a case that is real.** Inline code renders as a bare
+ *   `<code>[[syntax]]</code>` with no class — measured — so requiring the class
+ *   makes ``Inline `[[syntax]]` here`` fail the build. Documenting wikilink
+ *   syntax inline is exactly as legitimate as documenting it in a fence.
+ *
+ * So the exemption is the tag, and the reason it is safe is not that a body
+ * cannot write the tag: it is that a body cannot produce the *marker* this rule
+ * looks for. If a future change lets one, this comment is where to start.
+ *
+ * Non-greedy, and tag-name-anchored on both ends: `<pre` matches `<pre>` and
+ * `<pre tabindex="0">` alike, which is what this pipeline emits, while `</pre>`
+ * closes only a `pre`. Nesting is not handled and does not need to be — `code`
+ * inside `pre` is the only nesting that occurs here, and blanking the outer
+ * covers the inner.
+ *
+ * **Every ambiguous shape fails closed**, measured: an unclosed `<code>`, a
+ * `</code>` inside an attribute value, and a stray between two fences are all
+ * still reported. That is the direction an exemption has to err in.
  */
 function withoutCodeRegions(text: string): string {
   return text.replace(
     /<(pre|code)(\s[^>]*)?>([\s\S]*?)<\/\1>/gi,
-    (whole, tag: string, attributes: string | undefined, body: string) =>
+    (whole, tag: string, _attributes: string | undefined, body: string) =>
       whole.slice(0, whole.length - body.length - `</${tag}>`.length) +
       ' '.repeat(body.length) +
       `</${tag}>`,

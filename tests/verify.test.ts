@@ -358,6 +358,22 @@ test('a documented wikilink publishes, and a stray one is still residue', () => 
       'a stray wikilink went unreported because the same file also had a code region',
     );
 
+    // **The exemption is the tag, and the reason it is safe is not that a body
+    // cannot write the tag.** `sanitize-html` allows `code` as a raw tag, so a
+    // note body *can* wrap its own prose in one — and requiring
+    // `class="language-…"` to exclude that was tried and is measurably worse:
+    // inline code renders as a bare `<code>[[syntax]]</code>` with no class, so
+    // the stricter rule fails the build on ``Inline `[[syntax]]` here``, which
+    // is exactly as legitimate as a fence.
+    //
+    // What makes the loose exemption safe is that a body cannot produce the
+    // *marker*: the traversal parses every `[[…]]` in prose as a link node and
+    // degrades it, so there is nothing for a self-claimed exemption to hide.
+    // That property is asserted in `tests/link-traversal.test.ts`, over the
+    // producer, which is where it lives — this file scans built output and
+    // cannot see the producer. Named here so the two halves are findable from
+    // each other.
+
     // **Every other rule still applies inside code.** An absolute path or a
     // `javascript:` URL in a fence is as much of a disclosure as one in a
     // paragraph — more, since a reader is likelier to copy it. This is the

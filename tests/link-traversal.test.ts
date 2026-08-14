@@ -804,6 +804,74 @@ test('resolving one discovery twice is refused rather than silently corrupting i
   });
 });
 
+test('a wikilink in prose cannot survive into the rendered page', async () => {
+  // **The producer half of the residue scan's code-region exemption.**
+  // `scripts/scan-residue.ts` exempts `[[` inside `<code>` and `<pre>`, and
+  // that exemption is safe only because a note body cannot get a `[[` into
+  // prose in the first place. It is worth stating why the obvious tightening is
+  // wrong: `sanitize-html` allows `code` as a raw tag, so a body *can* wrap its
+  // own prose in one — but requiring `class="language-…"` to exclude that
+  // breaks inline code, which renders as a bare `<code>[[syntax]]</code>` with
+  // no class, and documenting the syntax inline is as legitimate as a fence.
+  //
+  // So the exemption rests on this: the traversal parses with `wikilinks: true`
+  // and every `[[…]]` in prose is a link node, resolved and degraded. A body
+  // that opens a raw `<code>` tag around one gets the degraded text inside its
+  // own tag, not a live marker. Asserted end to end, because a claim about what
+  // reaches `dist/` is only worth what the whole chain does.
+  await scratch('tk27-prose-', async (root) => {
+    put(root, 'other.md', '# Other\n\nprose\n');
+    put(
+      root,
+      'src.md',
+      [
+        '# Source',
+        '',
+        'Text with a raw <code> tag then [[stray]] after.',
+        '',
+        'A [[resolvable]] one and a [[missing one]] too.',
+        '',
+        'Documented in a fence, which must survive:',
+        '',
+        '```text',
+        '[[documented]]',
+        '```',
+        '',
+        'And inline `[[also documented]]`.',
+      ].join('\n'),
+    );
+    put(root, 'resolvable.md', '# Resolvable\n\nprose\n');
+
+    const discovery = await discover(root);
+    await resolveCorpusLinks(discovery);
+    const entry = discovery.entries.find((candidate) => candidate.slug === 'src')!;
+    const { html } = await renderMarkdown(entry.markdown);
+
+    // The fenced and inline forms survive as authored — that is the content
+    // this whole exemption exists to allow.
+    assert.match(html, /<code[^>]*>\[\[documented\]\]<\/code>/);
+    assert.match(html, /<code>\[\[also documented\]\]<\/code>/);
+
+    // And *outside* those, nothing. Asserted on the page with its code regions
+    // removed, which is the same question the residue scan asks: a `[[` a
+    // reader meets in prose means the degradation failed.
+    const prose = html.replace(/<(pre|code)(\s[^>]*)?>[\s\S]*?<\/\1>/gi, '');
+    assert.ok(
+      !prose.includes('[['),
+      `a wikilink survived into prose, so the residue scan's code exemption is unsound: ${prose}`,
+    );
+    // Non-vacuity: the stripper left real prose behind rather than blanking the
+    // page. Deliberately not asserting on the text *after* the raw `<code>` —
+    // the sanitizer closes that tag at the end of the paragraph, so the words
+    // following it are genuinely inside a code element. That is the sanitizer's
+    // behaviour and not this ticket's, and it is also why the exemption cannot
+    // rest on where a body's own tags fall.
+    assert.match(prose, /Text with a raw/);
+    assert.match(prose, /<a href="\/resolvable\/">resolvable<\/a> one/);
+    assert.match(prose, /missing one/);
+  });
+});
+
 test('the traversal imports no package absent from the manifest', () => {
   // The same rule `tests/discovery.test.ts` holds over the producer, applied to
   // the module that actually pulls the parser in. pnpm's symlinked
