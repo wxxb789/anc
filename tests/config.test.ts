@@ -29,7 +29,7 @@
  *   version was measured passing while `checkExclude` echoed every pattern.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -1077,6 +1077,92 @@ test('a configured pattern matching nothing fails, naming the configuration file
   });
 });
 
+// --- End to end, over the binary --------------------------------------------------
+
+/**
+ * A configured exclusion actually withholds the file, measured over the shipped
+ * command rather than over `discover`.
+ *
+ * **This gate exists because the two above are not evidence of it.** They call
+ * `discover` directly with `exclusionOptions(config)`, which proves the loader
+ * produces what the producer consumes and proves nothing about whether anything
+ * *passes* it. Measured on the shipped binary before the call site was wired: a
+ * repository whose `publish.config.yaml` excluded `drafts/**` built cleanly and
+ * **published the drafts** — the excluded note's body reached five files under
+ * `dist/`, including the search index. The counts line read `2 published` and
+ * looked exactly like a working build.
+ *
+ * That is the worst direction for this project's privacy model to fail. A
+ * fail-open exclusion is indistinguishable from a working one until somebody
+ * reads the published site, which is after the note is on a CDN and in a search
+ * index.
+ *
+ * **Both halves are asserted, and the first is what makes the second mean
+ * anything.** The token must be present in the corpus on disk — otherwise a gate
+ * that wrote the fixture wrongly would report absence from `dist/` as success,
+ * which is the "0 because none" versus "0 because I never looked" ambiguity this
+ * repository has been bitten by. Then it must be absent from *every* file under
+ * `dist/`, not merely from `dist/notes/`: the leak went through the Pagefind
+ * index and the content index as well as the page.
+ *
+ * Run through `bin/thoughtscape-publish.mjs` in a child process, because the
+ * property is about the command a user types. An in-process call would test the
+ * functions this file already tests.
+ *
+ * **Mutation watched fail:** replacing `exclusionOptions(config)` with no second
+ * argument at `bin/thoughtscape-publish.mjs`'s `discover` call turned this red —
+ * `2 published`, and the token in 5 files under `dist/`.
+ */
+test('a configured exclusion withholds the file from dist/, end to end', async () => {
+  await scratch('tk30-e2e-', async (directory) => {
+    const notes = join(directory, 'notes');
+    const out = join(directory, 'out');
+    mkdirSync(join(notes, 'drafts'), { recursive: true });
+    writeFileSync(join(notes, CONFIG_FILENAME), 'exclude:\n  - "drafts/**"\n', 'utf8');
+    writeFileSync(join(notes, 'public.md'), '# Public\n\nAn ordinary note.\n', 'utf8');
+    // A token no other file in the tree carries, so a hit is attributable.
+    writeFileSync(join(notes, 'drafts', 'secret.md'), '# Secret\n\nzzqexcludedleak here.\n', 'utf8');
+
+    const probe = spawnSync(
+      process.execPath,
+      [join(ROOT, 'bin/thoughtscape-publish.mjs'), 'build', '--content', notes, '--out', out],
+      { cwd: directory, encoding: 'utf8' },
+    );
+    assert.equal(probe.status, 0, `the build failed:\n${probe.stdout}\n${probe.stderr}`);
+
+    /** Every file under a directory, recursively. */
+    const filesUnder = (root: string): string[] =>
+      readdirSync(root, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? filesUnder(join(root, entry.name)) : [join(root, entry.name)],
+      );
+
+    // Half one: the token really is in the corpus. Without this the assertion
+    // below passes on a fixture that never contained it.
+    const inCorpus = filesUnder(notes).filter((file) => readFileSync(file, 'utf8').includes('zzqexcludedleak'));
+    assert.equal(inCorpus.length, 1, 'the fixture does not contain the token, so the next assertion proves nothing');
+
+    // Half two: it reached nothing that ships. Every file, not just the pages —
+    // the measured leak went through the Pagefind index too.
+    const leaked = filesUnder(out).filter((file) => {
+      try {
+        return readFileSync(file, 'utf8').includes('zzqexcludedleak');
+      } catch {
+        return false;
+      }
+    });
+    assert.deepEqual(
+      leaked.map((file) => file.slice(out.length + 1).replaceAll('\\', '/')),
+      [],
+      'the excluded note reached the published site',
+    );
+
+    // And the counts agree with the outcome, so a build that excluded the note
+    // by failing to find it would not pass.
+    assert.match(probe.stdout, /content: 3 discovered, 1 published, 2 dropped/, probe.stdout);
+    assert.deepEqual(readdirSync(join(out, 'notes')), ['public'], 'the published route set is not just the public note');
+  });
+}, 120_000);
+
 // --- The origin has one home -----------------------------------------------------
 
 /**
@@ -1147,11 +1233,16 @@ test('a configured origin reaches astro.config.mjs, and an absent one does not',
 test('a malformed config fails a raw astro build with no host path on the stream', async () => {
   await scratch('tk30-astrofail-', async (directory) => {
     writeFileSync(join(directory, CONFIG_FILENAME), 'siteTitle: Notes\n', 'utf8');
-    const astro = join(
-      ROOT,
-      'node_modules/.pnpm/astro@7.1.6_@emnapi+core@1._a5a14a47d29a3b4933c929dc34a41060/node_modules/astro/bin/astro.mjs',
-    );
-    if (!existsSync(astro)) return;
+    // `node_modules/astro/bin/astro.mjs`, not the `.pnpm/astro@7.1.6_<hash>/…`
+    // path this reached for first. Both resolve to the same file — verified —
+    // but the versioned one embeds an astro version *and* a pnpm
+    // peer-dependency hash, either of which changes on a lockfile bump, after
+    // which an `existsSync` guard that returned early would leave this gate
+    // green while asserting nothing. That is the vacuity shape this repository
+    // keeps being bitten by, so the path is the stable one and its absence is a
+    // failure rather than a skip.
+    const astro = join(ROOT, 'node_modules/astro/bin/astro.mjs');
+    assert.ok(existsSync(astro), `astro is not installed at ${astro}, so this gate cannot run`);
 
     const probe = spawnSync(process.execPath, [astro, 'build'], {
       cwd: ROOT,

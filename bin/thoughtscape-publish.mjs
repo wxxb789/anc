@@ -352,8 +352,14 @@ async function buildInto(contentDirectory, outDirectory, report) {
   try {
     const staging = join(workspace, 'dist');
 
-    const { discover, writeArtifact } = await import('../scripts/markdown-to-artifact.ts');
+    const { discover, resolveCorpusLinks, writeArtifact } = await import('../scripts/markdown-to-artifact.ts');
+    const { exclusionOptions, loadConfig } = await import('../scripts/load-config.ts');
     const artifact = join(workspace, 'content.json');
+
+    // Read from the *content* directory, not from cwd: `--content` may name a
+    // subdirectory, and the configuration belongs with the notes it governs.
+    // Absent is the ordinary case and yields the documented defaults.
+    const config = loadConfig(contentDirectory);
 
     // Discovery, then the report, then validation — in that order and not the
     // convenient one. The report stops saying `aborted` the moment discovery
@@ -362,8 +368,41 @@ async function buildInto(contentDirectory, outDirectory, report) {
     // names of the dropped files in a readable file on the two runs that need
     // them most: the one the contract rejects, and the one where every file was
     // dropped and there is nothing left to publish.
-    const discovery = await discover(contentDirectory);
-    report.discovered(discovery.counts, discovery.dropped);
+    // The configured exclusions reach discovery here, and this argument is the
+    // whole of what makes them real. Without it `discover` walks with its
+    // structural ignores alone and a user who excluded `drafts/**` publishes
+    // their drafts — measured, and the wrong direction for a privacy boundary to
+    // fail in: a fail-open exclusion looks exactly like a working one until
+    // somebody reads the site.
+    //
+    // `exclusionOptions(config)` rather than `{ exclude: config.exclude }`, and
+    // the difference is one a hand test does not show: it also passes
+    // `excludeSource`, which is what lets a pattern matching nothing name the
+    // file to edit. Measured with the bare object — a config whose `draft/**`
+    // was a typo for `drafts/**` failed with `the exclude list — exclude[0]
+    // matched 0 files`, sending the user to look for a list the tool would not
+    // name. `markdown-to-artifact.ts` validates the label against its own
+    // filename allowlist before printing it, so this cannot become a disclosure.
+    const discovery = await discover(contentDirectory, exclusionOptions(config));
+
+    // Between discovery and the artifact, because this is where the link
+    // findings come from and the report has to carry them: `discover` holds no
+    // report handle and `writeArtifact` holds none either, so this call site is
+    // the only place a link finding can reach the report.
+    //
+    // The report is named by `scripts/write-report.ts` and never here — not
+    // even in a comment. `tests/packaging.test.ts` scans every module the build
+    // loads for the report's filename and exempts only its writer, on the
+    // reasoning that a module which *names* the report is one layer from a
+    // module that prints it. That gate fired on an earlier draft of this
+    // comment, which is the gate working rather than a rule being pedantic.
+    //
+    // It also rewrites the bodies. Without it `outgoing` is empty for every
+    // note, and every wikilink survives into the artifact unresolved — so on
+    // the shipped binary a repository containing one did not build at all.
+    // Measured; the feature was reachable only from the test suite.
+    const links = await resolveCorpusLinks(discovery);
+    report.discovered(discovery.counts, discovery.dropped, links);
     await writeArtifact(discovery, artifact);
 
     // From here on the process runs as if it had been started in the package, so
