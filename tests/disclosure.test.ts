@@ -32,6 +32,7 @@
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -348,19 +349,40 @@ test('a dropped file is named in the report and nowhere else', () => {
     // slug `zzq-layoff` legitimately appears throughout `dist/`, and asserting
     // on the shared prefix would be red on correct output.
     const distFiles = walk(join(root, 'out'));
+    /**
+     * Whether one built file carries a string, **inflating where the bytes are
+     * gzip.**
+     *
+     * The Pagefind index under `dist/pagefind/` is compressed, so a UTF-8 read
+     * of it matches nothing whatever it contains — measured, a published note's
+     * own words are absent from a `.pf_fragment` read as text and present after
+     * `gunzipSync`. A dropped file's name reaching the search index is exactly
+     * the disclosure this gate refuses, and it was the one surface the gate
+     * could not read.
+     *
+     * One function rather than two copies of the rule, so the non-vacuity
+     * control below exercises the same code path the assertions do. Written
+     * inline first, the control called `gunzipSync` itself and stayed green
+     * when the search path stopped inflating — a control that reimplements what
+     * it is controlling for measures its own copy.
+     */
+    const carries = (file: string, needle: string): boolean => {
+      if (statSync(file).size > 4_000_000) return false;
+      try {
+        const bytes = readFileSync(file);
+        if (bytes.toString('utf8').includes(needle)) return true;
+        if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return false;
+        return gunzipSync(bytes).toString('utf8').includes(needle);
+      } catch {
+        return false;
+      }
+    };
     for (const needle of ['Zzq Layoff', '___.md', 'zzq-terms']) {
       assert.ok(
         !run.output.includes(needle),
         `the streams name a dropped file (${needle}):\n${run.output}`,
       );
-      const leaked = distFiles.filter((file) => {
-        if (statSync(file).size > 4_000_000) return false;
-        try {
-          return readFileSync(file, 'utf8').includes(needle);
-        } catch {
-          return false;
-        }
-      });
+      const leaked = distFiles.filter((file) => carries(file, needle));
       assert.deepEqual(
         leaked.map((file) => relative(root, file)),
         [],
@@ -373,6 +395,23 @@ test('a dropped file is named in the report and nowhere else', () => {
     assert.ok(
       distFiles.some((file) => relative(root, file).includes('zzq-layoff')),
       'the winning slug never reached dist/, so the absence assertions above prove nothing',
+    );
+
+    // **And the inflate reads a surface a UTF-8 read cannot**, or adding it
+    // proved nothing: a scan that never decompresses returns the same empty
+    // list as one that always does, so the absence assertions cannot tell a
+    // working gate from a blind one.
+    //
+    // A positive control rather than a planted needle, because no token lands
+    // *only* in a gzipped member — Pagefind indexes a published body, and that
+    // body is in the note's own HTML too. What is provable is that inflating
+    // recovers text the raw bytes of that same file do not contain.
+    assert.ok(
+      distFiles.some(
+        (file) => !readFileSync(file, 'utf8').includes('zzq-layoff') && carries(file, 'zzq-layoff'),
+      ),
+      'no file answered for the published slug only after inflating, so this gate is not ' +
+        'reading the search index and a dropped name could sit in it undetected',
     );
   });
 }, 120_000);
