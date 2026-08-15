@@ -299,12 +299,23 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
  * ## Why only the fragments
  *
  * **Because the fragment is the source the other members are derived from.**
- * `.pf_index` and `.pf_meta` hold Pagefind's word list, built from the same
- * extracted text a fragment stores verbatim, so any marker reaching them has
- * already passed through a fragment this scan now reads. That argument is what
- * makes the exclusion safe, and it survives a new rule being added to
- * {@link RESIDUE_RULES} — which is the property the earlier reasoning here
- * lacked.
+ * Every other member of the bundle — `.pf_index`, `.pf_meta`, `.pf_filter`, and
+ * the two `.pagefind` blobs — is built from the same extracted text a fragment
+ * stores verbatim, so any marker reaching them has already passed through a
+ * fragment this scan now reads. That argument is what makes the exclusion safe,
+ * and it survives a new rule being added to {@link RESIDUE_RULES} — which is the
+ * property the earlier reasoning here lacked.
+ *
+ * **The set is stated as "everything in the bundle that is not a fragment"
+ * rather than as a list, and that is deliberate.** An earlier version of this
+ * comment enumerated `.pf_index` and `.pf_meta` as though they were the whole
+ * excluded set, which is how `.pf_filter` — under `pagefind/filter/`, and the
+ * member that stores its values *least* digested of any — went unnamed. It is
+ * genuinely covered, because a filter value is also in its fragment's `filters`
+ * key, and this build emits none: nothing under `src/` writes
+ * `data-pagefind-filter` (`src/scripts/search-dialog.ts:482` records that too).
+ * But an auditor reading a list looks for the members on it. The code has always
+ * excluded by "not a fragment"; the comment now says the same thing.
  *
  * A weaker argument was written first and is recorded because it is wrong in an
  * instructive way: that a word list is split on punctuation, so a marker cannot
