@@ -74,8 +74,15 @@ export const RELATED_LIMIT = 5;
  *
  * Both functions below group the whole corpus by tag, and a static build calls
  * them once per note — so without this the grouping runs twice per page, which
- * measured **8.9 s** across a corpus at the `MAX_ENTRIES` ceiling of 900. With
- * it, 224 ms. That is a build-time cost only and nothing ships to a reader, but
+ * measured **8.9 s** across a 900-entry corpus. With it, 224 ms.
+ *
+ * That 900 was `MAX_ENTRIES`, a ceiling this project no longer has: it refused
+ * an ordinary vault at 957 notes and `src/lib/schema.ts` records why it went.
+ * The measurement stands as a measurement *at 900 entries* and is no longer a
+ * measurement at the largest corpus this tool accepts — which is now unbounded,
+ * so the quadratic this cache removes matters more than it did, not less.
+ *
+ * That is a build-time cost only and nothing ships to a reader, but
  * seconds of build for a value that cannot change between two calls in the same
  * build is not a trade worth taking.
  *
@@ -166,7 +173,7 @@ function sharedFacets(entry: ContentEntry, entries: readonly ContentEntry[]): Fa
  * reminder, and this paragraph is what replaces it.
  *
  * ponytail: the facets are recomputed per call, so a whole build is quadratic
- * in tag membership — at `MAX_ENTRIES` that is roughly two million set
+ * in tag membership — at 900 entries that is roughly two million set
  * operations across the build, well under a second. Hoist the facets into a
  * parameter if a build ever spends measurable time here.
  */

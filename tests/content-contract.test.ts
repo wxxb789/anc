@@ -4,7 +4,7 @@ import { test } from 'vitest';
 
 import {
   FIELD_LIMITS,
-  MAX_ENTRIES,
+
   RESERVED_SLUGS,
   SCHEMA_VERSION,
   ContentValidationError,
@@ -582,9 +582,23 @@ test('a tag list long enough to bury the site in routes is rejected', () => {
   );
 });
 
-test('a corpus larger than the entry ceiling fails before the build runs', () => {
-  // The bound is checked at validation time, which is the first thing the build
-  // chain runs, so an oversized artifact never reaches `astro build`.
+test('a corpus larger than any hand-curated one is accepted', () => {
+  // The inverse of a bound this contract used to carry. `MAX_ENTRIES = 900`
+  // rejected an artifact past it, and measured against the shipped binary a
+  // generated repository of 1,000 notes failed the build outright with
+  // `entries: has 957 entries, over the limit of 900`. An ordinary vault passes
+  // 900 notes in a year or two, so the tool refused the corpus it exists to
+  // publish.
+  //
+  // Both premises the number rested on had stopped being true — there is no
+  // hand-curated allowlist under default-publish, and `REDIRECT_RULES` is a
+  // hand-written literal that cannot grow with the corpus, so the host's 2,000
+  // rule ceiling it left headroom under is never approached. `src/lib/schema.ts`
+  // records the removal and what it costs.
+  //
+  // 2,000 rather than 901: a number just past the old limit would pass against a
+  // cap raised rather than removed, which is the repair someone reaching for the
+  // smallest edit would make.
   const entry = (index: number) => ({
     slug: `note-${index}`,
     title: `Note ${index}`,
@@ -594,28 +608,22 @@ test('a corpus larger than the entry ceiling fails before the build runs', () =>
     backlinks: [],
   });
 
-  const error = expectRejection(() =>
-    validateArtifact({ version: 1, entries: Array.from({ length: MAX_ENTRIES + 1 }, (_, i) => entry(i)) }),
-  );
-  assert.ok(
-    error.issues.some((issue) => issue.includes('entries:') && issue.includes(String(MAX_ENTRIES))),
-    `an oversized corpus was accepted:\n${error.issues.slice(0, 3).join('\n')}`,
-  );
-
-  // The bound must stay under Cloudflare Pages' ceiling of 2,000 static
-  // redirect rules at the two-rules-per-entry shape TK-04 used, which is the
-  // headroom `MAX_ENTRIES` was chosen for. `REDIRECT_RULES` is a hand-written
-  // literal today (TK-12), so nothing derives rules from the corpus and the
-  // ceiling is not currently binding — this is the assertion that has to keep
-  // holding if a stranded URL ever makes them derived again.
-  assert.ok(
-    MAX_ENTRIES * 2 <= 2000,
-    `${MAX_ENTRIES} entries would emit ${MAX_ENTRIES * 2} rules, over the host's 2,000 rule ceiling`,
-  );
-
-  // And it must not reject a corpus the site is expected to serve.
   assert.doesNotThrow(() =>
-    validateArtifact({ version: 1, entries: Array.from({ length: MAX_ENTRIES }, (_, i) => entry(i)) }),
+    validateArtifact({ version: 1, entries: Array.from({ length: 2000 }, (_, i) => entry(i)) }),
+  );
+
+  // Non-vacuity: the validator is still looking at the entries it accepted, so
+  // "no ceiling" is not "no checking". One bad entry in a corpus this size is
+  // still named, with its index.
+  const error = expectRejection(() =>
+    validateArtifact({
+      version: 1,
+      entries: [...Array.from({ length: 1500 }, (_, i) => entry(i)), { ...entry(1500), slug: 'Bad Slug' }],
+    }),
+  );
+  assert.ok(
+    error.issues.some((issue) => issue.includes('entries[1500]') && issue.includes('.slug')),
+    `the bad entry in a 1,501-entry corpus was not named:\n${error.issues.slice(0, 3).join('\n')}`,
   );
 });
 

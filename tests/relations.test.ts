@@ -279,7 +279,7 @@ test('tags differing only by case are one tag here, exactly as on the tag page',
  * The tag-grouping memo is keyed on the corpus, not shared across corpora.
  *
  * `facetsFor` caches `tagFacets` per call — without it the grouping runs twice
- * per page and a build at the `MAX_ENTRIES` ceiling spends 8.9 s in this module
+ * per page and a 900-entry build spends 8.9 s in this module
  * rather than 0.2 s. A cache is only safe here because it is keyed on the array
  * the caller passed: the fixture build, the published build, and this suite all
  * evaluate the module and pass *different* corpora, and a single cached value

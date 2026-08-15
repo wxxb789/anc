@@ -118,8 +118,12 @@ export const LOCAL_NODE_LIMIT = 12;
  * How many notes `/graph/` may draw.
  *
  * Requirements section 13.3 admits a global graph only while it "remains legible
- * at current node count", and `MAX_ENTRIES` is 900 — so an unbounded global
- * graph is a hairball for any corpus that grows. Sixty is the fifth ring of the
+ * at current node count", and a corpus now has **no ceiling at all** — the
+ * 900-entry `MAX_ENTRIES` this comment used to cite was removed after it refused
+ * an ordinary vault at 957 notes (`src/lib/schema.ts` records why). So the case
+ * for this bound is stronger than when it was written, not weaker: an unbounded
+ * global graph is a hairball for any corpus that grows, and nothing upstream
+ * bounds the corpus any more. Sixty is the fifth ring of the
  * packing below (1 + 7 + 14 + 22 + 29 = 73 capacity), which is the last radius
  * at which a label still has room beside its neighbour on the same ring.
  *

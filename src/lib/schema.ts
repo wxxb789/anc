@@ -133,8 +133,8 @@ const STRING_LIMITS: Partial<Record<keyof ContentEntry, number>> = {
 const ARRAY_LIMITS: Partial<Record<keyof ContentEntry, { items: number; itemChars?: number }>> = {
   // Every tag is a public route, so an unbounded tag list is an unbounded page
   // count. A note carrying more than this is a classification failure, not a
-  // note. (The redirect ceiling is a separate limit on the *corpus*; see
-  // `MAX_ENTRIES`.)
+  // note. There is no matching ceiling on the *corpus* — see the note below
+  // on why the entry limit was removed.
   tags: { items: 50, itemChars: 128 },
   // Every alias is a link-resolution key.
   aliases: { items: 50, itemChars: 300 },
@@ -148,23 +148,46 @@ const ARRAY_LIMITS: Partial<Record<keyof ContentEntry, { items: number; itemChar
 export const FIELD_LIMITS = { strings: STRING_LIMITS, arrays: ARRAY_LIMITS } as const;
 
 /**
- * How many entries one artifact may carry.
+ * **There is no ceiling on how many entries an artifact may carry, and the
+ * removal of one is the deliberate part.**
  *
- * The binding constraint is per-entry build cost, not any one page: a corpus
- * this large means 900 rendered note pages, 900 Pagefind records, and a page
- * per facet on top. An artifact past this is an exporter fault — the allowlist
- * is hand-curated — and saying so here means it is caught before anything is
- * generated, with a message naming the artifact.
+ * A `MAX_ENTRIES = 900` lived here and refused a corpus past it. Measured
+ * against the shipped binary, a generated repository of 1,000 notes failed the
+ * build outright: `entries: has 957 entries, over the limit of 900`. An ordinary
+ * Obsidian vault passes 900 notes in a year or two, so the tool refused the
+ * corpus it exists to publish.
  *
- * 900 rather than a round 1,000 to leave headroom under Cloudflare Pages'
- * ceiling of 2,000 static redirect rules. TK-11 set it when every entry emitted
- * two rules; TK-12 deleted those rules, so today the ceiling is not binding and
- * `REDIRECT_RULES` is a hand-written literal that cannot grow with the corpus.
- * The number is kept because it stays correct if a later rename ever strands a
- * URL and rules become derived again — at two per entry this corpus is still
- * inside the host's limit.
+ * Both premises the number rested on had already stopped being true, and its own
+ * comment said so:
+ *
+ * - *"An artifact past this is an exporter fault — the allowlist is
+ *   hand-curated."* There is no allowlist. Under default-publish every Markdown
+ *   file in a stranger's repository is an entry, and a stranger does not curate
+ *   them.
+ * - *"900 rather than a round 1,000 to leave headroom under Cloudflare Pages'
+ *   ceiling of 2,000 static redirect rules … TK-12 deleted those rules, so today
+ *   the ceiling is not binding."* The host limit it protected is not reached,
+ *   because `REDIRECT_RULES` is a hand-written literal that cannot grow with the
+ *   corpus.
+ *
+ * So it was retained on a hypothetical — that a future rename might make rules
+ * derived again — while the fault it named could not occur. A cap kept for a
+ * mechanism that does not exist is a cap that fails real users to protect a
+ * theoretical one.
+ *
+ * **What is lost, stated plainly.** A producer that runs away now exhausts
+ * memory instead of failing with a message. That trade was made knowingly: the
+ * limit did not distinguish a runaway producer from an ordinary vault, so it
+ * caught the second far more often than the first. If a guard is wanted later it
+ * should be an order of magnitude above any real corpus and named for what it
+ * catches, rather than a number chosen for a host constraint that no longer
+ * applies.
+ *
+ * Two comments elsewhere quote this ceiling as the bound on their own timings —
+ * `src/lib/relations.ts` and `src/lib/graph.ts`. Their measurements stand as
+ * measurements *at 900 entries*; they no longer describe the largest corpus this
+ * tool accepts, and both say so.
  */
-export const MAX_ENTRIES = 900;
 
 function checkLimits(value: Record<string, unknown>, label: string, issues: string[]): void {
   for (const [field, max] of Object.entries(STRING_LIMITS)) {
@@ -550,12 +573,7 @@ export function validateArtifact(data: unknown, source = 'content artifact'): Co
 
   const rawEntries = data['entries'];
   if (!Array.isArray(rawEntries)) issues.push('entries: must be an array');
-  else if (rawEntries.length > MAX_ENTRIES) {
-    issues.push(
-      `entries: has ${rawEntries.length} entries, over the limit of ${MAX_ENTRIES} ` +
-        '(see MAX_ENTRIES: one rendered page and one search record per entry)',
-    );
-  } else {
+  else {
     const valid: ContentEntry[] = [];
     for (const [index, entry] of rawEntries.entries()) {
       const checked = checkEntry(entry, index, issues);
