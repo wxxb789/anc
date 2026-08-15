@@ -44,6 +44,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { BuildFailure } from './write-report.ts';
@@ -263,21 +264,63 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Pagefind's own bundle, excluded with a reason rather than by convenience.
+ * Pagefind's own bundle, excluded with a reason rather than by convenience —
+ * **except for its fragments, which are read after inflating.**
  *
- * Two kinds of file live under it. Its runtime — `pagefind*.js`, `.css`, and
- * two WebAssembly binaries — is third-party code this repository does not
- * author; it legitimately contains `javascript:void(0)` in its form markup, and
- * the compiled WebAssembly contains `[[` as a byte coincidence. Its index
- * (`.pf_fragment`, `.pf_index`, `.pf_meta`) is compressed, so a text scan of it
- * reads noise: matching or not matching says nothing either way.
+ * Its runtime — `pagefind*.js`, `.css`, and two WebAssembly binaries — is
+ * third-party code this repository does not author; it legitimately contains
+ * `javascript:void(0)` in its form markup, and the compiled WebAssembly contains
+ * `[[` as a byte coincidence.
  *
- * That the index is excluded is safe for a specific reason, not a hope.
- * Pagefind indexes exactly the `data-pagefind-body` subtree of the built HTML,
- * and that HTML is scanned here in full. There is no path by which residue
- * reaches the index without first appearing in a page this scan reads. The
- * parity plan section 7.3 separately rejected decompressing a `.pf_fragment` in
- * a test, so this does not reopen that decision.
+ * ## The index was excluded on an argument that is measurably false
+ *
+ * That argument was: Pagefind indexes exactly the `data-pagefind-body` subtree
+ * of the built HTML, that HTML is scanned here in full, so nothing reaches the
+ * index without first appearing in a page this scan reads. It is wrong in one
+ * direction that matters, because **a fragment stores extracted text, not
+ * markup** — decoded, and with inline elements joined.
+ *
+ * Measured on a real packaged build, from an ordinary note body:
+ *
+ * - `A path ms**w/s**ecret here.` renders as `ms<strong>w/s</strong>ecret`. No
+ *   byte sequence anywhere in `dist/` contains `msw/`; the fragment contains it.
+ *   The build reported `residue scan ok: 25 files, 0 findings`.
+ * - The same split carried `/home/someone/`, `javascript:`, and
+ *   `sourceMappingURL` into the fragment, each invisible to every raw read.
+ * - HTML escaping does it too, without any markup: a body containing
+ *   `zzqacme&secret` ships `&amp;` in the page and the decoded form in the
+ *   fragment.
+ *
+ * So a marker split by emphasis, or merely containing an `&`, reached the
+ * shipped search index past a green scan. That is the failure mode a privacy
+ * gate may not have, and it is not hypothetical — a reader typing the marker
+ * into the site's own search box gets the page back.
+ *
+ * ## Why only the fragments
+ *
+ * **Because the fragment is the source the other members are derived from.**
+ * `.pf_index` and `.pf_meta` hold Pagefind's word list, built from the same
+ * extracted text a fragment stores verbatim, so any marker reaching them has
+ * already passed through a fragment this scan now reads. That argument is what
+ * makes the exclusion safe, and it survives a new rule being added to
+ * {@link RESIDUE_RULES} — which is the property the earlier reasoning here
+ * lacked.
+ *
+ * A weaker argument was written first and is recorded because it is wrong in an
+ * instructive way: that a word list is split on punctuation, so a marker cannot
+ * survive in one as a matchable string. Measured, a token of pure letters
+ * reaches `.pf_index` intact and **lowercased** — `sourceMappingXYZ` is stored
+ * as `sourcemappingxyz`. So `sourceMappingURL`, the one rule here that is a bare
+ * word, misses it only because that rule carries no `i` flag. The exclusion was
+ * resting on a regular-expression flag nobody had written down, and adding `i`
+ * to that rule — a change that reads as strictly safer — would have opened the
+ * surface silently.
+ *
+ * The two `.pagefind` blobs stay excluded, and they are not what their name
+ * suggests: measured, both begin with the gzip magic `1f 8b`, and their inflated
+ * bytes begin `pagefind` rather than the WebAssembly `\0asm`. Inflated they
+ * carry no marker; **raw** they trip the `[[` rule as a byte coincidence, which
+ * is the actual reason to keep them out.
  *
  * `tests/built-output.test.ts` draws the same third-party boundary for the same
  * reason, though more loosely — it matches `pagefind` anywhere in the path.
@@ -288,6 +331,41 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
  * page from the scan entirely. Anchoring costs nothing and removes the case.
  */
 const THIRD_PARTY = 'pagefind';
+
+/** The one member of that bundle whose text is this site's own content. */
+const FRAGMENT_EXTENSION = '.pf_fragment';
+
+/**
+ * The rules that do not apply to a fragment, and the one reason they do not.
+ *
+ * A fragment is extracted *text*: Pagefind strips the markup before storing it,
+ * so a fenced ` ```text\n[[not a link]] ` arrives with no `<code>` element left
+ * to exempt it. Measured — the fragment for such a note reads
+ * `"content":"Obsidian writes a link as: [[not a link]]"` while the page it came
+ * from reads `<code class="language-text">[[not a link]]</code>`. Applying the
+ * wikilink rule there would fail the build on a note documenting Obsidian
+ * syntax, which is exactly the case {@link CODE_EXEMPT} exists to permit, and it
+ * would do so with no way for the author to escape it.
+ *
+ * Dropping it costs nothing, because `[[` is the one rule that is not a privacy
+ * marker. It discloses nothing; it is a producer self-check over *rendered
+ * prose*, and the rendered prose is scanned in full. A `[[` that reaches a
+ * fragment either came from a code region — legitimate — or came from prose, in
+ * which case the page carrying that prose fails this scan first.
+ *
+ * Every other rule applies. A path or a scheme in a fragment is a disclosure
+ * wherever it came from, and the search box will hand it to a reader.
+ *
+ * **Spelled out rather than aliased to {@link CODE_EXEMPT}, though the two hold
+ * the same member today.** They encode opposite decisions: `CODE_EXEMPT`
+ * *narrows* a rule, blanking code regions while still catching the marker in
+ * prose either side, and this one *drops* a rule outright. A second rule added
+ * to `CODE_EXEMPT` for the narrowing reason would, through an alias, silently
+ * become disabled over the whole search index — and there is nothing about those
+ * two reasons that makes them co-vary. The duplicated literal is the cost of
+ * keeping one edit from meaning two things.
+ */
+const FRAGMENT_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
 
 function walk(directory: string): string[] {
   const found: string[] = [];
@@ -356,20 +434,63 @@ export function scanResidue(root: string = DIST): {
   for (const path of files) {
     const name = basename(path);
     const where = relative(root, path);
-    // Anchored at the root of the built site: `pagefind/…` and nothing else.
-    if (where.split(sep)[0] === THIRD_PARTY) continue;
-
     const extension = extname(name).toLowerCase();
-    if (BINARY_EXTENSIONS.has(extension)) continue;
-    if (!TEXT_EXTENSIONS.has(extension) && !TEXT_NAMES.has(name)) {
-      report(
-        `${where}: is neither declared text nor declared binary, so it shipped unscanned — ` +
-          `add its extension to TEXT_EXTENSIONS or BINARY_EXTENSIONS in scripts/scan-residue.ts`,
-      );
-      continue;
+    // Anchored at the root of the built site: `pagefind/…` and nothing else.
+    // Its fragments are the one member read anyway — see {@link THIRD_PARTY}.
+    //
+    // **Both conditions, not the extension alone.** A `.pf_fragment` anywhere
+    // else is not Pagefind's — it is a file a user put in their notes, or a
+    // future build step's — and treating it as one would skip this file's
+    // fail-closed classifier for it and then report it under a location that
+    // names Pagefind, sending the reader to the wrong place. Anchored, it falls
+    // through to the unclassified branch and fails the scan by name, which is
+    // property 1 of this file's header.
+    const inBundle = where.split(sep)[0] === THIRD_PARTY;
+    const isFragment = inBundle && extension === FRAGMENT_EXTENSION;
+    if (inBundle && !isFragment) continue;
+
+    // **A fragment's own filename may not be printed.** Measured: Pagefind names
+    // each fragment for a digest of the text in it, so two corpora differing
+    // only in a note's body produce `en_ad9f487` and `en_4d27cf9`. That makes
+    // the name a function of content the stream may not carry — and
+    // `tests/disclosure.test.ts`'s rename differential caught exactly that when
+    // this scan started reading fragments, which is the gate doing its job.
+    //
+    // The public half names the *surface* instead. It is a fixed literal, it is
+    // the same on every machine, and it loses nothing a reader needs: there is
+    // one search index, the fix is always in the note the marker came from, and
+    // the exact fragment is in the report's `detailed` half where the person who
+    // can act on it reads it.
+    const publicWhere = isFragment ? `the search index (${THIRD_PARTY}/)` : where;
+
+    if (!isFragment) {
+      if (BINARY_EXTENSIONS.has(extension)) continue;
+      if (!TEXT_EXTENSIONS.has(extension) && !TEXT_NAMES.has(name)) {
+        report(
+          `${where}: is neither declared text nor declared binary, so it shipped unscanned — ` +
+            `add its extension to TEXT_EXTENSIONS or BINARY_EXTENSIONS in scripts/scan-residue.ts`,
+        );
+        continue;
+      }
     }
 
-    const text = readFileSync(path, 'utf8');
+    // A fragment is gzip, and an unreadable one is reported rather than skipped:
+    // "I could not inflate it" and "it was clean" must not be the same outcome
+    // on the surface this exclusion was just narrowed to cover.
+    let text: string;
+    if (isFragment) {
+      try {
+        text = gunzipSync(readFileSync(path)).toString('utf8');
+      } catch {
+        report(
+          `${publicWhere}: holds a fragment that could not be inflated, so it shipped unscanned`,
+          `${where}: is a search-index fragment that could not be inflated, so it shipped unscanned`,
+        );
+        continue;
+      }
+    } else {
+      text = readFileSync(path, 'utf8');
+    }
     scannedPaths.push(where);
     // Computed once per file rather than per rule, and only when a file could
     // hold a code region at all.
@@ -377,6 +498,9 @@ export function scanResidue(root: string = DIST): {
       ? withoutCodeRegions(text)
       : text;
     for (const [pattern, what] of RESIDUE_RULES) {
+      // A fragment carries no markup, so the rule that reads code regions has
+      // nothing to exempt there and is dropped instead of being applied blind.
+      if (isFragment && FRAGMENT_EXEMPT.has(what)) continue;
       // One finding per rule per file, not one per form: the same marker seen
       // raw and again decoded is one defect, and reporting it twice would make
       // a clean fix look half-done.
@@ -385,12 +509,15 @@ export function scanResidue(root: string = DIST): {
         .map((form) => pattern.exec(form))
         .find((found) => found !== null);
       if (match) {
-        // `where` is a route and `what` is a literal, but `match[0]` is whatever
-        // was found — measured, `/home/<user>/` for the home-directory rule, a
-        // real disclosure on a surface a workflow log inherits. One rule leaking
-        // is enough to withhold the echo for all nine rather than maintain a
-        // per-rule table.
-        report(`${where}: contains ${what}`, `${where}: contains ${what} (${JSON.stringify(match[0])})`);
+        // `publicWhere` is a route or a literal and `what` is a literal, but
+        // `match[0]` is whatever was found — measured, `/home/<user>/` for the
+        // home-directory rule, a real disclosure on a surface a workflow log
+        // inherits. One rule leaking is enough to withhold the echo for all nine
+        // rather than maintain a per-rule table.
+        report(
+          `${publicWhere}: contains ${what}`,
+          `${where}: contains ${what} (${JSON.stringify(match[0])})`,
+        );
       }
     }
   }
