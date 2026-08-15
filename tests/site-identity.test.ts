@@ -44,6 +44,7 @@
 
 import { readFileSync, readdirSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -156,9 +157,16 @@ function build(directory: string, notes: string): string {
  * carrying the `localStorage` prefix. A gate reading `dist/**\/*.html` would
  * have called four of those clean.
  *
+ * **And not only the files.** Reading every file is still not the same as
+ * reading everything the site serves: the search index stores the text a reader
+ * sees rather than the bytes an author wrote, so a name split by markup is
+ * present in one and absent from the other. See the comment at `carries`.
+ *
  * **Mutations watched fail:** restoring `SITE_NAME = 'thoughtscape'` turned this
  * red with 11 files; restoring the `thoughtscape:` storage prefix turned it red
- * with the two bundles alone, which is the case a page-only scan misses.
+ * with the two bundles alone, which is the case a page-only scan misses; and
+ * removing the search-index inflate turned it red on the split-name control
+ * alone, which is the case *every* file-reading scan misses.
  */
 test('a build of a foreign corpus with no configuration carries no occurrence of this project’s name', () => {
   scratch('tk31-anon-', (directory) => {
@@ -169,9 +177,42 @@ test('a build of a foreign corpus with no configuration carries no occurrence of
     // Read as bytes and lowercased, so a token escapes by neither case nor
     // encoding: `dist/` carries minified JavaScript, XML, and JSON as well as
     // HTML, and each spells its strings differently.
+    //
+    // **And the search index is inflated, because the file and the page do not
+    // agree about what a word is.** This is a tokenisation property, not a
+    // compression one — the `gunzipSync` below is only how the bytes are
+    // reached, and reading it as "the fix was about gzip" is the misreading to
+    // avoid. Pagefind stores the text a *reader* sees; the file stores what an
+    // *author* wrote; and this gate is about the former. Two measured
+    // consequences, either of which defeats a raw scan on its own:
+    //
+    // - **Markup splits a word and the index rejoins it.** A note writing
+    //   `Built with **thought**scape here.` renders as
+    //   `<strong>thought</strong>scape`, so *no file under `dist/` contains this
+    //   project's name* — and the fragment contains it whole. A note that
+    //   emphasises part of a word defeats the unfixed gate completely.
+    // - **Escaping.** A `&` is `&amp;` in the page and bare in the fragment.
+    //
+    // So a raw read answers a question about file bytes, and the question this
+    // gate asks is about what a reader receives.
+    const carries = (file: string): boolean => {
+      const bytes = readFileSync(file);
+      if (bytes.toString('latin1').toLowerCase().includes(OWN_NAME)) return true;
+      if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return false;
+      try {
+        return gunzipSync(bytes).toString('latin1').toLowerCase().includes(OWN_NAME);
+      } catch {
+        // Not every gzip member inflates — `wasm.*.pagefind` is one — and a
+        // member that cannot be read is not evidence of absence. It is also not
+        // a surface this gate can speak for, so it is passed over rather than
+        // reported: `scripts/scan-residue.ts` owns the "could not look" case
+        // over the same directory and fails the build on it.
+        return false;
+      }
+    };
     const carriers = (root: string): string[] =>
       filesUnder(root)
-        .filter((file) => readFileSync(file, 'latin1').toLowerCase().includes(OWN_NAME))
+        .filter((file) => carries(file))
         .map((file) => file.slice(root.length + 1).replaceAll('\\', '/'));
 
     assert.deepEqual(
@@ -204,6 +245,45 @@ test('a build of a foreign corpus with no configuration carries no occurrence of
       carriers(build(directory, planted)).length > 0,
       `a corpus that names "${OWN_NAME}" in a note body produced a site the scan found it in ` +
         'nowhere, so the scan cannot see this token and the absence above proves nothing',
+    );
+
+    // **The control for the split form, which the plain one cannot stand in
+    // for.** Planting the name as ordinary text lands it in the HTML, where a
+    // raw read finds it — so that control passes identically whether or not this
+    // gate can see the search index, and it did pass throughout the interval
+    // when the gate was blind. The property that actually needed evidence is
+    // that a name *no file spells* is still caught.
+    //
+    // Split with `**` inside the word, which is the shape a real note produces
+    // when it emphasises part of a name. Measured on this fixture: with the
+    // inflate removed, `carriers()` returns `[]` here while the fragment holds
+    // the joined name — the gate reporting a clean build of a site that is
+    // wrong about whose it is.
+    const split = join(directory, 'split');
+    writeForeignCorpus(split);
+    const [head, ...rest] = [...OWN_NAME];
+    writeFileSync(
+      join(split, 'split.md'),
+      `# Split\n\nBuilt with **${head}**${rest.join('')} here.\n`,
+      'utf8',
+    );
+    const splitOut = build(directory, split);
+    assert.ok(
+      carriers(splitOut).length > 0,
+      `a note that emphasises the first letter of "${OWN_NAME}" produced a site this scan found ` +
+        'it in nowhere. The rendered word is unchanged for a reader and for the search index, so ' +
+        'the name is present in what the site serves and absent from every file — which is the ' +
+        'case a raw byte scan cannot see',
+    );
+    // And the split really is invisible to a raw read, or the control above is
+    // just the plain one again under another name.
+    assert.deepEqual(
+      filesUnder(splitOut)
+        .filter((file) => readFileSync(file, 'latin1').toLowerCase().includes(OWN_NAME))
+        .map((file) => file.slice(splitOut.length + 1).replaceAll('\\', '/')),
+      [],
+      'a raw read of the split corpus found the name, so this fixture is not exercising the ' +
+        'tokenisation gap and the control above proves nothing the plain one did not',
     );
   });
 }, 300_000);

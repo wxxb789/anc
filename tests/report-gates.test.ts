@@ -284,8 +284,19 @@ test('the marker the scan caught is one no page carries', () => {
  * **Mutation watched fail:** deleting the `FRAGMENT_EXEMPT` guard from the rule
  * loop turns this red with `pagefind/fragment/…: contains unresolved
  * [[wikilink]]`, on a corpus whose only offence is documenting a syntax.
+ *
+ * **Both authored forms, because for a long time only one of them worked.** The
+ * inline spelling failed the build end to end while the fenced one passed, and
+ * the asymmetry was invisible to the gate that existed: `tests/verify.test.ts`
+ * asserts this rule over *hand-written* scratch HTML, where an inline
+ * `<code>[[inline]]</code>` is trivially exempt. Through the real pipeline the
+ * excerpt is derived from the raw body and re-emitted into
+ * `<meta name="description">`, `content-index.json` and `rss.xml`, none of which
+ * carry a `<code>` element for the exemption to find — so the page failed on its
+ * own meta tag while its body was correctly exempt. Fixed in `excerptFor`; gated
+ * here, over the binary, because that is the only place the difference shows.
  */
-test('a note documenting wikilink syntax in a fence still builds', () => {
+test('a note documenting wikilink syntax builds, fenced or inline', () => {
   scratch('tk29-fence-', (directory) => {
     const notes = join(directory, 'notes');
     mkdirSync(notes, { recursive: true });
@@ -294,6 +305,8 @@ test('a note documenting wikilink syntax in a fence still builds', () => {
       ['# Syntax', '', 'Obsidian writes a link as:', '', '```text', '[[not a link]]', '```', ''].join('\n'),
       'utf8',
     );
+    // The inline form, in its own note so a failure names which spelling broke.
+    writeFileSync(join(notes, 'inline.md'), '# Inline\n\nInline `[[syntax]]` is how you write it.\n', 'utf8');
     writeFileSync(join(notes, 'beta.md'), '# Beta\n\nThe second note.\n', 'utf8');
 
     const run = build(directory, ['--content', 'notes', '--out', 'out']);
@@ -311,8 +324,158 @@ test('a note documenting wikilink syntax in a fence still builds', () => {
       'no search-index fragment carries `[[`, so this gate is not exercising the exemption it ' +
         'exists for — the corpus may not have been indexed at all',
     );
+
+    // **The excerpt of the inline note lost the code span rather than keeping
+    // its brackets**, which is where the fix landed and is the half a reader of
+    // this gate would otherwise have to infer. `content-index.json` ships the
+    // excerpt to the browser verbatim, so it is the cheapest place to read it.
+    const index = JSON.parse(
+      readFileSync(join(directory, 'out', 'content-index.json'), 'utf8'),
+    ) as { entries: { slug: string; excerpt: string }[] };
+    const inline = index.entries.find((entry) => entry.slug === 'inline');
+    assert.ok(inline, 'the inline note did not publish, so its excerpt proves nothing');
+    assert.equal(
+      inline.excerpt,
+      'Inline is how you write it.',
+      'the excerpt is not the prose with the code span removed',
+    );
   });
 }, 180_000);
+
+/**
+ * A wikilink the producer failed to degrade still fails the build.
+ *
+ * The other half of the gate above, and the one that keeps the repair from
+ * becoming a hole. `[[` over `dist/` is not a privacy marker — it is a producer
+ * self-check, kept deliberately in `02b51c0`: the traversal resolves every
+ * wikilink *node*, so a `[[` reaching output from prose means the degradation
+ * failed. A fix for the documented-syntax false positive that also let a
+ * genuinely unresolved link through would have closed one instance and opened
+ * the class.
+ *
+ * **The fixture is a built page, not a note**, and that is forced rather than
+ * chosen: there is no note body that produces this defect, because the producer
+ * degrades every `[[…]]` in prose — measured, `A bare [[nowhere]] in prose`
+ * becomes `A bare nowhere in prose` in both the excerpt and the body, while the
+ * backticked span beside it survives. The defect this rule exists to catch is a
+ * *producer regression*, so the only way to exhibit it is to present the
+ * scanner with what a broken producer would have emitted.
+ *
+ * **The layer matters and was measured rather than assumed.** This gate was
+ * first written against `scripts/validate-content.ts`, on the assumption that an
+ * undegraded link is caught before a page is written. It is not: `02b51c0`
+ * deleted the wikilink rule from the artifact schema deliberately, because at
+ * that layer it cannot tell a documented syntax from a defect. The residue scan
+ * over `dist/` is the only thing holding this property, which is exactly why
+ * `02b51c0` kept it there — and why weakening it would leave nothing.
+ *
+ * **Mutation watched fail:** widening `excerptFor`'s strip from `` `…` `` to
+ * anything that also removes bare brackets turns this red — which is the
+ * outcome that matters, since that is precisely the "make the failure go away"
+ * repair this gate exists to refuse.
+ */
+test('a wikilink that reached output from prose is still residue', () => {
+  scratch('tk29-genuine-', (directory) => {
+    // Shaped like a built site, with the undegraded link in the two places the
+    // excerpt reaches that carry no `<code>` element — a meta tag and the
+    // browser-facing index — plus a page whose body is correctly exempt. All
+    // three in one fixture, because the property is that the exemption
+    // distinguishes them rather than that it fires or does not.
+    writeFileSync(
+      join(directory, 'index.html'),
+      '<html><head><meta name="description" content="A link: [[nowhere]] in prose."></head>' +
+        '<body><p>Documented <code>[[syntax]]</code> here.</p></body></html>',
+      'utf8',
+    );
+    writeFileSync(
+      join(directory, 'content-index.json'),
+      JSON.stringify({ version: 1, entries: [{ slug: 'x', title: 'X', excerpt: 'A link: [[nowhere]].' }] }),
+      'utf8',
+    );
+
+    const { findings } = scanResidue(directory);
+    assert.equal(
+      findings.filter((finding) => finding.includes('wikilink')).length,
+      2,
+      `both surfaces carrying an undegraded link must be reported, and the exempt body must not ` +
+        `be:\n${findings.join('\n')}`,
+    );
+
+    // The discrimination, which is the whole point: the page's `<code>` span is
+    // exempt, so a gate that simply reported every `[[` would give three.
+    writeFileSync(
+      join(directory, 'index.html'),
+      '<html><body><p>Documented <code>[[syntax]]</code> here.</p></body></html>',
+      'utf8',
+    );
+    assert.deepEqual(
+      scanResidue(directory).findings.filter((finding) => finding.includes('index.html')),
+      [],
+      'a page whose only `[[` is inside a code element was reported, so documenting the syntax ' +
+        'still cannot publish',
+    );
+  });
+});
+
+/**
+ * The excerpt strips a code span and keeps a bare wikilink.
+ *
+ * The gate above holds the *scanner*; this holds the **producer**, and the two
+ * are not the same property. A `dist/`-level gate plants its own marker, so it
+ * stays green under a repair that stops the marker being produced at all —
+ * measured: widening `excerptFor` to also drop `[[…]]` leaves every gate in this
+ * file passing while `A bare [[nowhere]] in prose.` yields the excerpt
+ * `A bare in prose.`, with the producer regression erased before anything can
+ * scan for it.
+ *
+ * That is the shape this repository keeps meeting from a new angle: an
+ * assertion cannot see a defect that its own fixture supplies. So this asserts
+ * over `excerptFor`'s real output, on the two inputs whose treatment must
+ * differ, and it is the only gate here that would catch the tempting repair.
+ *
+ * `discover()` rather than the full pipeline, deliberately: it runs *before*
+ * `resolveCorpusLinks`, so the entry it returns carries the body exactly as
+ * authored — which is the state a producer regression leaves and the only state
+ * in which this distinction is observable.
+ *
+ * **Mutation watched fail:** adding `.replace(/\[\[[^\]]*\]\]/g, '')` to
+ * `excerptFor` turns this red on the second assertion. Removing the code-span
+ * strip turns it red on the first.
+ */
+test('the excerpt drops a code span and keeps a bare wikilink', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'tk29-excerpt-'));
+  try {
+    const notes = join(directory, 'notes');
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(
+      join(notes, 'a.md'),
+      '# A\n\nA bare [[nowhere]] in prose, and `[[documented]]` in code.\n',
+      'utf8',
+    );
+
+    const { discover } = await import('../scripts/markdown-to-artifact.ts');
+    const found = await discover(notes, {});
+    const entry = found.entries.find((candidate) => candidate.slug === 'a');
+    assert.ok(entry, 'the fixture note did not become an entry, so its excerpt proves nothing');
+
+    // The code span is gone, which is the false positive this repair closed.
+    assert.ok(
+      !entry.excerpt.includes('documented'),
+      `the excerpt kept its code span, so a note documenting the syntax fails the build: ` +
+        `${JSON.stringify(entry.excerpt)}`,
+    );
+    // And the bare link is still there, which is the producer defect the residue
+    // rule exists to catch. A repair that removed both would close the false
+    // positive by destroying the evidence.
+    assert.ok(
+      entry.excerpt.includes('[[nowhere]]'),
+      `the excerpt swallowed an undegraded wikilink, so a producer regression now reaches ` +
+        `dist/ with nothing left for the residue scan to find: ${JSON.stringify(entry.excerpt)}`,
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 /**
  * An unreadable fragment is a finding, not a silent skip.
