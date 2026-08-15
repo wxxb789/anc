@@ -1,9 +1,10 @@
 # Reading a gate's own result
 
 Five ways a gate lies about itself, each found here the hard way, each by a different ticket.
-They are collected because they were scattered across eight reports under `.tmp/` — a
+They are collected because they were scattered across the ticket reports under `.tmp/` — a
 directory `.gitignore` names and which has already been deleted out from under a session once
-(TK-27 §9). A lesson that costs a ticket to learn should not live somewhere a `rm` can end it.
+(TK-27 §9), taking one ticket's report with it for good. A lesson that costs a ticket to learn
+should not live somewhere a `rm` can end it.
 
 `AGENTS.md` carries the five in one line each, because every agent reads it and five lines is
 what a contract can afford. This file carries the measurement behind each, because that is
@@ -27,8 +28,8 @@ The loop's own guard at `scripts/resolve-links.ts` (`node.type !== 'link' && nod
 about the gate. The mutation that *does* reach it pushes each `code` node re-typed as a
 `link` — red, with the fence consumed and no `<pre>` in the article at all.
 
-Of the nine green mutations in TK-27, eight named a real unasserted property and one was this.
-They are indistinguishable from the verdict alone. You have to check what the edit reached.
+Nearly every green mutation in TK-27 named a real unasserted property; one was this. They are
+indistinguishable from the verdict alone. You have to check what the edit reached.
 
 ## 2. A red mutation may mean you mutated something broader than the property claimed
 
@@ -62,9 +63,12 @@ order. **A gate that erases the property before looking reads as more rigorous t
 equality, not less.**
 
 And at the reporting level: TK-28's `gunzip` catch fell back to raw bytes on failure, which
-reports clean. "Could not look" must not be spelled like "looked and found nothing" — which
-is also why `scanResidue` returns `{findings, blockers}` and why the report's `status` field
-distinguishes "nothing to report" from "I stopped before I could look."
+reports clean. "Could not look" must not be spelled like "looked and found nothing" — which is
+why `scanResidue` returns a `scannedCount` a caller can refuse a zero from, and why the
+report's `status` field distinguishes "nothing to report" from "I stopped before I could look."
+**The stronger form of this is still open**: `scan-residue.ts` reports "the built site is
+missing or unreadable" as a *finding*, so a caller counting findings cannot tell an unreadable
+output from a dirty one. `src/lib/diagram-mode.ts` records the defect and it is unfixed.
 
 ## 4. A control that reimplements what it is controlling for measures the reimplementation
 
@@ -86,7 +90,8 @@ control noticing, the zero it reports is the zero of having looked nowhere.
 Different in kind from the first four. There the instrument could not see; here it sees
 perfectly and is pointed at something the product does not build.
 
-**Measured — TK-29 §8.3.** Commit `02b51c0` narrowed the `[[` residue rule to exempt
+**Measured — TK-29, in its list of what its inputs got wrong, and in its §5.2.** Commit
+`02b51c0` narrowed the `[[` residue rule to exempt
 `<code>`/`<pre>` regions so a note documenting Obsidian syntax could publish, and its comment
 states the inline case was measured working. It was measured over **hand-written scratch
 HTML**. Through the real pipeline, ``Inline `[[syntax]]` is how you write it.`` exited 1 with
@@ -98,8 +103,9 @@ throughout — correctly, about a page the pipeline never produces.
 **Where a property is about output, build the output.** Every gate written against a foreign
 corpus in TK-28 and TK-31 found something no unit test had, and TK-31's opening measurement is
 the strongest single case: 126 occurrences of one owner's name in a stranger's build, of which
-only nine were in `.html`. A gate reading `dist/**/*.html` would have called four of the
-carrying files clean.
+only nine were in `.html`. A gate reading `dist/**/*.html` would have been blind to
+four whole classes of carrier: `robots.txt`, `rss.xml`, `sitemap.xml`, and the JavaScript
+bundles holding the storage prefix.
 
 ---
 
@@ -131,5 +137,8 @@ guesses. Check which:
    nothing.
 4. Does the control fail when the instrument is blinded? If not, the control is case 4.
 
-A mutation that stays green after all four is the useful result — it names a real gap. Nine of
-TK-27's thirty-nine did, and each became a gate.
+A mutation that stays green after all four is the useful result. TK-27 ran dozens and several
+came back green; all but one named a real unasserted property and became a gate, and the
+remaining one was case 1 — an edit that never executed. Its own report gives three different
+mutation totals in three places, which is its own small lesson about counting: the ratio is not
+the point, and the four checks above are.

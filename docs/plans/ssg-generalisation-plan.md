@@ -1,11 +1,11 @@
 # General-Purpose SSG — Plan
 
-**Status:** 10 of 12 tickets delivered; TK-32 (the Action and `init`) is open, TK-33 (preview)
-and TK-34 (scale) are in flight. All three fatal findings closed.
+**Status:** 11 of 12 tickets delivered; TK-32 (the Action and `init`) is the only one open.
+All three fatal findings closed.
 **Document type:** Architecture decision + revised backlog
 **Derived from:** three research agents, three drafted sections, and two adversarial reviews
 that returned 25 substantiated findings
-**Describes:** `main` at `4947787`, **605 passed / 46 skipped / 28 files**, 26 tickets delivered
+**Describes:** `main` at `d547ab0`, measured **607 passed / 46 skipped / 28 files**, zero red
 **Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md),
 which TK-35 revised in place on 2026-08-15 — §7 below is that revision's source and is now
 **executed**, so where the two disagree the requirements document is current
@@ -748,7 +748,7 @@ has shipped green four times already.
 > | G2 pattern matched nothing | shipped, TK-26. Counts live in the report, not in an artifact key (§3.1 row 1) |
 > | G3 report reached the output | shipped, TK-25/TK-29, both halves, over inflated gzip members |
 > | G4 link into excluded content | shipped, TK-27/TK-28 — with the equality corrected (§2.6) |
-> | G5 residue | shipped, TK-29. `checkPrivacy`'s split into `{findings, blockers}` shipped; the **user-configurable marker list did not**, so `msw/` is still hardcoded |
+> | G5 residue | shipped, TK-29 — the search index is now scanned, which is where the leak was. **`checkPrivacy`'s split into `{findings, blockers}` did not ship**: `scanResidue` returns `{findings, detailed, scannedCount}`, and "the built site is missing or unreadable" is still reported as a *finding*, which is the defect `src/lib/diagram-mode.ts` records and which is still open. The user-configurable marker list did not ship either, so `msw/` stays hardcoded |
 > | G6 asset reachability | **vacuously true.** Nothing emits assets, so "an asset reaches `dist/` only from a published note" holds because the antecedent is never satisfied. H4 in §8 refused to build an asset pipeline to make a gate satisfiable, and that is still right — but the gate proves nothing and should be read as a policy, not a check |
 > | G7 deletion round trip | **not built**, and neither is its search half. `tests/search.test.ts:42` is still `PRIMARY_QUERY = 'the'` — a fixed English constant, which is exactly the failure G7 predicted for a Chinese-only user repository. Its comment now argues *for* the constant, on the ground that a term lifted from one corpus times out under the other; that is a real constraint and the resolution is a term drawn from **whichever** corpus is under test, which nobody has written |
 
@@ -1340,8 +1340,8 @@ producer is split into four tickets that can each be implemented *and* reviewed 
 | TK-30 | Configuration file and loader | TK-24 | P0 | B | delivered `324c3e6` |
 | TK-31 | Site-identity extraction | TK-30 | P0 | D | delivered `95f16c4`, `db4d0f9` |
 | TK-32 | The GitHub Action and `init` | TK-24, TK-30, TK-25 | P0 | E | **open** |
-| TK-33 | Local preview at `publish.localhost` | TK-30 | P1 | D | in flight |
-| TK-34 | Scale evidence at 1,000 and 10,000 notes | TK-28 | P1 | F | in flight |
+| TK-33 | Local preview at `publish.localhost` | TK-30 | P1 | D | delivered `ae11023`, `6d48f26` |
+| TK-34 | Scale evidence at 1,000 and 10,000 notes | TK-28 | P1 | F | delivered `d547ab0` |
 | TK-35 | Requirements-document revisions | all above | P1 | F | this pass |
 
 **TK-32 is now the critical path**, and it carries more than its own scope: the deploy gate
@@ -1563,7 +1563,7 @@ documentation revisions in §7. Each carries the acceptance criteria stated ther
 >
 > **Three constraints governed the execution that this section did not anticipate:**
 >
-> 1. **Section numbers could not move.** Roughly sixty comments in `src/`, `scripts/`, and
+> 1. **Section numbers could not move.** Over eighty comment lines in `src/`, `scripts/`, and
 >    `tests/` cite the requirements by section number. The two "delete the subsection" rows
 >    below (§11.3, §27 Q2) were executed as *empty in place with the deletion recorded*, because
 >    renumbering would silently repoint every one of those comments.
@@ -1578,7 +1578,8 @@ documentation revisions in §7. Each carries the acceptance criteria stated ther
 >
 > Two further corrections to this section's own claims: the requirements document was **not**
 > "still marked Draft for owner review while eighteen tickets shipped" in any misleading sense —
-> it was, and the count is now 26 and 605 tests. And §7.5's "survives unchanged" list was
+> it was, and the suite measured 607 passed / 46 skipped / 28 files during this pass. And
+> §7.5's "survives unchanged" list was
 > checked rather than trusted: §17 needed a correction (axe-core is installed nowhere, so the
 > automated accessibility checks it promises do not run) and §18 needed one (budgets are
 > measured and not enforced). The other twelve survived.
@@ -1717,7 +1718,8 @@ fixture rather than as publication. Owned by TK-31.
 > **Delivered for identity, not for content.** A foreign build carried **126 occurrences** of
 > one owner's name across 15 files, of which only nine were `.html` — the rest were
 > `robots.txt`, `rss.xml`, `sitemap.xml`, and two JavaScript bundles carrying the localStorage
-> prefix, so a gate reading `dist/**/*.html` would have called four of the carrying files clean.
+> prefix — so a gate reading `dist/**/*.html` would have been blind to four whole classes of
+> carrier.
 > After: zero, on three corpora, asserted over every file as bytes.
 >
 > **The personal note is still in `src/data/content.json`.** So is `sync:content`, pointing at

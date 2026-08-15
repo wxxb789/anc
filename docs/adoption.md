@@ -17,6 +17,24 @@ against a scratch repository and is reported as measured.
 Node 22.18 or newer — `package.json` `engines` pins it, and the shipped code is compiled
 JavaScript, so nothing needs a TypeScript toolchain.
 
+**And, today, a checkout of this repository.** `package.json` carries `"private": true`, so
+`@thoughtscape/publish` is on no registry and `npx @thoughtscape/publish` resolves for nobody.
+Until it is published, the two ways to run it are:
+
+```bash
+# from a checkout, against your notes elsewhere
+node /path/to/thoughtscape-publish/bin/thoughtscape-publish.mjs build --content ~/notes --out ~/notes/dist
+
+# or install the tarball the repository builds
+cd /path/to/thoughtscape-publish && pnpm run pack:tarball
+cd ~/notes && npm install /path/to/thoughtscape-publish/thoughtscape-publish-*.tgz
+npx thoughtscape-publish build
+```
+
+Everything below is written as `npx @thoughtscape/publish`, which is the intended shape and
+the one the commands become on the day the package is published. Substitute one of the above
+until then.
+
 ## The shortest thing that works
 
 ```bash
@@ -28,7 +46,7 @@ npx @thoughtscape/publish preview
 Two commands. The first writes `dist/`; the second serves it at
 `http://localhost:4321/` and stays in the foreground until Ctrl-C.
 
-`build` prints three lines and no filenames:
+`build` prints four lines and no filenames:
 
 ```
 residue scan ok: 27 files, 0 findings
@@ -42,6 +60,10 @@ it. That split is deliberate and it is the thing to understand before you publis
 workflow log on a public repository is world-readable and retained for 90 days, so a list of
 the files you chose not to publish is an index to them. The report lives inside `.git/`, where
 `git add -A` cannot reach it and `git clean -xfd` does not delete it.
+
+**Outside a git repository** the last line reads differently: the report goes under your user
+state directory (`$LOCALAPPDATA` or `$XDG_STATE_HOME`), keyed by a digest of the build
+directory, and the line tells you so. Nothing else changes.
 
 ## Deciding what not to publish
 
@@ -91,9 +113,11 @@ publish.config.yaml: 1 configuration violation
 The line rather than the key, because a YAML key can be a path, and a path is the thing this
 tool does not print. Open your own file at that line.
 
-**Quote your globs.** YAML's plain scalars are a language and a glob is not written in it:
-unquoted, `!README.md` parses as an empty string and `&draft/**` parses as null. The loader
-refuses all three known rewrites rather than acting on them, but quoting avoids the argument.
+**Quote your globs.** YAML's plain scalars are a language and a glob is not written in it.
+Unquoted, `!README.md` parses as an empty string, `&draft/**` parses as null, and — the one
+worth knowing — `! README.md`, with a space, parses as the plain string `README.md`, which
+**inverts what you meant**: a re-include becomes an exclusion. The loader refuses all five of
+these rather than acting on them, but quoting avoids the argument entirely.
 
 ### What is skipped without being asked
 
@@ -107,8 +131,12 @@ deliberate rather than pending — the alternative shape, copying every non-Mark
 how comparable tools publish the images belonging to notes their users excluded.
 
 Add `/dist/` and `node_modules/` to your `.gitignore` before the first `git add -A`. The tool
-does not seed it yet. Excluding `dist/**` is worth doing too: without it the walk enumerates
-your own build output on every run.
+does not seed it yet.
+
+Excluding `dist/**` is worth doing **once a build exists** — without it the walk enumerates
+your own build output on every run, which on a one-note repository means 39 discovered and 38
+dropped. Add it after your first successful build, not before: on a repository with no `dist/`
+yet, the pattern matches nothing and the zero-match rule below fails the build.
 
 ## Links
 
@@ -117,10 +145,15 @@ Five spellings, all resolved by one pass, following Obsidian's own order:
 | You write | It resolves |
 | --- | --- |
 | `[[note]]` | by basename, when exactly one file has it |
-| `[[./sibling]]`, `[[../other]]`, `[[folder/note]]` | relative to the linking file |
-| `[[Projects/Three laws]]`, `[[/Projects/Three laws]]` | from the repository root |
+| `[[./sibling]]`, `[[../other]]` | relative to the linking file. Only an explicit `./` or `../` is relative |
+| `[[folder/note]]`, `[[Projects/Three laws]]`, `[[/Projects/Three laws]]` | from the **repository root** — a path with no `./` prefix is not relative, whatever it looks like. If nothing matches at the root, a path-suffix match is tried, preferring a file under the linking file's own folder |
 | `[text](../other.md)`, `[text](/Projects/Three%20laws)` | the same tiers, after URL-decoding |
 | `[[note\|shown]]` | the target resolves; the label is what a reader sees |
+
+The third row is the one that surprises people. `[[folder/note]]` written from `b/src.md`
+resolves to `folder/note.md` at the root, **not** to `b/folder/note.md`, even though both
+exist — measured. Write `[[./folder/note]]` if you meant the nearby one, or `/`-anchor it if
+you meant the root one.
 
 Matching is case-insensitive and Unicode-normalised, so a link whose case differs from the
 filename still resolves and a macOS-decomposed filename matches an NFC link.
@@ -131,7 +164,9 @@ words you wrote, with no anchor and no target, and is reported: that line is the
 one in the report, because it is your exclusion seen from the other side.
 
 Aliases are **not** link targets. Obsidian desktop and Obsidian Publish genuinely disagree
-here and this follows desktop. Aliases still reach search and previews.
+here and this follows desktop. They are also not indexed for search or previews, because the
+producer does not read them at all — an `aliases:` key in your frontmatter currently reaches
+nothing.
 
 ## Reading the report
 
@@ -159,7 +194,7 @@ hand-assembled equivalent, and the two properties worth preserving from the desi
   because there is no deploy step.
 
 The output is a directory of static files. Any static host serves it. `dist/_headers` carries
-a Content-Security-Policy and five other security headers in Cloudflare Pages' format; a host
+a Content-Security-Policy and three other security headers in Cloudflare Pages' format; a host
 that does not read that file serves the site without them, which works and is weaker.
 
 A rough GitHub Pages workflow, given the two caveats above:

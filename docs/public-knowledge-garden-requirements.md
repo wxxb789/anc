@@ -4,8 +4,9 @@
 **Document type:** Product requirements + architecture decision baseline
 **Target project:** A general-purpose static publisher for a repository of Markdown
 **Last updated:** 2026-08-15; first drafted 2026-08-06
-**Implementation status:** Twenty-six tickets delivered, 605 tests passing. Deployment remains
-a separately approved action this document does not authorize.
+**Implementation status:** Eleven of the twelve general-purpose tickets delivered; 607 tests
+passing, 46 skipped, measured on `d547ab0`. Deployment remains a separately approved action
+this document does not authorize.
 
 ## 0. How to read this document, after the inversion
 
@@ -18,10 +19,10 @@ section 6's glossary, section 10.3, and section 21.1.
 Three rules governed this revision, so a later reader can tell what changed from what merely
 survived:
 
-1. **Section numbers do not move.** Around sixty comments in `src/`, `scripts/`, and `tests/`
-   cite this document by section — "requirements section 13.2", "requirements §19.2" — and a
-   renumbering would silently repoint every one of them. Sections that lost their subject are
-   marked and kept rather than deleted.
+1. **Section numbers do not move.** Over eighty comment lines in `src/`, `scripts/`, and
+   `tests/` cite this document by section — "requirements section 13.2", "requirements §19.2" —
+   and a renumbering would silently repoint every one of them. Sections that lost their subject
+   are marked and kept rather than deleted.
 2. **A requirement met by a different mechanism says which mechanism.** A requirement that was
    abandoned says so and why. A requirements document that quietly drops things is worse than
    one that records the decision.
@@ -77,7 +78,9 @@ seen**, and must add:
 - a publication decision the user can inspect before it happens;
 - a documented path from fully static relationship data to D1 only if justified.
 
-`ob-flow` is one consumer of this tool, not its definition.
+The tool has no privileged input. A repository of Markdown is the whole of what it reads, and
+the vault this document was originally written around is now simply one such repository among
+any others.
 
 ## 3. Goals
 
@@ -86,7 +89,8 @@ seen**, and must add:
 1. Publish a repository of notes, minus an audited exclusion set, as a coherent public garden.
 2. Provide Quartz-v5-like discovery: search, backlinks, local graph, explorer, tags,
    breadcrumbs, table of contents, and hover previews.
-3. Preserve meaningful Obsidian authoring semantics without shipping the vault itself.
+3. Preserve meaningful Obsidian authoring semantics — wikilinks, aliases, callouts, embeds —
+   without requiring Obsidian, or any editor, to be involved in publishing.
 4. Make core reading, navigation, backlinks, metadata, and SEO work without client JavaScript.
 5. Load interactive JavaScript only where markup cannot express the behaviour, and only on
    pages that need it.
@@ -303,14 +307,14 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | Full-text search | Keyboard-accessible search with CJK support, excerpts, and tag filtering | Pagefind static index; vanilla dialog |
 | Explorer | Browse published collections and nested routes | `src/components/CollectionExplorer.astro`. **Empty in practice**: `collection` is a field the site renders and the producer does not derive |
 | Breadcrumbs | Stable hierarchy independent of source paths | Static HTML |
-| Table of contents | Heading navigation with active-section enhancement | Static HTML + script |
+| Table of contents | Heading navigation with active-section enhancement | Static HTML. **No script**: `TableOfContents.astro` states there is none, so the active-section enhancement is unbuilt |
 | Tags | Tag listing pages and per-page tag links | Static routes. **Unreachable from a real build**: the producer derives no `tags` |
 | Folder/collection listings | Published collections | Static routes; see the Explorer row |
 | Hover previews | Safe title, summary, metadata, and bounded excerpt | Static preview payload + `src/scripts/link-preview.ts` |
 | Local graph | One-hop incoming/outgoing neighborhood | **Static SVG plus an equivalent table.** Not the SQLite WASM island section 12 describes; that path was never built and is deferred |
 | Dark mode | System preference plus explicit user toggle | CSS + minimal script |
 | Reader mode | Distraction-reduced layout | CSS + minimal script |
-| Syntax highlighting | Build-time highlighted code with copy affordance | Static HTML + tiny script |
+| Syntax highlighting | Build-time highlighted code with copy affordance | Build-time highlighting. **No copy affordance**: TK-03 emitted a hidden button for a handler nobody wrote and TK-12 deleted it, per `src/lib/markdown.ts` |
 | Math | Build-time rendering | Native MathML via Temml. The "where approved" clause is deleted — there is no approval step |
 | Mermaid | Render safely; lazy-load only on pages that contain diagrams | Build-time markup by default |
 | RSS/Atom | Public notes feed with canonical URLs | Build-time |
@@ -319,10 +323,13 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | 404 and redirects | Static 404 plus versioned redirect map | 404 yes. `REDIRECT_RULES` is `[]` and cannot grow from a corpus |
 | Responsive layout | Mobile-first, no horizontal overflow | Static CSS, gated at 320 px |
 
-**Four rows above are the honest state of the general-purpose path, and each is a producer gap
-rather than a site gap**: `collection`, `tags`, `aliases`, and git commit dates are all fields
-`src/lib/schema.ts` accepts and the site renders, which `scripts/markdown-to-artifact.ts`
-does not derive. The pages exist and are empty. Nothing in this document assigns them.
+**Six rows above are the honest state of the general-purpose path.** Four are producer gaps
+rather than site gaps — `collection`, `tags`, `aliases`, and git commit dates are all fields
+`src/lib/schema.ts` accepts and the site renders, which `scripts/markdown-to-artifact.ts` does
+not derive, so the pages exist and are empty. Two are enhancements this document has been
+claiming for longer than that: the table of contents has no active-section script and code
+blocks have no copy button, and each file says so in a comment at the place the feature would
+be. Nothing in this document assigns any of the six.
 
 ### 8.2 P1 — post-launch enhancements
 
@@ -555,10 +562,12 @@ device. `bin/thoughtscape-publish.mjs` documents the measurement.
 zero Svelte is installed.** This staleness predates the inversion and is named so a later plan
 does not re-derive it.
 
-Five interactive surfaces ship — the search dialog, the collection explorer, hover previews,
-theme and reader-mode toggles, and diagram rendering — as static markup plus roughly 1 KB gzip
-of vanilla script. Article content, backlinks, breadcrumbs, tag links, and primary navigation
-require no script at all.
+Four interactive surfaces ship script — the search dialog, hover previews, theme and
+reader-mode toggles, and diagram rendering — totalling about 4.7 KB gzip across two files on
+every page. The collection explorer ships none: it is a `<details>`-based `<nav>` and says so
+at its own definition, and the diagram chunk is zero bytes under the build-time diagram mode.
+Article content, backlinks, breadcrumbs, tag links, and primary navigation require no script at
+all.
 
 A framework is not forbidden; it is unjustified. Reconsider it only if the Phase 2 interactive
 graph is built, which is the one feature whose state would plausibly need one.
@@ -870,7 +879,7 @@ Hover/focus previews:
 
 **Stacked pages are deleted from this document.** They were listed here and in 8.2 as a P1
 enhancement, have no implementation, no owner, and no requirement anyone has restated in
-twenty-six tickets. Recording the deletion rather than leaving the paragraph, because an
+twenty-six tickets across two plans. Recording the deletion rather than leaving the paragraph, because an
 unowned P1 in a requirements document reads as a commitment.
 
 ## 15. Content rendering requirements
@@ -982,10 +991,10 @@ Scan the built output for:
 
 - secrets with Gitleaks or equivalent — **not covered**, and deliberately: a credential pattern
   set is a different tool with a different false-positive profile;
-- path markers configured by the user, plus the `msw/` marker this repository still hardcodes.
-  That marker is one owner's path prefix and a false-positive generator for anyone using the
-  `msw` HTTP-mocking library; making the marker list configuration with an empty default is
-  designed and unbuilt;
+- path markers. **These are hardcoded and should be user configuration**: the only config keys
+  are `title`, `origin`, and `exclude`, and the scanner reads no config at all, so every user
+  inherits one owner's `msw/` prefix — a widely used HTTP-mocking library, and therefore a
+  false build failure waiting for the first user who documents it;
 - unresolved wikilinks outside code regions;
 - absolute local and home-directory paths;
 - source maps;
@@ -995,7 +1004,9 @@ Scan the built output for:
 - unexpected routes or assets — **not covered**; TK-09's deny-by-default assets gate does not
   exist.
 
-Six of the nine are enforced. Three are not, and each says which.
+Five of the eight are enforced. Three are not, and each says which. `AGENTS.md` and
+`scripts/scan-residue.ts` both still say "six of nine", counting an earlier spelling of this
+list; the identity of the three uncovered items is the same in all three places.
 
 **Every rule must be individually proven non-vacuous.** An aggregate "nine rules, zero
 findings" cannot distinguish nine working rules from one working rule and eight broken ones,
@@ -1347,7 +1358,7 @@ it reaches a CDN and a search index.
 | Withheld and unresolved links are distinct outcomes, both reported | shipped |
 | The report cannot be committed and cannot reach the output | shipped, gated |
 | The build's log carries counts and never names | shipped, gated |
-| Removing a note removes its page, feed entry, sitemap entry, and search record | shipped |
+| Removing a note removes its page, feed entry, sitemap entry, and search record | **not gated.** It follows from the build writing into an empty directory, and no test performs the round trip |
 | An asset reaches the output only from a published note | vacuously true — no asset ships |
 | **The publish set is reviewed as a diff before it publishes** | **not built.** `published.txt` was designed and killed; nothing replaced it. This is the open half of the trade |
 
@@ -1376,8 +1387,9 @@ fails against a macOS-decomposed filename).
 
 ### DR-9 — This repository is the tool, and has no site of its own
 
-**Decision (2026-08-12, owner):** No content of its own; the demo corpus is synthetic; the
-owner's site lives in `ob-flow` as the tool's first consumer.
+**Decision (2026-08-12, owner):** This repository holds the tool and no site of its own. Its
+demo corpus is synthetic; whoever wrote it publishes their own notes with it like anyone else,
+from their own repository.
 
 Delivered for identity — a foreign build carried 126 occurrences of one owner's name across 15
 files, of which only nine were in `.html`, and now carries zero. **Not delivered for content:**
@@ -1464,8 +1476,8 @@ reports and in `docs/plans/ssg-generalisation-plan.md` §2 and §5 rather than h
 The dedicated project exists and is this repository. Each item's outcome:
 
 - [x] Requirements baseline copied and versioned. This document, revised 2026-08-15.
-- [x] Project `AGENTS.md`. It is the contract every agent reads first, and roughly sixty source
-      comments cite this document by section number — which is why section 27's numbering
+- [x] Project `AGENTS.md`. It is the contract every agent reads first, and over eighty source
+      comment lines cite this document by section number — which is why section 27's numbering
       survived a revision that emptied it.
 - [x] Decision frontier resolved. Section 27, all eight.
 - [ ] Context glossary. Not created; section 6's table absorbed the new terms instead, which is

@@ -113,11 +113,12 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 - Deployment. Requirements section 21.1 stage 13 makes it a separately approved action; CI
   deliberately cannot deploy and needs no secrets.
 - Post-deploy smoke tests (stage 14), which need a deployed origin.
-- Secret scanning (section 19.1's Gitleaks item), non-allowlisted titles and slugs, and
-  unexpected routes or assets. The residue scan closes six of section 19.1's nine items; these
-  are the other three. The last two are route-model properties that TK-09's deny-by-default
-  assets gate owns, and **that gate does not exist** — `scripts/scan-residue.ts:33-37` names it
-  as not attempted.
+- Secret scanning (section 19.1's Gitleaks item), slugs absent from a reviewed publish set, and
+  unexpected routes or assets. Those are the three items of section 19.1 the residue scan does
+  not close; the last two are route-model properties that TK-09's deny-by-default assets gate
+  owns, and **that gate does not exist** — `scripts/scan-residue.ts` names it as not attempted.
+  Both that file and the requirements say "six of nine"; the list is now eight bullets and five
+  are enforced. The arithmetic drifted, the identity of the uncovered three did not.
 - `pnpm run build:fixture`, the 32-note corpus that un-skips the multi-entry gates. Not in
   `verify` because it builds the site twice. It cannot run concurrently with the suite — see
   the `.astro/` collision below.
@@ -185,12 +186,10 @@ meeting one of these has met a known gap, not a discovery.
 | `src/pages/about.astro`, `privacy.astro` | shipped pages; plan §4.4 says notes `init` seeds | TK-32 |
 | `init` and the GitHub Action | do not exist; `scripts/seed-gitignore.ts` ships with no caller | TK-32 |
 | `og:image` | never emitted; `SOCIAL_CARD_PATH` is `undefined` and no config key sets it | unassigned |
-| The report state directory | one directory per *build*, never pruned | TK-33, in flight |
-| Local preview | `thoughtscape-publish preview` exists and works; `pnpm run preview` is `astro preview` and serves only this repository | TK-33, in flight |
+| The report state directory | grows without pruning. **The key is per-directory, not per-build** — `sha256(realpath(cwd))`, a pure function of the path. A count rising once per build was three agents and a `mkdtemp`-heavy suite sharing a host, and reading that count as an identity is lesson 1 of `docs/gate-reading.md` committed against itself | unassigned |
 | `.astro/` as a shared staging path | two concurrent builds collide; a red `config.test.ts` should be re-run against a clean `.astro/` before it is believed | unassigned |
-| `MAX_ENTRIES` | justified by "the allowlist is hand-curated", which is false; should be configuration | TK-34, in flight |
-| `REDIRECT_RULES` | `[]` and cannot grow from a corpus; nothing promises a moved note keeps its URL | unassigned |
 | `src/lib/routes.ts` collision messages | say "the exporter", which the user cannot edit | unassigned |
+| `REDIRECT_RULES` | `[]` and cannot grow from a corpus; nothing promises a moved note keeps its URL | unassigned |
 
 ## Documentation
 

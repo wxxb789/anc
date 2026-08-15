@@ -27,7 +27,8 @@ document a stranger needs.
 - Astro `output: "static"`; the build output is `dist/`.
 - Content is produced by `scripts/markdown-to-artifact.ts` and `scripts/resolve-links.ts`, then
   validated against `src/lib/schema.ts` before anything renders.
-- Roughly 1 KB gzip of vanilla client script across five interactive surfaces. No framework.
+- About 4.7 KB gzip of vanilla client script in total, across four interactive surfaces. No
+  framework.
 - No D1, R2, Functions, or network access at build time or runtime.
 
 ## Working on the tool
@@ -55,14 +56,18 @@ npx @thoughtscape/publish build
 npx @thoughtscape/publish preview
 ```
 
-See [`docs/adoption.md`](docs/adoption.md) for configuration, exclusion, links, and hosting.
+**Not yet, though:** `package.json` carries `"private": true`, so the package is on no registry
+and that specifier resolves for nobody. Until it is published, run
+`bin/thoughtscape-publish.mjs` from a checkout or install the tarball `pnpm run pack:tarball`
+builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with configuration, exclusion,
+links, and hosting.
 
 **The GitHub Action and the `init` command do not exist yet** (TK-32). Deploying today means
 assembling a workflow by hand; the adoption document gives one and marks it as such.
 
 ## Deployment
 
-Any static host serves `dist/`. `dist/_headers` carries a Content-Security-Policy and five
+Any static host serves `dist/`. `dist/_headers` carries a Content-Security-Policy and three
 other security headers in Cloudflare Pages' format; a host that does not read that file serves
 the site without them.
 
