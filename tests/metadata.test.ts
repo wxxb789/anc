@@ -16,7 +16,7 @@
  * there any string for which this emits a document a parser rejects".
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
@@ -621,17 +621,41 @@ test('every page carries complete Open Graph and Twitter card metadata', () => {
       'og:title',
       'og:description',
       'og:url',
-      'og:image',
-      'og:image:alt',
-      'twitter:card',
     ]) {
       const value = meta.get(required);
       assert.ok(value !== undefined && value !== '', `${route}: ${required} is missing or empty`);
     }
 
     assert.equal(meta.get('og:site_name'), SITE_NAME);
-    assert.equal(meta.get('og:image'), `${ORIGIN}${SOCIAL_CARD_PATH}`);
-    assert.equal(meta.get('twitter:card'), 'summary_large_image');
+
+    /**
+     * The three card tags are present exactly when a card is configured, and
+     * absent together when one is not.
+     *
+     * **A stronger assertion than the unconditional one it replaces, which is
+     * what TK-31 traded for it.** `og:image` used to be required on every route
+     * and pointed at a card shipped inside this package — so every site built
+     * with this tool served one owner's wordmark. The card is gone and
+     * `SOCIAL_CARD_PATH` is `undefined`; a user's own card is a later ticket,
+     * and this row is written to be correct under both.
+     *
+     * The tags travel as a set deliberately: `og:image:alt` labelling a
+     * non-existent image, or `twitter:card=summary_large_image` reserving a
+     * large image region with nothing to put in it, are each worse than
+     * silence. So the check is that all three agree, not that each is present.
+     */
+    for (const tag of ['og:image', 'og:image:alt', 'twitter:card']) {
+      const value = meta.get(tag);
+      if (SOCIAL_CARD_PATH === undefined) {
+        assert.equal(value, undefined, `${route}: emits ${tag} while no social card is configured`);
+      } else {
+        assert.ok(value !== undefined && value !== '', `${route}: ${tag} is missing or empty`);
+      }
+    }
+    if (SOCIAL_CARD_PATH !== undefined) {
+      assert.equal(meta.get('og:image'), `${ORIGIN}${SOCIAL_CARD_PATH}`);
+      assert.equal(meta.get('twitter:card'), 'summary_large_image');
+    }
 
     // `og:url` agrees with the canonical link wherever there is one.
     const canonical = /<link rel="canonical" href="([^"]*)"/.exec(html)?.[1];
@@ -711,10 +735,39 @@ test('every page offers the feed, and the card image was actually built', () => 
       `${route}: does not offer the feed in its own language (lang="${lang}")`,
     );
   }
-  // `og:image` names a file, so the file has to exist: a card that 404s is worse
-  // than no card, since a consumer renders a broken image rather than falling
-  // back to text.
-  assert.ok(statSync(new URL(SOCIAL_CARD_PATH.slice(1), DIST)).size > 0, 'the social card is missing or empty');
+  /**
+   * `og:image` names a file that exists, or there is no `og:image`.
+   *
+   * **The assertion's subject moved with TK-31 and the property it protects did
+   * not.** It used to be "the social card is present and non-empty", because a
+   * card that 404s is worse than no card — a consumer renders a broken image
+   * rather than falling back to text. That argument is sound and was being used
+   * to justify shipping *this owner's* card inside the package, which every site
+   * built with this tool then served.
+   *
+   * The card is gone. What survives is the same rule stated as a biconditional:
+   * whatever `og:image` says, that file is in `dist/`. Today `SOCIAL_CARD_PATH`
+   * is `undefined`, so the branch taken is that nothing points at a card and no
+   * card ships; when a user configures one, the other branch checks the file
+   * they named is really there. Neither branch admits a dangling `og:image`,
+   * which is the whole of what the original gate was for.
+   */
+  if (SOCIAL_CARD_PATH === undefined) {
+    assert.ok(
+      !built('index.html').includes('og:image'),
+      'a page declares og:image while no social card is configured, so it points at nothing',
+    );
+    assert.ok(
+      !existsSync(new URL('og-card.png', DIST)),
+      'a social card ships in dist/ that nothing points at — a default card belonging to this ' +
+        "package is exactly the identity leak TK-31 removed",
+    );
+  } else {
+    assert.ok(
+      statSync(new URL(SOCIAL_CARD_PATH.slice(1), DIST)).size > 0,
+      'og:image names a social card that is missing or empty',
+    );
+  }
 });
 
 test('the built sitemap is exactly the built route set, minus what must not be crawled', () => {

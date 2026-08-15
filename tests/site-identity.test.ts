@@ -50,7 +50,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import { CONFIG_DIRECTORY_VARIABLE, CONFIG_FILENAME } from '../scripts/load-config.ts';
+import { CONFIG_FILENAME } from '../scripts/load-config.ts';
 import { DEFAULT_SITE_TITLE, SITE_TITLE_VARIABLE } from '../src/lib/site.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -68,6 +68,20 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const OWN_NAME = (
   JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string }
 ).name.replace(/^@/, '').split('/')[0]!;
+
+/**
+ * The host an unconfigured build falls back to, read out of `astro.config.mjs`.
+ *
+ * Never spelled here. `tests/metadata.test.ts` fails on any file under `src/`,
+ * `scripts/`, `tests/`, or `public/` that writes this host literally — the gate
+ * that keeps the origin to exactly one home — so a copy in this file would break
+ * it, and would additionally stop tracking the real default the moment it moved.
+ */
+const DEFAULT_HOST = (() => {
+  const origin = /DEFAULT_ORIGIN = '([^']+)'/.exec(readFileSync(join(ROOT, 'astro.config.mjs'), 'utf8'))?.[1];
+  assert.ok(origin, 'astro.config.mjs declares no default origin for these gates to read');
+  return new URL(origin).hostname;
+})();
 
 /** A scratch directory, removed however the body ends. */
 function scratch<T>(prefix: string, body: (directory: string) => T): T {
@@ -104,16 +118,15 @@ function writeForeignCorpus(notes: string, config?: string): void {
 /**
  * Build a corpus with the shipped command, and return where the site landed.
  *
- * `PUBLISH_CONFIG_DIR` is passed explicitly rather than relied upon, and the
- * reason is a real gap rather than a convenience: `bin/thoughtscape-publish.mjs`
- * loads the config for its *exclusions* but does not set this variable, so a
- * configured `title` and `origin` reach `astro.config.mjs` only when the caller
- * sets it. Measured — without it, a `publish.config.yaml` naming a title builds
- * a site titled `Notes`, silently. Setting it here keeps the configured-value
- * gate honest about what it is testing: the wiring from the variable onward,
- * which is this ticket's, and not the last inch at the call site, which is not.
+ * **No environment is passed, and that is the point.** The property every gate
+ * here measures is what a *user* gets from the command they type, so anything
+ * this helper sets is help the user does not have. An earlier version passed
+ * `PUBLISH_CONFIG_DIR` because the CLI did not set it — the configured-value
+ * gate was then green while a real `publish.config.yaml` was silently ignored
+ * end to end, which is the exact failure shape that makes a wiring gap survive a
+ * passing suite.
  */
-function build(directory: string, notes: string, environment: Record<string, string> = {}): string {
+function build(directory: string, notes: string): string {
   // Named after the corpus rather than a fixed `out`, so two builds in one
   // scratch directory do not overwrite each other — the positive-control gate
   // builds twice and would otherwise measure the second build's output twice.
@@ -121,7 +134,7 @@ function build(directory: string, notes: string, environment: Record<string, str
   const probe = spawnSync(
     process.execPath,
     [join(ROOT, 'bin/thoughtscape-publish.mjs'), 'build', '--content', notes, '--out', out],
-    { cwd: directory, encoding: 'utf8', env: { ...process.env, ...environment } },
+    { cwd: directory, encoding: 'utf8' },
   );
   assert.equal(probe.status, 0, `the build failed:\n${probe.stdout}\n${probe.stderr}`);
   return out;
@@ -196,22 +209,37 @@ test('a build of a foreign corpus with no configuration carries no occurrence of
 }, 300_000);
 
 /**
- * A configured title and origin reach every surface that once held a literal.
+ * A configured title and origin reach every surface that once held a literal —
+ * **through the command a user types, with nothing else set.**
  *
  * The complement of the gate above: proving the old identity is gone says
- * nothing about whether the user's own arrives. Both are needed, and this one
- * is what would catch a build that answered the first by shipping no identity
- * at all.
+ * nothing about whether the user's own arrives. Both are needed, and this one is
+ * what would catch a build that answered the first by shipping no identity at
+ * all.
+ *
+ * **This is an end-to-end gate over the binary, and it has to be.** The unit
+ * beneath it — `configForBuild()` reading `PUBLISH_CONFIG_DIR` — was correct and
+ * fully tested for the whole interval in which a real configured build ignored
+ * both values, because nothing called it: the CLI never set the variable, and
+ * its `process.cwd()` fallback could not rescue it either, since the CLI
+ * `chdir`s to the package root before Astro starts. Measured at the time: a
+ * `publish.config.yaml` naming `title` and `origin` produced a site carrying
+ * neither, and the build reported success. **A passing unit test for an unreached
+ * unit is the shape this gate exists against**, which is why it runs the shipped
+ * command and reads files off disk rather than calling anything.
  *
  * The surfaces are named individually rather than by searching `dist/` for the
  * value, because "the title appears somewhere" is satisfied by one page while
- * the feed and the sitemap still carry a default. Each row below was a
- * hardcoded literal before this ticket.
+ * the feed and the sitemap still carry a default. Each row below was a hardcoded
+ * literal before this ticket.
  *
- * **Mutation watched fail:** dropping `process.env['PUBLISH_SITE_TITLE']` from
- * `astro.config.mjs` turned this red on the four title rows, which are then all
- * `Notes`; changing `site:` to ignore `config.origin` turned it red on the
- * four origin rows.
+ * **Mutations watched fail:** deleting
+ * `process.env[CONFIG_DIRECTORY_VARIABLE] = contentDirectory` from
+ * `bin/thoughtscape-publish.mjs` turned this red on **every** row, title and
+ * origin alike, with the placeholder half naming the leaked host; dropping
+ * `process.env['PUBLISH_SITE_TITLE']` from `astro.config.mjs` turned it red on
+ * the title rows alone; changing `site:` to ignore `config.origin` turned it red
+ * on the origin rows alone. Three distinct mutations, three distinct signatures.
  */
 test('a configured title and origin reach the title, feed, sitemap, and robots.txt', () => {
   scratch('tk31-configured-', (directory) => {
@@ -219,7 +247,7 @@ test('a configured title and origin reach the title, feed, sitemap, and robots.t
     const title = 'Foundry Field Notes';
     const origin = 'https://notes.example.org/';
     writeForeignCorpus(notes, `title: ${JSON.stringify(title)}\norigin: ${JSON.stringify(origin)}\n`);
-    const out = build(directory, notes, { [CONFIG_DIRECTORY_VARIABLE]: notes });
+    const out = build(directory, notes);
 
     const read = (relative: string): string => {
       const file = join(out, relative);
@@ -246,6 +274,40 @@ test('a configured title and origin reach the title, feed, sitemap, and robots.t
     const feed = read('rss.xml');
     assert.match(feed, new RegExp(`<id>${origin}</id>`), 'the feed id is wrong');
     assert.match(feed, new RegExp(`<title>${title}</title>`), 'the feed title is not the configured one');
+
+    // **The other half: the defaults are gone, not merely joined.** Every
+    // assertion above is a *presence* check, and presence is satisfied by a
+    // build that emits the configured value somewhere while still carrying the
+    // package's own placeholder elsewhere — which is precisely what a partially
+    // wired config produces. The measured failure had `<title>Notes</title>`
+    // beside `https://thoughtscape.invalid`, and a presence-only gate for a
+    // *different* surface would have passed on it.
+    //
+    // Both defaults, because they arrive through different mechanisms and can
+    // fail independently: the title crosses on `PUBLISH_SITE_TITLE`, the origin
+    // through `site:`.
+    //
+    // `DEFAULT_SITE_TITLE` is deliberately **not** in this list, and the reason
+    // is worth stating rather than leaving to be rediscovered: it is `Notes`,
+    // which is also the English nav label and the home page's section heading.
+    // A correct configured build renders both, so forbidding the string would
+    // fail on working output — a gate that cannot distinguish the default site
+    // name from an ordinary English word is measuring the word. The `<title>`
+    // and feed-title rows above already pin that surface positively, which is
+    // where a leaked default title would actually show.
+    const defaults = [OWN_NAME, DEFAULT_HOST];
+    const residue = filesUnder(out).flatMap((file) => {
+      const text = readFileSync(file, 'latin1');
+      return defaults
+        .filter((value) => text.includes(value))
+        .map((value) => `${file.slice(out.length + 1).replaceAll('\\', '/')} carries ${JSON.stringify(value)}`);
+    });
+    assert.deepEqual(
+      residue,
+      [],
+      `a configured build still carries this package's own defaults, so the configuration is only ` +
+        `partly wired:\n  ${residue.join('\n  ')}`,
+    );
   });
 }, 180_000);
 
@@ -292,84 +354,80 @@ test('an unconfigured build still names itself, rather than shipping an empty ti
 }, 180_000);
 
 /**
- * The shipped social card carries no name.
+ * No social card ships, and no page claims one.
  *
- * **This is the leak TK-24 found by looking rather than by reading, and it is
- * the one a text search cannot find.** `public/og-card.png` is in the tarball's
- * `files`, every packaged build serves it as `og:image`, and until this ticket
- * it showed the wordmark `thoughtscape` over "A reviewed public projection from
- * a private knowledge garden". No grep over `dist/` sees that: the name is
- * *pixels*. The gate above would have passed on it for ever.
+ * **This is the leak TK-24 found by looking rather than by reading, and it was
+ * the one a text search could never find.** `public/og-card.png` sat in the
+ * tarball's `files`, every packaged build served it as `og:image`, and it showed
+ * the wordmark `thoughtscape` over "A reviewed public projection from a private
+ * knowledge garden". No grep over `dist/` sees that — the name is *pixels* — so
+ * the headline gate above would have passed on it for ever.
  *
- * So this asserts over the generator instead, which is the one place the card's
- * content is legible to a machine. Two properties, and the second is the one
- * that matters longest:
+ * **The fix is deletion rather than a nameless replacement**, and the
+ * intermediate step is worth recording because it looked like the answer. A card
+ * carrying only the mark passes every text search and is still an artefact
+ * belonging to *this package* appearing on a stranger's site: every site built
+ * with the tool would serve one identical meaningless image. That is the same
+ * defect in a different costume. Plan §4.2 chose "no card unless the user
+ * supplies one", and the argument TK-24 used to keep the card — a broken card is
+ * worse than a bland one — is sound against a *dangling* `og:image` and says
+ * nothing against an *absent* one, which every consumer already handles by
+ * falling back to the title and description.
  *
- * 1. The card's markup carries **no text node** — no `<h1>`, no `<p>`. A card
- *    with no words cannot name anybody.
- * 2. It imports **neither** `SITE_NAME` nor the locale table. This is stronger
- *    than it looks and is not redundant with the first: since TK-31, `SITE_NAME`
- *    resolves from whatever configuration the person *running the script* has on
- *    disk, so a contributor with their own `publish.config.yaml` would silently
- *    commit their site's name as the default card every user then ships. The
- *    import is the mechanism; forbidding it forecloses the whole class.
+ * Three assertions, each closing a different way the card could come back:
  *
- * What this deliberately does **not** assert is that the PNG matches the script.
- * The image is committed and hand-regenerated, so proving they agree means
- * rasterizing in a gate — Playwright, ~2 s, and a devDependency CI installs but
- * a consumer does not. Named rather than half-built: the honest limit is that
- * this holds the *source* of the card, and a hand-edited PNG would pass it.
+ * 1. **Nothing ships.** No image file in the package's `public/`, which is what
+ *    `files` copies into the tarball verbatim.
+ * 2. **No page claims one.** A build emits none of `og:image`, `og:image:alt`,
+ *    or `twitter:card` — read off a real foreign build rather than off the
+ *    component, because the component is a template and the output is the thing
+ *    a consumer parses.
+ * 3. **The generator is gone.** `scripts/render-og-card.ts` read `SITE_NAME` to
+ *    render the wordmark, and after this ticket that constant resolves from
+ *    whatever configuration the person *running the script* has on disk — so
+ *    keeping it would mean a contributor could silently commit their own site's
+ *    name as the default card for every user. Deleting the script forecloses
+ *    that whole class rather than gating it.
  *
- * **Three mutations watched fail, and each was caught by a different half —
- * which is what says the three are not one assertion written out three times.**
- * Restoring `<h1>` with the site name in it fired the text-node half; moving the
- * same interpolation into a CSS comment, where no element exists, fired the
- * interpolation half; leaving only the bare `import` fired the import half.
- * The second is the case worth naming: a name can enter the card without any
- * element being added, so a gate that looked for `<h1>` alone would have passed
- * on it.
+ * **Mutations watched fail:** restoring `SOCIAL_CARD_PATH = '/og-card.png'`
+ * turned assertion 2 red on every page; putting any `.png` back under `public/`
+ * turned assertion 1 red; restoring the generator turned assertion 3 red.
  */
-test('the shipped social card names nobody, and cannot come to name somebody', () => {
-  const source = readFileSync(join(ROOT, 'scripts/render-og-card.ts'), 'utf8');
-
-  // The template literal the card is built from, not the whole file: this
-  // module's own documentation legitimately discusses the wordmark it removed,
-  // and a scan over prose would flag the explanation as the defect.
-  const card = /const CARD = `([\s\S]*?)`;/.exec(source)?.[1];
-  assert.ok(card, 'scripts/render-og-card.ts declares no CARD template for this gate to read');
-
-  for (const element of ['h1', 'h2', 'p', 'span', 'title']) {
-    assert.ok(
-      !new RegExp(`<${element}[\\s>]`).test(card),
-      `the social card renders a <${element}>, so it carries text — and a shipped card is served ` +
-        "as og:image by every build, which puts whatever it says on every user's site",
-    );
-  }
-
-  // Interpolation of any kind: `${...}` in the template is how a name gets in
-  // without an element being added, and the two dimensions the card is built
-  // from are the only legitimate ones.
-  const interpolations = [...card.matchAll(/\$\{([^}]*)\}/g)].map(([, expression]) => expression!.trim());
+test('no social card ships, and no page claims one', () => {
+  const shipped = readdirSync(join(ROOT, 'public')).filter((name) => /\.(png|jpe?g|webp|avif)$/i.test(name));
   assert.deepEqual(
-    interpolations.filter((expression) => expression !== 'WIDTH_PX' && expression !== 'HEIGHT_PX'),
+    shipped,
     [],
-    'the social card interpolates something other than its own dimensions',
+    `these images ship inside the package and would appear on every site built with it:\n  ${shipped.join('\n  ')}`,
   );
 
-  for (const forbidden of ['site.ts', 'translations.ts']) {
-    assert.ok(
-      !source.includes(forbidden),
-      `scripts/render-og-card.ts imports ${forbidden}. The card is committed and regenerated by ` +
-        "hand, so reading the site name here bakes whichever config the author had on disk into " +
-        'the default card every user ships',
-    );
-  }
+  assert.ok(
+    !existsSync(join(ROOT, 'scripts/render-og-card.ts')),
+    'the card generator is back, and it renders the configured site name into a committed image — ' +
+      "so whoever runs it bakes their own site's name into every user's default card",
+  );
 
-  // And the card exists, because the metadata gate points `og:image` at it
-  // unconditionally: a build that shipped no card would 404 its own social image
-  // on every route.
-  assert.ok(existsSync(join(ROOT, 'public/og-card.png')), 'the shipped social card is missing');
-});
+  scratch('tk31-card-', (directory) => {
+    const notes = join(directory, 'notes');
+    writeForeignCorpus(notes);
+    const out = build(directory, notes);
+
+    const claimed = filesUnder(out)
+      .filter((file) => file.endsWith('.html'))
+      .flatMap((file) => {
+        const html = readFileSync(file, 'utf8');
+        return ['og:image', 'twitter:card']
+          .filter((tag) => html.includes(tag))
+          .map((tag) => `${file.slice(out.length + 1).replaceAll('\\', '/')} declares ${tag}`);
+      });
+
+    assert.deepEqual(
+      claimed,
+      [],
+      `pages declare a social card while none is configured, so each points at nothing:\n  ${claimed.join('\n  ')}`,
+    );
+  });
+}, 180_000);
 
 /**
  * The seam's two spellings agree.

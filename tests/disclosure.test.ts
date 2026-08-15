@@ -264,7 +264,13 @@ test('the streams carry no name that changes when the corpus is renamed', () => 
     assert.ok(counts, `a clean build did not print the counts line:\n${alpha['a']!.output}`);
     assert.ok(Number(counts[2]) > 0, 'the clean build published nothing, so the counts prove nothing');
   });
-}, 120_000);
+  // Four full CLI builds — two corpora, each built twice — plus a scan of every
+  // file in each `dist/` with the gzipped members inflated. Measured at 127 s
+  // here after the inflate landed, against a 120 s bound that predated it, so
+  // this gate began failing on a timer rather than on its property. Raised
+  // rather than narrowed: the two-corpus comparison *is* the assertion, and
+  // dropping a build to fit the clock would leave the gate green and blind.
+}, 300_000);
 
 test('a rejected argument is never echoed, whatever shape it has', () => {
   // The rule §2.3 states: any argv token that is not byte-equal to a spelling

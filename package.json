@@ -24,8 +24,7 @@
     "!src/data/content.json",
     "!public/content-index.json",
     "!scripts/build-fixture.ts",
-    "!scripts/compile-package.ts",
-    "!scripts/render-og-card.ts"
+    "!scripts/compile-package.ts"
   ],
   "scripts": {
     "dev": "astro dev",

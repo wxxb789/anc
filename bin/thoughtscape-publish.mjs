@@ -95,22 +95,24 @@
  * artifact shape so that this ticket's acceptance test can run end to end. It is
  * temporary and marked as such at its own definition.
  *
- * **It does not give the site the user's identity.** A site built here carries
- * this repository's: `https://thoughtscape.invalid` as its origin in every
- * canonical link, feed id, sitemap `<loc>`, and `robots.txt`; `thoughtscape` as
- * its name; this owner's social card; and an `/about/` page that describes
- * publication from "an explicit approval list", which is not how a build from a
- * directory of Markdown works. All of it is measured in a real packaged build,
- * not inferred.
+ * **It gives the site the user's identity, and did not until TK-31.** A site
+ * built here used to carry *this repository's*: `https://thoughtscape.invalid`
+ * as its origin in every canonical link, feed id, sitemap `<loc>`, and
+ * `robots.txt`; `thoughtscape` as its name; this owner's social card; and an
+ * `/about/` page describing publication from "an explicit approval list", which
+ * is not how a build from a directory of Markdown works. All of it was measured
+ * in a real packaged build rather than inferred, and the failure was silent —
+ * the site was valid, rendered correctly, and was wrong about whose it was.
  *
- * That is TK-31's ticket — "Site-identity extraction", which depends on TK-30's
- * config file — and it is named here rather than worked around because the
- * failure is silent: the site is valid, renders correctly, and is wrong about
- * whose it is. `tests/packaging.test.ts` asserts the boundary so that this note
- * cannot quietly stop being true, and `astro.config.mjs` already documents
- * `.invalid` as a placeholder that "cannot be mistaken for a real domain and
- * cannot accidentally point a crawler at somebody else's server" — which is what
- * makes shipping it the safe interim state rather than a leak.
+ * The title and origin now come from the user's `publish.config.yaml`, and the
+ * defaults a user who configures nothing gets belong to nobody: a neutral site
+ * name and an RFC 6761 `.localhost` preview origin. The line that makes it true
+ * from *this* file is the `PUBLISH_CONFIG_DIR` assignment in `buildInto`, which
+ * documents at its own site why it is an environment variable.
+ *
+ * One piece is deliberately unfinished: there is no `og:image`, because a
+ * default social card is an image belonging to this package appearing on a
+ * stranger's site. A user supplying their own is a later ticket.
  */
 
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -353,13 +355,37 @@ async function buildInto(contentDirectory, outDirectory, report) {
     const staging = join(workspace, 'dist');
 
     const { discover, resolveCorpusLinks, writeArtifact } = await import('../scripts/markdown-to-artifact.ts');
-    const { exclusionOptions, loadConfig } = await import('../scripts/load-config.ts');
+    const { exclusionOptions, loadConfig, CONFIG_DIRECTORY_VARIABLE } = await import('../scripts/load-config.ts');
     const artifact = join(workspace, 'content.json');
 
     // Read from the *content* directory, not from cwd: `--content` may name a
     // subdirectory, and the configuration belongs with the notes it governs.
     // Absent is the ordinary case and yields the documented defaults.
     const config = loadConfig(contentDirectory);
+
+    // Tell `astro.config.mjs` where to read the same file from, and this line is
+    // the difference between a configured site and a silently ignored
+    // configuration. Measured without it: a `publish.config.yaml` naming
+    // `title` and `origin` built a site carrying neither — the placeholder
+    // origin in every canonical link and feed id, the default name in every
+    // browser tab — and the build reported success. A stranger configures their
+    // site, gets this package's defaults, and is told nothing.
+    //
+    // **An environment variable rather than an argument, and there is no
+    // argument available to pass.** Astro loads `astro.config.mjs` itself, from
+    // inside `astroBuild()` below; nothing here calls it, so there is no
+    // parameter to thread a directory through. The config's scope then reads
+    // `process.env` because that is the only channel that crosses into it.
+    // `CONTENT_ARTIFACT` is set a few lines down for exactly the same reason and
+    // has the same shape. Anyone tempted to "clean this up" into a function
+    // argument will find there is no function.
+    //
+    // Set *before* the `chdir` below rather than after, though either works
+    // today: `contentDirectory` is already absolute. Keeping it beside the
+    // `loadConfig` call means the two readers of this directory sit together,
+    // and a future relative path cannot silently start resolving against the
+    // package root.
+    process.env[CONFIG_DIRECTORY_VARIABLE] = contentDirectory;
 
     // Discovery, then the report, then validation — in that order and not the
     // convenient one. The report stops saying `aborted` the moment discovery

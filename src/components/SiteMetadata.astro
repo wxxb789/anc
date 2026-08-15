@@ -54,7 +54,13 @@ const { title, description, lang } = Astro.props;
  * `trailingSlash: 'always'` this is already the normalized form.
  */
 const canonical = canonicalUrl(Astro.site, Astro.url.pathname);
-const card = canonicalUrl(Astro.site, SOCIAL_CARD_PATH);
+/**
+ * The absolute URL of the social card, or `undefined` when there is none.
+ *
+ * No card is the shipped state — `src/lib/site.ts` records why — so this is
+ * normally `undefined` and the three card tags below are simply absent.
+ */
+const card = SOCIAL_CARD_PATH === undefined ? undefined : canonicalUrl(Astro.site, SOCIAL_CARD_PATH);
 
 const slug = noteSlugFromPath(Astro.url.pathname);
 const note = slug === undefined ? undefined : getEntry(slug);
@@ -92,10 +98,30 @@ const t = translate(lang);
     `language_TERRITORY`, and a bare `en` is not a valid one. `<html lang>`
     carries the exact BCP 47 tag on every page regardless. */}
 {locale !== undefined && <meta property="og:locale" content={locale} />}
-<meta property="og:image" content={card} />
-{/* The card is a rendering of the site's own mark, identical on every route, so
-    the alternative text says what it is rather than describing the page. */}
-<meta property="og:image:alt" content={t.socialCardAlt(SITE_NAME)} />
+{/* The card, and all three tags stand or fall together.
+
+    A site with no configured card emits none of them. `og:image` pointing at a
+    file that does not exist is worse than silence — a consumer renders a broken
+    image rather than falling back to the title and description — and
+    `og:image:alt` describing an absent image is a label for nothing.
+
+    `twitter:card` goes with them, which is the one that looks separable and is
+    not. `summary_large_image` is a promise *about an image*: it tells a client
+    to reserve a large image region, so with no `og:image` to fill it the card
+    renders as an empty box above the text. The honest answer with no image is to
+    state no card type and let the consumer choose its own text treatment.
+
+    No `twitter:site` or `twitter:creator` either: this tool names no account,
+    and a metadata tag is not the place to invent one. */}
+{card !== undefined && (
+  <>
+    <meta property="og:image" content={card} />
+    {/* The card is a rendering of the site's own mark, identical on every route,
+        so the alternative text says what it is rather than describing the page. */}
+    <meta property="og:image:alt" content={t.socialCardAlt(SITE_NAME)} />
+    <meta name="twitter:card" content="summary_large_image" />
+  </>
+)}
 
 {/* Widened to the full RFC 3339 form Open Graph's DateTime type requires; the
     artifact may carry a bare calendar date. The `<time datetime>` on the page
@@ -107,12 +133,6 @@ const t = translate(lang);
 {note?.updated !== undefined && (
   <meta property="article:modified_time" content={rfc3339(note.updated)} />
 )}
-
-{/* Twitter reads `og:*` for everything else, so only the card type needs
-    stating. `summary_large_image` matches the card's 2:1 aspect ratio. No
-    `twitter:site` or `twitter:creator`: this projection names no account, and
-    a metadata tag is not the place to create one. */}
-<meta name="twitter:card" content="summary_large_image" />
 
 {/* Feed discovery. Absolute, so it is unambiguous wherever the markup is read. */}
 <link

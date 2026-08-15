@@ -128,8 +128,33 @@ export const FEED_PATH = '/rss.xml';
 /** Where the sitemap is served. `sitemap` is a reserved route segment (TK-01). */
 export const SITEMAP_PATH = '/sitemap.xml';
 
-/** The single static social card every route points at. See TK-08's report. */
-export const SOCIAL_CARD_PATH = '/og-card.png';
+/**
+ * The social card a site serves, when it has one — and no site has one yet.
+ *
+ * **`undefined` is the shipped state, and it is a decision rather than a gap.**
+ * A card lived at `/og-card.png` and shipped inside the package, so every site
+ * built with this tool served *one owner's* wordmark as its `og:image`. TK-24
+ * measured that and kept it, reasoning that excluding the file would make every
+ * build 404 its own card and that a broken card is worse than a borrowed one.
+ * The first half of that is right and the second does not follow: the choice is
+ * not between a broken card and a bland one, it is between a broken card and
+ * **no card**, and an absent `og:image` is a well-defined thing every consumer
+ * already handles by falling back to the page's title and description — both of
+ * which now carry the user's own configured name.
+ *
+ * So the tags are emitted only when this is a path, and a build with no card
+ * emits no `og:image`, no `og:image:alt`, and no `twitter:card`. See
+ * `src/components/SiteMetadata.astro` for why the third goes with the other two.
+ *
+ * **Typed as `string | undefined` against a value that is always `undefined`
+ * today**, which would ordinarily be speculative generality. It is not, for a
+ * reason worth stating: this is the seam a user's own configured card arrives
+ * on, plan §4.2's `brand.socialCard`, and the alternative to naming it is
+ * deleting every card-shaped line and rediscovering the conditional later. The
+ * config key deliberately does **not** exist yet — an unread key is worse than
+ * an absent one — so the follow-up is to read it here and nothing else.
+ */
+export const SOCIAL_CARD_PATH: string | undefined = undefined;
 
 /**
  * Said whenever the origin is needed and `site:` is not configured.
