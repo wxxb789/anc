@@ -1,40 +1,70 @@
 # thoughtscape-publish
 
-A static public projection from the private `ob-flow` vault.
+Build a static site from a git repository of Markdown. Every note publishes unless you
+exclude it.
+
+**This repository is the tool.** It is not anybody's site and ships no content of its own.
+If you want to publish your notes, read [`docs/adoption.md`](docs/adoption.md) — it is the one
+document a stranger needs.
+
+## What it does
+
+- Walks a repository of Markdown and publishes every `.md` file, minus what you withhold by
+  glob or by `publish: false` in frontmatter.
+- Resolves five link forms in one pass, following Obsidian's own resolution order. A link into
+  a note you withheld degrades to text and is reported; an ambiguous link warns with every
+  candidate named.
+- Renders backlinks, an outgoing-links list, a graph, breadcrumbs, and a table of contents as
+  build-time HTML — no fetch, no database. Tag and collection routes exist and are empty: the
+  producer does not derive those fields yet.
+- Pagefind for search, bilingual chrome resolved per document, native MathML, build-time
+  Mermaid, RSS, sitemap, and a strict CSP.
+- Writes the names of everything it dropped to a file under `.git/` that cannot be committed,
+  and only counts to the log.
 
 ## Architecture
 
-- Astro static output; Cloudflare Pages build output is `dist/`.
-- Content is an explicit allowlist exported by `ob-flow/.harness/publish/`.
-- Backlinks and hover previews are generated at build time.
-- Pagefind provides static search.
-- No D1, R2, Functions, or private-vault access is required at runtime.
+- Astro `output: "static"`; the build output is `dist/`.
+- Content is produced by `scripts/markdown-to-artifact.ts` and `scripts/resolve-links.ts`, then
+  validated against `src/lib/schema.ts` before anything renders.
+- Roughly 1 KB gzip of vanilla client script across five interactive surfaces. No framework.
+- No D1, R2, Functions, or network access at build time or runtime.
 
-## Local workflow
+## Working on the tool
 
 ```bash
 pnpm install
-pnpm run sync:content
-pnpm run build
-pnpm run preview
+pnpm run verify          # lint, type check, build, residue scan, tests — the gate
+pnpm run build           # the build chain alone
+pnpm run build:fixture   # rebuild against the 32-note corpus
+pnpm run pack:tarball    # compile TypeScript and pack the installable tarball
 ```
 
-`packageManager` in `package.json` pins the pnpm version, which Corepack honours when it is enabled (`corepack enable`). Dependencies install into a symlinked `node_modules`, so a package that is not declared in `package.json` does not resolve.
+`packageManager` in `package.json` pins the pnpm version, which Corepack honours when enabled
+(`corepack enable`). Dependencies install into a symlinked `node_modules`, so a package not
+declared in `package.json` does not resolve — which is a boundary rather than a preference.
 
-The generated `src/data/content.json` and `public/content-index.json` are committed to this public repository. Cloudflare builds only this repository; it never receives the private vault.
+Read [`AGENTS.md`](AGENTS.md) before changing anything. It carries the verification contract,
+what runs where, and a list of what is known stale and whose it is.
 
-## Cloudflare Pages
+## Running the tool on your own notes
 
-```text
-Framework preset: Astro
-Build command: pnpm run build
-Build output: dist
-Node version: 24
-PNPM_VERSION: 11.18.0
+```bash
+cd your-notes
+npx @thoughtscape/publish build
+npx @thoughtscape/publish preview
 ```
 
-`PNPM_VERSION` is set explicitly because the v3 build image documents that it infers a pnpm version from neither `pnpm-lock.yaml` nor `package.json` → `engines`. Whether it reads `packageManager` is not documented either way, which is reason enough to set the variable rather than depend on it. Setting it is what keeps the host on the version this lockfile was written by.
+See [`docs/adoption.md`](docs/adoption.md) for configuration, exclusion, links, and hosting.
 
-An unset variable is a degraded build rather than a broken one, but not an equivalent one. The image's own default is pnpm 10, which reads `lockfileVersion: '9.0'` and — since v10 — runs no dependency install script unless one is approved, so the tree still installs and `esbuild` still stays denied. What is lost is the *reviewed* denial: `allowBuilds` arrived in pnpm 10.26, and an older pnpm knows only `onlyBuiltDependencies`/`ignoredBuiltDependencies`, so on such a version the denial comes from the default rather than from a decision recorded in `pnpm-workspace.yaml` — and a future package that genuinely needs its build script would fail quietly instead of loudly. This is documented rather than worked around because no Pages build has been run: deployment needs explicit approval and is outside this ticket.
+**The GitHub Action and the `init` command do not exist yet** (TK-32). Deploying today means
+assembling a workflow by hand; the adoption document gives one and marks it as such.
 
-Add D1 or R2 only after a measured requirement cannot be satisfied statically. Publication remains an explicit external side effect; syncing content does not deploy.
+## Deployment
+
+Any static host serves `dist/`. `dist/_headers` carries a Content-Security-Policy and five
+other security headers in Cloudflare Pages' format; a host that does not read that file serves
+the site without them.
+
+Publication remains an explicit external side effect. Building does not deploy, and nothing in
+this repository can.

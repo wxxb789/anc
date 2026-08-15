@@ -1,12 +1,44 @@
 # General-Purpose SSG — Plan
 
-**Status:** Active backlog — 2 of 12 tickets delivered, 1 of 3 fatal findings open (C3, TK-26)
+**Status:** 10 of 12 tickets delivered; TK-32 (the Action and `init`) is open, TK-33 (preview)
+and TK-34 (scale) are in flight. All three fatal findings closed.
 **Document type:** Architecture decision + revised backlog
-**Derived from:** three research agents, three drafted sections, and two adversarial reviews that returned 25 substantiated findings
-**Describes:** `main` at `11b7cf2`, 497 tests, 20 tickets delivered
-**Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md) §4 and §10.3
-**Note:** §2 through §5 are the design as first drafted. Where a delivered ticket contradicts
-them, that ticket's specification under `.tmp/` is canonical and the section says so.
+**Derived from:** three research agents, three drafted sections, and two adversarial reviews
+that returned 25 substantiated findings
+**Describes:** `main` at `4947787`, **605 passed / 46 skipped / 28 files**, 26 tickets delivered
+**Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md),
+which TK-35 revised in place on 2026-08-15 — §7 below is that revision's source and is now
+**executed**, so where the two disagree the requirements document is current
+**Note:** §2 through §5 are the design as first drafted. Delivery overtook parts of them, and
+every such part now carries a **DISPROVED** or **AMENDED** marker naming the ticket and the
+measurement. Unmarked text was either delivered as drafted or is still unbuilt.
+
+## 0. What a reader of §2–§5 must know first
+
+This plan was drafted before any of it was implemented, and the tickets that implemented it
+found things the drafting could not. **The wrong text is deliberately kept.** This project has
+found the record of a wrong belief valuable more than once — §8's rejected list is entirely
+made of them — and a plan silently corrected reads as though it was always right, which
+teaches nobody how it was found.
+
+The convention, applied throughout by TK-35:
+
+- **DISPROVED** — measured false. The claim is struck and the measurement that killed it is
+  beside it.
+- **AMENDED** — true as far as it went, and delivery chose differently or found more.
+- Unmarked — still current, whether built or not.
+
+The five largest, so a reader is not surprised mid-section:
+
+| Where | Drafted | What shipped | Disproved by |
+| --- | --- | --- | --- |
+| §4.1 | `publish.config.ts`, a TypeScript module | `publish.config.yaml` | TK-30 — a `.ts` config prints the user's absolute path to stderr uninterceptably, and an executed config makes the unknown-key check advisory against a getter |
+| §2.3 | `fs.globSync` for discovery | `readdir` walk, `matchesGlob` for patterns | TK-26 — `globSync('readme.md')` returns the *pattern* as though it were a path on win32 and `[]` on Linux |
+| §3.3 G1 | `published.txt` as the publish ledger | nothing | S6/M1/M2 in §8, and no successor exists — the open half of the safety argument |
+| §2.6 | article hrefs equal `outgoing` | equal it *excluding the page's own slug* | TK-28 — a same-page heading link renders an anchor and correctly contributes no edge |
+| §2.5 | the report is not printed | still true, and the *reason* was understated | TK-29 — the search index carries what no file spells |
+
+---
 
 ## 1. Verdict
 
@@ -19,6 +51,9 @@ piece of luck this plan runs on: turning the project into a general-purpose SSG 
 producer and touches almost nothing downstream. The rendering pipeline, design system,
 graph, and search do not change.
 
+**That prediction held.** Eight further tickets replaced the producer, and nothing downstream of
+`src/lib/schema.ts` changed. The schema version never moved.
+
 What does change is the safety argument, and it changes for the worse before it changes for
 the better. The allowlist made privacy structural: a note not named in the manifest was
 physically unreadable, so no bug in this tree could publish it. Default-publish deletes that
@@ -28,7 +63,15 @@ search index. The owner accepted that trade. The replacement is not a weaker ver
 same guarantee; it is a different one, moved from read time to the publication event, and it
 only works if the gates that enforce it can be watched failing.
 
-**This plan was not implementable as drafted, and two of the three reasons are now gone.** Two
+**AMENDED — the replacement is partly built, and the missing part is the largest one.** The
+zero-match refusal shipped, the report shipped, the disclosure split shipped and is gated. The
+*publication event* itself — a computed publish set compared against something a human
+approved — has no implementation, because `published.txt` was killed (§8) and nothing replaced
+it. So today the trade is: structural read-time privacy exchanged for a build that refuses a
+typo and writes a report the user may not read. Requirements 5.1 and DR-7 record it as the open
+half rather than as done.
+
+**This plan was not implementable as drafted, and all three reasons are now gone.** Two
 adversarial reviews returned 25 substantiated findings, three of them fatal: the `npx`
 distribution model could not run because every renderer was a devDependency (S1); the
 exclusion report was published to the world on the documented free adoption path, because
@@ -37,18 +80,22 @@ repository are readable by anyone (C1); and the shipped default exclusion patter
 real repository on first push, because `fs.globSync` structurally cannot match a dotfile while
 the zero-match rule fails the build for exactly that (C3).
 
-**S1 is closed by TK-24 (`5db558c`, `8127c26`) and C1 by TK-25 (`11b7cf2`). C3 remains, and
-TK-26 owns it.** Sections 2 through 5 record the design as drafted, which in places the
-delivered tickets have since overtaken; §8 records what the reviews killed. Where a delivered
-ticket contradicts a drafted section, the ticket's own specification under `.tmp/` is
-canonical and the section carries a note saying so — §2.5's report destination is the
-instructive case, because the drafted answer reads safe and is destroyed by an ordinary `git
-clean`.
+**S1 is closed by TK-24 (`5db558c`, `8127c26`), C1 by TK-25 (`11b7cf2`), and C3 by TK-26
+(`b234607`) — which closed it by disproving its premise rather than by working around it:
+`globSync` does return dotfiles on both platforms, and the real defect was elsewhere in the
+same function.** Sections 2 through 5 record the design as drafted, which in places the
+delivered tickets have since overtaken; §8 records what the reviews killed.
 
 The bet §1 opened with paid off: eighteen tickets built the reader against an *artifact
 interface* rather than against a vault, and a stranger's three Markdown files now produce a
 complete site with nothing downstream of `src/lib/schema.ts` changed. What remains is the
 producer.
+
+**Measured on 2026-08-15, running the shipped binary against a scratch repository**: two notes
+and a `publish: false` draft, an excluded folder, and a link into it produce a complete site —
+titled and origin'd from `publish.config.yaml`, the withheld note absent from every file, the
+link into it degraded to text, and a report naming both. That is the whole claim of this plan,
+executed.
 
 ---
 
@@ -74,6 +121,14 @@ doing that.
 | `scripts/sync-content.ts` | CLI entry: read repo → write artifact + report → exit status |
 | `src/lib/schema.ts` | unchanged except for two deletions (§2.7) |
 
+> **AMENDED — TK-26, TK-27. Three of the four filenames are wrong, and one deletion did not
+> happen.** Delivered: `scripts/markdown-to-artifact.ts` (discovery and exclusion, growing out
+> of TK-24's bridge rather than starting fresh), `src/lib/link-resolution.ts` (as planned),
+> `scripts/resolve-links.ts` (the traversal, which the table did not anticipate as a separate
+> file), and `scripts/write-report.ts`. There is no `note-discovery.ts` and no
+> `sync-content.ts`; the CLI entry is `bin/thoughtscape-publish.mjs`, which TK-24 had already
+> built. `src/lib/schema.ts` lost one rule, not two — see §2.7.
+
 One new direct dependency, `yaml` — already resolvable in the tree as a transitive
 dependency of Astro. Frontmatter is YAML and hand-rolling a subset of it is the flimsier
 algorithm, not the lazier one. `satteri` and `github-slugger` are already direct
@@ -84,6 +139,11 @@ dependencies and do the rest.
 Python). If five is load-bearing rather than descriptive, `scripts/render-og-card.ts` is
 the one file with no npm script and no build caller (`scripts/render-og-card.ts:4` says so
 itself) — but that is the owner's call, not this plan's.
+
+> **AMENDED.** `scripts/` is now twelve files. `render-og-card.ts` was deleted by TK-31 along
+> with `public/og-card.png`, because a shipped card carries a brand onto a stranger's site;
+> `og:image` is now emitted only when a card is configured, and no config key configures one.
+> `sync:content` still exists in `package.json` and is dead — see the AGENTS.md note.
 
 The producer runs **in the user's notes repository**, not here. It never reads
 `src/data/content.json`; it writes one.
@@ -98,6 +158,24 @@ The producer runs **in the user's notes repository**, not here. It never reads
 | `.git/`, `.obsidian/`, `node_modules/`, any dot-prefixed file or directory | excluded by default (§2.3) | `.obsidian/` carries workspace state, plugin data, and `graph.json`; a dotfile is configuration by convention |
 | Root `README.md` | excluded by default, re-includable with `!README.md` | in a repo adopted by adding a GitHub Action, the README carries the badge, the Action snippet, and install steps. It addresses the repository, not the reader |
 | Nested `README.md` | an ordinary note | it is a folder's index, which is prose |
+
+> **DISPROVED on row 1 — TK-26 (`b234607`).** Discovery does **not** use `fs.globSync`, and the
+> reason is not the dotfile premise this plan built C3 on. Measured on Node 24.18.1,
+> `globSync('.obsidian/**')` returns its dotfiles on win32 *and* Linux, so C3's stated
+> mechanism does not exist. The real defect is worse and platform-split: on win32
+> `globSync('readme.md')` returns `['readme.md']` in a directory whose only such file is
+> `README.md` — it **echoes the pattern back as though it were a path** — while Linux returns
+> `[]`. A mistyped-case pattern is therefore green on one platform and red on the other, and
+> any code treating the result as a real path acts on a filename that is not there. The walk is
+> `readdir`, which returns what is on disk, and patterns are matched with `path.matchesGlob`,
+> measured identical and case-sensitive on both platforms.
+>
+> The sorting requirement in row 1 survives and is why the walk sorts.
+>
+> Rows 4 and 5 also changed shape: the dot-prefixed set and `node_modules` are a **predicate on
+> a name** evaluated during the walk, never expressed as a pattern — because a rule that cannot
+> be written down cannot be mistyped — and pruning during the walk is the only affordable shape
+> when `.git/` in a real repository is tens of thousands of files.
 
 **Derived fields.** Each is stated because each is a decision, not a mapping.
 
@@ -116,6 +194,19 @@ The producer runs **in the user's notes repository**, not here. It never reads
 justification is "the allowlist is hand-curated", which stops being true here. The binding
 cost is per-entry build time, so the limit should become configuration with 900 as the
 default, and the message should say how to raise it. One constant, one message.
+
+> **The false justification is unchanged; the number is TK-34's, and was in flux as this was
+> written.** Requirements 10.1 states the requirement against the justification and the
+> mechanism — configuration with a message — rather than against a value, so that a scale
+> ticket raising the constant does not make the document wrong.
+>
+> **AMENDED on the derived-field table above: four of its rows are not implemented.** `created`
+> and `updated` (git commit dates), `tags`, `collection`, and `aliases` are all still
+> underived — `scripts/markdown-to-artifact.ts` states the scope decision at its header. The
+> consequence is exactly the five degraded surfaces the `created`/`updated` row predicts, and
+> two more the table did not: `/tags/` and `/collections/` are routes with no data. The `slug`,
+> `title`, and `markdown` rows shipped as drafted, frontmatter-`slug:` excepted — it was offered
+> to TK-26, then TK-27, then TK-30, and taken by none of them.
 
 ### 2.3 Exclusion
 
@@ -141,6 +232,17 @@ Defaults ship as ordinary glob entries so a user can see and negate them:
 .git/**  .obsidian/**  node_modules/**  **/.*  **/.*/**  README.md
 ```
 
+> **DISPROVED — TK-26 (`b234607`).** They do not ship as glob entries and must not. A shipped
+> default matching nothing is *normal* — not every repository has an `.obsidian/` — while a
+> user's own pattern matching nothing is a probable typo. Expressing both as globs forces one
+> rule over two different situations, which is C3's whole shape. Structural ignores are a
+> predicate on a name, evaluated during the walk; the zero-match rule applies to the user's
+> patterns because they are the only patterns there are.
+>
+> The root `README.md` is the one hybrid and keeps its negation: it is structurally dropped
+> unless the user's patterns *say something about it*, which is what makes `"!README.md"`
+> work without the default being a pattern.
+
 **A pattern that matches nothing fails the build**, naming each such pattern. There is no
 flag to downgrade it. This is the single mitigation available for the consequence the
 owner accepted: default-publish fails open, and a mistyped exclusion glob is exactly the
@@ -152,6 +254,17 @@ the pattern or creating the folder, which is one line and visible.
 "Matched" means the pattern returned true for at least one discovered path, whatever the
 final verdict was. A pattern shadowed by an earlier rule still counts, so the check does
 not depend on rule order.
+
+> **Delivered, and the second paragraph turned out to be load-bearing in a way the first did
+> not anticipate.** With the `not-markdown` drop ahead of the pattern test, a non-Markdown file
+> was discovered and never offered to a pattern — so `exclude: ["assets/**"]` on a repository
+> whose `assets/` holds only images matched nothing and failed the build. Excluding an asset
+> folder is the ordinary case in a notes repository, and it was unbuildable. Every discovered
+> path is now offered to every pattern before any drop.
+>
+> The message names the pattern's **index and its config file**, never its text: a
+> gitignore-style pattern may be a bare path, and a path is what may not reach a log.
+> Measured: `publish.config.yaml — exclude[0] matched 0 files.`
 
 ### 2.4 Link resolution
 
@@ -189,6 +302,17 @@ a build's contract diverge.
 | 4 leading `/` strict anchor | tier 3 missed **and** the link was written with `/` ⇒ unresolved | **adopt verbatim, and document `/`-anchoring as the recommended authoring spelling** | it is the most precise spelling available. Widely circulated third-party "ground truth" says a `/`-anchored link never resolves; the research executed it and that is wrong — the slash is stripped before tier 3 |
 | 5 *matching* | raw-string `path.endsWith(link)` and `path.startsWith(srcDir)` | **harden to segment-aware** | executed: `[[ary/index]]` resolves to `knowledge/glossary/index.md`, and a source in `proj/` prefers `projects/note.md` over `zzz/note.md`. These are defects, not semantics |
 | 5 *ranking* | same-folder bucket, then path length ascending, then `uniqueFileLookup` insertion order | **replace with a build error** | undocumented, and executed reversal of file order reverses the winner. A silent pick by scan order violates the determinism constraint outright |
+
+> **DISPROVED by a later owner decision — D1 (§9), delivered by TK-27 (`40b6fa5`).** "Replace
+> with a build error" was overruled two days after this table was written: an unbounded,
+> unoverridable failure is worst exactly where it is most likely, and a stranger with two
+> root-level notes sharing a basename cannot act on it from their own repository. Ambiguity
+> **warns**, names every candidate in the report, and the link renders.
+>
+> That leaves the determinism problem this row was right about, and it is solved differently:
+> the tiebreak is made **total** — length, then the path — rather than removed. Gated over
+> three corpus permutations, so a reversed filesystem order cannot reverse the winner.
+> The build error survives only as an opt-in strict mode, which has no implementation.
 
 ```ts
 // src/lib/link-resolution.ts
@@ -228,6 +352,14 @@ already generates. Quartz slugs at parse time with `github-slugger` in `splitAnc
 is a divergence from Obsidian, not a reproduction, and it silently mismatches on any heading
 whose two slugging rules disagree.
 
+> **AMENDED — TK-27 §8, and it is an approximation that is still open.** The subpath is run
+> through the same `github-slugger` the renderer uses, **without loading the target's
+> headings** — which is exactly the Quartz behaviour the paragraph above criticises. It agrees
+> whenever the author wrote the heading's text verbatim, which is what Obsidian's autocomplete
+> inserts, and where it disagrees the link lands at the top of the **right page** rather than at
+> a wrong one. Never a wrong page, never a dangling anchor. Closing it needs every target's
+> heading list plus a second model of heading identity, and nobody owns it.
+
 `INTERNAL_HREF` (`src/lib/markdown.ts:283`) already carries a capture group for exactly this
 fragment — the fragment `export.py` destroyed by putting the heading anchor in a
 non-capturing group.
@@ -256,6 +388,27 @@ side, and it is the most useful line in the whole report.
 | `unpublished` | the link's **display text only**, as plain text. The resolved path never enters `markdown` | passes; reported |
 | `unresolved` | display text only | passes; reported |
 | `ambiguous` | nothing | **fails**, naming file, line, link text, and every candidate path, with the fix: write the vault-root path, or `/`-anchor it |
+
+> **DISPROVED on two rows — TK-27 (`40b6fa5`, `a2d3307`).**
+>
+> **`ambiguous` does not fail** — D1 again; it resolves by the total tiebreak, renders, and is
+> reported with every candidate and with which one won. The union gained a fifth member the
+> plan never named: `external`, plus a fifth *report outcome*, `embed-not-transcluded`, because
+> `![[note]]` is transclusion and nothing here transcludes, so the embed becomes an ordinary
+> link and the demotion is recorded.
+>
+> **"display text only" is not sufficient, and the reason cost a draft.** Deciding what to show
+> by asking "did the author write a label?" — reconstructing `[[…]]` from the label and
+> comparing against the source — let a label that happened to *be* the target through:
+> `[[drafts/secret plan|drafts/secret plan]]` rendered `secret plan`. The rule is now decided
+> **against the resolved path**, which has no spellings to enumerate: there is one path, and
+> either the label discloses it or it does not. Measured leak shape: the folder segment was
+> already withheld; the stem was not.
+>
+> The stem is **kept, deliberately** (owner ruling, TK-28 §5): the author typed that word into
+> their own sentence, and a reader who meets it learns what the link pointed at without being
+> able to follow it. The same leaf on a *log line* is refused, because there it arrives as a
+> filename with no sentence around it. Two surfaces, two rules.
 
 `![[x.png]]` and `![](x.png)` resolve to a repository file that is not a publishable note,
 so they are `unpublished`: the node is dropped and reported. No broken `<img>` ships. An
@@ -310,6 +463,26 @@ published to the world. The stream carries counts and closed-set rule identifier
 carries names. TK-25 §2 states the rule an implementer applies to a line before writing it,
 and `tests/disclosure.test.ts` gates it.
 
+> **Delivered, and three further leaks were found by the gate rather than by reading.** Each is
+> the same class — a string nobody composed reaching a stream — and each was invisible from the
+> design:
+>
+> - **`scan-residue.ts` printed a Pagefind fragment's filename.** Pagefind names each fragment
+>   for a **digest of the text in it**, so two corpora differing only in a note's body produce
+>   different filenames — a function of withheld content on a public log. The public half is now
+>   the fixed literal `the search index (pagefind/)`.
+> - **An unrecognised argv token was echoed.** `build clients/acme/2026-renewal` printed that
+>   path back verbatim. A shape test does not help — `--clients-acme-renewal` matches every
+>   plausible pattern. The rule is now that a printed token must be byte-equal to a spelling
+>   this tool's own table declares, which admits none.
+> - **`console.error(error.message)` printed every throw in the process**, including a `readdir`
+>   `ENOTDIR` carrying an absolute path — from the residue scanner, whose whole job is keeping
+>   absolute paths out of the output, on the one run where one existed.
+>
+> The differential design is what caught all three: `tests/disclosure.test.ts` renames the
+> corpus, rebuilds, and diffs the streams, so a string derived from user content shows up as a
+> difference regardless of what it is made of.
+
 **Never counts — in the report.** "0 unresolved because I never looked" and "0 unresolved
 because there were none" are the same number, so the *file* records the link text and
 position for each finding and the gates assert on those. The *stream* is the opposite case
@@ -341,6 +514,23 @@ from a whole repository rather than a curated list. But it proves the two arrays
 element is already delimited, and it excludes the graph SVG, the outgoing list, and the
 backlinks aside) equals `entry.outgoing` mapped through `routeForSlug`.
 
+> **DISPROVED — TK-28 (`fed1866`). The equality is false in general**, and a gate written to
+> these literal words would have been green only because no fixture contained a self-link, and
+> red for the first user who wrote one. Measured: `[[hub#A Section]]` inside `hub.md` renders
+> `<a href="/notes/hub/#a-section">` in the article while `outgoing` correctly omits `hub` —
+> `checkCorpus` rejects an entry that lists itself. The property that holds is the equality
+> **over every article href other than the page's own slug**, and the fixture now contains a
+> self-link so the exclusion is not inert.
+>
+> Two more things the three-property list below did not anticipate, both delivered:
+>
+> - **The corpus for this gate must be built by the real binary**, not selected from
+>   `valid-corpus.json`. Confirmed unsatisfiable there: 32 entries, zero `[[` at any layer, and
+>   three entries already violating the equality.
+> - **`[[/nope]]` is not a tier-4 test.** Property 3 asks for "a `/`-anchored link that misses";
+>   the obvious spelling dies at tier 0, indistinguishable from a typo. Tier 4 needs a
+>   `/`-anchored link to a file that exists *deeper*.
+
 Three properties that decide whether that gate means anything:
 
 1. **Assert on the href set, not its size.** Two wrong edges of the same cardinality is the
@@ -355,6 +545,20 @@ Three properties that decide whether that gate means anything:
    pair, a prefix-less multi-segment relative link, and a `/`-anchored link that misses.
    Neither existing corpus has any of these. This is the fifth instance of the hazard —
    every high-value defect so far came from hardening a gate.
+
+> **All three delivered, and property 3's own fixture nearly went inert twice.** The NFC/NFD
+> pair was first written with two filenames that differed by prefix — not canonically
+> equivalent, and nothing linked them, so the case was decorative. It is now one file stored
+> decomposed and linked in NFC, with the two names written as `\u` escapes and a guard asserting
+> they are unequal-but-equivalent, because a literal pair is one "fix my encoding" save away
+> from becoming one string.
+>
+> **And the ordering defect this section is about was found by the fixture, not by the gate.**
+> `outgoing` was emitted in document order while `checkCorpus` requires ascending, so
+> `"See [[zebra]] and [[apple]]."` exited 1 — a first build a stranger could not get past on
+> their real notes, since nobody writes prose in slug-alphabetical order. The gate that should
+> have caught it was vacuous twice over: it sorted the actual before comparing, over a corpus
+> whose links were already in slug order.
 
 ### 2.7 What happens to `schema.ts:207`
 
@@ -377,12 +581,39 @@ changes. The real invariant lives where the information is:
 > `markdown` is therefore, by construction, inside a code fence, inside inline code, or
 > escaped.
 
+> **AMENDED — one deletion, not two. TK-27 (`02b51c0`), gated by TK-29 (`4947787`).**
+> `src/lib/schema.ts` loses the rule, for exactly the reason above. `scripts/scan-residue.ts`
+> **keeps** it, narrowed to exempt `<code>` and `<pre>` regions — because over *built output* a
+> stray `[[` outside a code region means the degradation itself failed, which is a producer
+> defect rather than a user's, and nothing else in the tree holds that property. §3.3's G5 row
+> already said "moves out of the artifact gate entirely and stays only over `dist/`"; §2.7's
+> "delete both" was the earlier reading and is the wrong one.
+>
+> **The exemption is the tag, not `class="language-…"`, and that is the reverse of where the
+> reasoning first went.** Requiring the class looks safer — a note body *can* write a raw
+> `<code>` tag — and is measurably worse: inline code renders as a bare `<code>[[syntax]]</code>`
+> with no class, so the strict rule fails the build on a note documenting the syntax inline.
+> What makes the loose exemption sound is that a body cannot produce the *marker*: the same
+> body through the real producer has its `[[stray]]` parsed as a link node and degraded.
+>
+> **And the case that comment claimed was measured working was not.** ``Inline `[[syntax]]` is
+> how you write it.`` still exited 1 with five findings, because the *excerpt* is not rendered
+> through the Markdown pipeline and carries no `<code>` element — so it reached four surfaces as
+> raw Markdown. `excerptFor` stripped fenced code and not spans. This is the fifth instrument
+> failure and it has its own entry in `docs/gate-reading.md`: the measurement was taken over
+> hand-written HTML, not through the pipeline.
+
 The privacy rules that carry actual weight — absolute local paths (`:208`), home-directory
 paths, unsafe schemes, source-map references — all stay, along with
 `scan-residue.ts`'s two designs worth preserving: the non-vacuity guards (`:282-286`) and
 fail-closed-on-unknown-extension (`:257-263`). The `msw/` marker at `:206` and `:81` is a
 separate problem — it is one owner's private path prefix and a false-positive generator for
 everyone else — and belongs to the configuration section, not here.
+
+> **The `msw/` marker is still hardcoded in both files.** §3.3's G5 designs it as a
+> user-configured list defaulting to empty; nobody built it. `msw` is a widely used
+> HTTP-mocking library, so this is a false build failure waiting for the first user who
+> documents it.
 
 ### 2.8 Code fences
 
@@ -450,6 +681,20 @@ Two structural prerequisites, both cheap, both blocking:
 | `SCHEMA_VERSION` 1 → 2 with a third top-level key | `validateArtifact` (`src/lib/schema.ts:522-529`) rejects every top-level key but `version` and `entries`, so the exclusion report, the ambiguity report, and the pattern-match counts have **nowhere in the contract to live**. `SCHEMA_VERSION` is at `src/lib/schema.ts:33` | one constant, one `if`, one type |
 | `dist/` is written into an empty directory each run | Deletion (G7) is only structural if a stale page cannot survive a rebuild. Quartz's `helpers.ts:13` writes non-atomically into a directory it already `rm -rf`'d — the wrong half of this | already true for `astro build`; must be stated as a deployment rule, not an accident |
 
+> **DISPROVED on row 1 — S2 and the owner's 2026-08-12 decision, delivered by TK-25.** The
+> schema was never bumped and must not be. The reports contain precisely the strings the
+> privacy model exists to keep *out* of the artifact, so a top-level key for them would put the
+> list of things the user withheld inside the file the site renders from. A separate
+> `content-report.json` that nothing under `src/` imports cannot reach a page by accident, and
+> changes no schema, no version, and no validator. `SCHEMA_VERSION` is still 1. §8 records the
+> rejection.
+>
+> Row 2 survives and is delivered — with a sharper reason than the drafting had. The binary
+> copies into the user's `dist/` only *after* every gate passes, so a build that fails a gate
+> leaves the previous output intact; and it refuses an `--out` that is or contains the content
+> directory, because `--out .` in a notes repository would delete the notes. Measured: a probe
+> lost a file to exactly that.
+
 ## 3.2 Where the summary goes
 
 Three destinations, three different audiences, three different disclosure rules. Conflating
@@ -493,6 +738,19 @@ inversion untouched.
 Every row is a build failure, not an intention. The last column is the seeded defect that
 must turn the gate red; a gate whose mutation has never been run is a gate this repository
 has shipped green four times already.
+
+> **Delivery status, added by TK-35. Five of seven shipped; one cannot be built as written and
+> one is vacuous by construction.**
+>
+> | Gate | State |
+> | --- | --- |
+> | G1 unacknowledged publication | **not built.** `published.txt` was killed (§8) and nothing replaced it. The open half of §3.1 |
+> | G2 pattern matched nothing | shipped, TK-26. Counts live in the report, not in an artifact key (§3.1 row 1) |
+> | G3 report reached the output | shipped, TK-25/TK-29, both halves, over inflated gzip members |
+> | G4 link into excluded content | shipped, TK-27/TK-28 — with the equality corrected (§2.6) |
+> | G5 residue | shipped, TK-29. `checkPrivacy`'s split into `{findings, blockers}` shipped; the **user-configurable marker list did not**, so `msw/` is still hardcoded |
+> | G6 asset reachability | **vacuously true.** Nothing emits assets, so "an asset reaches `dist/` only from a published note" holds because the antecedent is never satisfied. H4 in §8 refused to build an asset pipeline to make a gate satisfiable, and that is still right — but the gate proves nothing and should be read as a policy, not a check |
+> | G7 deletion round trip | **not built**, and neither is its search half. `tests/search.test.ts:42` is still `PRIMARY_QUERY = 'the'` — a fixed English constant, which is exactly the failure G7 predicted for a Chinese-only user repository. Its comment now argues *for* the constant, on the ground that a term lifted from one corpus times out under the other; that is a real constraint and the resolution is a term drawn from **whichever** corpus is under test, which nobody has written |
 
 | # | Gate | Fails when | Proven non-vacuous by |
 | --- | --- | --- | --- |
@@ -541,6 +799,34 @@ you typed wrong* — and the answers separate cleanly (research §2, offsets 37,
 with `satisfies PublishConfig`, parsed at build time by a strict validator in the same shape
 as `src/lib/schema.ts`.**
 
+> **DISPROVED — TK-30 (`324c3e6`). The format is `publish.config.yaml`, and the `.ts` module
+> was rejected on two disqualifying measurements — not on taste, and not on the supporting
+> claim below, which reproduces exactly as stated.**
+>
+> 1. **It prints the user's absolute path to stderr, uninterceptably.** In a notes repository
+>    holding a `package.json` with no `"type"` — what `npm i` for a local preview leaves behind
+>    — Node emits `[MODULE_TYPELESS_PACKAGE_JSON] Warning: Module type of
+>    file:///…/publish.config.ts is not specified`. A `process.on('warning')` listener saw
+>    **zero** warnings while stderr carried it; only process-wide `NODE_NO_WARNINGS=1`
+>    suppresses it. TK-25's disclosure rule forbids a discovered path on that stream.
+> 2. **It cannot be validated, which kills §4.1's own headline property.** A config whose
+>    `exclude` is a getter returned `['drafts/**']` to the validator and `['nothing-at-all/**']`
+>    to the next reader. A `Proxy` reports whatever key set it likes to `Object.keys`. The
+>    unknown-key check this section exists to provide would be advisory.
+>
+> TOML was rejected because `node:toml` does not exist and a new dependency must beat what is
+> installed. JSON was rejected because the file's body *is* exclusion patterns a user wants to
+> annotate, and JSON has no comments.
+>
+> **The cost YAML carries, stated plainly, because it is real.** YAML's plain scalars are a
+> language and a glob is not written in it. Over 34 realistic patterns written unquoted: 21
+> byte-exact, 13 loud failures, and **3 rewritten with no error at all** — `!README.md` → `""`,
+> `&draft/**` → `null`, `- dash/**` → `["dash/**"]`. The first is this plan's own spelling for
+> re-including the README. Three mechanisms close it — warning promotion, a type check, and a
+> node-tag rule — and *which catches which was measured rather than assumed*, because the first
+> repair looked complete and was not. With all three: zero silent rewrites unquoted, 34/34
+> byte-exact quoted.
+
 Three properties, each bought by a specific choice:
 
 | Property | Mechanism | Grounding |
@@ -548,6 +834,11 @@ Three properties, each bought by a specific choice:
 | A wrong key is a red squiggle while typing | `import type { PublishConfig } from '@thoughtscape/publish'` + `satisfies` | research line 300: *"types for authoring, Zod for the build, and the two are derived from the same shape"* |
 | A wrong key fails the build even with no editor, no TypeScript, no `node_modules` | the same strict validator that already rejects unknown artifact fields (`src/lib/schema.ts:390`, `:528`) | research line 370: *"if we ship a schema, the build must run it"* |
 | The file works in a repository with no `package.json` and no `tsconfig.json` | Node 24 type stripping erases a type-only import of an unresolvable specifier | measured on Node v24.18.1 (`.nvmrc`): `import type { X } from 'package-that-does-not-exist'` in a temp directory with no `package.json` loads and returns its default export |
+
+> The first property is **given up** with the `.ts` format — a YAML file gets no editor
+> autocomplete from this package. The second and third are delivered and are the ones that
+> mattered: the validator runs on every build, and a repository with no `package.json` needs
+> nothing installed for its config to be valid.
 
 That last row is the reason this beats TOML or YAML for a file that lives in *someone
 else's notes repository*. The user gets autocomplete if `@thoughtscape/publish` is
@@ -562,6 +853,18 @@ a dependency spent on nothing.
 **One filename, no search order.** `publish.config.ts`, at the root of the notes repository,
 or the path given by the Action's `config:` input. Not `.js`, not `.mjs`, not `.json`, not
 `.config/`. A search order is a place for a file to be silently not found.
+
+> **AMENDED — delivered as one filename with a *near-miss refusal*, which the drafting did not
+> anticipate needing.** `publish.config.yaml` at the root of the **content** directory — where
+> its own patterns are anchored, so `drafts/**` is relative to the file that declares it. A user
+> who wrote one of 13 near-miss spellings, `publish.config.ts` among them, is **told**; without
+> that they have configured nothing and been told nothing, which is the silent-not-found failure
+> this paragraph is about wearing a different hat.
+>
+> `config.yaml` and `config.yml` were on that list and were **removed** after review: they are
+> among the most common filenames in existence, and refusing a stranger's unrelated
+> `config.yaml` outright, with no way to proceed, is this tool overreaching into a repository
+> that is not its own.
 
 **Declarative only, no escape hatch yet.** Quartz's `loadQuartzConfig({ overrides })` door
 (research line 304) is the right shape *when there is a plugin API to reach through*. There
@@ -632,6 +935,32 @@ error can never be masked by a build that otherwise succeeded.
 | Exclusion pattern matching zero files | after discovery | **hard failure**, research line 381: a pattern matching nothing is a typo or dead config, and both should stop the build |
 | Config file absent | config parse | all defaults; build succeeds; deploy refuses on `title` and `origin` |
 
+> **DISPROVED on the first two rows — TK-30. The message shape assumes the key and the value
+> can be printed, and neither can.** A YAML key may be a withheld note's path —
+> `clients/acme/2026-renewal.md:` is a valid key — and a value is user-authored text. So an
+> **unknown** key is reported by *line* with a suggestion drawn from the known-key table, and
+> its bytes go to the report's private half; a **known** key is printed in full, because it is a
+> literal of the loader's own table, identical in every run, distinguishing no user. For values,
+> what is printed is the type that was found, from a closed set. Measured shape:
+>
+> ```
+> publish.config.yaml: 1 configuration violation
+>   - line 2: unknown key is not allowed. Did you mean "title"?
+>   - exclude[0] (line 2): must be a string, found a number
+> ```
+>
+> **Rows 3 and 4 are not built**, because there is no deploy gate — TK-32 owns it. A build with
+> no `title` succeeds and ships `Notes`; a build with the loopback origin succeeds and ships
+> canonical links pointing at loopback. Nothing in this repository can refuse to deploy, so the
+> honest statement lives in `astro.config.mjs` as a comment.
+>
+> The last three rows are delivered as written, and the disclosure gate that holds the whole
+> rule is worth one line: its first two versions were both near-vacuous — one searched for
+> planted needles that the mutation happened not to trip, one subtracted an "admissible
+> vocabulary" that erased any ASCII path. It is now a **positive token allowlist**: every word
+> in every issue line must appear in the loader's own source, or in `yaml`'s enumerated code
+> list. A word the module never wrote is a word the user supplied, whatever it is made of.
+
 Two of those are behaviour changes worth naming. `src/lib/site.ts:80-95` currently throws
 `NO_SITE` whenever the origin is missing and any absolute URL is needed — canonical link,
 feed id, sitemap `<loc>`. Owner decision 4 ("no domain needed to preview") means that path
@@ -653,6 +982,20 @@ Today they are the same repository, and three artifacts prove it.
 | `src/data/content.json` | one real personal note, 5,272 B, slug `add-password-to-pfx-windows` | **deleted** |
 | `tests/fixtures/valid-corpus.json` | 32 synthetic bilingual entries, reachable only via `CONTENT_ARTIFACT` | the **default** artifact for this repository's own build |
 | `src/pages/about.astro`, `privacy.astro` | shipped pages asserting an allowlist that will no longer exist | **deleted**; seeded as Markdown by `init` |
+
+> **Not delivered, all three rows — and the reasons differ.** `src/data/content.json` still
+> holds that note, byte-identical. `about.astro` and `privacy.astro` are still shipped pages:
+> deleting them before `init` exists would remove `/about/` and `/privacy/` from `SITE_MAP` and
+> leave a build with **no privacy statement at all** in the interval, which is worse than a
+> shipped one. What TK-31 did instead was make every claim on them true — three false claims
+> were found and removed, two of which that ticket had introduced itself in its own first
+> draft, and one of which (*"their titles are not represented here in any form"*) was measured
+> false: a withheld note's title does reach the published site, through the linking author's own
+> link text, working exactly as designed.
+>
+> `isPublishedArtifact` was **not** deleted either, so the index-projection check still runs
+> only for `src/data/content.json` — meaning the coverage illusion this section warns about is
+> still armed. Deleting that file today silently retires the check.
 
 **Delete the personal note.** It is the only content in this repository, it is not synthetic,
 and under a default-publish tool it is a note the tool's own repository publishes for no
@@ -713,6 +1056,13 @@ And it must run on the fixture build, because a one-corpus assumption is the fai
 ---
 
 ## 5. The GitHub Action and adoption path
+
+> **Nothing in this section is built. TK-32 owns all of it**, and it is the last thing between
+> the tool as it stands — a command that works when you run it — and the adoption path this
+> plan was written for. What *is* built and this section did not anticipate needing:
+> `thoughtscape-publish preview`, because `astro preview` is not reachable from a pnpm install
+> at all (§5.5). `docs/adoption.md` documents the hand-assembled equivalent of the workflow
+> below, marked as hand-assembled.
 
 ### 5.1 What the user adds
 
@@ -919,6 +1269,33 @@ So the entire implementation is that `origin` defaults to `http://publish.localh
 a `.ts` module from `src/lib/`, so importing the resolved config is the existing pattern, not
 a new one.
 
+> **AMENDED — TK-30 and TK-31, and the "entire implementation" was one line short of true in a
+> way that made the whole feature inert.** Two seams were needed, not one, and neither is an
+> import:
+>
+> - **`site.ts` cannot import the config loader.** Astro bundles `src/lib/site.ts` into
+>   `dist/.prerender/`, so every module it pulls in is evaluated *from there* — and the loader's
+>   chain reads `../package.json` through `import.meta.url`, which from inside the prerender
+>   directory resolves to `dist/.prerender/package.json`. Measured: the build reaches "generating
+>   static routes" and dies with `ENOENT`. The title crosses on an environment variable,
+>   `PUBLISH_SITE_TITLE`, which is the same seam `CONTENT_ARTIFACT` already uses across the same
+>   boundary for the same reason.
+> - **`PUBLISH_CONFIG_DIR` had no setter for a full ticket.** `configForBuild()` resolves it or
+>   cwd, and by the time `astro.config.mjs` runs the binary has already `chdir`'d to the package
+>   root — so a `publish.config.yaml` naming `title: Foundry Field Notes` built a site titled
+>   `Notes`, silently, and reported success. One line in `bin/`, added later by the lead.
+>
+> The measurement that made this visible is worth keeping: the gate for the feature passed
+> throughout, because it set the variable itself. **A gate that supplies the seam the product
+> fails to supply is testing the seam, not the product** — recorded as the fourth instrument
+> failure in `docs/gate-reading.md`.
+>
+> **Delivered and verified on 2026-08-15:** a scratch repository with `origin:
+> https://notes.example.org/` produced `<link rel="canonical" href="https://notes.example.org/notes/index/">`,
+> and with no config at all produced `http://publish.localhost/` and `<title>Notes</title>`.
+> `curl http://publish.localhost:4399/` against a running preview returned 200 with no hosts
+> file entry.
+
 **The port is the one honest wrinkle.** `http://publish.localhost/` with no port is port 80,
 which requires privilege on Linux and macOS. Astro's default is 4321. The decision:
 
@@ -952,20 +1329,24 @@ producer is split into four tickets that can each be implemented *and* reviewed 
 
 ### 6.1 Ticket table
 
-| ID | Title | Depends on | Priority | Wave |
-| --- | --- | --- | --- | --- |
-| TK-24 | Make the package installable and runnable from another directory | — | P0 | A |
-| TK-25 | Redesign the report disclosure surface | — | P0 | A |
-| TK-26 | Discovery and exclusion, with defaults that work on a real repository | TK-24 | P0 | B |
-| TK-27 | Link resolution: five forms, one traversal, typed outcomes | TK-26 | P0 | C |
-| TK-28 | Backlink derivation from all link forms | TK-27 | P0 | C |
-| TK-29 | The report file and its gates | TK-26, TK-28 | P0 | D |
-| TK-30 | Configuration file and loader | TK-24 | P0 | B |
-| TK-31 | Site-identity extraction | TK-30 | P0 | D |
-| TK-32 | The GitHub Action and `init` | TK-24, TK-30, TK-25 | P0 | E |
-| TK-33 | Local preview at `publish.localhost` | TK-30 | P1 | D |
-| TK-34 | Scale evidence at 1,000 and 10,000 notes | TK-28 | P1 | F |
-| TK-35 | Requirements-document revisions | all above | P1 | F |
+| ID | Title | Depends on | Priority | Wave | State |
+| --- | --- | --- | --- | --- | --- |
+| TK-24 | Make the package installable and runnable from another directory | — | P0 | A | delivered `5db558c`, `8127c26` |
+| TK-25 | Redesign the report disclosure surface | — | P0 | A | delivered `11b7cf2` |
+| TK-26 | Discovery and exclusion, with defaults that work on a real repository | TK-24 | P0 | B | delivered `b234607`, `8ed97be` |
+| TK-27 | Link resolution: five forms, one traversal, typed outcomes | TK-26 | P0 | C | delivered `40b6fa5`, `a2d3307`, `02b51c0` |
+| TK-28 | Backlink derivation from all link forms | TK-27 | P0 | C | delivered `fed1866`, `69fdcae`, `2ce70e8` |
+| TK-29 | The report file and its gates | TK-26, TK-28 | P0 | D | delivered `fa35d37`, `4947787` |
+| TK-30 | Configuration file and loader | TK-24 | P0 | B | delivered `324c3e6` |
+| TK-31 | Site-identity extraction | TK-30 | P0 | D | delivered `95f16c4`, `db4d0f9` |
+| TK-32 | The GitHub Action and `init` | TK-24, TK-30, TK-25 | P0 | E | **open** |
+| TK-33 | Local preview at `publish.localhost` | TK-30 | P1 | D | in flight |
+| TK-34 | Scale evidence at 1,000 and 10,000 notes | TK-28 | P1 | F | in flight |
+| TK-35 | Requirements-document revisions | all above | P1 | F | this pass |
+
+**TK-32 is now the critical path**, and it carries more than its own scope: the deploy gate
+(§4.3 rows 3 and 4), `init`'s seeding of `.gitignore` and the two prose notes (§4.4), and the
+publish-set review that is §3's open half all wait on it or on a decision it forces.
 
 ### 6.2 Parallelism, keyed on file ownership
 
@@ -1139,6 +1520,31 @@ the mistyped-glob case with a green gate on one platform and a red build on the 
 - The same repository produces the same published set on Windows and Linux, proven rather
   than assumed.
 
+**Delivered** — `b234607`, then `8ed97be` for the wiring. **No report survives**: `.tmp/` is
+gitignored and was deleted mid-session at least once, so the reasoning below is reconstructed
+from the delivered source, which carries it at the head of
+`scripts/markdown-to-artifact.ts`. That the code carries its own argument is why this
+reconstruction was possible at all, and it is the argument for
+`docs/gate-reading.md` existing in the repository rather than under `.tmp/`.
+
+**C3's premise was false and the ticket says so at the top of the file it wrote.** `globSync`
+returns dotfiles on both platforms. What it *does* do is return a mistyped-case pattern back
+as though it were a path on win32 and `[]` on Linux, which is a worse defect than the one
+looked for — a mistyped exclusion green on one platform and red on the other. Discovery is a
+`readdir` walk; patterns use `path.matchesGlob`; every comparison is byte-exact on both
+platforms.
+
+Two things the acceptance criteria did not cover and delivery had to decide:
+
+- **A pattern must be offered every discovered path before any drop.** With the `not-markdown`
+  drop first, `exclude: ["assets/**"]` over a folder of images matched nothing and failed the
+  build — the ordinary case in a notes repository, unbuildable.
+- **The exclusion did not reach the build for a whole ticket.** `discover` was called without
+  the configured patterns, so a user who excluded `drafts/**` published their drafts, and the
+  build reported success. That is a fail-open privacy boundary that looks exactly like a
+  working one, and no unit test could see it — the gate for it runs the **binary** and asserts
+  the token is in the corpus on disk *and* absent from every file under `dist/`.
+
 ---
 
 The remaining tickets (TK-27 through TK-35) are specified in the sections above: the resolver
@@ -1147,7 +1553,35 @@ documentation revisions in §7. Each carries the acceptance criteria stated ther
 
 ---
 
-## 7. Requirements-document revisions
+## 7. Requirements-document revisions — **executed 2026-08-15 (TK-35)**
+
+> **This section is now a record of what was changed, not a list of what to change.** The
+> revision is in `docs/public-knowledge-garden-requirements.md`; read that document for the
+> current requirements. What follows is preserved because the *mapping* is useful — a reader
+> who remembers the old text can find what happened to it — and because five rows below turned
+> out to be wrong when executed, which is itself worth keeping.
+>
+> **Three constraints governed the execution that this section did not anticipate:**
+>
+> 1. **Section numbers could not move.** Roughly sixty comments in `src/`, `scripts/`, and
+>    `tests/` cite the requirements by section number. The two "delete the subsection" rows
+>    below (§11.3, §27 Q2) were executed as *empty in place with the deletion recorded*, because
+>    renumbering would silently repoint every one of those comments.
+> 2. **Rows resting on `published.txt` could not be executed as written.** §7.3's §19.1 row and
+>    §25 row both say "compare against `published.txt`", and `published.txt` was killed by §8
+>    before this section was reached. Executed as *the requirement plus its missing
+>    implementation*, which is a weaker document and a truer one.
+> 3. **Four rows understated the gap.** §8.1's delivery column had to record that `tags`,
+>    `collection`, `aliases`, and git dates are underived — the pages exist and are empty. This
+>    section's framing throughout is "a requirement met by a different mechanism", and these are
+>    requirements met by no mechanism.
+>
+> Two further corrections to this section's own claims: the requirements document was **not**
+> "still marked Draft for owner review while eighteen tickets shipped" in any misleading sense —
+> it was, and the count is now 26 and 605 tests. And §7.5's "survives unchanged" list was
+> checked rather than trusted: §17 needed a correction (axe-core is installed nowhere, so the
+> automated accessibility checks it promises do not run) and §18 needed one (budgets are
+> measured and not enforced). The other twelve survived.
 
 `docs/public-knowledge-garden-requirements.md`, 1,020 lines, last updated 2026-08-06,
 still marked *"Draft for owner review"* and *"Design only; this document does not authorize
@@ -1263,6 +1697,13 @@ most likely — two root-level notes sharing a basename, which a stranger cannot
 their own repository. Silent resolution was rejected equally: that is Quartz's defect, where
 zero matches and five matches fall through identically with no warning. Owned by TK-27.
 
+> **Delivered, and it overrides §2.4 and §2.5, which were written before it.** The strict mode
+> is not built and needs no new mechanism beyond a config key. Two divergences from Obsidian
+> ride on this and are named because "Obsidian-compatible" is ambiguous between two first-party
+> implementations that genuinely disagree: **aliases are not link targets** (desktop, not
+> Publish), and **both link text and file paths are NFC-normalised** (Obsidian normalises only
+> the link text, which fails against a macOS-decomposed filename).
+
 ### D2 — This repository is the tool only
 
 No site of its own. The demo corpus becomes synthetic; the owner's site lives in `ob-flow`
@@ -1272,6 +1713,21 @@ This closes the incomplete split S10 found, where `content-index.json`, `SITE_NA
 localStorage namespace still carried one owner's identity — including the personal note
 still in `src/data/content.json`. Every remaining ticket treats this repository's content as
 fixture rather than as publication. Owned by TK-31.
+
+> **Delivered for identity, not for content.** A foreign build carried **126 occurrences** of
+> one owner's name across 15 files, of which only nine were `.html` — the rest were
+> `robots.txt`, `rss.xml`, `sitemap.xml`, and two JavaScript bundles carrying the localStorage
+> prefix, so a gate reading `dist/**/*.html` would have called four of the carrying files clean.
+> After: zero, on three corpora, asserted over every file as bytes.
+>
+> **The personal note is still in `src/data/content.json`.** So is `sync:content`, pointing at
+> the private vault's `export.py`. D2's content half is unowned.
+>
+> One thing the decision did not anticipate and TK-31 got right: interpolating the *configured*
+> title into the social card would be **worse** than the hardcoded name it replaced, because it
+> would resolve from whatever config the person running the script has on disk — so a
+> contributor would silently commit their own site's name as every user's default card. The
+> card ships naming nobody, and a gate forbids the import.
 
 ### D3 — TK-24 ships before any second design pass — **answered**
 
@@ -1296,3 +1752,19 @@ half was the one that could not fire, and a published site leaking excluded name
 wikilink display text. Cheaper than finding any of them in review.
 
 C3 remains open, and TK-26 owns it.
+
+> **C3 is closed — TK-26 (`b234607`) — and closed by disproving it.** `globSync` does return
+> dotfiles on both platforms, so the stated mechanism never existed; the real defect was a
+> platform-split case behaviour in the same function. The split the ticket asked for was still
+> right, for a different reason (§2.3).
+>
+> **The pattern D3 records held for every ticket after it, and is the single most reusable
+> thing in this plan.** Ten tickets, and in each one the design-stage errors were found by
+> *running the thing* rather than by reading it: the packaging blockers (TK-24), the report
+> destination (TK-25), C3's premise (TK-26), the nested-badge build failure (TK-27), the
+> unsorted `outgoing` that made a first real build impossible (TK-28), the search index the
+> residue scan had never read (TK-29), the three YAML rewrites that produce no error (TK-30),
+> the 126 name occurrences of which only nine were in HTML (TK-31), and `astro preview` being
+> absent from a pnpm install entirely (TK-33). Not one was visible from the source.
+>
+> `docs/gate-reading.md` generalises the class.
