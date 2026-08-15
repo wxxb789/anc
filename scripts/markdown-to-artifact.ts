@@ -281,11 +281,33 @@ function titleFor(markdown: string, fallback: string): string {
   return /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim() || fallback;
 }
 
-/** Prose, collapsed and bounded, for the card and the meta description. */
+/**
+ * Prose, collapsed and bounded, for the card and the meta description.
+ *
+ * **Inline code is stripped as well as fenced, and the reason is a build break
+ * rather than tidiness.** An excerpt is not rendered through the Markdown
+ * pipeline — it lands verbatim in `content-index.json`, in `rss.xml`, and in the
+ * `<meta name="description">` of every page that shows the card. Those surfaces
+ * carry no `<code>` element, so the residue scan's code-region exemption cannot
+ * see them, and a note writing ``Inline `[[syntax]]` is how you write it.``
+ * exited 1 with `contains unresolved [[wikilink]]` against four files. Measured
+ * on the shipped binary: a *fenced* example built clean and the inline form did
+ * not, which is the asymmetry this line removes.
+ *
+ * A note documenting wikilink syntax is this tool's own audience, so the break
+ * was on exactly the content it exists to publish.
+ *
+ * Stripped rather than exempted downstream: the excerpt is a projection of the
+ * prose, and a code span is not prose. Widening the scanner's exemption instead
+ * would have admitted a genuinely unresolved `[[wikilink]]` — the producer
+ * defect that rule exists to catch — which is the repair this rule has already
+ * had twice.
+ */
 function excerptFor(markdown: string): string {
   const prose = markdown
     .replace(/^#.*$/gm, '')
     .replace(/```[\s\S]*?```/g, '')
+    .replace(/`[^`\n]*`/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   return prose.length > 200 ? `${prose.slice(0, 200).trimEnd()}…` : prose;
