@@ -127,8 +127,12 @@ const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const USAGE = `thoughtscape-publish — build a static site from a directory of Markdown
 
 Usage
+  thoughtscape-publish init [options]
   thoughtscape-publish build [options]
   thoughtscape-publish preview [options]
+
+Options for init
+  --content <dir>  directory holding the Markdown (default: the working directory)
 
 Options for build
   --content <dir>  directory holding the Markdown (default: the working directory)
@@ -500,6 +504,74 @@ async function buildInto(contentDirectory, outDirectory, report) {
 }
 
 /**
+ * Prepare a notes repository for its first build.
+ *
+ * `scripts/init-repository.ts` documents what is written and what deliberately
+ * is not. What belongs here is the reporting, which is the half a user judges
+ * the command by: `init` writes into a repository the user owns, so every line
+ * it prints is an account of a file it touched.
+ *
+ * **Every string on this stream is a literal of this tool's own source.** The
+ * seeded entries, the config filename, and the tracked-case advice are all
+ * constants declared in `scripts/seed-gitignore.ts` and `scripts/load-config.ts`
+ * — a closed set, byte-equal to a spelling this tool declares, which is the rule
+ * `parseArguments` states. No path the user supplied and no name discovered on
+ * their filesystem reaches it. That is what makes `init` printable at all where
+ * `build` prints counts: `build` speaks about the user's corpus and `init`
+ * speaks only about its own two files.
+ *
+ * It opens no report, for the reason `preview` gives: a report describes a
+ * corpus, and this command reads none.
+ *
+ * The four outcomes are each reported, including the two that wrote nothing.
+ * "Already covered" is the answer a user running this a second time needs, and
+ * `tracked` is the one case where the tool cannot fix the problem itself and
+ * hands back the command that can.
+ */
+async function init(argv) {
+  const { initialise, parseInitArguments } = await import('../scripts/init-repository.ts');
+  const { CONFIG_FILENAME } = await import('../scripts/load-config.ts');
+
+  const options = parseInitArguments(argv);
+  const result = initialise(resolve(process.cwd(), options.content));
+
+  for (const outcome of result.ignore.outcomes) {
+    if (outcome.state === 'tracked') {
+      // The rule was written; what it cannot do is take effect on a path git is
+      // already tracking, because `git add -A` stages a modification to a
+      // tracked file whatever the ignore rules say. So the line and the command
+      // are both needed, and the message says which does what — an earlier
+      // version said an ignore rule "cannot help" and wrote none, which left the
+      // user's `git rm --cached` undone by their next `git add -A`.
+      console.log(`.gitignore: ${outcome.entry} — added, but this path is already tracked, so it stays staged until:`);
+      console.log(`  ${outcome.advice}`);
+      continue;
+    }
+    const said = {
+      seeded: 'added to .gitignore',
+      covered: 'already ignored',
+      negated: 'left alone — this repository un-ignores it deliberately',
+    }[outcome.state];
+    console.log(`.gitignore: ${outcome.entry} — ${said}`);
+  }
+
+  if (result.ignore.unprobed) {
+    // The state words above mean something weaker on this branch and the line
+    // says so: with no repository there is nothing to ask, so `already ignored`
+    // is "this exact line is in the file" rather than git's answer. A user who
+    // has a global ignore rule, or who later writes a `!dist/`, gets the probed
+    // reading from the next run after `git init`.
+    console.log('.gitignore: not a git repository yet, so the entries were matched as text rather than checked');
+  }
+
+  console.log(
+    result.config === 'written'
+      ? `${CONFIG_FILENAME}: written, with every key commented out — edit it, or leave it`
+      : `${CONFIG_FILENAME}: already present, left unchanged`,
+  );
+}
+
+/**
  * Serve a built site, and stay in the foreground until interrupted.
  *
  * The command that makes the tool's own output readable to the person who ran
@@ -548,13 +620,14 @@ async function main(argv) {
     console.log(USAGE);
     return command === undefined ? 1 : 0;
   }
-  if (command === 'preview') {
+  if (command === 'init' || command === 'preview') {
     const rest = argv.slice(1);
     if (rest.includes('--help') || rest.includes('-h')) {
       console.log(USAGE);
       return 0;
     }
-    await preview(rest);
+    if (command === 'init') await init(rest);
+    else await preview(rest);
     return 0;
   }
   if (command !== 'build') {

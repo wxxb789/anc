@@ -816,14 +816,34 @@ test('ensureIgnored seeds what a stranger\'s repository needs', () => {
     const { outcomes } = ensureIgnored(root);
     // `check-ignore` alone cannot see this: for a tracked path it reports
     // uncovered even with a matching rule present, because it consults the
-    // index — and a new ignore line does not help, since `git add -A` still
-    // stages the modification.
+    // index — so the ignore line alone does not help, since `git add -A` still
+    // stages the modification. Hence the state and the advice.
     assert.equal(outcomes[0]!.state, 'tracked', 'an already-tracked dist/ was treated as uncovered');
     assert.match(outcomes[0]!.advice ?? '', /git rm --cached/, 'the tracked case gave no way out');
-    assert.equal(
+
+    // **The rule is written as well, and this assertion used to require the
+    // opposite.** TK-25 reasoned that a line which cannot take effect should not
+    // be written, which is true about the moment it is written and false about
+    // every moment after. Measured under TK-32, following the advice verbatim
+    // with no rule present: `git rm --cached -r dist` then `git add -A` puts
+    // every file straight back in the index, so the one state a user cannot fix
+    // themselves was the state the tool withheld the line that makes the fix
+    // stick. With the rule present the same two commands leave it untracked.
+    assert.ok(
       gitignore(root).includes('/dist/'),
-      false,
-      'a rule was appended for a tracked path, where it cannot help',
+      'no rule was written for a tracked path, so the `git rm --cached` this run advises is undone ' +
+        'by the user\'s next `git add -A`',
+    );
+
+    // The behavioural half, which is what the assertion above is a proxy for.
+    // Asserted rather than assumed, because "the line is in the file" is the
+    // weaker claim and this whole module exists because those two come apart.
+    nakedGit(root, 'rm', '--cached', '-r', '-q', 'dist');
+    nakedGit(root, 'add', '-A');
+    assert.deepEqual(
+      nakedGit(root, 'ls-files').stdout.split('\n').filter((line) => line.startsWith('dist/')),
+      [],
+      'after the advised command and a re-add, the build output is tracked again',
     );
   });
 

@@ -2,11 +2,11 @@
  * The `.gitignore` lines a notes repository needs, and the algorithm that seeds
  * them without overwriting what the user already wrote.
  *
- * **This ships with no caller.** `init` does not exist — the CLI rejects every
- * command but `build` — and TK-32 writes it. What is worth having now is the
- * part that can be wrong: appending to a stranger's `.gitignore` has four
- * distinct correct behaviours and three measured ways to corrupt a working file,
- * and none of that needs a command to be gated against a scratch repository.
+ * **The caller is `thoughtscape-publish init`**, which TK-32 built; this module
+ * shipped before it with none, and the part worth having early was the part that
+ * can be wrong. Appending to a stranger's `.gitignore` has four distinct correct
+ * behaviours and three measured ways to corrupt a working file, and none of that
+ * needed a command to be gated against a scratch repository.
  *
  * ## What is seeded, and what deliberately is not
  *
@@ -18,13 +18,22 @@
  * that directory to exist, so the entry can never hide something the user
  * wanted.
  *
- * `content-report.json` is **not** seeded, and its absence is the design rather
- * than an omission: `scripts/write-report.ts` writes the report under the git
- * directory, where no ignore rule applies and none is needed. Measured,
- * `check-ignore -v` on that path exits 1 reporting no rule at all and `git add
- * -A` stages nothing from it. A line ignoring a file this tool never writes
- * there is a line no gate can turn red and no future maintainer can safely
- * delete.
+ * **The build's report is not seeded**, and its absence is the design rather
+ * than an omission: `scripts/write-report.ts` writes it under the git directory,
+ * where no ignore rule applies and none is needed. Measured, `check-ignore -v`
+ * on that path exits 1 reporting no rule at all and `git add -A` stages nothing
+ * from it. A line ignoring a file this tool never writes there is a line no gate
+ * can turn red and no future maintainer can safely delete.
+ *
+ * The report's own filename is deliberately not written down here, and that
+ * became a requirement rather than a preference when TK-32's `init` gave this
+ * module a caller. `tests/packaging.test.ts` forbids any module the build's
+ * import graph reaches from naming the report, on the reasoning that a module
+ * which names it is one layer from a module that prints it — and the gate fired
+ * on this comment the moment `bin/thoughtscape-publish.mjs` began importing this
+ * file. That is the gate working: the exemption is `write-report.ts` alone, and
+ * an allowlist that grows every time a new module mentions the name in prose is
+ * not an allowlist.
  *
  * The build's staging workspace gets no line either: it is created inside the
  * *package* root, which in a stranger's repository is under `node_modules/`,
@@ -43,7 +52,7 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 /**
@@ -243,10 +252,32 @@ export function ensureIgnored(root: string): SeedResult {
   }
 
   if (inside.status !== 0 || inside.stdout.trim() !== 'true') {
-    // No repository: write the block unconditionally. It costs one file and is
-    // correct the moment they run `git init`.
-    append(root, [...SEEDED_ENTRIES]);
-    return { outcomes: SEEDED_ENTRIES.map((entry) => ({ entry, state: 'seeded' })), unprobed: true };
+    // No repository: nothing can be probed, so the only available idempotence is
+    // a literal line match. Sound *here specifically* and nowhere else in this
+    // file, because with no repository there is no ignore chain to consult and
+    // no rule that could cover an entry other than one written literally — the
+    // whole argument at the head of `append` for why reading the file cannot
+    // answer the question rests on `check-ignore` having an answer to give.
+    //
+    // Measured before this branch deduplicated: three `init` runs in a
+    // directory with no repository produced three copies of the block. That is
+    // the *ordinary* order for a user who runs `init` first, which the seeded
+    // template's own "correct the moment they run `git init`" invites — so it
+    // is the documented path rather than an edge case.
+    //
+    // The header is deliberately not what is searched for: a user who edits or
+    // splits the block still gets no duplicate, which is the same property the
+    // probed path has for the same reason.
+    const existing = readLines(root);
+    const missing = SEEDED_ENTRIES.filter((entry) => !existing.includes(entry));
+    if (missing.length > 0) append(root, missing);
+    return {
+      outcomes: SEEDED_ENTRIES.map((entry) => ({
+        entry,
+        state: missing.includes(entry) ? ('seeded' as const) : ('covered' as const),
+      })),
+      unprobed: true,
+    };
   }
 
   const top = git(root, ['-C', root, 'rev-parse', '--show-toplevel']);
@@ -255,14 +286,38 @@ export function ensureIgnored(root: string): SeedResult {
   }
   const toplevel = top.stdout.trim();
 
-  const outcomes = classify(toplevel);
-  const missing = outcomes.filter((outcome) => outcome.state === 'seeded').map((outcome) => outcome.entry);
+  const entries = entriesFor(toplevel, root);
+  const outcomes = classify(toplevel, entries);
+  // `tracked` is written as well as `seeded`, which is the finding recorded in
+  // `classify`: the advice alone does not survive the `git add -A` that follows
+  // it. `covered` and `negated` are the two that must not be written — one is
+  // already handled and the other is a choice the user made.
+  //
+  // The tracked case is the one place idempotence cannot come from the probe,
+  // and the reason is the same fact that makes the write necessary:
+  // `check-ignore` consults the index, so a tracked entry reports uncovered
+  // however many rules match it, and a second `init` would append the line
+  // again. Measured on this branch before the text check was added: two runs,
+  // two copies. So the line already being in the file is what suppresses the
+  // second write — the weaker test, used only where git has no answer to give.
+  const present = readLines(toplevel);
+  const missing = outcomes
+    .filter(
+      (outcome) =>
+        outcome.state === 'seeded' || (outcome.state === 'tracked' && !present.includes(outcome.entry)),
+    )
+    .map((outcome) => outcome.entry);
   if (missing.length > 0) append(toplevel, missing);
 
   // Verify, then fail loudly. The re-probe is the same probe, so a seed that did
   // not take — appended to the wrong file, or defeated by a later rule — is a
   // non-zero exit rather than a success message.
-  for (const outcome of classify(toplevel)) {
+  //
+  // A `tracked` entry is exempt from the re-probe and cannot be otherwise:
+  // `check-ignore` consults the index, so it reports a tracked path as uncovered
+  // however many rules match it. Requiring coverage there would turn the write
+  // that fixes the user's problem into an error.
+  for (const outcome of classify(toplevel, entries)) {
     if (outcome.state === 'seeded' && missing.includes(outcome.entry)) {
       throw new Error(
         `${outcome.entry} was written to .gitignore and is still not ignored — ` +
@@ -274,11 +329,44 @@ export function ensureIgnored(root: string): SeedResult {
   return { outcomes, unprobed: false };
 }
 
+/**
+ * The lines to seed, which is {@link SEEDED_ENTRIES} plus one when the content
+ * directory is not the repository root.
+ *
+ * **Root-anchored `/dist/` does not cover `notes/dist/`, and that is the whole
+ * point of the anchoring.** The two facts compose into a hole: `init --content
+ * notes` seeds a rule at the root, and a build whose output lands under `notes/`
+ * — either `--out notes/dist`, or the default `dist` for a user standing in
+ * `notes/` — is not covered by it. Measured before this existed: `init
+ * --content notes`, then a build, then `git add -A`, staged **41 files** of
+ * build output, and `check-ignore` exited 1 on every one of them. That is
+ * exactly the accident `init` exists to prevent, on the shape `--content` was
+ * added for.
+ *
+ * The added entry is a *path* rather than a second bare `dist/`, for the reason
+ * the anchoring exists: an unanchored `dist/` would ignore a user's own note
+ * folder called `dist` anywhere in the tree, which is the silent-data-loss
+ * direction this module refuses to fail in.
+ *
+ * `node_modules/` needs no equivalent because it is already unanchored, and
+ * deliberately: a nested `node_modules` is never a user's note directory.
+ */
+function entriesFor(toplevel: string, contentDirectory: string): string[] {
+  const step = relative(toplevel, contentDirectory).replaceAll('\\', '/');
+  // Empty means they are the same directory. A `..` means the content directory
+  // is outside the repository, where a rule in *this* repository's `.gitignore`
+  // governs nothing — `init` refuses that case before reaching here, and the
+  // check is repeated rather than assumed because this function must be right
+  // about the arguments it is handed.
+  if (step === '' || step.startsWith('..') || isAbsolute(step)) return [...SEEDED_ENTRIES];
+  return [...SEEDED_ENTRIES, `/${step}/dist/`];
+}
+
 /** The four states, one probe pair for all entries. */
-function classify(toplevel: string): EntryOutcome[] {
+function classify(toplevel: string, entries: readonly string[]): EntryOutcome[] {
   // Probed without the leading `/` the written lines carry, and with the
   // trailing one they do not: the argument is a path, the line is a pattern.
-  const paths = SEEDED_ENTRIES.map((entry) => entry.replace(/^\//, '').replace(/\/$/, ''));
+  const paths = entries.map((entry) => entry.replace(/^\//, '').replace(/\/$/, ''));
 
   const covered = probe(toplevel, paths, true);
   const negated = probe(toplevel, paths, false);
@@ -291,17 +379,27 @@ function classify(toplevel: string): EntryOutcome[] {
     throw new Error('the ignore rules could not be read — nothing was written');
   }
 
-  return SEEDED_ENTRIES.map((entry, index) => {
+  return entries.map((entry, index) => {
     // `[file, line, pattern, path]`, with the first three empty when no rule
     // matched. The pattern is read as a field rather than parsed out of a
     // colon-joined string, because the file field can itself contain a colon.
     if (covered[index]![2] !== '') return { entry, state: 'covered' as const };
     if (negated[index]![2]!.startsWith('!')) return { entry, state: 'negated' as const };
 
-    // Already tracked is a fourth answer and needs the opposite action.
-    // Measured: for a tracked path `check-ignore` reports uncovered even with a
-    // matching rule present, because it consults the index — and a new ignore
-    // line does not help, since `git add -A` still stages the modification.
+    // Already tracked is a fourth answer and needs an *additional* action rather
+    // than a different one. Measured: for a tracked path `check-ignore` reports
+    // uncovered even with a matching rule present, because it consults the
+    // index — and an ignore line alone does not help, since `git add -A` still
+    // stages the modification.
+    //
+    // **The rule is written anyway, and an earlier version's refusal to write it
+    // was a measured defect.** Following the advice verbatim with no rule
+    // present — `git rm --cached -r dist`, then `git add -A` — puts every file
+    // straight back in the index, so the one state the user cannot fix
+    // themselves was the state this withheld the line that makes the fix stick.
+    // With the rule present the same two commands leave it untracked. A rule on
+    // a tracked path is inert until the moment it is needed and harmless
+    // before it, which is the cheaper side of the trade by a wide margin.
     const path = paths[index]!;
     const tracked = git(toplevel, ['-C', toplevel, 'ls-files', '--error-unmatch', '--', path]);
     if (tracked !== undefined && tracked.status === 0) {
@@ -314,6 +412,23 @@ function classify(toplevel: string): EntryOutcome[] {
 
     return { entry, state: 'seeded' as const };
   });
+}
+
+/**
+ * The file's lines, trimmed, or none when there is no file.
+ *
+ * Only the no-repository branch reads this. Everywhere else the question "is
+ * this entry ignored?" is git's to answer, and reading the file is measured
+ * wrong for it — see {@link append}'s own list.
+ */
+function readLines(root: string): string[] {
+  try {
+    return readFileSync(join(root, '.gitignore'), 'utf8')
+      .split('\n')
+      .map((line) => line.trim());
+  } catch {
+    return [];
+  }
 }
 
 /**
