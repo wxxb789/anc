@@ -187,7 +187,7 @@ meeting one of these has met a known gap, not a discovery.
 | `init` and the GitHub Action | do not exist; `scripts/seed-gitignore.ts` ships with no caller | TK-32 |
 | `og:image` | never emitted; `SOCIAL_CARD_PATH` is `undefined` and no config key sets it | unassigned |
 | The report state directory | grows without pruning. **The key is per-directory, not per-build** — `sha256(realpath(cwd))`, a pure function of the path. A count rising once per build was three agents and a `mkdtemp`-heavy suite sharing a host, and reading that count as an identity is lesson 1 of `docs/gate-reading.md` committed against itself | unassigned |
-| `.astro/` as a shared staging path | two concurrent builds collide; a red `config.test.ts` should be re-run against a clean `.astro/` before it is believed | unassigned |
+| `.astro/` as a shared staging path | `scripts/build-fixture.ts:39` runs `pnpm exec astro build` with the repository as its cwd, so its staging and its `dist/` are the ones the suite is reading. **`pnpm run build:fixture` and the test suite cannot run concurrently** — that is the whole collision, and `rm -rf .astro` plus a re-run settles any red it caused. Earlier notes here blamed `tests/config.test.ts:1337`; measured, that gate's build fails on the malformed config before writing any directory, so it creates no staging at all and was never the source | unassigned |
 | `src/lib/routes.ts` collision messages | say "the exporter", which the user cannot edit | unassigned |
 | `REDIRECT_RULES` | `[]` and cannot grow from a corpus; nothing promises a moved note keeps its URL | unassigned |
 

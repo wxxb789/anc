@@ -17,6 +17,12 @@ export default getViteConfig({
   test: {
     include: ['tests/**/*.test.ts'],
     /**
+     * Redirect the report's state directory into a scratch path for the whole
+     * run. Seven test files spawn the binary and one remembered to do this per
+     * spawn; the file itself explains why that is the wrong place for it.
+     */
+    setupFiles: ['./tests/setup-state-directory.ts'],
+    /**
      * Raised from Vitest's 5 s default because a single render can now lay out
      * real diagrams.
      *
