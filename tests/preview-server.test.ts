@@ -295,10 +295,51 @@ test('preview refuses a directory this tool did not build', () => {
     'a directory of notes was accepted as a built site',
   );
 
+  // Refused *before* anything binds, which is the half a code check does not
+  // cover: a server that starts and then declines has already opened the port.
+  // `startPreview` is the only thing here that opens a socket, so asserting the
+  // throw came from the resolve — with no server handle to clean up — is the
+  // ordering assertion.
+  assert.equal(running.length, 0, 'a server was started before the directory was refused');
+
   // And the same directory becomes acceptable once it carries the marker, which
   // is what makes the refusal about the marker rather than about the fixture.
   writeFileSync(join(notes, 'content-index.json'), '{"entries":[]}\n', 'utf8');
   assert.equal(resolveArtifactDirectory(notes, ROOT), notes, 'a marked directory was still refused');
+});
+
+/**
+ * What the refusal is worth: without it, that directory is served.
+ *
+ * The refusal gate above asserts a throw, and a throw proves the guard fires —
+ * not that anything bad happens without it. This is the other half, and it is
+ * the reason the guard is not decoration: `startPreview` does not consult the
+ * marker, so pointing it at a notes directory is exactly what the binary would
+ * do with the guard removed.
+ *
+ * Asserted on the token in the file, not on a status code: a 200 says the server
+ * answered and only the bytes say what it answered with. The dotfile is the
+ * sharp case — the directory has no `index.html` at all, so it is obviously not
+ * a build, and every file in it is served anyway.
+ */
+test('without the marker check, a notes directory would be served', async () => {
+  const notes = temporary();
+  mkdirSync(join(notes, 'private'));
+  writeFileSync(join(notes, '.env'), 'SECRET=zzqdotenvtoken\n', 'utf8');
+  writeFileSync(join(notes, 'private', 'salary.md'), '# zzqsalarytoken\n', 'utf8');
+
+  const port = await serve(notes);
+
+  // The control: there is no index, so nothing here resembles a build output.
+  assert.equal((await fetchPath(port, '/index.html')).status, 404, 'the fixture has an index, so it is not the case under test');
+
+  for (const [path, token] of [['/.env', 'zzqdotenvtoken'], ['/private/salary.md', 'zzqsalarytoken']] as const) {
+    const response = await fetchPath(port, path);
+    assert.ok(
+      response.body.includes(token),
+      `${path} was not served, so this gate no longer shows what the marker check prevents`,
+    );
+  }
 });
 
 /**
@@ -608,7 +649,27 @@ test('a running preview prints only the lines the binary composes', async () => 
   child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
 
   try {
-    await new Promise((done) => setTimeout(done, 9000));
+    // Waited for, not slept through. A fixed 9 s sleep failed 2 runs in 6 —
+    // spawning Node and paying Astro's cold start is not a bounded cost on a
+    // machine running sixteen test workers, and the failure read as "the preview
+    // never announced a URL", which blames the property for the clock. This
+    // resolves the moment the second line lands and gives the whole budget to a
+    // command that is genuinely stuck.
+    //
+    // Then one further beat, because the *leak* would arrive before the announce
+    // — Vite logs the port-in-use line ahead of it — so waiting for the announce
+    // is already sufficient to have captured it. The extra pause is only so a
+    // late writer on either stream is not missed.
+    await new Promise<void>((done, fail) => {
+      const budget = setTimeout(() => fail(new Error(`the preview never announced a URL in 25 s: ${stdout}`)), 25_000);
+      const check = (): void => {
+        if (!/press Ctrl-C to stop/.test(stdout)) return;
+        clearTimeout(budget);
+        setTimeout(done, 500);
+      };
+      child.stdout.on('data', check);
+      check();
+    });
 
     // The control: the command really got as far as serving, so the silence
     // below is a silent success rather than a command that died before logging.
@@ -630,7 +691,7 @@ test('a running preview prints only the lines the binary composes', async () => 
     child.kill('SIGTERM');
     await new Promise<void>((done) => blocker.close(() => done()));
   }
-}, 30_000);
+}, 40_000);
 
 /**
  * The preview subcommand's own flags are refused by its own parser.

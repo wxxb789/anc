@@ -75,18 +75,48 @@
  * ## The refusal, which is the part that is not convenience
  *
  * `preview()` serves whatever directory it is given, and a directory of notes is
- * a directory. Measured, pointed at one: `/` served an `index.html`, `/.env`
- * served `SECRET=…`, and `/private/salary.md` served its contents — all 200. A
- * user who types `--dist .` in their notes repository publishes their notes to a
- * port, which for a tool whose entire premise is that excluded notes never ship
- * is the worst thing it could do.
+ * a directory. Measured, pointed at one holding `.env` and `private/salary.md`:
  *
- * So the directory must carry `content-index.json`, which every build this tool
- * performs writes into its output and which no notes repository has. It is a
- * marker of "this tool built this", not a validity check — a corrupt or partial
- * artifact still previews, because a user debugging a bad build is exactly who
- * needs to look at it. What it excludes is the *category* error of aiming the
- * server at a directory that was never a build output.
+ *     /.env               -> 200   SECRET=…
+ *     /private/salary.md  -> 200   the note's contents
+ *     /index.html         -> 404
+ *
+ * Note the third line, which is the sharp part: the directory is *obviously* not
+ * a build — it has no index — and every file in it is served anyway. So `--dist .`
+ * in a notes repository publishes the notes **and** the dotfiles on a port, which
+ * for a tool whose entire premise is that excluded notes never ship is the worst
+ * thing it could do.
+ *
+ * So the directory must carry `content-index.json`.
+ *
+ * **That file and not `index.html`, because the marker has to be something only
+ * this tool writes.** An `index.html` is the most ordinary file on earth — a
+ * user may plausibly have one lying around in a notes directory, a downloaded
+ * page, or any other static site's output, and every one of those would satisfy
+ * a guard written against it while being no build of ours. `content-index.json`
+ * is this tool's own projection of the corpus, written into the output by
+ * `bin/thoughtscape-publish.mjs` on every run and by `scripts/build-fixture.ts`,
+ * and nothing else produces a file by that name. The guard is only as good as
+ * the marker's exclusivity.
+ *
+ * **A hand-made `content-index.json` is accepted, deliberately.** `touch
+ * content-index.json` in a notes directory defeats this, and that is the trade
+ * taken: the alternative is validating the file's contents, which turns a
+ * category check into a schema check and refuses the one user who most needs a
+ * preview — the one debugging a build that came out wrong. The guard is aimed at
+ * the *accident* (`--dist .`, a typo, a stale path), not at a user determined to
+ * serve their own notes, who can do that with any static server in one command.
+ * A guard that stops the accident and not the intent is the right size here, and
+ * naming that ceiling is worth more than pretending it is a boundary.
+ *
+ * It is a marker of "this tool built this", not a validity check — a corrupt or
+ * partial artifact still previews, for the reason above. What it excludes is the
+ * *category* error of aiming the server at a directory that was never a build
+ * output.
+ *
+ * **Checked before anything binds.** `resolveArtifactDirectory` throws and
+ * `startPreview` is the only thing that opens a socket; the binary calls them in
+ * that order. A server that starts and then refuses has already opened the port.
  */
 
 import { existsSync } from 'node:fs';
