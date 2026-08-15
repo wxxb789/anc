@@ -7,10 +7,8 @@ rendered ahead of time, full-text search, backlinks, a graph, no server and no d
 start. There is no allowlist and no `publish: true` to opt in with — a file that is in the
 repository and ends in `.md` becomes a page, so the work is deciding what to withhold.
 
-**Status: the tool builds and previews. It does not deploy itself yet.** The GitHub Action
-and the `init` command are designed and unbuilt (TK-32), so the hosting section below is what
-you assemble by hand today, not a command you run. Everything above it has been executed
-against a scratch repository and is reported as measured.
+**Status: the tool builds, previews, and ships the Action and `init` (TK-32).** Everything
+below has been executed against a scratch repository and is reported as measured.
 
 ## What you need
 
@@ -130,13 +128,26 @@ embedded image does not ship, and a link to one degrades to text and is reported
 deliberate rather than pending — the alternative shape, copying every non-Markdown file, is
 how comparable tools publish the images belonging to notes their users excluded.
 
-Add `/dist/` and `node_modules/` to your `.gitignore` before the first `git add -A`. The tool
-does not seed it yet.
+Run `thoughtscape-publish init` before your first `git add -A`. It seeds `.gitignore` with
+`node_modules/` and your build's output directory — which follows `--content`, so a build into
+`notes/dist/` is ignored as `/notes/dist/` rather than as a root-anchored `/dist/` that would
+miss it. It is safe to run twice: measured, three runs outside a git repository once produced
+three copies of the block, and the command now recognises its own.
 
-Excluding `dist/**` is worth doing **once a build exists** — without it the walk enumerates
-your own build output on every run, which on a one-note repository means 39 discovered and 38
-dropped. Add it after your first successful build, not before: on a repository with no `dist/`
-yet, the pattern matches nothing and the zero-match rule below fails the build.
+**Do not add `dist/**` to `exclude`.** It reads like the obvious hygiene rule and it does
+nothing you want. Measured on a one-note repository, three builds in a row:
+
+```
+first build (no dist/ yet)        1 discovered,  1 published,  0 dropped
+second build (dist/ exists)      42 discovered,  1 published, 41 dropped
+third build, dist/** excluded    43 discovered,  1 published, 42 dropped
+```
+
+The count goes **up**, not down. Every file in `dist/` is already dropped as `not-markdown`
+before any exclusion rule is consulted, so the pattern changes a file's *reason* for being
+dropped rather than whether it is walked — and it adds one, because the config file itself is
+then discovered too. Nothing is published either way. `discovered` counts what the walk
+classified, not what it considered publishing.
 
 ## Links
 
@@ -180,9 +191,15 @@ it reaches `dist/`, and nothing in it can be committed.
 
 ## Hosting it
 
-**This part is not automated yet.** The Action that would do it is specified in
-`docs/plans/ssg-generalisation-plan.md` §5 and does not exist. What follows is the
-hand-assembled equivalent, and the two properties worth preserving from the design:
+**The Action exists.** `action.yml` at the root of this repository is what a user adds; the
+hand-assembled equivalent below is still worth reading, because it is what the Action does and
+the two properties are yours to preserve either way.
+
+The Action is referenced by git coordinate — `uses: <owner>/<repo>@<ref>` — rather than by
+package name, and that is deliberate rather than temporary. The package is not published, so
+`npx` resolves for nobody today; but a git ref keeps working through a rename, and a workflow
+pinned to a package name does not. A user's adopted workflow surviving a rename of this tool is
+worth more than a shorter install line.
 
 - **Clone at full depth.** `created` and `updated` are meant to come from git commit dates, and
   a shallow clone would produce a site that looks correct and carries wrong dates — the failure

@@ -105,8 +105,14 @@ export const CONFIG_TEMPLATE = `# ${CONFIG_FILENAME} — every key is optional, 
 # which turns a rule that keeps a file into one that removes it.
 #
 # A pattern matching no files fails the build, with no override: a mistyped
-# exclusion publishes what it was meant to withhold. Add "dist/**" after your
-# first successful build, not before — until one exists it matches nothing.
+# exclusion publishes what it was meant to withhold.
+#
+# Do not add "dist/**". Every file in a build's output is already dropped as
+# not-markdown before exclusion is consulted, so the pattern changes a file's
+# reason for being dropped rather than whether it is walked — measured, the
+# discovered count goes up by one, not down, because the config file itself is
+# then discovered too. Keep build output out of git with .gitignore, which
+# this command seeds; exclude is for notes you wrote and do not want published.
 # exclude:
 #   - "drafts/**"
 #   - "private/**"
