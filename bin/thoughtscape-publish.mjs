@@ -128,10 +128,16 @@ const USAGE = `thoughtscape-publish — build a static site from a directory of 
 
 Usage
   thoughtscape-publish build [options]
+  thoughtscape-publish preview [options]
 
-Options
+Options for build
   --content <dir>  directory holding the Markdown (default: the working directory)
   --out <dir>      where to write the site (default: <working directory>/dist)
+
+Options for preview
+  --dist <dir>     the built site to serve (default: <working directory>/dist)
+  --port <number>  the port to listen on (default: 4321)
+
   --help           show this message
 `;
 
@@ -493,11 +499,63 @@ async function buildInto(contentDirectory, outDirectory, report) {
   }
 }
 
+/**
+ * Serve a built site, and stay in the foreground until interrupted.
+ *
+ * The command that makes the tool's own output readable to the person who ran
+ * it — `scripts/preview-site.ts` documents why a subcommand exists at all when
+ * `astro preview` does, and it comes down to `astro` not being on a pnpm
+ * install's `.bin` at all.
+ *
+ * It opens no report. A report describes a corpus, and this command reads no
+ * corpus — it reads a directory of HTML the build already accounted for. Opening
+ * one would announce a `no such thing was dropped` summary for a run that
+ * dropped nothing because it discovered nothing, which is a line that says
+ * something false about a build that already happened.
+ *
+ * **Nothing holds the process open, because the listening socket already does.**
+ * An `await new Promise(() => {})` was written here first, on the reasoning that
+ * `main` returning would let Node exit. Measured with that line removed: the
+ * command served normally past 12 s and answered 200. Node's event loop is held
+ * by the listening handle, which is what a server handle is for. The line was
+ * not merely redundant — an unsettled top-level await makes Node print `Warning:
+ * Detected unsettled top-level await` and exit **13** when the loop does drain,
+ * so it turned a clean shutdown into a warning and a failure code.
+ */
+async function preview(argv) {
+  const { parsePreviewArguments, resolveArtifactDirectory, startPreview } = await import(
+    '../scripts/preview-site.ts'
+  );
+
+  const options = parsePreviewArguments(argv);
+  const artifact = resolveArtifactDirectory(options.dist, process.cwd());
+  const server = await startPreview(artifact, options.port, PACKAGE_ROOT);
+
+  // The port comes from the server rather than from `options`, because a taken
+  // port moves: measured, `preview()` on a held 4580 returned 4581. Printing
+  // what was asked for would send the user to a port nothing is listening on.
+  //
+  // No path in the line, for the reason every other stream write in this file
+  // gives — `--dist` may name a withheld directory, and this stream is one a
+  // workflow log inherits.
+  console.log(`preview: http://localhost:${server.port}/`);
+  console.log('press Ctrl-C to stop');
+}
+
 async function main(argv) {
   const command = argv[0];
   if (command === undefined || command === '--help' || command === '-h') {
     console.log(USAGE);
     return command === undefined ? 1 : 0;
+  }
+  if (command === 'preview') {
+    const rest = argv.slice(1);
+    if (rest.includes('--help') || rest.includes('-h')) {
+      console.log(USAGE);
+      return 0;
+    }
+    await preview(rest);
+    return 0;
   }
   if (command !== 'build') {
     // Same treatment as an unrecognised option, for the reason
