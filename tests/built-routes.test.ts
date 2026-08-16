@@ -20,6 +20,7 @@ import { test, type TestContext } from 'vitest';
 import { entries, getEntry } from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
+import { GROUP_WINDOW } from '../src/lib/collection-navigation.ts';
 import {
   MESSAGE_DATASET,
   NAV_LANGUAGE,
@@ -1310,9 +1311,27 @@ function explorerSlugs(rail: string): string[] {
  *
  * Every built route, not one: the rail is layout chrome, so a page that lost it
  * would be a page where the site's navigation silently ends.
+ *
+ * **Scoped to a corpus every group of which is under `GROUP_WINDOW`**, which is
+ * where "lists every note" is the whole truth. Past the bound a group draws a
+ * window and links its index instead, and this gate would be asserting the
+ * defect rather than the design. Both published corpora are inside it — the
+ * fixture's largest group is 11 of 32 — so nothing here is skipped in practice;
+ * the guard exists so that a corpus which outgrows the bound reports "this gate
+ * no longer applies" rather than failing as though the rail had broken. The
+ * bounded case is gated over a real build in `tests/adoption.test.ts`.
  */
 test('the explorer lists every published note, on every route', (context) => {
   requireMultiEntry(context);
+  const largest = Math.max(
+    ...collectionFacets(entries).map((facet) => facet.entries.length),
+    entries.filter((entry) => entry.collection === undefined).length,
+  );
+  context.skip(
+    largest > GROUP_WINDOW,
+    `the largest group holds ${largest} notes, past the ${GROUP_WINDOW}-note window — ` +
+      'the bounded rail is gated in tests/adoption.test.ts',
+  );
   const expected = entries.map((entry) => entry.slug).sort();
 
   for (const route of ROUTES) {
@@ -1966,9 +1985,11 @@ test('English renders both a singular and a plural count, and Chinese renders on
  * A foreign-language title in a list says which language it is.
  *
  * WCAG 2.2 AA success criterion 3.1.2 is about *parts* of a page, and every
- * route on a bilingual site is that case: the explorer rail lists the whole
- * corpus, so an English page carries every Chinese title on the site. Without
- * `lang` a screen reader reads those in an English voice.
+ * route on a bilingual site is that case: the explorer rail lists a window of
+ * every group, so an English page carries Chinese titles from across the site —
+ * every one of them on a corpus whose groups are all under `GROUP_WINDOW`, which
+ * the fixture's are. Without `lang` a screen reader reads those in an English
+ * voice.
  *
  * Both directions, because both are defects: a missing attribute is the
  * accessibility failure, and an attribute on a title already in the page's own
@@ -2288,9 +2309,9 @@ test('a foreign-language title is marked in every list, not only the rail', (con
   for (const route of ROUTES) {
     const html = readFileSync(new URL(pageFor(route), DIST), 'utf8');
     const pageLanguage = declaredLanguage(html);
-    // The rail lists the whole corpus on every page and is checked by its own
-    // gate; excluding it here keeps each surface's counters honest about that
-    // surface rather than being dominated by the rail's rows.
+    // The rail lists notes from every group on every page and is checked by its
+    // own gate; excluding it here keeps each surface's counters honest about
+    // that surface rather than being dominated by the rail's rows.
     const body = html.replace(/<nav class="explorer"[\s\S]*?<\/nav>/, '');
 
     for (const surface of SURFACES) {

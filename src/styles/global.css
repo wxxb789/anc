@@ -329,6 +329,25 @@ main:focus:not(:focus-visible) {
 }
 
 /*
+ * A windowed group's own sentence: how many of its notes the rail drew, and
+ * where the rest are. Same muted treatment as `.explorer-index`, because it is
+ * the same kind of thing — a note about the list rather than a member of it.
+ */
+.explorer-bound {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-xs);
+}
+
+.explorer-bound a {
+  color: var(--color-link);
+}
+
+/*
  * The page being read. Three signals, not one: a weight change, a left rule,
  * and the text colour. WCAG 1.4.1 — a reader who cannot distinguish the colour
  * still sees where they are, and `aria-current="page"` says it outright to a

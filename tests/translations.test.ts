@@ -73,7 +73,7 @@ const THEME_KEYS = ['themeLabel'] as const;
  * between a half-exercised key and a page reading "Drawing 3 of undefined
  * notes". Sampling the pairs is what makes the coverage real.
  */
-const COUNT_PAIR_KEYS = ['graphFigureLabel', 'graphBounded', 'graphBoundedLocal'] as const;
+const COUNT_PAIR_KEYS = ['graphFigureLabel', 'graphBounded', 'graphBoundedLocal', 'explorerBounded'] as const;
 /** The one entry taking a title, a relationship, and a count. */
 const NODE_KEYS = ['graphNodeLabel'] as const;
 
@@ -206,6 +206,7 @@ test('an accessible name contains the visible text of its own control', () => {
   const PAIRS = [
     ['graphExpand', 'graphExpandLabel'],
     ['graphExpandLocal', 'graphExpandLocalLabel'],
+    ['explorerExpand', 'explorerExpandLabel'],
   ] as const;
 
   for (const language of LANGUAGES) {

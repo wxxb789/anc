@@ -1,6 +1,6 @@
 ---
 /**
- * The collection explorer: every published note, grouped, as a real `<nav>`.
+ * The collection explorer: the corpus, grouped, as a real `<nav>`.
  *
  * Four properties are load-bearing, and each is a decision the parity plan's L5
  * records against Quartz's explorer:
@@ -21,6 +21,14 @@
  *    page, so without it every note's search record would carry the title of
  *    every other note. This is the defect TK-12 fixed for the back link and the
  *    heading anchors, and a rail is the largest possible instance of it.
+ *
+ * **Every group is listed; a large group's notes are windowed.** The rail used
+ * to render every published note on every page, which is quadratic in the
+ * corpus — `GROUP_WINDOW` in `collection-navigation.ts` carries the measurement
+ * and the reason the bound is what it is. What this component owes the bound is
+ * two things: the count beside a label is `group.total` rather than the size of
+ * the drawn slice, and the collection index link is rendered where a group has
+ * one, because on a windowed group that link is the expansion action.
  *
  * The heading is visually hidden rather than absent. A `<nav>` needs an
  * accessible name — two unnamed navigations on a page are indistinguishable in a
@@ -43,8 +51,11 @@ const t = translate(lang);
 {/* Nothing to browse is not an empty rail: a corpus with one note in one group
     would render a disclosure whose only content is the page already open. The
     threshold is two notes, below which the site map in the footer already says
-    everything this would. */}
-{groups.reduce((count, group) => count + group.notes.length, 0) > 1 && (
+    everything this would.
+
+    Summed over `total` rather than over `notes.length`, so the decision is about
+    how many notes the corpus has and not how many this page happens to draw. */}
+{groups.reduce((count, group) => count + group.total, 0) > 1 && (
   <nav class="explorer" aria-labelledby="explorer-title" data-pagefind-ignore>
     <h2 id="explorer-title" class="sr-only">{t.explorerHeading}</h2>
     <ul class="explorer-groups">
@@ -59,8 +70,13 @@ const t = translate(lang);
               <span class="explorer-label">{group.label}</span>
               {/* Text, not a badge: nothing here is carried by colour or shape
                   alone, and the count tells a reader whether opening the group
-                  costs them three lines or thirty. */}
-              <span class="explorer-count">{group.notes.length}</span>
+                  costs them three lines or thirty.
+
+                  `group.total`, never `group.notes.length`: past
+                  `GROUP_WINDOW` the two differ, and the number a reader needs is
+                  how large the collection is rather than how much of it this
+                  page drew. */}
+              <span class="explorer-count">{group.total}</span>
             </summary>
             {/* The collection's own index page, where it has one. The
                 uncollected group has no route — see `ExplorerGroup.route` — and
@@ -80,11 +96,18 @@ const t = translate(lang);
                       colour. A reader who cannot see the colour still knows
                       where they are.
 
+                      The window is what makes that mark *reachable*: past the
+                      rail's own row budget the marker rendered below the fold of
+                      the rail's scroll container, so on a 300-note site 40 of 40
+                      sampled pages showed a wall of titles that never included
+                      the reader's own. `windowAround` centres the slice on them.
+
                       `lang` on a title whose language differs from the page's.
-                      This rail lists the *whole corpus* on every route, so on a
-                      bilingual site it is the largest concentration of foreign-
-                      language text on any page — 4 of the 32 fixture notes on
-                      every English page, and 28 on every Chinese one. */}
+                      The rail is still the largest concentration of foreign-
+                      language text on any page on a bilingual site. Every group
+                      of the 32-note fixture corpus is under the bound, so both
+                      directions render whole there — 4 Chinese titles on every
+                      English page and 28 English ones on every Chinese page. */}
                   <a
                     href={note.route}
                     aria-current={note.isCurrent ? 'page' : undefined}
@@ -93,6 +116,32 @@ const t = translate(lang);
                 </li>
               ))}
             </ul>
+            {/* A windowed group says so, and says how to see the rest.
+                Rendered only where the window actually dropped something, so a
+                group drawing whole does not claim to be partial — the same rule
+                `NoteGraph.astro` applies to its own bound sentence, and the
+                same shown-of-total shape.
+
+                Without this the group is a contradiction a reader has to
+                resolve: a count of 376 beside twelve rows, with nothing saying
+                the twelve are a window. A screen reader hears "Uncollected,
+                376", walks twelve items, and reaches the end of the list.
+
+                The expansion link matters most on the group that has no
+                collection index — and that is not an edge case, it is the shape
+                every corpus this tool builds has, since
+                `scripts/markdown-to-artifact.ts` derives no `collection`. The
+                home page lists every published note, so that is where it goes;
+                a group with its own index already links it above and does not
+                need a second route to the same idea. */}
+            {group.total > group.notes.length && (
+              <p class="explorer-bound">
+                <span>{t.explorerBounded(group.notes.length, group.total)}</span>
+                {group.route === undefined && (
+                  <a href="/" aria-label={t.explorerExpandLabel}>{t.explorerExpand}</a>
+                )}
+              </p>
+            )}
           </details>
         </li>
       ))}

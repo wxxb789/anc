@@ -176,6 +176,26 @@ export interface Translation {
   explorerIndex: (collection: string) => string;
   /** The group holding notes that carry no collection. */
   uncollected: string;
+  /**
+   * What a windowed group states: how many of its notes the rail drew.
+   *
+   * The same shape `graphBounded` uses, for the same reason — a bounded view has
+   * to say it is bounded, or the count beside the label and the rows under it
+   * are a contradiction the reader has to resolve. `GROUP_WINDOW` carries why
+   * the rail is bounded at all.
+   */
+  explorerBounded: (shown: number, total: number) => string;
+  /**
+   * The expansion action on a group with no collection index to link.
+   *
+   * The uncollected group has no route of its own, and it is the group the CLI
+   * puts *every* note in — `markdown-to-artifact.ts` derives no `collection` —
+   * so without this the one corpus shape every user of this tool actually
+   * publishes would be the one shape whose window has no way out. It points at
+   * the home page, which lists every published note.
+   */
+  explorerExpand: string;
+  explorerExpandLabel: string;
 
   // --- Note lists ------------------------------------------------------------
   readNote: string;
@@ -389,6 +409,9 @@ const EN = {
 
   explorerHeading: 'Browse collections',
   explorerIndex: (collection) => `All ${collection} notes`,
+  explorerBounded: (shown, total) => `Showing ${shown} of ${total}.`,
+  explorerExpand: 'See every published note →',
+  explorerExpandLabel: 'See every published note, including those this rail does not list',
   uncollected: 'Uncollected',
 
   readNote: 'Read note →',
@@ -561,6 +584,9 @@ const ZH_CN = {
 
   explorerHeading: '浏览合集',
   explorerIndex: (collection) => `${collection} 的全部笔记`,
+  explorerBounded: (shown, total) => `共 ${total} 篇，此处列出 ${shown} 篇。`,
+  explorerExpand: '查看全部公开笔记 →',
+  explorerExpandLabel: '查看全部公开笔记，包括本导航栏未列出的部分',
   uncollected: '未归入合集',
 
   readNote: '阅读全文 →',

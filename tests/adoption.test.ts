@@ -25,19 +25,21 @@
  * spawns `bin/thoughtscape-publish.mjs`.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
-import { test } from 'vitest';
+import { describe, test } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
 import { CONFIG_TEMPLATE, parseInitArguments } from '../scripts/init-repository.ts';
 import { CONFIG_FILENAME, parseConfig, DEFAULTS } from '../scripts/load-config.ts';
 import { SEEDED_ENTRIES, SEEDED_HEADER } from '../scripts/seed-gitignore.ts';
 import { compilePackage } from '../scripts/compile-package.ts';
+import { GROUP_WINDOW } from '../src/lib/collection-navigation.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
@@ -854,4 +856,308 @@ test('action.yml is in no tarball this package produces', () => {
   } finally {
     rmSync(staged, { recursive: true, force: true });
   }
+});
+
+/* --------------------------------------------------------------- scale -- */
+
+/**
+ * The rail's per-page cost does not grow with the corpus.
+ *
+ * **The defect this closes was quadratic and it landed on the user's bill.** The
+ * explorer renders on every page and listed every published note, so a site paid
+ * n entries × n pages. Measured through this binary before the bound: 100 notes
+ * gave a 7,817 B rail on a 17,245 B page, and 300 gave 23,126 B on 32,566 B —
+ * 71% of what a reader downloaded was a list of the pages they had not asked
+ * for. At 77 B/entry that is 732 KB per page across 10,000 pages.
+ *
+ * **Built rather than modelled, and built by the shipped binary.** The rail is
+ * markup, so the claim is about output — `docs/gate-reading.md` case 5. It is
+ * also the CLI's own corpus shape that matters: `markdown-to-artifact.ts`
+ * derives no `collection`, so every note a user publishes lands in the single
+ * uncollected group, and a bound applied only to collection facets would leave
+ * every real user unbounded while every fixture stayed green.
+ *
+ * **Two sizes, because one measures a constant and two measure growth.** A fix
+ * that improved the constant and kept the slope would pass any single-size
+ * check. The sizes are 60 and 400 — far enough apart that a per-page cost still
+ * proportional to the corpus cannot hide in the noise, and small enough that two
+ * full builds stay inside one test; `scripts/generate-corpus.ts` produces both
+ * from one seed.
+ *
+ * **Sequential with the rendered gate below, and that is a measurement rather
+ * than tidiness.** Each of the two runs a whole Astro build, and run
+ * concurrently they took enough CPU to push `tests/math-and-diagrams.test.ts`
+ * past the 30 s `testTimeout` — on a file that finishes in 17 s alone — and to
+ * redden `tests/backlink-surfaces.test.ts`, which builds its own fixture. Both
+ * were flakes in neighbours rather than defects in either file, and both
+ * disappeared under `--no-file-parallelism`. `concurrent: false` buys the same
+ * result for these two without slackening the global timeout, which would
+ * loosen every gate in the repository to settle one. Spelled as the option
+ * rather than as `describe.sequential`, which Vitest 4 deprecates in favour of
+ * exactly this — `astro check` reports the chained form as `ts(6385)`.
+ */
+describe('rail scale', { concurrent: false }, () => {
+test('the explorer does not grow with the corpus', () => {
+  /** The rail's own bytes and links on one built page. */
+  const railOf = (html: string): { bytes: number; links: number; counts: number[] } | undefined => {
+    const start = html.indexOf('<nav class="explorer"');
+    if (start < 0) return undefined;
+    const end = html.indexOf('</nav>', start);
+    const rail = html.slice(start, end + '</nav>'.length);
+    return {
+      bytes: Buffer.byteLength(rail, 'utf8'),
+      links: (rail.match(/<li><a href="\/notes\//g) ?? []).length,
+      // The number beside each group's label, which must be the collection's
+      // size and not the window's.
+      counts: [...rail.matchAll(/<span class="explorer-count">(\d+)<\/span>/g)].map(([, n]) => Number(n)),
+    };
+  };
+
+  /** Build `notes` synthetic notes through the binary and measure one note page. */
+  const measure = (notes: number): { bytes: number; links: number; counts: number[]; pages: number; cards: number } =>
+    scratch(`tk36-scale-${notes}-`, (root) => {
+      const corpus = join(root, 'notes');
+      mkdirSync(corpus, { recursive: true });
+      // Awaited through a subprocess rather than by making this test async:
+      // `generateCorpus` is async and this file's `scratch` helper is not.
+      // `pathToFileURL` rather than a separator replacement — an import
+      // specifier on win32 is a URL, and `Q:\repos\…` is not one.
+      const generate = spawnSync(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          `import { generateCorpus } from ${JSON.stringify(pathToFileURL(join(ROOT, 'scripts/generate-corpus.ts')).href)};` +
+            `await generateCorpus(${JSON.stringify(corpus)}, { notes: ${notes}, seed: 7 });`,
+        ],
+        { encoding: 'utf8' },
+      );
+      assert.equal(generate.status, 0, `corpus generation failed:\n${generate.stdout}${generate.stderr}`);
+
+      const build = cli(root, 'build', '--content', 'notes', '--out', 'dist');
+      assert.equal(build.status, 0, `the ${notes}-note build failed:\n${build.output}`);
+
+      const noteDirectory = join(root, 'dist', 'notes');
+      const slugs = readdirSync(noteDirectory);
+      // A note page rather than the home page: the home page opens no group, so
+      // its rail is closed disclosures and would measure the wrong thing.
+      const rail = railOf(readFileSync(join(noteDirectory, slugs[0]!, 'index.html'), 'utf8'));
+      assert.ok(rail, `the ${notes}-note build renders no rail at all, so nothing was measured`);
+      // The home page is the *only* surface listing every note once the rail is
+      // windowed, so it is the last link of the reachability argument — and it
+      // was the ungated one. `tests/built-routes.test.ts` asserts the note grid
+      // covers the corpus, but behind `requireMultiEntry`, whose condition
+      // includes more than one collection facet; a CLI corpus has zero, so that
+      // gate skips on exactly the shape this tool produces. Counted here, on a
+      // build that already exists.
+      const home = readFileSync(join(root, 'dist', 'index.html'), 'utf8');
+      const cards = (home.match(/<article class="note-card">/g) ?? []).length;
+      return { ...rail, pages: slugs.length, cards };
+    })!;
+
+  const small = measure(60);
+  const large = measure(400);
+
+  // Non-vacuity in the only direction that matters: the corpora really do differ
+  // in size, so an equal rail is a bound rather than two runs of one corpus.
+  assert.ok(
+    large.pages > small.pages * 4,
+    `the two builds produced ${small.pages} and ${large.pages} note pages — they are not different corpora`,
+  );
+
+  // The property: the rail a reader downloads is the same size on a corpus
+  // more than six times larger. Asserted on links first, because that is the
+  // quantity that was O(n) and it names the defect; bytes follow from it and are
+  // checked with a margin for the titles' own lengths.
+  assert.equal(
+    large.links,
+    small.links,
+    `the rail carries ${small.links} note links at ${small.pages} pages and ${large.links} at ` +
+      `${large.pages} — its size still grows with the corpus`,
+  );
+  assert.ok(
+    large.bytes < small.bytes * 1.5,
+    `the rail is ${small.bytes} B on the small corpus and ${large.bytes} B on the large one — ` +
+      'a bound on the link count that leaves bytes growing is not a bound',
+  );
+
+  // And the bound is the one the model declares, so a change to `GROUP_WINDOW`
+  // moves this gate with it rather than leaving a literal behind.
+  assert.equal(small.links, GROUP_WINDOW, `the rail draws ${small.links} notes, not the declared window`);
+
+  // The count beside the group label is the *collection's* size, not the
+  // window's. **This can only be gated here.** The fixture corpus's largest
+  // group holds 11 notes against a bound of 12, so no corpus in this repository
+  // renders a group where the two numbers differ — `docs/gate-reading.md` case 3,
+  // and the reason this assertion sits in a gate that builds its own corpus
+  // rather than beside the other rail gates in `tests/built-routes.test.ts`.
+  // A count wired to the drawn slice would print 12 on a 376-note group and tell
+  // the reader their site is a thirtieth of its real size.
+  assert.deepEqual(
+    large.counts,
+    [large.pages],
+    `the rail's group count reads ${JSON.stringify(large.counts)} on a corpus of ${large.pages} notes — ` +
+      'the count is the size of the window rather than the size of the collection',
+  );
+
+  // **Nothing became unreachable.** The window is only defensible because the
+  // home page still lists every published note, and on a corpus this tool
+  // actually produces that is the last link of the argument: the rail draws 12,
+  // the uncollected group has no collection index to expand into, so the home
+  // page is where "see the rest" goes.
+  //
+  // It was also the ungated link. `tests/built-routes.test.ts` asserts the note
+  // grid covers the corpus, but behind `requireMultiEntry`, which requires more
+  // than one collection facet — and a CLI corpus has none, so that gate skips on
+  // precisely this shape. Checked at both sizes, because a grid that silently
+  // paginated past some threshold would satisfy the small one alone.
+  for (const [size, built] of [
+    [small.pages, small.cards],
+    [large.pages, large.cards],
+  ] as const) {
+    assert.equal(
+      built,
+      size,
+      `the home page lists ${built} of ${size} published notes — the rail is windowed, so a home ` +
+        'page that does not list the whole corpus makes the missing notes unreachable',
+    );
+  }
+}, 600_000);
+
+/**
+ * The reader's own position in the rail is on screen without scrolling the rail.
+ *
+ * **This is what made the bound a correctness fix rather than only a bytes fix,
+ * and it is measured in a browser because no other instrument can see it.** The
+ * rail's whole contextual claim is `aria-current="page"` — three non-colour
+ * signals in `global.css` and an announcement to a screen reader. But the rail
+ * is `max-height: calc(100vh - 7rem)` with `overflow-y: auto`, so past its own
+ * row budget that marker renders *below the fold of its own scroll container*:
+ * present in the markup, invisible to the reader, and every string gate in this
+ * repository green about it.
+ *
+ * Measured through the shipped binary before the bound, at 1280×720 over 40 note
+ * pages: at 100 notes 31 of 40 put the marker outside the visible box, and at
+ * 300 notes 40 of 40 did. A reader on a 300-note site was shown a wall of titles
+ * that never contained the one they were reading.
+ *
+ * 1280×720 because it is the smallest viewport at which the rail is a column at
+ * all — the two-column layout switches on at 64rem — and so the one with the
+ * fewest visible rows. A gate at 1440×900 would have 21 rows to play with and
+ * would pass a window this one refuses.
+ *
+ * **This is the only instrument that constrains `GROUP_WINDOW`'s value.** Every
+ * other gate over the window asserts its *shape* — centred, clamped, `total`
+ * distinct from the drawn slice — and is deliberately written in terms of the
+ * constant, so all of them stay green at any value. Measured: with the window at
+ * 40, `tests/collection-navigation.test.ts` is 20 of 20 green and only this test
+ * goes red. Anyone deleting or weakening it is removing the whole basis for the
+ * number, which is why it must report "could not look" as a skip rather than as
+ * a pass — `docs/gate-reading.md` case 3.
+ */
+test('the rail shows the reader their own position without scrolling', async (context) => {
+  const { chromium } = await import('playwright');
+  let executable: string | undefined;
+  try {
+    executable = chromium.executablePath();
+  } catch {
+    executable = undefined;
+  }
+  if (executable === undefined || !existsSync(executable)) {
+    // `context.skip` with the reason, not a bare `return` — which Vitest records
+    // as **passed**, so a host with no browser would report the one gate behind
+    // this bound as green having measured nothing. That is exactly the shape
+    // `docs/gate-reading.md` case 3 names: "could not look" must not be spelled
+    // like "looked and found nothing". `tests/rendered-page.test.ts` reaches the
+    // same place through its own `requireBrowser`.
+    return context.skip('run `pnpm exec playwright install chromium` for the rendered rail gate');
+  }
+
+  const directory = mkdtempSync(join(tmpdir(), 'tk36-rendered-'));
+  const server = createServer((request, response) => {
+    let path = join(directory, 'dist', decodeURIComponent((request.url ?? '/').split('?')[0]!));
+    if (existsSync(path) && statSync(path).isDirectory()) path = join(path, 'index.html');
+    if (!existsSync(path)) {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    response.writeHead(200, {
+      'content-type': path.endsWith('.css') ? 'text/css; charset=utf-8' : 'text/html; charset=utf-8',
+    });
+    response.end(readFileSync(path));
+  });
+
+  try {
+    const corpus = join(directory, 'notes');
+    mkdirSync(corpus, { recursive: true });
+    const generate = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `import { generateCorpus } from ${JSON.stringify(pathToFileURL(join(ROOT, 'scripts/generate-corpus.ts')).href)};` +
+          `await generateCorpus(${JSON.stringify(corpus)}, { notes: 300, seed: 7 });`,
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.equal(generate.status, 0, `corpus generation failed:\n${generate.stdout}${generate.stderr}`);
+
+    const build = cli(directory, 'build', '--content', 'notes', '--out', 'dist');
+    assert.equal(build.status, 0, `the build failed:\n${build.output}`);
+
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+      const slugs = readdirSync(join(directory, 'dist', 'notes'));
+      // A sample rather than all 285: each navigation is a real page load, and
+      // 40 spread across the corpus is enough to have caught the defect at every
+      // size it was measured at — it was 40 of 40 failing before the bound.
+      const step = Math.max(1, Math.floor(slugs.length / 40));
+      const sampled = slugs.filter((_, index) => index % step === 0).slice(0, 40);
+
+      const hidden: string[] = [];
+      let checked = 0;
+      for (const slug of sampled) {
+        await page.goto(`${origin}/notes/${slug}/`, { waitUntil: 'load' });
+        const state = await page.evaluate(() => {
+          const rail = document.querySelector('.explorer');
+          if (rail === null) return 'no-rail';
+          const current = rail.querySelector('[aria-current="page"]');
+          if (current === null) return 'no-marker';
+          const railBox = rail.getBoundingClientRect();
+          const markerBox = current.getBoundingClientRect();
+          // Inside the rail's own visible box, at the scroll position the reader
+          // arrives at. Not `isIntersecting` against the viewport, which would
+          // be green for a marker the rail has scrolled out of view.
+          return markerBox.top >= railBox.top && markerBox.bottom <= railBox.bottom
+            ? 'visible'
+            : 'below-the-fold';
+        });
+        assert.notEqual(state, 'no-rail', `${slug}: renders no rail, so nothing was measured`);
+        assert.notEqual(state, 'no-marker', `${slug}: the rail does not mark the note being read`);
+        checked += 1;
+        if (state !== 'visible') hidden.push(slug);
+      }
+
+      // Non-vacuity: a run that navigated nowhere reports zero hidden markers
+      // exactly like a run where every marker was visible.
+      assert.ok(checked >= 30, `only ${checked} pages were measured, so a clean result proves little`);
+      assert.deepEqual(
+        hidden,
+        [],
+        `${hidden.length} of ${checked} pages render aria-current="page" outside the rail's visible ` +
+          'box — the reader is shown a list of notes that does not contain the one they are reading',
+      );
+    } finally {
+      await browser.close();
+    }
+  } finally {
+    server.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 600_000);
 });

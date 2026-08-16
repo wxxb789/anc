@@ -62,7 +62,14 @@ const description = describe(Astro.props.description, t.siteDescription);
  * carries the same navigation frame by construction — a page that forgets to
  * ask is the failure mode this prevents, and it is the same reason
  * `SiteMetadata` lives here. `Astro.url.pathname` is what makes the rail
- * contextual: it opens the group holding the current page and no other.
+ * contextual: it opens the group holding the current page and no other, and it
+ * is what centres each group's window on the note being read.
+ *
+ * **This line is why the rail's size is a scaling property rather than a page's
+ * own concern.** It renders on every route, so whatever it costs is paid once
+ * per published page — the rail listing the whole corpus made a site O(n²) in
+ * bytes. `GROUP_WINDOW` in `collection-navigation.ts` is the bound that fixed
+ * it and carries the measurements.
  */
 const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncollected);
 ---
@@ -185,8 +192,8 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncol
         reaches the article before the site-wide navigation, and a reader with no
         CSS gets the article first. Placing the explorer visually before the
         article — Quartz's left-hand shape — would mean either a DOM order that
-        puts a list of every title on the site ahead of the page's own content,
-        or a `grid-column` that makes the tab order disagree with the layout. */}
+        puts the site's whole navigation ahead of the page's own content, or a
+        `grid-column` that makes the tab order disagree with the layout. */}
     <div class="page-shell">
       <main id="main" tabindex="-1">
         <slot />
