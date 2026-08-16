@@ -2,9 +2,9 @@
   "version": 1,
   "entries": [
     {
-      "slug": "add-password-to-pfx-windows",
-      "title": "Adding a Password to a PFX Certificate on Windows",
-      "excerpt": "Adding a Password to a PFX Certificate on Windows Introduction A PFX (Personal Information Exchange) file is a container format that stores both a certificate and its associated private key in a single encrypted file. Th"
+      "slug": "reading-a-build-log",
+      "title": "Reading a Build Log Without Trusting It",
+      "excerpt": "A build log is a claim about what happened, written by the thing that did it. That makes it useful and makes it the wrong place to look first when the claim and the artifact disagree."
     }
   ]
 }

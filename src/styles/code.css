@@ -52,6 +52,8 @@
 
 .token-keyword,
 .token-control-flow,
+/* bash grammar spells a for/select loop this way; it is control flow. */
+.token-for-or-select,
 .token-module,
 .token-operator,
 .token-arrow,
@@ -67,7 +69,7 @@
  * Container tokens, which wrap other tokens rather than marking a leaf: batch's
  * `command` spans a whole command line with `keyword` nested inside it, and
  * `namespace` wraps a qualified name. Colouring one paints everything it
- * contains — `openssl pkcs12 -in original.pfx` came out entirely purple — so
+ * contains — a whole command line came out entirely purple — so
  * they inherit and let the nested token carry the meaning. `inherit` is
  * declared rather than omitted so the intent is visible and the rule exists.
  */
@@ -94,6 +96,16 @@
 .token-parameter,
 .token-function,
 .token-function-variable,
+/* `method` and `property-access` are what Prism calls a function and a field
+   reached through a receiver, in the grammars that distinguish them —
+   JavaScript among them. Both were missing while every fence in this
+   repository's own corpus was `cmd`, which produces neither, so the gate that
+   requires every shipped class to be styled had nothing to catch. Replacing
+   that corpus with one carrying a JavaScript fence is what surfaced them.
+   Grouped with `function` because they are the same things with a dot in
+   front. */
+.token-method,
+.token-property-access,
 .token-builtin,
 .token-class-name {
   color: var(--color-syntax-literal);

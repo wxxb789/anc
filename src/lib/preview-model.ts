@@ -46,7 +46,7 @@ export const FRAGMENT_LIMIT = 80;
  *
  * Shown **verbatim**, decoded and bounded, rather than turned back into prose.
  * The payload carries a note's title and excerpt and nothing per-heading, so the
- * heading's real text is not available here; de-slugging `add-password-to-pfx`
+ * heading's real text is not available here; de-slugging `reading-a-build-log`
  * into something title-like would be a guess rendered in the shape of a fact.
  * The fragment is what the address bar will show on arrival, so it is the one
  * thing that is certainly true about the target.
