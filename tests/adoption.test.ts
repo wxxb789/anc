@@ -660,6 +660,17 @@ test('the action prints nothing derived from the user\'s repository', () => {
     '$PUBLISH_CONTENT_DIR',
     '$PUBLISH_OUT_DIR',
     '$GITHUB_ACTION_PATH',
+    // The pnpm version the install step passes to `npm install -g`. Set by the
+    // preceding step from the generator's own `packageManager` key, so its value
+    // is a literal of this package's manifest rather than anything discovered in
+    // the user's repository — the same standing as `$entry` below. It reaches an
+    // argument, not the log.
+    //
+    // It is a *variable* rather than a `$(node -p …)` deliberately: admitting a
+    // second command substitution here would widen a closed allowlist whose
+    // whole value is that it is closed, so the value crosses through
+    // `$GITHUB_ENV` instead and arrives as an ordinary reference.
+    '$PNPM_SPEC',
     '$entry',
     '$(git rev-parse --is-shallow-repository)',
     "$(node -p 'const m=require(process.env.GITHUB_ACTION_PATH+\"/package.json\"); Object.values(m.bin)[0]')",

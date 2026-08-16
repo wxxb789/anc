@@ -86,6 +86,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+import { parse as parseYaml } from 'yaml';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -242,6 +243,82 @@ function manifestFiles(): { roots: string[]; excluded: string[] } {
 }
 
 /**
+ * The exact version each direct dependency resolves to, read from
+ * `pnpm-lock.yaml`.
+ *
+ * **Why the staged manifest is pinned at all.** A caret range in a published
+ * package is resolved fresh by whoever installs it, so `npx <name>@<version>`
+ * twice on the same version can produce two different dependency trees — and
+ * this tool's output is a website. The generator is pinned exactly by the
+ * version a user names; without this its dependency tree is not.
+ *
+ * **Why this is the only lever left, measured rather than assumed.** npm gives a
+ * *publisher* two mechanisms and takes back the two obvious ones:
+ *
+ * - `npm-shrinkwrap.json`, the file invented for exactly this, is **gone**. npm
+ *   12's own `package-lock-json.md` states it "is no longer read or written",
+ *   and that a shrinkwrap shipped inside a dependency's tarball "is ignored".
+ *   Measured against npm 12.0.2: `npm-packlist` force-excludes it (`lib/index.js`
+ *   lists `/npm-shrinkwrap.json` among the rules that cannot be un-ignored), and
+ *   a real `npm pack` of a probe carrying one produced a tarball without it —
+ *   with and without a `files` entry naming it.
+ * - `overrides`, which would reach transitives, is documented as considered
+ *   "only in the root `package.json` for a project… Overrides in installed
+ *   dependencies are not considered". A published package cannot use it.
+ * - `bundleDependencies` is what npm's own docs name as the replacement, and it
+ *   is refused here on measurement: a production install of this package's tree
+ *   is **325 MB across 299 packages**, and that figure is for *one* platform —
+ *   pnpm resolved only this host's three native binaries (`@esbuild/win32-x64`,
+ *   `@astrojs/compiler-binding-win32-x64-msvc`, and one more), because the rest
+ *   are optional dependencies gated on `os`/`cpu`. Bundling vendors whatever the
+ *   packing machine happened to install, so the tarball would be both enormous
+ *   and wrong for every consumer on another platform.
+ *
+ * That leaves pinning the dependencies, which is what this does.
+ *
+ * **What it does not do, stated because the ceiling is real.** Exact direct pins
+ * fix 11 entries of a 553-entry lockfile; the production closure is 299
+ * packages, and `astro` alone declares 48 caret ranges of its own. A consumer's
+ * transitive tree still floats. Pinning the direct dependencies removes the
+ * whole class this project controls and cannot remove the class it does not
+ * publish — the alternative that would is `bundleDependencies`, priced above.
+ *
+ * **Derived, never written down.** A hand-maintained list is stale the first
+ * time somebody runs `pnpm update`, and the version is read from the lockfile
+ * rather than from `node_modules` because the lockfile is the file that travels
+ * with the repository: a tree installed from a *stale* lockfile would otherwise
+ * pin what a developer happens to have on disk. `tests/pinning.test.ts` fails if
+ * a shipped range survives this rewrite.
+ */
+function lockedVersions(): Map<string, string> {
+  const lock = parseYaml(readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8')) as {
+    importers?: Record<
+      string,
+      {
+        dependencies?: Record<string, { version?: string }>;
+        optionalDependencies?: Record<string, { version?: string }>;
+      }
+    >;
+  };
+  // Both kinds pnpm resolves for this importer, because both are rewritten. An
+  // `optionalDependencies` entry lives under its own key in the lockfile, so
+  // reading only `dependencies` would make every optional dependency look
+  // unresolvable and throw on a manifest that is in fact perfectly in step.
+  const importer = lock.importers?.['.'];
+  const entries = { ...importer?.dependencies, ...importer?.optionalDependencies };
+
+  return new Map(
+    Object.entries(entries).map(([name, entry]) => [
+      name,
+      // A lockfile version carries its peer resolution in parentheses —
+      // `7.1.6(@types/node@26.1.2)(yaml@2.9.0)` — which is pnpm's own notation
+      // and not a version npm can install. The version is the part before it.
+      (entry.version ?? '').split('(')[0]!,
+    ]),
+  );
+}
+
+/**
  * Stage a complete, compiled copy of this package at `destination`.
  *
  * A staged copy rather than an in-place compile, and that is the whole point:
@@ -324,6 +401,42 @@ export function compilePackage(destination: string): { compiled: number; rewritt
   const staged = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
   delete staged['scripts'];
   delete staged['devDependencies'];
+
+  // And every dependency range becomes the exact version the lockfile resolved,
+  // so that installing this tarball twice cannot produce two different trees.
+  // See `lockedVersions` for why this is the mechanism rather than a shrinkwrap.
+  //
+  // **Both installed kinds, not just `dependencies`.** npm installs
+  // `optionalDependencies` by default — the "optional" is about tolerating a
+  // failed install, not about being skipped — so a range left there is the same
+  // unpinned tree this rewrite exists to remove, reported as closed. Measured: a
+  // caret range added under that key shipped verbatim to a consumer while the
+  // gates stayed green. `peerDependencies` is deliberately absent: a peer range
+  // is a statement about what a *host* must provide, and pinning it to one
+  // version would refuse hosts this package works with.
+  //
+  // A dependency the lockfile does not carry is fatal rather than skipped: it
+  // means the manifest and the lockfile have drifted, and the quiet outcome
+  // would be a tarball pinning some of its tree and floating the rest — which
+  // reads as pinned.
+  const locked = lockedVersions();
+  for (const kind of ['dependencies', 'optionalDependencies']) {
+    const declared = staged[kind] as Record<string, string> | undefined;
+    if (declared === undefined) continue;
+    staged[kind] = Object.fromEntries(
+      Object.keys(declared).map((name) => {
+        const version = locked.get(name);
+        if (version === undefined || version === '') {
+          throw new Error(
+            `pnpm-lock.yaml resolves no version for "${name}" (${kind}), so the packaged manifest ` +
+              'cannot pin it — run `pnpm install` to bring the lockfile back in step with package.json',
+          );
+        }
+        return [name, version];
+      }),
+    );
+  }
+
   writeFileSync(manifestPath, `${JSON.stringify(staged, null, 2)}\n`, 'utf8');
 
   return { compiled: sources.length, rewritten };

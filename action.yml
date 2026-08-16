@@ -58,11 +58,14 @@
 # the binary, which composes its own lines under the same rule and puts the names
 # in a report under the git directory that no `git add` can reach.
 #
-# The two commands that are not ours are `git rev-parse`, which answers `true` or
-# `false`, and `npm install`, silenced to `--loglevel=error`. npm's own failure
-# output does carry paths, and they are paths into the *action's* dependency tree
-# on the runner — never the user's notes, which npm never reads. A dependency
-# install that fails silently would be the worse trade.
+# The commands that are not ours are `git rev-parse`, which answers `true` or
+# `false`, and the two installers, both at `--loglevel=error`. What each prints
+# there was measured rather than assumed, because they differ: `pnpm install`
+# prints nothing at all on success, while `npm install -g` still prints one line
+# of the form `added 1 package in 2s` — a count and a duration, naming nothing.
+# On failure both report, and their output carries paths into the *action's*
+# dependency tree on the runner — never the user's notes, which neither installer
+# reads. A dependency install that failed silently would be the worse trade.
 
 name: Publish a site from a directory of Markdown
 description: >-
@@ -152,32 +155,105 @@ runs:
           }
         '
 
-    # `npm`, not `pnpm`, and the reason is a measured constraint rather than a
-    # preference. `AGENTS.md` names pnpm as this repository's package manager, and
-    # `pnpm/setup` reads the pin from `packageManager` — but its `package-json-file`
-    # input is documented as resolved **relative to `GITHUB_WORKSPACE`**, and
-    # `$GITHUB_ACTION_PATH` is not inside the workspace. So the action that would
-    # honour the pin cannot see the file carrying it. npm ships with every Node on
-    # every runner and needs no setup step at all.
+    # **pnpm, against the lockfile that is already here.** This step used to run
+    # `npm install --omit=dev`, and the defect it left open was written up in this
+    # comment rather than fixed: `npm install` ignores `pnpm-lock.yaml` and
+    # resolves the caret ranges in `package.json` fresh, so a dependency's new
+    # minor reached a user's build with no diff in their repository. The generator
+    # was pinned exactly by the ref in `uses:` and its dependency tree was not, so
+    # two builds of the same commit could differ. For a tool whose output is a
+    # published website that is a supply-chain hole, and a comment is not a fix.
     #
-    # The consequence, named rather than hidden: `npm install` ignores
-    # `pnpm-lock.yaml` and resolves the caret ranges in `package.json` fresh, so a
-    # dependency's new minor can reach a user's build without any diff in their
-    # repository. That is the caveat plan §5.3 attaches to version pinning, one
-    # layer down — the *generator* is pinned exactly, by the ref in `uses:`; its
-    # dependency tree is not. Closing it means committing a `package-lock.json`
+    # **The old comment's premise was false when it was written, not merely
+    # out of date.** It said closing this "means committing a `package-lock.json`
     # for a repository that installs with pnpm, which is a second lockfile and its
-    # own drift; it is left open deliberately and belongs to whoever publishes the
-    # package, since `npx` on a published version has the same property.
+    # own drift", and left a P0 open on that cost. There was no such cost. The
+    # runner checks out the generator's *whole repository* at
+    # `$GITHUB_ACTION_PATH`, so `pnpm-lock.yaml` — every one of its 553 resolved
+    # entries, each with an integrity hash — was already on disk beside this file,
+    # at the exact commit the user's ref names. The complete pin was being shipped
+    # to the runner and thrown away by the installer. Nothing had to be committed
+    # and no second lockfile had to be invented; the paragraph reasoned about what
+    # would have to be *added* and never checked what was already there.
     #
-    # `--omit=dev` because a user's build needs none of the gates. Measured on a
-    # `git archive` checkout of this repository, a production install leaves
-    # `astro`, `pagefind`, and `yaml` present and `vitest`, `typescript`, and
-    # `@astrojs/check` absent — and the build runs.
+    # `--frozen-lockfile` is what stops it being thrown away, and it *refuses*
+    # rather than resolving if the lockfile and `package.json` have drifted apart
+    # — so a stale lockfile is a loud failure rather than a silent fresh
+    # resolution. It is also a strictly stronger pin than rewriting the direct
+    # dependencies, which is what the publish path has to settle for: the lockfile
+    # covers the transitive tree, all 553 entries, and not merely the 11 this
+    # manifest names.
+    #
+    # `pnpm/action-setup` is still not available — not for the `package-json-file`
+    # reason the old comment gave, but because a composite action calling another
+    # action is what `tests/adoption.test.ts` forbids outright, since anything it
+    # calls may deploy. Corepack, the other obvious route, is worse than
+    # unavailable: it is **excluded from Node from 25.0.0** (nodejs/corepack
+    # README), so building on it would be building on something already leaving.
+    # So pnpm is installed by npm, at the version `packageManager` already pins —
+    # read out of the manifest rather than written here, because a literal would
+    # be a second pin that drifts from the first.
+    #
+    # Two properties come along with pnpm that npm never gave this step. The
+    # checkout also carries `pnpm-workspace.yaml`, whose `allowBuilds` is an
+    # approval list for install scripts, so a new dependency cannot begin running
+    # one unnoticed in a stranger's CI. And `--prod` omits the gates, measured:
+    # `astro`, `pagefind` and `yaml` present, `vitest`, `typescript` and
+    # `@astrojs/check` absent, and the build runs.
+    #
+    # **What `allowBuilds` costs, named rather than sold as free.** A package in
+    # neither direction of that list is unreviewed and *fails* the install, so
+    # adding a dependency whose install script matters breaks every user's build
+    # until this repository approves it — and the message tells a stranger to run
+    # `pnpm approve-builds` in a repository they do not own and cannot fix. That
+    # is the right default for a tool that publishes websites, since the
+    # alternative is an unreviewed postinstall running in every adopter's CI, but
+    # the failure lands on the adopter and the fix is only ever available here.
+    #
+    # `--loglevel=error` because pnpm's default reporter prints the runner's
+    # content-addressable store path. That is a path into the *action's* own
+    # dependency tree and never the user's notes, but a world-readable log has no
+    # use for it.
+    #
+    # **The pnpm version reaches npm through the environment, not through a
+    # command substitution**, and the reason is a gate rather than taste:
+    # `tests/adoption.test.ts` refuses any expansion in a `run:` body that is not
+    # on a closed allowlist, because command substitution is how a directory
+    # listing reaches a world-readable log. Writing `npm install -g "$(node -p
+    # …)"` would have meant widening that allowlist to admit a second `node -p`,
+    # which is the wrong direction for a rule whose whole value is that it is
+    # closed. `$GITHUB_ENV` is GitHub's own mechanism for passing a value between
+    # steps, and `$PNPM_SPEC` is then an ordinary variable reference.
+    #
+    # **It is a separate step because `$GITHUB_ENV` only reaches _later_ steps.**
+    # A variable written to that file during a step is not in the environment of
+    # the same step — so a single step would run `npm install -g ""`, which is
+    # not an error npm reports usefully. Split, the value is set here and read
+    # below.
+    #
+    # The `+sha512.…` tail `packageManager` may carry is stripped: it is
+    # corepack's integrity hash, not part of an npm specifier, and a spec of the
+    # form `pnpm@<version>+sha512.…` fails on it. The version itself is
+    # deliberately not written anywhere in this file — `tests/pinning.test.ts`
+    # forbids it, including in a comment, because a second spelling is the drift
+    # the derivation exists to remove.
+    - name: Read the pinned pnpm version
+      shell: bash
+      run: |
+        node -e '
+          const { readFileSync, appendFileSync } = require("node:fs");
+          const manifest = JSON.parse(readFileSync(process.env.GITHUB_ACTION_PATH + "/package.json", "utf8"));
+          const declared = manifest.packageManager;
+          if (typeof declared !== "string") throw new Error("the generator declares no packageManager");
+          appendFileSync(process.env.GITHUB_ENV, "PNPM_SPEC=" + declared.split("+")[0] + "\n");
+        '
+
     - name: Install the generator's dependencies
       shell: bash
       working-directory: ${{ github.action_path }}
-      run: npm install --omit=dev --no-audit --no-fund --loglevel=error
+      run: |
+        npm install -g "$PNPM_SPEC" --loglevel=error
+        pnpm install --frozen-lockfile --prod --loglevel=error
 
     # The one step that reads the user's notes. Every path here is the user's own
     # input echoed back into an argument, never into the log: the binary prints
