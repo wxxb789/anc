@@ -149,8 +149,9 @@ every gate above is enforced only by running `pnpm run verify` on the host.
   Both that file and the requirements say "six of nine"; the list is now eight bullets and five
   are enforced. The arithmetic drifted, the identity of the uncovered three did not.
 - `pnpm run build:fixture`, the 32-note corpus that un-skips the multi-entry gates. Not in
-  `verify` because it builds the site twice. It cannot run concurrently with the suite — see
-  the `.astro/` collision below.
+  `verify` because it builds the site twice. It *can* now run concurrently with the suite — the
+  two interlock over `dist/` and wait for each other (`scripts/dist-lock.ts`), which the
+  "Known-stale" table records was not always true.
 - `pnpm run pack:tarball`, which compiles this package's TypeScript to JavaScript and packs
   the tarball. Not in `verify` because the artifact is a release step, not a gate — but the
   compile itself *is* gated: `tests/packaging.test.ts` stages a package on every run and
@@ -218,7 +219,7 @@ meeting one of these has met a known gap, not a discovery.
 | `src/pages/about.astro`, `privacy.astro` | shipped pages; plan §4.4 says notes `init` seeds. TK-32 built `init` and deliberately did not seed them — that row is tied to deleting the two pages, which is not TK-32's scope, and a seeded note beside a shipped page contradicting it is worse than neither | unassigned |
 | `og:image` | never emitted; `SOCIAL_CARD_PATH` is `undefined` and no config key sets it | unassigned |
 | The report state directory | grows without pruning. **The key is per-directory, not per-build** — `sha256(realpath(cwd))`, a pure function of the path. A count rising once per build was three agents and a `mkdtemp`-heavy suite sharing a host, and reading that count as an identity is lesson 1 of `docs/gate-reading.md` committed against itself | unassigned |
-| `.astro/` as a shared staging path | `scripts/build-fixture.ts:39` runs `pnpm exec astro build` with the repository as its cwd, so its staging and its `dist/` are the ones the suite is reading. **`pnpm run build:fixture` and the test suite cannot run concurrently** — that is the whole collision, and `rm -rf .astro` plus a re-run settles any red it caused. Earlier notes here blamed `tests/config.test.ts:1337`; measured, that gate's build fails on the malformed config before writing any directory, so it creates no staging at all and was never the source | unassigned |
+| `dist/` as a shared output path | **Fixed.** `scripts/dist-lock.ts` interlocks the three commands that write or read it — the suite (vitest `globalSetup`), `pnpm run build`, and `build:fixture` — so they wait for each other instead of emptying a directory another is reading. The row this replaces blamed `.astro/`, which was wrong for three tickets: measured, `getOutDirWithinCwd` returns an `outDir` under cwd unchanged, the binary stages under `PACKAGE_ROOT` after chdir'ing there, and 24 concurrent binary builds against a live suite were all clean. What collided was `emptyDir(config.outDir)` (`astro/dist/core/build/static-build.js:64`) over the one `dist/`. See `.tmp/staging-collision-report.md` | closed |
 | `src/lib/routes.ts` collision messages | say "the exporter", which the user cannot edit | unassigned |
 | `REDIRECT_RULES` | `[]` and cannot grow from a corpus; nothing promises a moved note keeps its URL | unassigned |
 

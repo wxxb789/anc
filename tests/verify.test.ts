@@ -261,12 +261,33 @@ test('the residue scan is a blocking link of the build, not an advisory step', (
   // Pages runs `pnpm run build` and nothing else. A scan that lived only in
   // `verify` would be enforced on this machine and absent from the host that
   // publishes the artifact — which is the wrong way round for a privacy gate.
-  assert.match(
-    build,
-    /pnpm run scan:residue\s*$/,
-    'the residue scan is not the last link of `build`, so a build could ship an unscanned dist/',
+  //
+  // **The chain moved out of `package.json` and into `scripts/build-site.ts`**,
+  // a wrapper that holds the `dist/` lock across every step — which no single
+  // step can do, since the five are five processes and the writing spans three
+  // of them. So the property is read where the chain now lives. It is a stronger
+  // form than the string match it replaces: the steps are an ordered array, so
+  // "last" is a position rather than a regex anchor, and "blocking" is a
+  // non-zero return rather than an `&&`.
+  assert.match(build, /scripts\/build-site\.ts/, '`build` no longer runs the chain wrapper');
+
+  const wrapper = readFileSync(new URL('../scripts/build-site.ts', import.meta.url), 'utf8');
+  const steps = [...wrapper.matchAll(/\['node', 'scripts\/([\w-]+)\.ts'\]|\['pnpm', 'exec', '(astro)'/g)].map(
+    (match) => match[1] ?? match[2]!,
   );
-  assert.match(build, /&&\s*pnpm run scan:residue/, 'the residue scan is not chained with `&&`, so it cannot block');
+  assert.ok(steps.length >= 4, `the wrapper declares only ${steps.length} steps`);
+  assert.equal(
+    steps.at(-1),
+    'scan-residue',
+    `the residue scan is not the last step of the build chain (${steps.join(' -> ')}), so a build ` +
+      'could ship an unscanned dist/',
+  );
+  // And a failing step stops the chain, which is what `&&` used to buy.
+  assert.match(
+    wrapper,
+    /if \(result\.status !== 0\) return/,
+    'the wrapper does not stop on a failing step, so a later gate could measure a half-written dist/',
+  );
   assert.ok(SCRIPTS['scan:residue'], 'package.json declares no `scan:residue` script');
 });
 

@@ -23,6 +23,19 @@ export default getViteConfig({
      */
     setupFiles: ['./tests/setup-state-directory.ts'],
     /**
+     * Hold a lock over `dist/` for the whole run.
+     *
+     * Seven test files read the published `dist/`, and `pnpm run build:fixture`
+     * empties and rewrites it — `astro/dist/core/build/static-build.js:64` calls
+     * `emptyDir(outDir)` before writing. Run concurrently, the gates read a
+     * directory that is empty at that instant.
+     *
+     * `globalSetup`, not `setupFiles`: setup files run once per *worker*, and
+     * `isolate: true` gives each of the thirty-one test files its own — so the
+     * lock would be taken thirty-one times and released when the first finished.
+     */
+    globalSetup: ['./tests/lock-dist.ts'],
+    /**
      * Raised from Vitest's 5 s default because a single render can now lay out
      * real diagrams.
      *

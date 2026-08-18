@@ -362,6 +362,12 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
 
   // `build` reaches its steps through the named scripts it chains, so resolve
   // one level: `pnpm run emit:redirects` is `node scripts/emit-redirects.ts`.
+  //
+  // And since the chain moved into `scripts/build-site.ts` — a wrapper that
+  // holds the `dist/` lock across all five steps, which no single step can do —
+  // the steps are read from *that* file when `build` names it. Without this the
+  // gate resolves `build` to one script name, finds `build-site` in the binary
+  // too, and passes while comparing nothing.
   const expanded = build
     .split('&&')
     .map((link) => {
@@ -369,9 +375,16 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
       return named === undefined ? link : (MANIFEST.scripts[named] ?? link);
     })
     .join(' && ');
+  const wrapper = /scripts\/(build-site)\.ts/.exec(expanded)?.[1];
+  const chain =
+    wrapper === undefined ? expanded : `${expanded} ${readFileSync(join(ROOT, 'scripts', `${wrapper}.ts`), 'utf8')}`;
 
   const cli = readFileSync(join(ROOT, MANIFEST.bin['thoughtscape-publish']!), 'utf8');
-  const missing = [...scriptsIn(expanded)].filter((step) => !scriptsIn(cli).has(step));
+  // The wrapper itself is not a build step — it is the thing that runs them —
+  // so the binary is not expected to import it.
+  const missing = [...scriptsIn(chain)].filter(
+    (step) => step !== 'build-site' && step !== 'dist-lock' && !scriptsIn(cli).has(step),
+  );
 
   assert.deepEqual(
     missing,
