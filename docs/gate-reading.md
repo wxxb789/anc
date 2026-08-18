@@ -1,13 +1,14 @@
 # Reading a gate's own result
 
-Five ways a gate lies about itself, each found here the hard way, each by a different ticket.
+Seven ways a gate lies about itself, each found here the hard way, each by a different ticket.
 They are collected because they were scattered across the ticket reports under `.tmp/` — a
 directory `.gitignore` names and which has already been deleted out from under a session once
 (TK-27 §9), taking one ticket's report with it for good. A lesson that costs a ticket to learn
 should not live somewhere a `rm` can end it.
 
-`AGENTS.md` carries the five in one line each, because every agent reads it and five lines is
-what a contract can afford. This file carries the measurement behind each, because that is
+`AGENTS.md` carries the first five in one line each, because every agent reads it and five lines
+is what a contract can afford. Cases 6 and 7 are about a *measurement* and a *claim* rather than
+a gate, which is why they live here only. This file carries the measurement behind each, because that is
 what makes one recognisable in the next instance rather than merely agreed with.
 
 **The unifying claim: the instrument has to be confirmed to have looked at the thing before
@@ -106,6 +107,82 @@ the strongest single case: 126 occurrences of one owner's name in a stranger's b
 only nine were in `.html`. A gate reading `dist/**/*.html` would have been blind to
 four whole classes of carrier: `robots.txt`, `rss.xml`, `sitemap.xml`, and the JavaScript
 bundles holding the storage prefix.
+
+
+## 6. A broken measurement can break in the direction that reads as good news
+
+A gate that fails is loud. A *measurement* that fails is a number, and a number arrives without
+a status. If the failure makes it smaller, and smaller is what you were hoping for, nothing in
+the result argues with you.
+
+**Measured — the render-cost report, in its own §"one methodological note".** The first bundle
+run reported Mermaid at **406 KB gzip across 62 chunks**, which is a plausible figure that
+would have gone straight into a recommendation. It was wrong: rolldown had left `dompurify`,
+`d3`, `katex`, `cytoscape` and their transitive dependencies **external**, because pnpm nests
+each package's own dependencies under `.pnpm/<name>@<version>/node_modules/` and a bundler
+pointed only at the top level does not find them. Resolved properly the same bundle is
+**967 KB across 111 chunks** — the first answer was 42% of the real one.
+
+The bundle was smaller *because it was broken*. Nothing in the output said so. It surfaced only
+when a browser was asked to run it and refused:
+`Failed to resolve module specifier "dompurify"`.
+
+**The second half is subtler and is the part worth carrying.** The obvious repair — hand the
+bundler a list of every `.pnpm/*/node_modules` directory — is also wrong, and fails in a way
+that at least announces itself. pnpm keeps several copies of a package at different versions,
+so a flat list resolves whichever directory comes first rather than the one the importer is
+actually linked to. Measured: rolldown reported
+`"curveBumpX" is not exported by d3/src/index.js` for a symbol that is plainly exported there,
+because the `d3-shape` it had found was not the one `d3` re-exports. `createRequire` from the
+*importing file* resolves the same copy the runtime would; nothing else does.
+
+The rule is not about bundlers. **Ask which direction your instrument's failure points.** A
+scanner that cannot open a file reports zero findings. A benchmark that skips the slow path
+reports a better time. A coverage tool that misses a directory reports higher coverage. Every
+one of those is the answer you wanted, and none of them will tell you. Where a measurement can
+fail silently, the check is a *positive control on the measurement itself* — for a bundle,
+"does it run"; for a scan, a planted needle; for a benchmark, a known-slow input.
+
+## 7. An unverified mechanism survives in the documentation long enough to be quoted back
+
+Case 6 is about a number nobody checked. This is about a *sentence* nobody checked, which is
+worse, because a sentence gets copied.
+
+**Measured — the staging-collision report, and the claim was written by this project about
+itself.** The test suite was intermittently red, always on a gate that spawned the binary. The
+explanation recorded was that `bin/thoughtscape-publish.mjs` chdirs to `PACKAGE_ROOT`, so
+Astro's `getOutDirWithinCwd` discards the per-run `outDir` and stages every concurrent build at
+a shared `<cwd>/.astro/`. It named a real function, quoted its real source, and reasoned
+correctly — from a premise about which branch that function takes that nobody had executed.
+
+Executing it takes one call:
+
+```
+getOutDirWithinCwd(<cwd>/.thoughtscape-build-abc/dist) -> unchanged
+getOutDirWithinCwd(<cwd>/dist)                         -> unchanged
+getOutDirWithinCwd(C:/elsewhere/dist)                  -> <cwd>/.astro/
+```
+
+The fallback fires only for an `outDir` **outside** cwd, and the binary stages *inside*
+`PACKAGE_ROOT` after chdir'ing there — so it never fires, and the per-run workspace really was
+per-run. Confirmed behaviourally: 24 concurrent binary builds against a live suite, every one
+exit 0, no crossover. The real cause was `emptyDir(config.outDir)`
+(`astro/dist/core/build/static-build.js:64`) on the single `dist/` that two commands write and
+seven test files read.
+
+**What makes this case 7 rather than an ordinary wrong guess is what happened next.** The claim
+reached `AGENTS.md`'s known-stale table, two ticket briefs, and a ticket report's own §8 — and
+was then quoted back to its author as established fact by the agent who had been told it. Three
+tickets tripped over the symptom while the explanation sat in the contract looking settled.
+Nothing in the sentence marked it as never-measured, because prose has no field for that.
+
+**So say how you know, in the sentence.** This repository's convention already exists and works:
+"measured", "executed", "reproduced" mean somebody ran it, and a claim carrying none of those
+words is a hypothesis wearing a statement's clothes. A one-line `node -e` would have settled
+this one before it was ever written down. Where that is not affordable, the honest form is the
+one `docs/` uses elsewhere — record the *stimulus* ("I ran X and got Y") rather than the
+verdict ("X does not happen"), because a stimulus invites correction and a verdict forecloses
+it.
 
 ---
 

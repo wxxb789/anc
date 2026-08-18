@@ -192,8 +192,8 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 
 ## Reading a gate's own result
 
-Five distinct ways to misread a mutation have been found here, each the hard way and each by a
-different ticket. They are collected in
+Seven distinct ways to misread an instrument have been found here, each the hard way and each
+by a different ticket. They are collected in
 [`docs/gate-reading.md`](docs/gate-reading.md) with the measurement behind each. The short
 form, because the cost of not knowing them is a ticket:
 
@@ -204,9 +204,13 @@ form, because the cost of not knowing them is a ticket:
 4. **A control that reimplements what it is controlling for measures the reimplementation.**
 5. **A fixture you construct encodes what you believe the pipeline emits**, so a gate over one
    measures your belief, not the product.
+6. **A broken measurement can break toward good news.** A bundle that failed to resolve half
+   its dependencies measured 42% of its real size, and nothing in the number said so.
+7. **An unverified mechanism survives in prose and gets quoted back as fact.** The `.astro/`
+   staging story reached this file and two briefs before one `node -e` falsified it.
 
 Unifying: the instrument has to be confirmed to have looked at the thing before its answer
-means anything.
+means anything — and so does the explanation.
 
 ## Known-stale, and whose
 
@@ -226,7 +230,7 @@ meeting one of these has met a known gap, not a discovery.
 ## Documentation
 
 - [`docs/adoption.md`](docs/adoption.md) — what a stranger with a notes repository does.
-- [`docs/gate-reading.md`](docs/gate-reading.md) — the five ways a gate lies about itself.
+- [`docs/gate-reading.md`](docs/gate-reading.md) — the seven ways an instrument lies about itself.
 - [`docs/public-knowledge-garden-requirements.md`](docs/public-knowledge-garden-requirements.md)
   — the requirements every section reference in a source comment points at.
 - [`docs/plans/ssg-generalisation-plan.md`](docs/plans/ssg-generalisation-plan.md) — the
