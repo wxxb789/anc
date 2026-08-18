@@ -1,0 +1,59 @@
+---
+/**
+ * Where every link to a note this build did not publish lands.
+ *
+ * **One page for every withheld target, and it names none of them.** A link to
+ * an excluded note used to render as plain text; owner decision 2026-08-17 made
+ * it live, so it needs a destination that exists and tells the truth. This is
+ * that destination — the same static document whichever link led here, which is
+ * what makes it safe: it has no subject, so it discloses nothing beyond what
+ * the link the reader already read told them.
+ *
+ * The disclosure that *does* now happen is in the linking page, not in this one:
+ * a wikilink's own text is its target path, and that text is what ships. See
+ * `scripts/resolve-links.ts`'s `unpublished` branch, where the decision and its
+ * cost are recorded.
+ *
+ * **It says the note will not appear later**, and that sentence is the reason
+ * this is a page rather than a redirect to `/404/`. A 404 tells a reader the
+ * address is wrong, which is false — the author wrote that link deliberately and
+ * the build resolved it to a real file. Saying "not published, and not pending"
+ * is the honest version, and it is the one a reader can act on by not coming
+ * back.
+ *
+ * `noindex`, via `isIndexable`: a crawler that indexed this would list one page
+ * under the text of every withheld link on the site, which is the disclosure
+ * concentrated rather than dispersed. Nothing links here from the chrome — the
+ * only inbound links are the ones a note body wrote — so it is reachable exactly
+ * as often as an author chose.
+ *
+ * The route segment is reserved in `src/lib/schema.ts`; without that a user's
+ * own `private.md` would capture every withheld link on their site.
+ */
+import Layout from '../layouts/Layout.astro';
+import { SITE_MAP } from '../lib/routes.ts';
+import { TITLE_SUFFIX } from '../lib/site.ts';
+import { NAV_LANGUAGE, translate } from '../lib/translations.ts';
+
+// The navigation language, for the same reason `404.astro` uses it: this page
+// renders no document, so there is no document language to read. A withheld
+// note has a language and this page may not consult it — reading one would make
+// the chrome here a fact about the file that was not published.
+const t = translate(NAV_LANGUAGE);
+---
+
+<Layout title={`${t.withheldTitle}${TITLE_SUFFIX}`} description={t.withheldDescription}>
+  <article class="prose">
+    <h1>{t.withheldTitle}</h1>
+
+    <p>{t.withheldBody}</p>
+
+    <p>{t.withheldPermanence}</p>
+
+    <h2>{t.notFoundWhereTo}</h2>
+
+    <ul>
+      {SITE_MAP.map((item) => <li><a href={item.href}>{t[item.label]}</a></li>)}
+    </ul>
+  </article>
+</Layout>

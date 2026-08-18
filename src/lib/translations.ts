@@ -372,6 +372,30 @@ export interface Translation {
   notFoundDescription: string;
   notFoundBody: string;
   notFoundWhereTo: string;
+
+  // --- Withheld ---------------------------------------------------------------
+  // One page, reached by every link whose target this build did not publish.
+  // Every string here is written to say what is true of *any* such target
+  // without naming one: this page has no subject, because it is the same static
+  // document whichever link led to it.
+  withheldTitle: string;
+  withheldDescription: string;
+  /** What happened, in the first sentence a reader meets. */
+  withheldBody: string;
+  /**
+   * That it will not change, said plainly.
+   *
+   * A page saying only "not published" invites a reader to come back and check.
+   * Nothing here schedules a publication, and implying one would be a promise
+   * the tool cannot keep on the author's behalf.
+   */
+  withheldPermanence: string;
+  // The heading over the way out is `notFoundWhereTo`, reused rather than
+  // duplicated: this page and the 404 offer the identical list for the identical
+  // reason, and a second key holding the same sentence is one that can drift
+  // into a different sentence with nothing to notice. `tests/translations.test.ts`
+  // compares across locales, not within one, so a within-locale duplicate is
+  // invisible to it.
 }
 
 const EN = {
@@ -530,6 +554,17 @@ const EN = {
     'have existed here — published pages that move keep a permanent redirect, so a page that was ' +
     'once here would have brought you along.',
   notFoundWhereTo: 'Where to go instead',
+
+  withheldTitle: 'Not published',
+  withheldDescription: 'The note this link points at is not part of this site.',
+  withheldBody:
+    'A published note links here, and the note it names was not published. Its text, its title, ' +
+    'and everything else about it are absent from this site — the link you followed is the only ' +
+    'trace of it here, and the words in that link were written by the author of the note you came ' +
+    'from.',
+  withheldPermanence:
+    'This is not a page that fills in later. Nothing about the excluded note is scheduled for ' +
+    'publication, and this address will say the same thing whenever you return to it.',
 } as const satisfies Translation;
 
 /**
@@ -693,6 +728,16 @@ const ZH_CN = {
     '该地址不对应任何已公开的页面。它可能已被撤回，也可能从未存在于此 — ' +
     '公开页面在迁移时会保留永久重定向，所以曾经在此的页面会把你带到新地址。',
   notFoundWhereTo: '可以去这些地方',
+
+  withheldTitle: '未公开',
+  withheldDescription: '此链接指向的笔记不属于本站。',
+  withheldBody:
+    '一篇已公开的笔记链接到了这里，而它所指向的那篇笔记并未公开。它的正文、标题以及其余内容' +
+    '都不在本站之中 — 你刚才点击的那个链接是它在此处留下的唯一痕迹，而链接里的文字出自你' +
+    '来时那篇笔记的作者之手。',
+  withheldPermanence:
+    '本页不会在日后补上内容。那篇未公开的笔记没有任何发布安排，无论何时回到这个地址，' +
+    '它都会是同样的说明。',
 } as const satisfies Translation;
 
 /**

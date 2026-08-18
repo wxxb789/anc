@@ -49,6 +49,7 @@ import {
   GRAPH_SEGMENT,
   REDIRECT_RULES,
   SITE_MAP,
+  WITHHELD_ROUTE,
   collectionFacets,
   collectionRoute,
   isRouteKey,
@@ -102,6 +103,12 @@ function expectedRoutes(): string[] {
     // Not a route in the navigable sense: the host serves it for an unmatched
     // request. It is listed because it is a file `dist/` must contain.
     '/404.html',
+    // Also not navigable, and not in `SITE_MAP` for that reason: the only links
+    // to it come from note bodies whose author wrote a link to a note this build
+    // did not publish. It is listed here because it is a file `dist/` must
+    // contain — a link that resolves to nothing would be worse than the plain
+    // text it replaced.
+    WITHHELD_ROUTE,
     ...entries.map((entry) => noteRoute(entry.slug)),
     ...tagFacets(entries).map((facet) => tagRoute(facet.key)),
     ...collectionFacets(entries).map((facet) => collectionRoute(facet.key)),

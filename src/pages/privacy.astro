@@ -35,6 +35,13 @@
  *
  * See `about.astro` for why this is still a shipped page rather than a note
  * `init` seeds into the user's own repository.
+ *
+ * **The Content section was rewritten on 2026-08-17**, for the same reason the
+ * paragraphs above it were: it said an excluded note "produces no page, no
+ * search entry, and no link", and the last clause stopped being true when the
+ * owner made links to withheld notes live. It now says what a reader can
+ * actually observe — the link exists, it carries the note's own path as often
+ * as not, and it leads to a page that says the note is not published.
  */
 import Layout from '../layouts/Layout.astro';
 import { TITLE_SUFFIX } from '../lib/site.ts';
@@ -98,9 +105,10 @@ import { TITLE_SUFFIX } from '../lib/site.ts';
 
     <p>
       This site is generated from a set of notes, and a note excluded from it produces no page, no
-      search entry, and no link. None of its content appears here. What can still appear is the
-      words a published note used to refer to it: a link pointing at an excluded note keeps its own
-      link text, which the author wrote. See <a href="/about/">About</a> for how that works.
+      search entry, and no content here. None of what it says appears. What does still appear is
+      the words a published note used to refer to it: a link pointing at an excluded note keeps its
+      own text — often the note's name and the path it had — and leads to a page saying the note is
+      not published. See <a href="/about/">About</a> for how that works.
     </p>
 
     <p>

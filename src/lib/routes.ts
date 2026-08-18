@@ -21,14 +21,14 @@
 import { slug as slugify } from 'github-slugger';
 import type { ContentEntry } from './schema.ts';
 import type { NavLabelKey } from './translations.ts';
-import { NOTES_SEGMENT, noteRoute, noteSlugFromPath } from './route-path.ts';
+import { NOTES_SEGMENT, WITHHELD_ROUTE, noteRoute, noteSlugFromPath } from './route-path.ts';
 
 /**
  * Re-exported so pages have one route module to import. The definitions live in
  * `route-path.ts` because `link-preview.ts` needs them in the browser, and
  * importing this module there would ship the whole site map as dead code.
  */
-export { NOTES_SEGMENT, noteRoute, noteSlugFromPath };
+export { NOTES_SEGMENT, WITHHELD_ROUTE, noteRoute, noteSlugFromPath };
 
 /** The top-level segment tag pages live under. Reserved by TK-01. */
 export const TAGS_SEGMENT = 'tags';

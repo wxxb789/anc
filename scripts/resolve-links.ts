@@ -48,6 +48,7 @@
 
 import { markdownToMdast, type MdastNode } from 'satteri';
 import { resolveLink, type LinkIndex } from '../src/lib/link-resolution.ts';
+import { WITHHELD_LINK_TEXT, WITHHELD_ROUTE } from '../src/lib/route-path.ts';
 import type { LinkFindingRow } from './write-report.ts';
 
 /** What one note's traversal produced. */
@@ -68,6 +69,21 @@ interface Edit {
 }
 
 /**
+ * Node types that render as an anchor, so nothing inside one may open another.
+ *
+ * Wider than the two types this walk rewrites, deliberately — see
+ * {@link collectLinkNodes}. `footnoteReference` renders as an anchor too and is
+ * childless, so it can contain nothing and costs nothing to omit; every
+ * *container* HTML forbids an `<a>` inside is here.
+ */
+const CONTAINS_LINK: ReadonlySet<string> = new Set([
+  'link',
+  'image',
+  'linkReference',
+  'imageReference',
+]);
+
+/**
  * Every `link` and `image` node, in document order, including nested ones.
  *
  * **Nesting is real and both halves of it matter.** `[![logo](logo.png)](index.md)`
@@ -83,21 +99,42 @@ interface Edit {
  * an outer link is rewritten as **two edits around its label** rather than one
  * over its whole span (see {@link labelSpan}), so the region a nested node
  * writes into is one neither edit touches.
+ *
+ * `nested` receives every node that has a link-bearing ancestor, because the one
+ * rewrite that cannot be split is the one that would put an anchor inside an
+ * anchor — see the `unpublished` branch in {@link resolveLinksIn}. Recorded
+ * during the walk rather than recovered from spans afterwards: the tree states
+ * containment directly, and a span comparison would restate it.
+ *
+ * **The ancestor test is {@link CONTAINS_LINK} and not the two types this walk
+ * rewrites**, which is a distinction that cost a defect. `linkReference` is
+ * mdast's reference-style link — `[![build](badge.png)][ci]` with `[ci]:` on its
+ * own line, the badge idiom half of every README uses — and it is neither `link`
+ * nor `image`, so a version testing only those two left a withheld image inside
+ * one unmarked. Measured through the shipped renderer: it emitted
+ * `<p>Badge: [<a href="/private/">build</a>]<a href="https://ci.example/">ci</a></p>`
+ * — the nested anchor this set exists to prevent, the outer reference link
+ * destroyed, and its label `ci` rendered as prose. The reference forms are not
+ * *pushed* into `into`, because this walk does not resolve them; they only have
+ * to be recognised as things a rewrite may not open an anchor inside.
  */
-function collectLinkNodes(node: MdastNode, into: MdastNode[]): void {
-  if (node.type === 'link' || node.type === 'image') into.push(node);
+function collectLinkNodes(node: MdastNode, into: MdastNode[], nested: Set<MdastNode>, inside = false): void {
+  const isLinkNode = node.type === 'link' || node.type === 'image';
+  if (isLinkNode) {
+    into.push(node);
+    if (inside) nested.add(node);
+  }
   for (const child of ('children' in node ? node.children : []) as MdastNode[]) {
-    collectLinkNodes(child, into);
+    collectLinkNodes(child, into, nested, inside || CONTAINS_LINK.has(node.type));
   }
 }
 
 /**
- * The display text a degraded link leaves behind.
+ * The display text a link with no live target leaves behind.
  *
- * An `unresolved` or `unpublished` link is not rendered as an anchor — a live
- * anchor to nothing is a lie to the reader, and for `unpublished` the target
- * path is exactly the string the privacy model exists to keep out of the
- * artifact. What remains is what the author wrote for a human to read.
+ * An `unresolved` link is not rendered as an anchor — a live anchor to nothing
+ * is a lie to the reader. What remains is what the author wrote for a human to
+ * read.
  *
  * Taken from the node's own child span rather than reconstructed, so inline
  * markup inside the label survives: `[**bold** text](gone.md)` degrades to
@@ -108,6 +145,10 @@ function collectLinkNodes(node: MdastNode, into: MdastNode[]): void {
  * An image degrades to its alt text, which is the same rule applied to the
  * field images carry it in. An empty label degrades to nothing at all: `[](x)`
  * had nothing for a reader in the first place.
+ *
+ * **`unpublished` no longer routes through here**, and did until 2026-08-17.
+ * See the `unpublished` branch in {@link resolveLinksIn} for the decision that
+ * changed and what it cost.
  */
 function displayText(node: MdastNode, source: string): string {
   if (node.type === 'image') return node.alt ?? '';
@@ -168,81 +209,6 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
  */
 function escapeLabel(text: string): string {
   return text.replace(/[[\]]/g, (character) => `\\${character}`);
-}
-
-/**
- * The text a link to a **withheld** file degrades to.
- *
- * Plan §2.5: "the link's **display text only**, as plain text. The resolved path
- * never enters `markdown`." An authored label is ordinarily exactly that — a
- * string the author chose to publish — so the rule is not "shorten every label".
- * It is: **no part of the withheld path survives**, whatever produced the label.
- *
- * **Decided against the resolved path, never against the source syntax**, and
- * that is the whole of this function's history. A first version asked "did the
- * author write a label?" by reconstructing `[[…]]` from the label and comparing
- * against the source. It worked for the case it was written for and left two
- * spellings leaking, both measured:
- *
- * ```
- * [[drafts/secret plan|drafts/secret plan]]     -> "drafts/secret plan"
- * [drafts/secret plan](drafts/secret%20plan.md) -> "drafts/secret plan"
- * ```
- *
- * Both have an authored label, so the "an authored label is untouched"
- * exemption swallowed them — and the label happened to *be* the withheld path.
- * A privacy decision made by reconstructing input syntax will keep having
- * spellings nobody enumerated, and each one is a silent leak in a published
- * body. Comparing against the path the resolver actually found has no such
- * spellings: there is one path, and either the label discloses it or it does
- * not.
- *
- * What survives is the target's last segment — the name a reader would
- * recognise — with the directories removed, because the folder path is the part
- * that says *where in the user's tree* the withheld note lives. Where the label
- * merely *contains* the path, only that substring is reduced; the author's own
- * surrounding words are theirs and are kept.
- *
- * A subpath goes with it. It names a heading inside a note that was not
- * published, and there is nothing on this site for it to mean.
- */
-function withheldLabel(label: string, path: string): string {
-  // Every spelling the same file can be named by, longest first so a full path
-  // is reduced before its own stem matches inside it. A wikilink writes the raw
-  // form and usually without the extension; a Markdown href arrives
-  // percent-encoded and usually with it.
-  const stem = path.replace(/\.[^./]+$/, '');
-  // The `/`-anchored spellings too. A link may be written `[[/drafts/x]]` — the
-  // strict root anchor tier 4 documents — and reducing only the unanchored form
-  // left `/secret plan`, a leading slash with a directory's worth of meaning
-  // stripped out but its shape still announcing that one was there.
-  const spellings = [path, stem, `/${path}`, `/${stem}`, encodeURI(path), encodeURI(stem)]
-    .filter((form, index, all) => all.indexOf(form) === index)
-    .sort((a, b) => b.length - a.length);
-
-  // The **file's own name**, extension included. `a.png` reduces to `a.png` and
-  // not to `a`: the extension is part of what a reader recognises, and it is
-  // not the disclosing part — the directories are. `drafts/secret plan.md`
-  // reduces to `secret plan.md`, which says a note exists and not where in the
-  // user's tree it lives.
-  const name = basename(path);
-  let text = label;
-  for (const spelling of spellings) {
-    // The stem's replacement keeps whatever followed it, so `secret plan` inside
-    // `drafts/secret plan.md` does not lose the `.md` a longer spelling already
-    // handled.
-    const replacement = spelling === stem || spelling === `/${stem}` ? basename(stem) : name;
-    text = text.split(spelling).join(replacement);
-  }
-
-  // The subpath the target carried, if the label kept one — `note#Heading`
-  // reduces to `note`, because the heading is inside a note nobody can read.
-  return text.split('#')[0] ?? text;
-}
-
-/** POSIX basename, on the `/`-joined relative paths the walk produces. */
-function basename(path: string): string {
-  return path.slice(path.lastIndexOf('/') + 1);
 }
 
 /**
@@ -339,7 +305,8 @@ export function resolveLinksIn(
 ): TraversalResult {
   const tree = markdownToMdast(markdown, { features: { wikilinks: true, gfm: true } });
   const nodes: MdastNode[] = [];
-  collectLinkNodes(tree as MdastNode, nodes);
+  const nestedNodes = new Set<MdastNode>();
+  collectLinkNodes(tree as MdastNode, nodes, nestedNodes);
 
   const edits: Edit[] = [];
   const findings: LinkFindingRow[] = [];
@@ -359,6 +326,7 @@ export function resolveLinksIn(
     const isWikilink = isWikilinkNode(node, markdown);
     const written = markdown.slice(span.start, span.end);
     const label = displayText(node, markdown);
+    const nested = nestedNodes.has(node);
 
     // **The single resolution.** Everything below reads this one value: the
     // replacement text, the edge, and the finding. There is no second call and
@@ -403,22 +371,54 @@ export function resolveLinksIn(
     };
 
     if (resolution.kind === 'unresolved' || resolution.kind === 'unpublished') {
-      // Degraded to text. For `unpublished` the resolved path is deliberately
-      // *not* written into the body: it is a path to a file the user chose not
-      // to publish, and the artifact is the one place it may not appear. It goes
-      // to the report, which lives where nothing can commit it. See
-      // {@link withheldLabel} for the case where the *authored* text is itself
-      // that path.
+      // **`unpublished` keeps the author's label whole and becomes a live link
+      // to {@link WITHHELD_ROUTE}.** Owner decision, 2026-08-17, reversing the
+      // 2026-08-14 rule that reduced the label to the target's last segment.
       //
-      // A label the traversal must shorten cannot keep its label region — the
-      // shortening *is* an edit over that region — so it is replaced whole.
-      // Nothing nested is lost by that: a node whose label discloses a withheld
-      // path has that path in its own text, not in a child the walk would
-      // rewrite separately.
-      const shortened =
-        resolution.kind === 'unpublished' ? withheldLabel(label, resolution.path) : label;
-      if (shortened === label) rewrite('', '');
-      else edits.push({ start: span.start, end: span.end, text: shortened });
+      // What changed, measured on the same input:
+      //
+      //     See [[clients/acme/2026-renewal]] for the numbers.
+      //     before:  See 2026-renewal for the numbers.
+      //     after:   See [clients/acme/2026-renewal](/private/) for the numbers.
+      //
+      // **What it costs, stated because the code cannot state it later.** A
+      // wikilink's label *is* its target, so the full path of every withheld
+      // note a published note links now enters `dist/`. One `grep` over the
+      // built site lists the directory structure the author excluded. That is
+      // the intended consequence rather than an oversight; the owner heard it
+      // and kept the rule. The withheld note's *body* still never ships, which
+      // is a different fact and is gated separately.
+      //
+      // `unresolved` still degrades to text: there is no honest destination for
+      // a link to nothing, and `/private/` would claim the target exists.
+      //
+      // **A withheld node nested inside a link stays text**, and that is forced
+      // rather than chosen: CommonMark has no nested anchor, so emitting one
+      // produces `[[chart](/private/)](/target/)` — measured through the shipped
+      // renderer as `[<a href="/private/">chart</a>](/notes-beta/)`, an anchor
+      // to the withheld page with the outer link destroyed and its closing
+      // syntax spilled into the prose. A `link` inside a `link` is
+      // unrepresentable in mdast (measured), so the containers this has to
+      // survive are the image and the two *reference* forms — see
+      // {@link CONTAINS_LINK}, which is where omitting `linkReference` put the
+      // nested anchor back.
+      //
+      // The label a nested node keeps is its own text, which for an image is
+      // the alt the author wrote. That is usually not the path — but
+      // `![[private/chart.png]]` has an alt *equal to* the path, so this drops
+      // the path in some spellings and keeps it in others. Neither is a privacy
+      // property any more; what decides it is only whether an anchor can open
+      // here.
+      const live = resolution.kind === 'unpublished' && !nested;
+      // The slug is not available on an `unpublished` resolution — there is no
+      // published note to name — so an empty label falls back to the withheld
+      // page's own title. `[](x.md)` and `![](x.png)` otherwise emit
+      // `<a href="/private/"></a>`, an anchor with no accessible name, which is
+      // the defect the resolved branch below already guards against with
+      // `label || resolution.slug`. Under the previous rule these degraded to
+      // nothing at all, so the shape did not exist to guard.
+      if (live) rewrite('[', `](${WITHHELD_ROUTE})`, label || WITHHELD_LINK_TEXT);
+      else rewrite('', '');
       findings.push({
         source: sourcePath,
         line: span.line,

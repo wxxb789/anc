@@ -23,7 +23,7 @@ import { test } from 'vitest';
 
 import { entries } from '../src/lib/content.ts';
 import type { ContentEntry } from '../src/lib/schema.ts';
-import { noteRoute } from '../src/lib/routes.ts';
+import { WITHHELD_ROUTE, noteRoute } from '../src/lib/routes.ts';
 import {
   FEED_PATH,
   SITEMAP_PATH,
@@ -500,9 +500,31 @@ test('a required Atom element is never omitted, even for empty text', () => {
   assertWellFormed(feed, 'a feed with an empty title');
 });
 
-test('only the error document is non-indexable', () => {
+test('the error document and the withheld page are the only non-indexable routes', () => {
+  // **Was "only the error document is non-indexable", which stopped being true
+  // on 2026-08-17** when `/private/` joined it — and the name outlived the fact
+  // by exactly as long as it took review to read it.
+  //
+  // The two are excluded for different reasons, and the difference is why this
+  // gate names both rather than iterating a list. `/404/` has no address of its
+  // own: the host serves its body for any unmatched request, so a canonical URL
+  // on it would be false. `/private/` *is* served at its address; it is excluded
+  // because every link to a withheld note points there carrying the target's
+  // path as its text, so an indexed copy would be listed by a search engine
+  // under the text of every withheld link on the site — the disclosure gathered
+  // into one crawlable record rather than scattered across the bodies that
+  // wrote it.
+  //
+  // **Asserted here as well as through the built sitemap**, because the sitemap
+  // gate computes its expectation *with* `isIndexable` and `SiteMetadata.astro`
+  // renders *with* `isIndexable`, so the two agree however this function
+  // answers. Deleting the `WITHHELD_ROUTE` clause does turn that gate red — but
+  // via a route-set mismatch, which is lesson 2 of `docs/gate-reading.md`: a red
+  // for a reason other than the property named. This is the assertion that
+  // fails for the right reason.
   assert.equal(isIndexable('/404/'), false);
   assert.equal(isIndexable('/404.html'), false);
+  assert.equal(isIndexable(WITHHELD_ROUTE), false, 'the withheld page may not be indexed');
   for (const path of ['/', '/about/', '/notes/a/', '/tags/t/']) {
     assert.equal(isIndexable(path), true, `${path} is not indexable`);
   }

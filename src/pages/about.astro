@@ -32,6 +32,16 @@
  * same treatment `tests/translations.test.ts` records for this file: it is a
  * document rather than chrome, and translating a document is a content decision
  * this ticket does not own.
+ *
+ * **The withheld-link paragraph was rewritten on 2026-08-17** and it is the one
+ * claim here a reader could previously have been misled by. It said a link to an
+ * unpublished note "is not rendered as a link" and that "their content, their
+ * number, or that any exist" is not represented. Both became false when the
+ * owner made those links live: they are anchors now, they land on `/private/`,
+ * and a link's text is routinely the note's own path — so a reader can count
+ * them and read where they lived. The paragraph says that plainly, because a
+ * reader consulting this page to calibrate trust is exactly the person the
+ * omission would cost.
  */
 import Layout from '../layouts/Layout.astro';
 import { SITE_NAME, TITLE_SUFFIX } from '../lib/site.ts';
@@ -55,20 +65,21 @@ import { SITE_NAME, TITLE_SUFFIX } from '../lib/site.ts';
       The site is built from a set of notes written in Markdown. Publication is the default: a note
       becomes a page unless it was explicitly excluded, and the person who runs the build chooses
       what to exclude by listing patterns in a configuration file, or by marking an individual note.
-      An excluded note produces no page, no search entry, and no link, and none of its content
-      appears here.
+      An excluded note produces no page, no search entry, and none of its content appears here.
     </p>
 
     <p>
-      Links between notes are resolved when the site is built. A link whose target is not published
-      is not rendered as a link, so following one cannot lead to something that is not here.
+      Links between notes are resolved when the site is built. A link whose target was not
+      published points at a page saying so, rather than at the note — so following one cannot
+      lead to something that is not here.
     </p>
 
     <p>
-      One thing this site can still show you about an unpublished note is the words a published note
-      used to refer to it. A link left pointing at an excluded note keeps its own link text, which
-      is the author's writing rather than anything read from the note it names. Nothing else about
-      unpublished notes — their content, their number, or that any exist — is represented here.
+      One thing this site does still show you about an unpublished note is the words a published
+      note used to refer to it. That link keeps its text exactly as the author wrote it, which
+      often means the note's own name and the path it had among the author's notes. It is the
+      author's writing rather than anything read from the note it names, and nothing else about
+      unpublished notes — their content, their titles, their number — is represented here.
     </p>
 
     <h2>How it is built</h2>

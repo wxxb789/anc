@@ -27,6 +27,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
+import { WITHHELD_LINK_TEXT, WITHHELD_ROUTE } from '../src/lib/route-path.ts';
 import { resolveLinksIn } from '../scripts/resolve-links.ts';
 import { discover, resolveCorpusLinks, writeArtifact } from '../scripts/markdown-to-artifact.ts';
 import { openReport } from '../scripts/write-report.ts';
@@ -222,13 +223,13 @@ test('a link to an excluded note is a publication-boundary event, not a broken l
     ],
   );
 
-  // **The excluded note's path never enters the body.** It is a path to a file
-  // the user chose not to publish, and the artifact is the one place it may not
-  // appear — `schema.ts` would reject an absolute one and cannot see a relative
-  // one, so this is the control.
-  assert.ok(!result.markdown.includes('drafts/'), `the body carried an excluded path: ${result.markdown}`);
-  assert.ok(!result.markdown.includes('secret.md'), 'the body carried an excluded filename');
-  assert.equal(result.markdown, 'See secret and diagram.png.');
+  // **The excluded note's path enters the body, and the link is live.** Owner
+  // decision 2026-08-17, reversing the rule this gate's last three assertions
+  // used to hold — they read `!markdown.includes('drafts/')`,
+  // `!markdown.includes('secret.md')`, and `equal(markdown, 'See secret and
+  // diagram.png.')`. The finding half above is untouched: the *report* was
+  // never the surface that decision was about.
+  assert.equal(result.markdown, 'See [secret](/private/) and [diagram.png](/private/).');
 });
 
 test('an ambiguous link renders, and the finding names every candidate and the winner', () => {
@@ -544,7 +545,17 @@ test('a linked image builds, which is the badge every README opens with', () => 
 
   // The two forms of the same image agree — the property draft 2 broke, and the
   // one a gate on the badge alone cannot see.
-  assert.equal(traverse('![logo](assets/diagram.png)').markdown, 'logo');
+  //
+  // **They agree by pointing at different things, and that asymmetry is the
+  // decision rather than a defect.** Since 2026-08-17 a withheld target renders
+  // as a live link to `/private/`, *except* where it is nested inside another
+  // link: CommonMark has no nested anchor, so the badge form must stay text or
+  // the outer link is destroyed. Measured through the shipped renderer, the
+  // nested-anchor form emits `[<a href="/private/">chart</a>](/notes-beta/)` —
+  // an anchor to the withheld page with the outer link's closing syntax spilled
+  // into the prose. What "agree" means here is that neither form ships the
+  // *path*: an image's label is its alt text, which the author wrote.
+  assert.equal(traverse('![logo](assets/diagram.png)').markdown, '[logo](/private/)');
 
   // A published image would keep its markup; there is no asset pipeline, so the
   // external form is the only one that reaches that branch. Untouched, which is
@@ -564,33 +575,45 @@ test('a linked image builds, which is the badge every README opens with', () => 
   );
 });
 
-test('no withheld path reaches the body or the excerpt, in any link form', async () => {
-  // **The property, not a list of forms.** Plan §2.5: "the resolved path never
-  // enters `markdown`." Two earlier versions of this gate enumerated the
-  // spellings their author happened to think of, and both were green while a
-  // spelling nobody listed leaked — first the undisplayed wikilink, then a
-  // label that *equals* the withheld path, which the "an authored label is
-  // untouched" exemption swallowed:
+test('every withheld link form is live, keeps its label, and ships no withheld body', async () => {
+  // **Was "no withheld path reaches the body or the excerpt, in any link form",
+  // and its central property was deleted on 2026-08-17.** That property read:
   //
-  //     [[drafts/secret plan|drafts/secret plan]]     -> "drafts/secret plan"
-  //     [drafts/secret plan](drafts/secret%20plan.md) -> "drafts/secret plan"
+  //     for (const path of withheld)
+  //       for (const segment of path.split('/').slice(0, -1))
+  //         assert.ok(!artifact.includes(segment), …)
   //
-  // So this asserts over the *corpus*: every file the build did not publish,
-  // against every form that can name one, checking the whole artifact rather
-  // than one field. A form-by-form gate cannot catch the next spelling, and
-  // there has now been a next spelling twice.
+  // — every directory segment of every withheld file, absent from the whole
+  // artifact. It protected the fact that a reader of the published site could
+  // not learn *where in the author's tree* a withheld note lived. The owner
+  // reversed that: the label survives whole, and a wikilink's label is its path,
+  // so the artifact now carries it. The assertion is false and is gone rather
+  // than weakened, because a weakened version would read as though something
+  // were still being withheld.
+  //
+  // **The fixture is kept, and it is the reason this is a repurposing rather
+  // than a deletion.** Eleven link forms over two withheld files is the most
+  // hostile corpus in this tree for the `unpublished` branch, and the new rule
+  // needs exactly that breadth: it has to hold for the bare wikilink, the
+  // `/`-anchored one, the subpath, the embed, the percent-encoded href, and the
+  // two nested forms alike. Rebuilding this fixture for the new rule would have
+  // produced this fixture.
   await scratch('tk27-withheld-', async (root) => {
     // Every segment is a distinctive token, so an assertion that finds one has
     // found a real disclosure rather than an English word that happens to occur
     // in the fixture prose.
     const withheld = ['zzqclients/zzqacme/zzqrenewal.md', 'zzqprivate/zzqchart.png'];
-    put(root, 'zzqclients/zzqacme/zzqrenewal.md', '---\npublish: false\n---\n\n# Renewal\n\nprose\n');
+    put(
+      root,
+      'zzqclients/zzqacme/zzqrenewal.md',
+      '---\npublish: false\n---\n\n# Renewal\n\nzzqwithheldbody prose no reader may see\n',
+    );
     put(root, 'zzqprivate/zzqchart.png', 'not really a png\n');
     put(root, 'target.md', '# Target\n\nprose\n');
 
-    // Every form that can name a file, including the two that leaked and the
-    // nested one, written so each appears in a body that also has ordinary
-    // prose around it.
+    // Every form that can name a file, including the two that leaked under the
+    // old syntax-based rule and the nested one, written so each appears in a
+    // body that also has ordinary prose around it.
     put(
       root,
       'src.md',
@@ -618,9 +641,9 @@ test('no withheld path reaches the body or the excerpt, in any link form', async
     const artifact = readFileSync(join(root, 'out', 'content.json'), 'utf8');
 
     // **Non-vacuity, and it is two halves.** The tokens must be present in the
-    // *input* — otherwise an empty corpus passes the absence check — and the
+    // *input* — otherwise an empty corpus passes the assertions below — and the
     // build must have seen them as real files, which the findings prove. Both
-    // are asserted before any absence is.
+    // are asserted before anything else is.
     const source = readFileSync(join(root, 'src.md'), 'utf8');
     for (const path of withheld) {
       const directory = path.slice(0, path.indexOf('/'));
@@ -629,39 +652,113 @@ test('no withheld path reaches the body or the excerpt, in any link form', async
     assert.ok(
       findings.filter((finding) => finding.outcome === 'unpublished').length >= 10,
       `the corpus reached ${findings.length} findings, so most forms resolved to nothing ` +
-        'instead of to a withheld file and the absence assertions below prove little',
+        'instead of to a withheld file and the assertions below prove little',
     );
 
-    // The property. Every directory segment of every withheld file, absent from
-    // the whole artifact — which covers `markdown`, `excerpt`, and `title` at
-    // once, so a field added later is covered without editing this gate.
-    for (const path of withheld) {
-      for (const segment of path.split('/').slice(0, -1)) {
-        assert.ok(
-          !artifact.includes(segment),
-          `the artifact carries "${segment}", a directory of a file this build withheld`,
-        );
-      }
+    const entry = discovery.entries.find((candidate) => candidate.slug === 'src')!;
+
+    // **The rule, one row per authored form, written out.**
+    //
+    // This replaced a count — `anchors === unpublished - nested` — that review
+    // proved self-cancelling: both sides came from the same run, so a form
+    // regressing from `unpublished` to `unresolved` decremented the finding
+    // count *and* the anchor count together and the gate stayed green. Measured
+    // on this fixture: sending the subpath form, the percent-encoded form, or
+    // the embed to `unresolved` each took it from `12/10` to `11/9`, green every
+    // time, and doing two at once reached `10/8` and still cleared the `>= 10`
+    // non-vacuity check above. Nine of the eleven forms were protected by
+    // nothing. That is lesson 3 of `docs/gate-reading.md` in its arithmetic
+    // form: a comparison between two numbers the same defect moves is not a
+    // comparison.
+    //
+    // So each form states what it must render as. A regression in any one of
+    // them now names that one.
+    const anchor = `(${WITHHELD_ROUTE})`;
+    for (const [expected, what] of [
+      [`[zzqclients/zzqacme/zzqrenewal]${anchor}`, 'the bare wikilink'],
+      [`[/zzqclients/zzqacme/zzqrenewal]${anchor}`, 'the /-anchored wikilink'],
+      [`[zzqclients/zzqacme/zzqrenewal#Some Heading]${anchor}`, 'the subpath wikilink'],
+      // The embed and the label-equals-target form both reduce to the bare
+      // spelling, so they are counted rather than merely found: three
+      // occurrences of that exact string is what proves all three rendered.
+      [`[text]${anchor}`, 'the markdown href and its percent-encoded twin'],
+      [`[chart]${anchor}`, 'the standalone image'],
+      [`[zzqprivate/zzqchart.png]${anchor}`, 'the image embed, whose alt is its path'],
+    ] as const) {
+      assert.ok(entry.markdown.includes(expected), `${what} did not render as ${expected}`);
     }
 
-    // And the reader still gets the *name*, which is what makes this a
-    // reduction rather than a deletion. Without it, "delete every label" passes
-    // every assertion above.
-    const entry = discovery.entries.find((candidate) => candidate.slug === 'src')!;
-    assert.ok(
-      entry.markdown.includes('zzqrenewal'),
-      `the withheld note's own name was deleted rather than reduced: ${entry.markdown}`,
+    // The four forms whose output is the same string, counted. `includes`
+    // cannot tell one occurrence from four, and these are four separately
+    // authored links — the bare wikilink, the embed, the label-equals-target
+    // spelling, and the label-equals-href one — that must each have rendered.
+    // The number is measured against the fixture rather than reasoned about: an
+    // earlier draft of this line said three, having forgotten that a Markdown
+    // href whose label is its own target lands on the identical string.
+    assert.equal(
+      entry.markdown.split(`[zzqclients/zzqacme/zzqrenewal]${anchor}`).length - 1,
+      4,
+      'the bare wikilink, the embed, and the two label-equals-target forms do not all render ' +
+        `alike: ${entry.markdown}`,
     );
-    assert.ok(entry.markdown.includes('zzqchart.png'), 'the image lost its filename');
+    // And `[text](…)` is two: the plain markdown href and the percent-encoded
+    // one, which resolve to the same file by different spellings.
+    assert.equal(
+      entry.markdown.split(`[text]${anchor}`).length - 1,
+      2,
+      `the percent-encoded href did not resolve to the same withheld file: ${entry.markdown}`,
+    );
+
+    // The two nested forms stay text, because an anchor may not open inside a
+    // link. Each is asserted as its whole line: the withheld image's own alt
+    // survives as the *label of the outer link* where that link is published,
+    // and as bare text where the outer link resolved to nothing. Asserting the
+    // absence of `/private/` alone would pass on a build that deleted the node.
+    assert.ok(
+      entry.markdown.includes('Nested [chart](/target/) here.'),
+      `a nested withheld image did not become the outer link's label: ${entry.markdown}`,
+    );
+    assert.ok(
+      entry.markdown.includes('Nested to nothing chart here.'),
+      `a nested withheld image under an unresolved link was not degraded: ${entry.markdown}`,
+    );
+
+    // **And the body is still withheld, which is the half the decision did not
+    // touch.** A path in the artifact and a *note* in the artifact are different
+    // facts, and this is the one that must stay false — it is the line between
+    // "the link discloses where the note lives" and "the note was published".
+    assert.ok(
+      !artifact.includes('zzqwithheldbody'),
+      "the withheld note's own prose reached the artifact",
+    );
+    assert.ok(
+      !discovery.entries.some((candidate) => candidate.slug.includes('zzqrenewal')),
+      'the withheld note became an entry',
+    );
+
     // The author's surrounding prose is untouched.
     assert.ok(entry.markdown.includes('Bare wikilink'), "the author's prose was deleted");
     assert.ok(entry.markdown.includes('here.'), "the author's prose was truncated");
   });
 });
 
-test('an unpublished target path does not enter the body, even undisplayed', () => {
-  // The narrow case the property gate above generalises, kept because it names
-  // the two spellings that actually leaked and what each degrades to.
+test('every spelling of a withheld target renders as one live link, label intact', () => {
+  // **Replaces "an unpublished target path does not enter the body, even
+  // undisplayed", which held the reduction the owner reversed on 2026-08-17.**
+  // What that gate protected: the withheld note's *directory* never reached the
+  // body, in any of the nine spellings below — so a reader could learn that a
+  // note named `secret plan` existed and not where in the author's tree it sat.
+  // Every one of its assertions is now false, and none is recoverable in a
+  // weaker form: `!markdown.includes('drafts')` has no weaker version that still
+  // says something.
+  //
+  // **The nine spellings are kept, and they are the reason this is a rewrite
+  // rather than a deletion.** Each was added because a mutation removing its
+  // handling stayed green — the `/`-anchored label, the percent-encoded one, the
+  // label that equals its own target. Those are the spellings a rule about
+  // withheld links has to be exercised over whichever direction the rule runs,
+  // and they are asserted here as exact output so a partial rewrite of any one
+  // of them is visible rather than absorbed.
   const corpus: readonly CorpusFile[] = [
     { path: 'src.md', slug: 'src' },
     { path: 'drafts/secret plan.md', slug: undefined },
@@ -669,52 +766,162 @@ test('an unpublished target path does not enter the body, even undisplayed', () 
   const run = (body: string) =>
     resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`);
 
-  for (const body of [
-    'A [[drafts/secret plan]] end',
-    'B ![[drafts/secret plan]] end',
-    'C [[drafts/secret plan#Some Heading]] end',
-    'D [[/drafts/secret plan]] end',
-  ]) {
-    const { markdown } = run(body);
-    assert.ok(!markdown.includes('drafts'), `${body} leaked the excluded folder: ${markdown}`);
-    assert.ok(!markdown.includes('.md'), `${body} leaked a filename: ${markdown}`);
-    // The reader still sees the name the author typed, which is the point of
-    // degrading to text rather than dropping the node.
-    assert.ok(markdown.includes('secret plan'), `${body} lost the author's own words: ${markdown}`);
+  // Exact output for every form, rather than a substring test. A substring test
+  // ("the path is present") would be green on a rewrite that emitted the path
+  // *and* mangled the anchor around it, which is precisely the failure mode of
+  // an edit made to the label region.
+  for (const [body, expected] of [
+    ['A [[drafts/secret plan]] end', 'A [drafts/secret plan](/private/) end'],
+    ['B ![[drafts/secret plan]] end', 'B [drafts/secret plan](/private/) end'],
+    // The subpath survives *in the label* and points nowhere new: `/private/` is
+    // one page with no heading of the withheld note on it. It is part of what
+    // the author wrote, so removing it would be an edit to their prose.
+    ['C [[drafts/secret plan#Some Heading]] end', 'C [drafts/secret plan#Some Heading](/private/) end'],
+    ['D [[/drafts/secret plan]] end', 'D [/drafts/secret plan](/private/) end'],
+    // The label that equals its own target, which is the spelling that leaked
+    // past the first syntax-based rule and is now simply the ordinary case.
+    [
+      'E [[drafts/secret plan|drafts/secret plan]] end',
+      'E [drafts/secret plan](/private/) end',
+    ],
+    ['F [drafts/secret plan](drafts/secret%20plan.md) end', 'F [drafts/secret plan](/private/) end'],
+    // A label the author wrote that is *not* the path: untouched, which is what
+    // proves the label is carried through rather than reconstructed from the
+    // target. This is the one row whose expected value is the same under both
+    // rules, and it is kept for that reason.
+    ['G [see notes/the draft](drafts/secret%20plan.md) end', 'G [see notes/the draft](/private/) end'],
+    [
+      'H [[/drafts/secret plan|/drafts/secret plan]] end',
+      'H [/drafts/secret plan](/private/) end',
+    ],
+    [
+      'I [drafts/secret%20plan.md](drafts/secret%20plan.md) end',
+      'I [drafts/secret%20plan.md](/private/) end',
+    ],
+  ] as const) {
+    assert.equal(run(body).markdown, expected, `${body} did not render as one live withheld link`);
   }
 
-  // The two spellings that leaked past a syntax-based rule, and the one whose
-  // label is the author's own words. All three are decided by comparing against
-  // the resolved path now, so there is no exemption for a spelling to hide in.
-  //
-  // Each keeps the form the author wrote: a wikilink names the note without its
-  // extension and reduces to `secret plan`, while a Markdown href names the
-  // file and reduces to `secret plan.md`. The directory is gone from both,
-  // which is the property; the extension is not disclosing and the author's own
-  // spelling is what a reader recognises.
-  assert.equal(run('E [[drafts/secret plan|drafts/secret plan]] end').markdown, 'E secret plan end');
-  assert.equal(
-    run('F [drafts/secret plan](drafts/secret%20plan.md) end').markdown,
-    'F secret plan end',
+  // And the destination is the constant the site reserves, not a literal spelled
+  // twice. Without this the rows above would pin `/private/` as a string and a
+  // rename of the route would leave nine green rows describing a page that no
+  // longer exists.
+  assert.ok(
+    run('J [[drafts/secret plan]] end').markdown.includes(`](${WITHHELD_ROUTE})`),
+    'the withheld link does not point at the route the site reserves for it',
   );
-  assert.equal(
-    run('G [see notes/the draft](drafts/secret%20plan.md) end').markdown,
-    'G see notes/the draft end',
-  );
+});
 
-  // The two spellings the same path can wear, each of which needs its own entry
-  // in the reduction list. Added after mutations removing them stayed green:
-  // the corpus above never wrote a `/`-anchored link whose label was its own
-  // target, nor a percent-encoded one, so both list entries were unasserted.
+test('a withheld node inside a reference link does not open an anchor inside one', () => {
+  // **The defect this exists for was shipped and found by review.** The nesting
+  // set was filled by testing `node.type === 'link' || node.type === 'image'` —
+  // the two types this walk *rewrites* — and mdast's reference-style link is
+  // neither. So `[![build](badge.png)][ci]`, the badge idiom half of every
+  // README uses, had its withheld image marked unnested, took the live branch,
+  // and emitted an anchor inside a link. Measured through the shipped renderer:
+  //
+  //     <p>Badge: [<a href="/private/">build</a>]<a href="https://ci.example/">ci</a></p>
+  //
+  // — the outer reference link destroyed, a stray bracket in the prose, and its
+  // label `ci` rendered as the anchor text. It is also the only way the withheld
+  // rule could change a link that is *not* withheld.
+  //
+  // **Mutation watched fail:** removing `'linkReference'` from `CONTAINS_LINK`
+  // in `scripts/resolve-links.ts` restores exactly the output above and turns
+  // the first row red.
+  const corpus: readonly CorpusFile[] = [
+    { path: 'src.md', slug: 'src' },
+    { path: 'other.md', slug: 'other' },
+    { path: 'assets/badge.png', slug: undefined },
+    { path: 'drafts/secret.md', slug: undefined },
+  ];
+  const run = (body: string) =>
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
+
+  const definition = '\n\n[ci]: https://ci.example/\n';
+  for (const [body, expected, what] of [
+    // The two withheld-inside-reference shapes. Each degrades to its own label
+    // as text, which is what a node that may not open an anchor does.
+    [
+      `Badge: [![build](assets/badge.png)][ci]${definition}`,
+      `Badge: [build][ci]${definition}`,
+      'a withheld image inside a reference link',
+    ],
+    // **Not nesting, and it is here because it looks like it.**
+    // `[[[drafts/secret]]][ci]` reads as a wikilink *beside* a reference link
+    // rather than inside one — measured on the parse tree: `link`, `text`,
+    // `linkReference` as three siblings of one paragraph. So the wikilink is
+    // unnested and correctly becomes an anchor, and the brackets around it are
+    // the author's own text. Written down because the first version of this row
+    // asserted the nested outcome, went red, and the tree is what settled it:
+    // a shape that looks nested in the source is not necessarily nested in the
+    // tree, and only the tree decides this branch.
+    [
+      `See [[[drafts/secret]]][ci]${definition}`,
+      `See [[drafts/secret](${WITHHELD_ROUTE})][ci]${definition}`,
+      'a withheld wikilink beside a reference link',
+    ],
+    // And the reference link itself is untouched in every case, withheld
+    // content or not — the property the defect broke.
+    [
+      `A [text][ci] end${definition}`,
+      `A [text][ci] end${definition}`,
+      'an ordinary reference link',
+    ],
+    [
+      `B [![ok](https://img.example/x)][ci] end${definition}`,
+      `B [![ok](https://img.example/x)][ci] end${definition}`,
+      'a reference link wrapping an external image',
+    ],
+  ] as const) {
+    assert.equal(run(body), expected, `${what} was rewritten wrongly`);
+  }
+
+  // Non-vacuity: the same withheld image *outside* a reference link does become
+  // an anchor. Without this the rows above are satisfied by a build that
+  // stopped making withheld links live at all.
   assert.equal(
-    run('H [[/drafts/secret plan|/drafts/secret plan]] end').markdown,
-    'H secret plan end',
-    'the /-anchored spelling of a withheld path was not reduced',
+    run('C ![build](assets/badge.png) end'),
+    `C [build](${WITHHELD_ROUTE}) end`,
+    'the unnested form is not live, so the rows above prove nothing about nesting',
   );
+});
+
+test('a withheld link with no label of its own still has an accessible name', () => {
+  // `[](note.md)` and `![](chart.png)` carry no label at all. Under the rule
+  // this replaced they degraded to nothing and the shape did not exist; now
+  // they are anchors, and an anchor with no text is announced by a screen
+  // reader as its URL. Measured before the fallback: `<a href="/private/"></a>`.
+  //
+  // The resolved branch has had this guard since TK-27 and falls back to the
+  // target's slug. A withheld target has no slug — there is no published note —
+  // so the fallback is what the destination says about itself.
+  //
+  // **Mutation watched fail:** dropping the third argument from the `rewrite`
+  // call in the `unpublished` branch of `scripts/resolve-links.ts` turns both
+  // rows red with an empty label.
+  const corpus: readonly CorpusFile[] = [
+    { path: 'src.md', slug: 'src' },
+    { path: 'drafts/secret.md', slug: undefined },
+    { path: 'assets/chart.png', slug: undefined },
+  ];
+  const run = (body: string) =>
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
+
+  for (const body of ['[](drafts/secret.md) end', '![](assets/chart.png) end']) {
+    assert.equal(
+      run(body),
+      `[${WITHHELD_LINK_TEXT}](${WITHHELD_ROUTE}) end`,
+      `${body} produced an anchor with no accessible name`,
+    );
+  }
+
+  // And a label the author *did* write is never replaced by the fallback, which
+  // is what stops this from being "always use the fixed text".
   assert.equal(
-    run('I [drafts/secret%20plan.md](drafts/secret%20plan.md) end').markdown,
-    'I secret plan.md end',
-    'the percent-encoded spelling of a withheld path was not reduced',
+    run('[their words](drafts/secret.md) end'),
+    `[their words](${WITHHELD_ROUTE}) end`,
+    "the author's own label was replaced by the fallback",
   );
 });
 

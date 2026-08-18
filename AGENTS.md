@@ -28,6 +28,35 @@ owner's name a foreign build carried before TK-31 removed them.
   file's path — or its basename — is a disclosure there. `content-report.json` lives under
   `<git-dir>/publish-report/`, is never an artifact key, and is never copied into `dist/`.
   `tests/disclosure.test.ts` gates the split by renaming the corpus and diffing the streams.
+- **A link to a withheld note keeps its full path and resolves to `/private/`.** The rendered
+  body carries the path exactly as the author wrote it, and the link is live: it lands on a
+  generated page stating that the note is not published and will not be. `publish: false`
+  still withholds the note — its body, title, and excerpt reach nothing — and only the *link*
+  changed.
+
+  **This reverses the rule of 2026-08-14 and it has a cost the owner accepted on 2026-08-17
+  after hearing it.** The superseded rule reduced a withheld target to its last segment, so
+  `[[clients/acme/2026-renewal]]` published as the text `2026-renewal` and the directory
+  never left the host. Under the rule that now holds, the full path of every withheld note a
+  published note links enters `dist/` — and under the planned SQLite conversion it enters a
+  database every visitor downloads, where one `SELECT` lists every path the author excluded.
+  That is the intended consequence and not a defect to mitigate. The reasoning the old rule
+  rested on is in `.tmp/tk-27-report.md` §7.1 and in the superseded-gate notes in
+  `tests/link-traversal.test.ts` and `tests/backlink-surfaces.test.ts`; what it bought was
+  that a reader could not learn the shape of the author's private tree, and that is what was
+  spent.
+
+  Two things follow that are easy to get wrong. The `private` slug is **reserved**
+  (`src/lib/schema.ts`), because `markdown.ts` rewrites every single-segment `/<slug>/` href
+  through `routeForSlug` and a user's own `private.md` would otherwise capture every withheld
+  link on their site. And the page is `noindex`: it names no note, but an indexed copy would
+  be listed by a search engine under the text of every withheld link on the site, which
+  gathers into one crawlable record what is otherwise scattered.
+
+  **The two-surface rule the old one rested on is now a one-surface rule.** A withheld name
+  is still a disclosure *on a stream* — that is what the bullet above holds, and
+  `tests/disclosure.test.ts` still enforces it. It is no longer withheld from the rendered
+  body. Both directions are deliberate.
 - `src/data/content.json` and `public/content-index.json` are this repository's own build
   inputs. `src/data/content.json` still holds one real personal note — plan D2 says it should
   become synthetic and TK-31 did not reach it; see "Known-stale" below.
@@ -150,6 +179,10 @@ every gate above is enforced only by running `pnpm run verify` on the host.
   It is not a privacy rule — `[[` discloses nothing — it is the producer's self-check that its
   degradation ran. The artifact-level version of this rule was deleted, because a note
   documenting Obsidian syntax is content.
+- A link to a withheld note is a live anchor at `/private/` carrying the author's label whole,
+  and the withheld note's own body reaches no published file. The second half is the one the
+  2026-08-17 reversal did not move, and it is now the *only* thing standing between a link and
+  a publication — so it is gated over every file in the output with gzip members inflated.
 - A site built by a stranger carries no occurrence of this project's name, asserted over every
   file as bytes and after inflating gzip members, with a positive control that plants the name
   *split by markup* so the gate cannot silently degrade into a raw substring search.

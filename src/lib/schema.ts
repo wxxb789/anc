@@ -42,6 +42,14 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   'search',
   'about',
   'privacy',
+  // Where a link to a withheld note lands. Reserved for a reason the others are
+  // not: `markdown.ts`'s `INTERNAL_HREF` rewrites every single-segment
+  // `/<slug>/` href through `routeForSlug`, so a note published under this slug
+  // would silently capture every withheld link on the site and send readers to
+  // itself. See `WITHHELD_ROUTE` in `src/lib/route-path.ts`, and the gate in
+  // `tests/route-model.test.ts` that holds the mechanism rather than the
+  // membership.
+  'private',
   '404',
   'rss',
   'sitemap',

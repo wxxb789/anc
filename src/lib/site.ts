@@ -24,7 +24,7 @@
  */
 
 import type { ContentEntry } from './schema.ts';
-import { noteRoute } from './route-path.ts';
+import { WITHHELD_ROUTE, noteRoute } from './route-path.ts';
 import { NAV_LANGUAGE, translate } from './translations.ts';
 import {
   FIXED_ROUTES,
@@ -615,12 +615,23 @@ export function socialTitle(title: string): string {
 /**
  * Whether a route may be indexed, and may therefore claim a canonical URL.
  *
- * `/404/` is the whole exception. The host serves that document's *body* in
- * response to any unmatched address, so the page has no address of its own: a
- * `rel="canonical"` on it would tell a crawler that every mistyped URL on this
- * site is canonically `/404/`, which is an instruction to index the error page
- * under arbitrary names. `noindex` says the true thing instead.
+ * Two exceptions, and they are excluded for different reasons.
+ *
+ * `/404/`: the host serves that document's *body* in response to any unmatched
+ * address, so the page has no address of its own. A `rel="canonical"` on it
+ * would tell a crawler that every mistyped URL on this site is canonically
+ * `/404/`, which is an instruction to index the error page under arbitrary
+ * names. `noindex` says the true thing instead.
+ *
+ * {@link WITHHELD_ROUTE}: it has an address of its own and is served at it, so
+ * this is a privacy exclusion rather than a correctness one. Every link to a
+ * note the build did not publish points here, and those links carry the target's
+ * path as their text — so an indexed copy of this page would be listed in a
+ * search engine under the text of every withheld link on the site, gathering in
+ * one crawlable record what is otherwise scattered across the bodies that wrote
+ * it. The page itself names nothing; what `noindex` withholds is the
+ * *aggregation* an external index would build around it.
  */
 export function isIndexable(path: string): boolean {
-  return path !== '/404/' && path !== '/404.html';
+  return path !== '/404/' && path !== '/404.html' && path !== WITHHELD_ROUTE;
 }

@@ -52,7 +52,7 @@
  * document order deliberately opposes its slug order.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
@@ -61,7 +61,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import { noteRoute } from '../src/lib/routes.ts';
+import { WITHHELD_ROUTE, noteRoute } from '../src/lib/routes.ts';
 import { translate } from '../src/lib/translations.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -598,22 +598,28 @@ test('the outgoing empty state is printed only where it is true', () => {
 // --- Increment 3: the withheld path, over every rendered surface -----------------
 
 /**
- * No part of a withheld note's **path** reaches any file the build publishes.
+ * A withheld note's **body** reaches no published file, and its **path** now
+ * deliberately does.
  *
- * This is not TK-27's artifact gate restated. That one proves the path does not
- * reach `content.json`, and the page only ever sees the artifact — so the
- * surfaces that can newly disclose are the ones that exist *only after
- * rendering*, and none of them was covered:
+ * **This gate held the opposite of its second half until 2026-08-17**, and the
+ * assertion that went read:
  *
- * - `excerpt` becoming `<meta name="description">`
- * - the Pagefind index under `dist/pagefind/`
- * - `content-index.json`'s title and excerpt
- * - the graph SVG's node labels and its equivalent table
+ *     for (const token of [WITHHELD_DIRECTORY, WITHHELD_SUBDIRECTORY])
+ *       assert.deepEqual(published.filter(carries(token)), [])
  *
- * So the assertion is over **every file under the output**, which is the shape
- * TK-30's gate arrived at the hard way — its first version asserted over
- * `dist/notes/` and the leak was in `content-index.json` and the Pagefind
- * index.
+ * — no directory of a withheld note in any file the build publishes, over
+ * `dist/` decompressed. What it protected is the fact that a reader of the
+ * published site, or a crawler, could not recover the shape of the author's
+ * private tree. The owner reversed that: a withheld link keeps its full label,
+ * a wikilink's label is its path, so `zzqclients/zzqacme` ships. The loop is
+ * gone rather than narrowed — there is no narrower true version of it.
+ *
+ * **Everything else here survives, and the machinery is why this gate is worth
+ * more now than before.** Scanning every published file with gzip members
+ * inflated is exactly what is needed to hold the line the decision did *not*
+ * move: the note's own prose. A build that published the withheld body would
+ * now be much harder to notice by reading a page, because the path being
+ * present is no longer a signal that something went wrong.
  *
  * **The Pagefind index is gzipped, and a raw text scan cannot see into it.**
  * Measured: the token `Introduction` from a published note is absent from
@@ -623,49 +629,22 @@ test('the outgoing empty state is printed only where it is true', () => {
  * real disclosure. So every file is decompressed first where its magic bytes
  * say to.
  *
- * **What is asserted is the path, not the stem, and that is a settled decision
- * rather than an open question.** TK-27's `withheldLabel` keeps the target's
- * last segment on purpose — "the name a reader would recognise" — so
- * `[[zzqclients/zzqacme/zzqrenewal]]` degrades to the text `zzqrenewal`, which
- * ships. The owner ruled to keep it: the author typed that word into their own
- * prose, `[[2026-renewal]]` is the author's sentence rather than the
- * filesystem's, and a reader who meets "Withheld 2026-renewal" learns what the
- * link pointed at without being able to follow it. The **path** is what the
- * user did not choose to publish, and the path is what this asserts.
+ * **Mutation watched fail (body half):** deleting the `published === false`
+ * branch in `scripts/markdown-to-artifact.ts` turns this red with
+ * `zzqwithheldbody` found in six published files, four of them reachable only
+ * after inflating.
  *
- * The rule this sits against is real, and is also not wrong.
- * `tests/disclosure.test.ts` says "the leaf *is* the disclosure", and that stays
- * true **for a log line** — a workflow log is a list of filenames with no
- * author's sentence around them, and a leaf there discloses that a note by that
- * name exists and nothing else. A rendered body is a different surface with a
- * different reader: the same leaf arrives inside prose the author wrote, as the
- * text of a link they chose to write down. Two surfaces, two rules,
- * deliberately. Recorded here so the inconsistency is found next to its
- * reasoning rather than re-litigated.
- *
- * **Mutation watched fail:** in `scripts/resolve-links.ts`, making
- * `withheldLabel` return its `label` argument unchanged turned this red with
- * the token found in **three** files — `notes/hub/index.html`,
- * `pagefind/fragment/*.pf_fragment`, and `pagefind/index/*.pf_index`. **Two of
- * the three are reachable only by inflating**, which is the confirmation that
- * the decompression below is load-bearing rather than decorative: with
- * `gunzipSync` disabled and the same mutation applied, the list drops to the
- * single HTML page and the search index goes unexamined. That is the blind gate
- * this one is written not to be.
- *
- * Recorded precisely because an earlier draft of this comment named four files
- * from memory — including `content-index.json` and the root `index.html`, which
- * the mutation does *not* reach: `excerptFor` truncates at 200 characters and
- * the withheld line sits past that offset in this fixture. A mutation note
- * written from recall rather than from a run is the same defect as a gate
- * written from recall.
+ * **Mutation watched fail (link half):** making the `unpublished` branch in
+ * `scripts/resolve-links.ts` take the `unresolved` path — `const live = false`
+ * — turns the anchor assertion red: the withheld link degrades to text and no
+ * `href="/private/"` appears in the built page.
  */
-test('no directory of a withheld note reaches any published file, decompressed', () => {
+test('a withheld note ships its path in a live link and its body nowhere', () => {
   scratch('tk28-withheld-', (root) => {
     const { notes, out } = buildFixture(root);
 
     // Half one: the tokens really are in the corpus on disk. Without this the
-    // absence assertions below pass on a fixture that never contained them.
+    // assertions below pass on a fixture that never contained them.
     const corpusFiles = filesUnder(notes);
     for (const token of [WITHHELD_DIRECTORY, WITHHELD_SUBDIRECTORY]) {
       const carrying = corpusFiles.filter(
@@ -673,7 +652,7 @@ test('no directory of a withheld note reaches any published file, decompressed',
       );
       assert.ok(
         carrying.length > 0,
-        `the fixture never carries "${token}", so the absence assertion below proves nothing`,
+        `the fixture never carries "${token}", so the assertions below prove nothing`,
       );
     }
     // And the *link* to it is in a body, so the build had to make a decision
@@ -683,8 +662,8 @@ test('no directory of a withheld note reaches any published file, decompressed',
       'no note links the withheld file, so no withheld path was ever at risk',
     );
 
-    // Half two: it reached nothing that ships. Every file, decompressed where
-    // the bytes are gzip — which is what lets this see into the Pagefind index.
+    // Half two: every file, decompressed where the bytes are gzip — which is
+    // what lets this see into the Pagefind index.
     const readable = (file: string): string => {
       const bytes = readFileSync(file);
       if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
@@ -708,23 +687,32 @@ test('no directory of a withheld note reaches any published file, decompressed',
     };
 
     const published = filesUnder(out);
-    for (const token of [WITHHELD_DIRECTORY, WITHHELD_SUBDIRECTORY]) {
-      const leaked = published.filter((file) => file.includes(token) || readable(file).includes(token));
-      assert.deepEqual(
-        leaked.map((file) => file.slice(out.length + 1).replaceAll('\\', '/')),
-        [],
-        `"${token}" — a directory of a file this build withheld — reached the published site`,
-      );
-    }
 
-    // The withheld note's *body* never ships either, which is a different fact
-    // from its path: the path could be withheld while an excerpt of the note
-    // was indexed.
+    // **The withheld note's own prose ships nowhere.** This is the line the
+    // 2026-08-17 decision did not move, and it is the one that separates "the
+    // link discloses where the note lives" from "the note was published".
     const bodyLeaks = published.filter((file) => readable(file).includes('zzqwithheldbody'));
     assert.deepEqual(
       bodyLeaks.map((file) => file.slice(out.length + 1).replaceAll('\\', '/')),
       [],
       "the withheld note's own prose reached the published site",
+    );
+
+    // **And the path ships, in a live anchor, on the page that linked it.**
+    // Asserted rather than merely permitted: a rule nobody checks is a rule the
+    // next refactor silently reverts, and this is the surface the owner decided
+    // about. The anchor and the path are asserted together — the path present
+    // *without* the anchor would mean the rewrite emitted the target as prose.
+    const hub = readFileSync(join(out, 'notes', 'hub', 'index.html'), 'utf8');
+    assert.match(
+      hub,
+      new RegExp(`<a href="${WITHHELD_ROUTE}">${WITHHELD_DIRECTORY}/${WITHHELD_SUBDIRECTORY}/[^<]*</a>`),
+      `the hub page does not carry the withheld target as a live link to ${WITHHELD_ROUTE}`,
+    );
+    // And that route is a page the host can serve, so the link is not a 404.
+    assert.ok(
+      existsSync(join(out, WITHHELD_ROUTE.slice(1, -1), 'index.html')),
+      `${WITHHELD_ROUTE} is linked from a note body but was not built`,
     );
 
     // Non-vacuity for the decompression itself. If no published file were

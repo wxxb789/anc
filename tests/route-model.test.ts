@@ -18,6 +18,7 @@ import {
   REDIRECT_RULES,
   SITE_MAP,
   TAGS_SEGMENT,
+  WITHHELD_ROUTE,
   collectionFacets,
   collectionRoute,
   isRouteKey,
@@ -67,6 +68,48 @@ test('every fixed route collides with a reserved segment or is the site root', (
     const segment = route.slice(1, -1);
     assert.ok(RESERVED_SLUGS.has(segment), `fixed route "${route}" is not protected by a reserved slug`);
   }
+});
+
+test('a note cannot capture the withheld route, whatever it is named', async () => {
+  // **The one reservation that is not covered by the two gates above**, because
+  // `WITHHELD_ROUTE` is deliberately absent from `SITE_MAP` and therefore from
+  // `FIXED_ROUTES`: nothing in the site chrome links it, and only a note body
+  // that named a withheld target does.
+  //
+  // Written after the obvious mutation stayed green — deleting `'private'` from
+  // `RESERVED_SLUGS` left `tests/route-model.test.ts` and
+  // `tests/content-contract.test.ts` passing, 108 of 108, because every gate
+  // over that set iterates the set itself and a member removed from it is a
+  // member no gate looks for. That is `docs/gate-reading.md`'s corollary about
+  // searching by the constant, in the direction that reports success.
+  //
+  // **The mechanism, not the membership**, is what is asserted here. `INTERNAL_HREF`
+  // in `src/lib/markdown.ts` rewrites every single-segment `/<slug>/` href
+  // through `routeForSlug`, so a *published* note slugged `private` would make
+  // that helper answer for the withheld route and send every withheld link on
+  // the site to that note instead. The contract refusing the slug is what makes
+  // the collision unreachable, and the second half below is what proves the
+  // collision would otherwise be real — a gate on the refusal alone cannot tell
+  // a load-bearing reservation from a decorative one.
+  const segment = WITHHELD_ROUTE.slice(1, -1);
+  assert.throws(
+    () => validateArtifact({ version: 1, entries: [entry(segment)] }),
+    /collides with reserved route segment/,
+    `a note slugged "${segment}" would capture every link to a withheld note`,
+  );
+
+  // The capture itself, demonstrated through the renderer with the guard
+  // bypassed: `renderMarkdown` is handed a `routeForSlug` that answers for that
+  // slug, exactly as `[slug].astro`'s would if such a note had been published.
+  const { renderMarkdown } = await import('../src/lib/markdown.ts');
+  const { html } = await renderMarkdown(`A [label](${WITHHELD_ROUTE}) link.\n`, {
+    routeForSlug: (slug) => (slug === segment ? noteRoute(segment) : undefined),
+  });
+  assert.ok(
+    html.includes(`href="${noteRoute(segment)}"`),
+    'the withheld route is not rewritten by `routeForSlug` at all, so the reservation above ' +
+      `guards nothing — check whether \`INTERNAL_HREF\` still matches ${WITHHELD_ROUTE}: ${html}`,
+  );
 });
 
 test('note paths are recognized only in their canonical form', () => {
