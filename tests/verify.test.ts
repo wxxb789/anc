@@ -291,6 +291,64 @@ test('the residue scan is a blocking link of the build, not an advisory step', (
   assert.ok(SCRIPTS['scan:residue'], 'package.json declares no `scan:residue` script');
 });
 
+test('a scan of nothing throws rather than reporting clean or reporting a finding', () => {
+  // **Both wrong answers are refused, and they are different wrong answers.**
+  // Returning `{findings: []}` says "I looked and it was clean" about a
+  // directory that does not exist. Returning a *finding* — which is what this
+  // did until now — says "I looked and found residue", so every caller that
+  // counts findings, tests `length`, or filters by rule name treats an unbuilt
+  // directory as a dirty one. Neither is true; nothing was scanned.
+  //
+  // **Mutation watched fail:** restoring the old branch in
+  // `scripts/scan-residue.ts` — `report(...)` then
+  // `return { findings, detailed, scannedCount: 0, rowCount: 0 }` — turns this
+  // red on the throw assertion, and the message check below is what stops a
+  // future version from throwing something that reads like residue.
+  const root = mkdtempSync(join(tmpdir(), 'vacuity-'));
+  try {
+    const missing = join(root, 'never-built');
+
+    // Caught once and asserted outside, rather than asserting inside a `catch`
+    // — `tests/preview-server.test.ts:374` uses the same shape. The obvious
+    // version puts `assert.fail('did not throw')` in the `try` and the
+    // assertions in the `catch`, where the `catch` swallows its own
+    // `AssertionError`: still red, but red saying "the private half does not
+    // name the directory" when the real regression is that nothing threw.
+    let thrown: (Error & { detail?: string }) | undefined;
+    try {
+      scanResidue(missing);
+    } catch (error) {
+      thrown = error as Error & { detail?: string };
+    }
+
+    assert.ok(thrown, 'scanning a missing directory did not throw');
+    assert.match(thrown.message, /missing or unreadable/, 'the refusal does not say what was wrong');
+    // The public half carries no host path: this reaches a workflow log on a
+    // public repository, which is the disclosure this module exists to prevent.
+    assert.doesNotMatch(
+      thrown.message,
+      /(?<![A-Za-z0-9])[A-Za-z]:[\\/]/,
+      `the public message names an absolute path: ${thrown.message}`,
+    );
+    // And the *detail* does carry it, or the report a maintainer reads cannot
+    // say which directory was missing.
+    assert.ok(
+      thrown.detail?.includes(missing),
+      'the private half does not name the directory, so the report cannot say which one',
+    );
+
+    // Non-vacuity: the same call against a directory that *does* exist returns
+    // normally. Without this every assertion above passes on a `scanResidue`
+    // that throws unconditionally.
+    writeFileSync(join(root, 'index.html'), '<!doctype html><p>ordinary</p>', 'utf8');
+    const clean = scanResidue(root);
+    assert.deepEqual(clean.findings, [], 'a clean directory reported findings');
+    assert.ok(clean.scannedCount > 0, 'the control scanned nothing, so it is not a control');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('the residue scan reads the built site and finds nothing in it', () => {
   const { findings, scannedCount } = scanResidue();
   assert.deepEqual(findings, [], 'the residue scan found something in dist/');

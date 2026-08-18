@@ -67,9 +67,14 @@ And at the reporting level: TK-28's `gunzip` catch fell back to raw bytes on fai
 reports clean. "Could not look" must not be spelled like "looked and found nothing" — which is
 why `scanResidue` returns a `scannedCount` a caller can refuse a zero from, and why the
 report's `status` field distinguishes "nothing to report" from "I stopped before I could look."
-**The stronger form of this is still open**: `scan-residue.ts` reports "the built site is
-missing or unreadable" as a *finding*, so a caller counting findings cannot tell an unreadable
-output from a dirty one. `src/lib/diagram-mode.ts` records the defect and it is unfixed.
+**The stronger form is now closed at the definition**: `scan-residue.ts` used to report "the
+built site is missing or unreadable" as a *finding*, so a caller counting findings could not
+tell an unreadable output from a dirty one. It throws instead. The other "could not look"
+cases in that file stay findings, by a rule rather than a list: a file that shipped and could
+not be read inside is a finding and names itself; vacuity is the case where there is no
+artifact at all. The rule form is not a flourish — the first draft of that comment enumerated
+those branches and undercounted them, three sections above the corollary warning against
+exactly that.
 
 ## 4. A control that reimplements what it is controlling for measures the reimplementation
 

@@ -299,7 +299,13 @@ test('every diagram type renders to CSP-clean SVG', async () => {
     if (name !== 'info') assert.match(svg, /viewBox="/, `${name}: no viewBox, so the diagram cannot scale`);
     assert.match(svg, /aria-label="/, `${name}: a diagram is content and needs an accessible name`);
   }
-});
+  // The most expensive gate in the tree: every diagram type, each rendered twice
+  // to pair the palettes. Measured at 160 s under `pnpm run verify` against the
+  // 90 s file default and 32 s alone — so it is not slow, it is *contended*, and
+  // a default sized on an idle machine is the wrong instrument for it. Its own
+  // budget rather than another rise in the global one, which would relax every
+  // gate to accommodate this one.
+}, 300_000);
 
 test('flattening preserves the appearance the stylesheet described', async () => {
   // The assertion the CSP gate above cannot make. Deleting the stylesheet makes

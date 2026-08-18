@@ -987,12 +987,34 @@ export function scanResidue(root: string = DIST): {
   let files: string[];
   try {
     files = walk(root);
-  } catch {
-    report(
-      'the built site is missing or unreadable — run `pnpm run build` first',
-      `${root} is missing or unreadable — run \`pnpm run build\` first`,
+  } catch (error) {
+    // **Vacuity throws; it is not a finding.** A finding is a fact about output
+    // that exists — this is the absence of output, and returning it as a
+    // finding made "I could not look" arrive in the same channel and the same
+    // shape as "I looked and found residue". Every caller that counts findings,
+    // tests `length`, or filters by rule name then treats an unbuilt directory
+    // as a dirty one, and the one caller that reports success reads
+    // `scannedCount` — which was 0, a number no assertion here checks.
+    //
+    // The other "could not look" cases in this file are deliberately *not*
+    // collapsed into this, and the line between them is a rule rather than a
+    // list: **a file that shipped and could not be read inside is a finding and
+    // names itself; vacuity is the case where there is no artifact at all.**
+    // Stated as a rule because a list is what `docs/gate-reading.md`'s corollary
+    // about enumerations warns against — and earned it here, since the first
+    // draft of this comment counted five such branches as four (it missed the
+    // search-index fragment, which has its own inflate because a fragment's
+    // bytes are never read into the shared gzip path).
+    // The public half names no path. `root` is a host filesystem path and this
+    // throw reaches a workflow log on a public repository, which is the
+    // disclosure the whole module exists to prevent — `BuildFailure` already
+    // carries the split, so the detail goes where the report reads it.
+    throw new BuildFailure(
+      'residue-scan-vacuous',
+      'the built site is missing or unreadable — run `pnpm run build` first. Nothing was ' +
+        'scanned, so a clean result would be the zero of having looked nowhere.',
+      `${root} is missing or unreadable: ${error instanceof Error ? error.message : String(error)}`,
     );
-    return { findings, detailed, scannedCount: 0, rowCount: 0 };
   }
 
   for (const path of files) {

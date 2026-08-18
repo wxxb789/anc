@@ -56,12 +56,12 @@ export const DIAGRAM_MODE: DiagramMode = 'build-time';
  *    code rather than residue, but `scan:residue` is a link of `build`, so the
  *    Cloudflare build fails. It needs a vendored-runtime exemption of the kind
  *    it already grants Pagefind — a TK-09/TK-14 decision, not this ticket's to
- *    make unilaterally. Whoever opens that file: `scanResidue` currently
- *    reports "I couldn't look" as a *finding*, so a caller counting findings
- *    cannot tell it from "I looked and found residue". Throwing on vacuity
- *    instead would remove the ambiguity at the definition rather than asking
- *    every caller to dodge it, and needs no caller changes — none of them
- *    match on the vacuity message today.
+ *    make unilaterally. (The vacuity ambiguity this paragraph used to also
+ *    record — `scanResidue` reporting "I couldn't look" as a finding — is
+ *    fixed, and its reasoning now lives in `scripts/scan-residue.ts`, where the
+ *    behaviour is. It was recorded here only because this constant happened to
+ *    be the file someone had open, and it would have been deleted with this
+ *    constant.)
  *
  * Until both are settled, `client` is implemented-and-verified but not
  * shippable, and `build-time` is not merely the better choice — it is the only
