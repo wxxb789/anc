@@ -202,14 +202,112 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
  * special-casing, because escaping the delimiters fixes it and every other
  * spelling at once.
  *
- * Only `[` and `]`. A `(` or `)` in a label is harmless — the parser closes the
- * label at the `]` before the destination begins — and escaping more than the
- * two characters that can break the construct would put visible backslashes
- * into a reader's text.
+ * **Only `[` and `]`, and the set is measured rather than assumed.** Every
+ * candidate was run through both rewrite paths and the shipped renderer
+ * (`.tmp/probe-labels.mjs`); `(`, `)`, a backtick, and a lone backslash all
+ * round-trip intact, because the parser closes a label at its `]` before a
+ * destination begins and nothing else in a label is delimiter syntax. Escaping
+ * more than the two characters that can break the construct would put visible
+ * backslashes into a reader's text.
  */
 function escapeLabel(text: string): string {
   return text.replace(/[[\]]/g, (character) => `\\${character}`);
 }
+
+/**
+ * The edits that make a label's own text safe to sit inside `[…]`.
+ *
+ * **This is the split rewrite's half of {@link escapeLabel}, and it existed as a
+ * defect for as long as the split rewrite has.** An outer link is rewritten as
+ * two edits *around* its label so a nested node can write into the middle
+ * (see {@link labelSpan}) — which means the label's bytes are copied through
+ * untouched, escaper included. Measured on `2405cb2` and still live at
+ * `ebd53ff`:
+ *
+ * ```
+ * [[beta|has ] bracket]]  ->  [has ] bracket](/beta/)   no anchor at all
+ * [[beta|has [ bracket]]  ->  [has [ bracket](/beta/)   anchor text " bracket"
+ * ```
+ *
+ * The first renders as literal text — the label closes at the author's `]` and
+ * `](/beta/)` becomes prose. The second silently loses the first half of the
+ * author's own words. Both are what a *reader* gets, which is why the gates
+ * assert rendered HTML rather than the intermediate Markdown.
+ *
+ * **The escape operates on the source bytes and touches nothing else**, which is
+ * the property the first two attempts both got wrong and is worth stating as a
+ * rule: *a label with no bracket in it must come out byte-identical to what the
+ * author wrote.*
+ *
+ * The first attempt escaped the source slice with a plain `[` / `]` replace, so
+ * an author's own `\]` became `\\]` — a literal backslash and then an unescaped
+ * delimiter, which renders a backslash and closes the label. Worse than the
+ * defect, because the input was already correct.
+ *
+ * The second attempt escaped the parser's `value` instead, which fixes that case
+ * and breaks three others, because `value` is not the source with escapes
+ * resolved — it is the source with *everything* resolved. Measured, and found by
+ * review rather than by any gate:
+ *
+ * ```
+ * [[t|ends with \]]              ->  [ends with \](/t/)     zero anchors
+ * [the \*star\* file](t.md)      ->  <a>the <em>star</em> file</a>
+ * [label &lt;img src=…&gt;](t)  ->  <a>label <img src=…></a>
+ * ```
+ *
+ * The third is the serious one: an author who wrote `&lt;img&gt;` as *displayed
+ * text* would have shipped a live third-party request out of a build whose whole
+ * subject is not making requests the author did not ask for. The predicate was
+ * "did the parser decode anything", which is a far larger set than "does this
+ * need escaping".
+ *
+ * So: escape the **unescaped** brackets in the source slice, and leave every
+ * other byte alone. A bracket is already escaped exactly when an odd number of
+ * backslashes precedes it, which is what the capture group counts.
+ *
+ * **Only `text` descendants are escaped, and the exclusions are each measured.**
+ *
+ * - An `inlineCode` node is skipped: a `]` inside backticks cannot close a label
+ *   (measured — `[code \`has ] bracket\` here](/t/)` renders as one anchor
+ *   containing a `<code>`), and escaping there would put a visible backslash
+ *   inside code the author wrote.
+ * - A `text` node under a **nested** `link` or `image` is skipped, because those
+ *   bytes are the region that node's own rewrite writes into.
+ *
+ * **The nested exclusion is reachable, and a first version of this comment said
+ * it was not.** A GFM autolink is a `link` node *inside* a link's children —
+ * `[[t|see <https://example.invalid/a> b]]` parses with `link[8,35)` under
+ * `link[0,39)` — so a bracket inside an autolink URL does reach here. Without
+ * the guard, `[[t|a ] b <https://x.invalid/p]q> c]]` ships
+ * `href="https://x.invalid/p%5C%5Dq"`: a backslash spliced into somebody's URL.
+ * The probe that concluded "unreachable" enumerated only `[…](…)` and `![…](…)`
+ * shapes and never an autolink, which is `docs/gate-reading.md` case 5 — a
+ * fixture encoding what its author believed the parser emits.
+ *
+ * Emitted as one edit per text node rather than one over the whole label, for
+ * the same reason the outer rewrite is split: any span a nested node owns has to
+ * be left alone.
+ */
+function escapeLabelEdits(node: MdastNode, source: string, into: Edit[]): void {
+  const walk = (current: MdastNode, insideNested: boolean): void => {
+    for (const child of ('children' in current ? current.children : []) as MdastNode[]) {
+      const nested = insideNested || CONTAINS_LINK.has(child.type);
+      if (child.type === 'text' && !nested) {
+        const span = spanOf(child);
+        if (span !== undefined) {
+          const written = source.slice(span.start, span.end);
+          const escaped = written.replace(/(\\*)([[\]])/g, (_, slashes: string, bracket: string) =>
+            slashes.length % 2 === 1 ? `${slashes}${bracket}` : `${slashes}\\${bracket}`,
+          );
+          if (escaped !== written) into.push({ start: span.start, end: span.end, text: escaped });
+        }
+      }
+      walk(child, nested);
+    }
+  };
+  walk(node, false);
+}
+
 
 /**
  * Whether a node was written as a wikilink, decided from its own source span.
@@ -349,13 +447,12 @@ export function resolveLinksIn(
     // with no label span — an image, or a link the parser gave none — has
     // nothing nested to protect and is replaced whole.
     //
-    // The whole-span form is also the only one that can escape its label: the
-    // split form leaves the label's own bytes in place, which is what preserves
-    // a nested node's rewrite. That is sound because a node *with* a label span
-    // has a label the parser read as link-label syntax already — its brackets
-    // are balanced by construction. An image's `alt` and a wikilink's display
-    // half were never link-label syntax, and those are exactly the nodes with
-    // no label span. See {@link escapeLabel}.
+    // The whole-span form is also the only one that could escape its label
+    // *through* {@link escapeLabel}: the split form leaves the label's own bytes
+    // in place, which is what preserves a nested node's rewrite. So the split
+    // form escapes its label separately, in edits scoped to the label's own text
+    // nodes — see {@link escapeLabelEdits}, which is where that had been missing
+    // for as long as the split form existed.
     const inner = node.type === 'link' ? labelSpan(node) : undefined;
     const rewrite = (before: string, after: string, fallbackLabel = label): void => {
       if (inner === undefined) {
@@ -368,6 +465,10 @@ export function resolveLinksIn(
       }
       edits.push({ start: span.start, end: inner.start, text: before });
       edits.push({ start: inner.end, end: span.end, text: after });
+      // Only where an anchor is actually opened. An `unresolved` link degrades
+      // to plain text, and text is not a construct a `]` can break — escaping
+      // there would ship the author a visible backslash in prose.
+      if (before !== '') escapeLabelEdits(node, markdown, edits);
     };
 
     if (resolution.kind === 'unresolved' || resolution.kind === 'unpublished') {

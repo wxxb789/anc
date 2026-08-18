@@ -982,21 +982,22 @@ test('the title and the excerpt carry a link\'s text, never its syntax', async (
     // that must survive untouched — was replaced by an ellipsis, so the gate
     // would have measured truncation while claiming to measure stripping.
     //
-    // **The bracket row asserts a known-broken output, deliberately.** A
-    // wikilink whose display half contains `]` is a pre-existing producer
-    // defect: `escapeLabel` escapes it in the whole-span rewrite and the
-    // *split* rewrite — the one a node with a label span takes — leaves the
-    // label's own bytes in place, unescaped. Measured on `2405cb2`, before any
-    // of this ticket's work: `[[beta|has ] bracket]]` becomes
-    // `[has ] bracket](/beta/)`, which is not link syntax and renders as literal
-    // text. So there is nothing here for a stripper to strip, and asserting the
-    // *repaired* string would be asserting a fix nobody has made. Recorded so
-    // whoever fixes the escape sees this row go red and knows it is the row that
-    // should change.
+    // **The bracket row was a known-broken output and is now repaired.** A
+    // wikilink whose display half contains `]` was a producer defect for as long
+    // as the split rewrite existed: `escapeLabel` escaped it in the whole-span
+    // rewrite, and the split rewrite — the one a node with a label span takes —
+    // copied the label's own bytes through unescaped. Measured on `2405cb2` and
+    // still live at `ebd53ff`, `[[beta|has ] bracket]]` became
+    // `[has ] bracket](/beta/)`, which is not link syntax and rendered as
+    // literal text, so there was nothing here for a stripper to strip.
+    //
+    // `escapeLabelEdits` in `scripts/resolve-links.ts` closes it, and this row
+    // is what changed: the body now carries `[has \] bracket](/beta/)`, a real
+    // link, so the excerpt strips it to its text like every other form.
     assert.equal(
       hub.excerpt,
       'See beta, drafts/secret too, and alt. ' +
-        'A badge logo and a bracket [has ] bracket](/beta/). ' +
+        'A badge logo and a bracket has ] bracket. ' +
         'A ref [text][ci] and a bare https://example.invalid/p stay. ' +
         '[ci]: https://example.invalid/',
     );
@@ -1047,21 +1048,149 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   //
   //     ![[t|before ] after]]  ->  [before ] after](/t/)
   //
+  // **Both rewrite paths, because for a year only one of them escaped.** A node
+  // the parser gives a label span — an ordinary wikilink — is rewritten as two
+  // edits *around* its label so a nested node can write into the middle, and
+  // that path copied the label's bytes through untouched. A node with no label
+  // span — an image embed — is replaced whole and went through `escapeLabel`.
+  // The two rows below are the same input in the two syntaxes, and the first
+  // was the defect: measured at `ebd53ff`, `[[t|has ] bracket]]` produced
+  // `[has ] bracket](/t/)` — no anchor at all — and `[[t|has [ bracket]]`
+  // produced an anchor whose text was ` bracket`, silently losing half the
+  // author's words.
+  //
   // Asserted through the *renderer* as well as on the Markdown, because the
   // escape is only correct if it disappears again: a reader must see the
   // bracket, not a backslash.
   const corpus: readonly CorpusFile[] = [
     { path: 'src.md', slug: 'src' },
     { path: 't.md', slug: 't' },
+    // Published, so the nested-node rows below carry a node that is actually
+    // rewritten. With it absent the image degrades to its alt text and the row
+    // would measure degradation rather than the escape stepping around a span.
+    { path: 'a.md', slug: 'a' },
   ];
   const run = (body: string) =>
     resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
 
-  assert.equal(run('![[t|has ] bracket]]'), '[has \\] bracket](/t/)');
-  assert.equal(run('![[t|has [ bracket]]'), '[has \\[ bracket](/t/)');
-  // A label with no bracket gains no backslash, so the escape is not applied
-  // indiscriminately.
-  assert.equal(run('![[t|plain label]]'), '[plain label](/t/)');
+  for (const [syntax, spell] of [
+    ['wikilink, the split rewrite', (label: string) => `[[t|${label}]]`],
+    ['embed, the whole-span rewrite', (label: string) => `![[t|${label}]]`],
+  ] as const) {
+    assert.equal(run(spell('has ] bracket')), '[has \\] bracket](/t/)', syntax);
+    assert.equal(run(spell('has [ bracket')), '[has \\[ bracket](/t/)', syntax);
+    assert.equal(run(spell('has [x] bracket')), '[has \\[x\\] bracket](/t/)', syntax);
+    // A label with no bracket gains no backslash, so the escape is not applied
+    // indiscriminately — the constraint that an ordinary label must not change.
+    assert.equal(run(spell('plain label')), '[plain label](/t/)', syntax);
+  }
+
+  // **The set is `[` and `]` and nothing else, measured rather than assumed.**
+  // Each of these was run through both paths and the renderer
+  // (`.tmp/probe-labels.mjs`) and round-trips intact: the parser closes a label
+  // at its `]` before a destination begins, so a paren cannot truncate one, and
+  // a backtick and a lone backslash are not label syntax at all. A gate over the
+  // two that break would pass just as well if the escape were widened to all
+  // six, which is why the four that must *not* change are asserted here.
+  for (const label of ['has ( paren', 'has ) paren', 'has ` backtick', 'has \\ backslash']) {
+    assert.equal(run(`[[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
+    assert.equal(run(`![[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
+  }
+
+  // **The invariant that actually matters, stated as itself: a label with no
+  // bracket comes out byte-identical to what the author wrote.** The four rows
+  // above check four characters; this checks the property, and it is the one two
+  // successive versions of this fix violated in ways no bracket-shaped gate
+  // could see. Each row below was a real regression, found by review:
+  //
+  // - a label ending in a backslash had its escape re-emitted raw, so the
+  //   backslash escaped the label's own `]` and the link vanished entirely;
+  // - `[the \*star\* file](t.md)` lost the author's escapes and rendered
+  //   `the <em>star</em> file` — emphasis the author had deliberately suppressed;
+  // - `&lt;img src="…"&gt;`, written by an author as *displayed text*, was
+  //   decoded into a live `<img>` and shipped a third-party request out of a
+  //   build whose subject is not making requests nobody asked for.
+  //
+  // All three came from escaping the parser's decoded `value` rather than the
+  // source bytes: the predicate was "did the parser decode anything", which is a
+  // far larger set than "does this need escaping".
+  for (const label of [
+    'the \\*star\\* file',
+    'snake\\_case name',
+    'label &lt;img src="https://tracker.invalid/p.gif"&gt; here',
+    'a &amp; b',
+    'a &#93; b',
+    'plain label',
+  ]) {
+    assert.equal(run(`[[t|${label}]]`), `[${label}](/t/)`, 'a bracket-free label was rewritten');
+    assert.equal(run(`[${label}](t.md)`), `[${label}](/t/)`, 'a bracket-free label was rewritten');
+  }
+
+  // **A trailing backslash, both spellings, because they differ.** One `\`
+  // escapes the construct's own closing delimiter, so the parser hands back
+  // prose and this module never sees a node — on base too. Two is an escaped
+  // backslash: the link forms, the label ends with a literal `\`, and it must
+  // come through untouched. The second is where the regression lived — escaping
+  // the parser's decoded `value` re-emitted it as one raw backslash, which then
+  // escaped the label's own `]` and the anchor vanished.
+  assert.equal(run('[[t|ends with \\]]'), '[[t|ends with \\]]', 'one backslash should not form a link');
+  assert.equal(run('[[t|ends with \\\\]]'), '[ends with \\\\](/t/)', 'a literal backslash was rewritten');
+  assert.equal(run('[ends with \\\\](t.md)'), '[ends with \\\\](/t/)', 'a literal backslash was rewritten');
+
+  // The same property through the renderer, because two of those three
+  // regressions were invisible in the Markdown and only showed as HTML: what
+  // reached the reader was emphasis, or a request.
+  // (Asserted in the rendering gate below.)
+
+  // **The two paths differ on inline code, and it is the parser rather than the
+  // escape.** A wikilink's label is parsed as inline content, so its backticks
+  // reach this module as an `inlineCode` node and survive in the source bytes;
+  // an embed's label becomes an image `alt`, which is plain text, so the parser
+  // has already resolved the span and the backticks are gone before anything
+  // here runs. Measured at `ebd53ff` and unchanged by this fix — asserted so a
+  // later change to the escape cannot quietly move either one.
+  assert.equal(run('[[t|has (parens) and `code`]]'), '[has (parens) and `code`](/t/)');
+  assert.equal(run('![[t|has (parens) and `code`]]'), '[has (parens) and code](/t/)');
+
+  // A `]` inside inline code cannot close a label, so escaping there would put
+  // a visible backslash inside code the author wrote.
+  assert.equal(run('[[t|code `has ] bracket` here]]'), '[code `has ] bracket` here](/t/)');
+
+  // **An author who escaped it correctly must not be escaped again.** The
+  // parser resolves `\]` before this module sees it, so the node's `value` is
+  // `has ] pre-escaped` while its source bytes still carry the backslash. A
+  // first version of the fix escaped the *bytes*, producing `\\]` — a literal
+  // backslash followed by an unescaped delimiter, which renders as a backslash
+  // and then closes the label. That is worse than the defect, because the input
+  // was already right. Both spellings must normalise to one output.
+  assert.equal(run('[[t|has \\] pre-escaped]]'), '[has \\] pre-escaped](/t/)');
+  assert.equal(run('![[t|has \\] pre-escaped]]'), '[has \\] pre-escaped](/t/)');
+
+  // **An `unresolved` link degrades to plain text, where a bracket is not
+  // syntax.** Escaping there would ship the author a visible backslash in
+  // ordinary prose, so the escape is scoped to the branch that opens an anchor.
+  assert.equal(run('[[gone|has ] bracket]]'), 'has ] bracket');
+
+  // **A nested node's own region is left alone.** An `![[embed]]` inside a
+  // wikilink label is an image node whose span is where its own rewrite writes;
+  // an escape reaching into it would be two edits over one span, which
+  // `applyEdits` refuses with a build failure. The text *beside* it still
+  // escapes, in both directions around the nested node.
+  assert.equal(
+    run('[[t|a ] bracket ![logo](a.md) here]]'),
+    '[a \\] bracket [logo](/a/) here](/t/)',
+  );
+  // **Only a wikilink can reach that shape, and it is worth saying why.** A
+  // Markdown link's label cannot hold an unescaped `]` — the parser closes the
+  // label there, so `[a ] bracket ![x](a.md) here](t.md)` is read as prose plus
+  // a standalone image and never becomes an outer link at all. A wikilink label
+  // closes at `]]`, so it is the one construct that arrives here carrying both a
+  // nested node and a bracket. Measured; an earlier version of this row used the
+  // Markdown spelling and was asserting a parse rather than an escape.
+  assert.equal(
+    run('[a ] bracket ![logo](a.md) here](t.md)'),
+    '[a ] bracket [logo](/a/) here](t.md)',
+  );
 });
 
 test('an escaped bracket renders as one anchor, with the bracket in its text', async () => {
@@ -1070,21 +1199,124 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
   // rather than by inspecting Markdown, because "correctly escaped" is a claim
   // about what the next stage does with it — and the escape would be worse than
   // the defect if it shipped a visible backslash.
+  //
+  // **Every row is checked for anchor *count* as well as text**, because the
+  // defect's signature is a link that silently stops being one: measured at
+  // `ebd53ff`, `[[t|has ] bracket]]` rendered zero anchors and the whole
+  // construct became literal prose. A gate asserting only "the text is there"
+  // passes on that, since the text is indeed there — as prose.
   const corpus: readonly CorpusFile[] = [
     { path: 'src.md', slug: 'src' },
     { path: 't.md', slug: 't' },
   ];
-  const markdown = resolveLinksIn(
-    'See ![[t|has ] bracket]] here.',
-    'src.md',
-    indexCorpus(corpus),
-    'src',
-    (slug) => `/${slug}/`,
-  ).markdown;
+  const run = (body: string) =>
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
 
-  const { html } = await renderMarkdown(markdown);
-  assert.match(html, /<a href="\/t\/">has \] bracket<\/a>/);
-  assert.ok(!html.includes('\\'), `a backslash reached the reader: ${html}`);
+  for (const [what, body, expected] of [
+    ['a wikilink, right bracket', 'See [[t|has ] bracket]] here.', 'has ] bracket'],
+    ['a wikilink, left bracket', 'See [[t|has [ bracket]] here.', 'has [ bracket'],
+    ['a wikilink, both', 'See [[t|has [x] bracket]] here.', 'has [x] bracket'],
+    ['an embed, right bracket', 'See ![[t|has ] bracket]] here.', 'has ] bracket'],
+    ['an author escape', 'See [[t|has \\] pre-escaped]] here.', 'has ] pre-escaped'],
+  ] as const) {
+    const { html } = await renderMarkdown(run(body));
+    const anchors = html.match(/<a\b/g) ?? [];
+    assert.equal(anchors.length, 1, `${what}: rendered ${anchors.length} anchors, not one: ${html}`);
+    assert.match(html, new RegExp(`<a href="/t/">${expected.replaceAll(/[[\]]/g, '\\$&')}</a>`), what);
+    assert.ok(!html.includes('\\'), `${what}: a backslash reached the reader: ${html}`);
+  }
+
+  // **What a bracket-free label renders as, which is where two regressions
+  // showed and the Markdown did not.** Escaping the parser's decoded `value`
+  // left these byte-plausible and reader-wrong: the first rendered emphasis the
+  // author had escaped away, and the second turned text into a live request to a
+  // third party. `!html.includes('\\')` cannot catch either, because both
+  // *remove* backslashes.
+  for (const [what, body, expected] of [
+    ['an escaped asterisk stays literal', '[the \\*star\\* file](t.md)', 'the *star* file'],
+    ['an escaped underscore stays literal', '[[t|a \\_b\\_ c]]', 'a _b_ c'],
+    ['a trailing backslash keeps its link', '[[t|ends with \\\\]]', 'ends with \\'],
+  ] as const) {
+    const { html } = await renderMarkdown(run(body));
+    const anchors = html.match(/<a\b/g) ?? [];
+    assert.equal(anchors.length, 1, `${what}: rendered ${anchors.length} anchors, not one: ${html}`);
+    assert.ok(!/<em>|<strong>/.test(html), `${what}: an escaped marker became emphasis: ${html}`);
+    assert.match(html, new RegExp(`<a href="/t/">${expected.replaceAll(/[*\\]/g, '\\$&')}</a>`), what);
+  }
+
+  // **An entity an author wrote as text stays text.** This is the one with a
+  // consequence beyond appearance: `&lt;img src="…"&gt;` decoded into the body
+  // becomes a real element, and the sanitizer allows a remote `<img>` — so a
+  // build whose subject is not making requests nobody asked for would have
+  // issued one. Asserted on the *absence of a live element*, not on the entity
+  // spelling, because a renderer is free to re-encode.
+  const entity = await renderMarkdown(
+    run('[label &lt;img src="https://tracker.invalid/p.gif"&gt; here](t.md)'),
+  );
+  assert.ok(!/<img\b/.test(entity.html), `an entity became a live element: ${entity.html}`);
+  // The URL is *present* either way — it is the author's own text — so the
+  // discriminator is whether it sits in an attribute the browser will fetch.
+  // Measured on the regression: `<img src="https://tracker.invalid/p.gif" alt=""
+  // />`. Now it survives only inside the escaped `&lt;…&gt;` the author typed,
+  // which is why this asserts on the *element*, not on the URL: `src=` appears
+  // in the anchor's own text in both cases and cannot discriminate.
+  assert.match(entity.html, /&lt;img/, 'the author’s own text was dropped rather than kept inert');
+
+  // **A trailing backslash through the renderer.** The escaped-backslash form
+  // makes a link whose text ends in one literal `\`; the regression made it make
+  // no link at all.
+  const trailing = await renderMarkdown(run('[[t|ends with \\\\]]'));
+  assert.equal((trailing.html.match(/<a\b/g) ?? []).length, 1, trailing.html);
+  assert.match(trailing.html, /<a href="\/t\/">ends with \\<\/a>/);
+
+  // **A bracket inside an autolink is the nested node's own business.** A GFM
+  // autolink is a `link` node *inside* the label's children, so an escape
+  // reaching into it splices a backslash into somebody's URL: measured without
+  // the nested guard, `href="https://x.invalid/p%5C%5Dq"`. With it, the URL
+  // percent-encodes the bracket and nothing else, and the text beside it still
+  // escapes.
+  const autolink = await renderMarkdown(run('[[t|a ] b <https://x.invalid/p]q> c]]'));
+  assert.match(autolink.html, /href="https:\/\/x\.invalid\/p%5Dq"/);
+  assert.ok(!autolink.html.includes('%5C'), `a backslash reached the URL: ${autolink.html}`);
+});
+
+test('a withheld link with a bracket in its label is still one anchor', async () => {
+  // The 2026-08-17 reversal routes a withheld target through the same
+  // live-anchor rewrite as a published one, so the label-escape defect surfaces
+  // there too — and a withheld link is the case where a *silently broken* one
+  // matters most, because the reader gets the author's private path as prose
+  // with no anchor and no indication anything went wrong.
+  //
+  // Measured at `ebd53ff`: `[[drafts/secret|has ] bracket]]` produced
+  // `[has ] bracket](/private/)` and rendered zero anchors.
+  const corpus: readonly CorpusFile[] = [
+    { path: 'src.md', slug: 'src' },
+    // No slug: present in the corpus, withheld from publication.
+    { path: 'drafts/secret.md', slug: undefined },
+  ];
+  const run = (body: string) =>
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`);
+
+  for (const [what, body, expected] of [
+    ['a bracket in the label', 'See [[drafts/secret|has ] bracket]] here.', 'has ] bracket'],
+    ['an open bracket', 'See [[drafts/secret|has [ bracket]] here.', 'has [ bracket'],
+    ['no label at all', 'See [[drafts/secret]] here.', 'drafts/secret'],
+  ] as const) {
+    const result = run(body);
+    const { html } = await renderMarkdown(result.markdown);
+    const anchors = html.match(/<a\b/g) ?? [];
+    assert.equal(anchors.length, 1, `${what}: rendered ${anchors.length} anchors, not one: ${html}`);
+    assert.match(
+      html,
+      new RegExp(`<a href="/private/">${expected.replaceAll(/[[\]]/g, '\\$&')}</a>`),
+      what,
+    );
+    assert.ok(!html.includes('\\'), `${what}: a backslash reached the reader: ${html}`);
+    // Non-vacuity: the target really was withheld rather than merely missing,
+    // or these rows would be measuring the `unresolved` branch — which degrades
+    // to text and would render zero anchors for a different reason.
+    assert.equal(result.findings[0]?.outcome, 'unpublished', what);
+  }
 });
 
 test('an NFC link finds an NFD filename in every segment, not only the last', () => {
