@@ -271,14 +271,68 @@ function publishFlag(data: Record<string, unknown> | undefined): boolean | undef
 }
 
 /**
+ * A link's text, with its syntax removed — for the two fields that are read as
+ * plain text rather than rendered.
+ *
+ * `title` and `excerpt` are derived from the *rewritten* Markdown, so every
+ * internal link in them is already `[label](/route/)`. Neither field goes
+ * through the Markdown pipeline: the excerpt lands verbatim in
+ * `content-index.json`, in `rss.xml`, and in the `<meta name="description">` of
+ * every page showing the card, and the title lands in `<title>` and `og:title`.
+ * Measured before this existed — a heading and a body each containing one
+ * ordinary link:
+ *
+ * ```
+ * <title>See [beta](/beta/) now · Notes</title>
+ * <meta name="description" content="See [beta](/beta/) for the numbers.">
+ * ```
+ *
+ * Brackets and a route in a reader's search result, on every build with a link
+ * in a first heading or first paragraph. This is the same defect `aab694b`
+ * fixed for code spans, in the same function, and that fix stripped backticks
+ * and stopped.
+ *
+ * **The label is kept and the destination dropped**, which is what a reader
+ * would have seen had the field been rendered. That is also why this cannot be
+ * "delete the whole construct": the label is the author's prose.
+ *
+ * **Applied repeatedly until it stops changing**, because a badge is a link
+ * whose label is an image — `[![logo](/private/)](/t/)` — and one pass leaves
+ * the outer construct behind.
+ *
+ * The label pattern admits `\]`, which `scripts/resolve-links.ts` writes when an
+ * author's own label contains a bracket; those escapes are unescaped afterwards,
+ * since a reader of a plain-text field should see the bracket rather than the
+ * backslash. A reference link (`[text][ci]`) is deliberately untouched: nothing
+ * here resolves one, so its definition may not even be in this note, and
+ * dropping the syntax would assert a resolution this module never made.
+ */
+function withoutLinkSyntax(markdown: string): string {
+  let text = markdown;
+  for (;;) {
+    // No whitespace and no parens in the destination, so ordinary prose such as
+    // "the array [a] (see below)" is not mistaken for a link.
+    const next = text.replace(/!?\[((?:[^\][\\]|\\.)*)\]\([^()\s]*\)/g, '$1');
+    if (next === text) break;
+    text = next;
+  }
+  return text.replace(/\\([[\]])/g, '$1');
+}
+
+/**
  * The first heading's text, or the filename.
  *
  * A title is required and must be non-empty, and the renderer removes a leading
  * `# Title` that matches the page title — so taking it from the body is what
  * makes an ordinary note render with its heading once rather than twice.
+ *
+ * Link syntax is stripped for the reason {@link withoutLinkSyntax} gives: this
+ * value reaches `<title>` and `og:title` as plain text, and a heading may carry
+ * a link like any other line.
  */
 function titleFor(markdown: string, fallback: string): string {
-  return /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim() || fallback;
+  const heading = /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim();
+  return (heading === undefined ? '' : withoutLinkSyntax(heading).trim()) || fallback;
 }
 
 /**
@@ -302,12 +356,21 @@ function titleFor(markdown: string, fallback: string): string {
  * would have admitted a genuinely unresolved `[[wikilink]]` — the producer
  * defect that rule exists to catch — which is the repair this rule has already
  * had twice.
+ *
+ * **Link syntax goes the same way and for the same reason**, one commit later
+ * and found the same way: the fix above stripped backticks and stopped, so
+ * every build shipped `See [beta](/beta/) for the numbers.` into the meta
+ * description. See {@link withoutLinkSyntax}. Code spans are removed *before*
+ * links, so a note documenting `` `[label](/route/)` `` loses the span whole
+ * rather than having its example rewritten into prose.
  */
 function excerptFor(markdown: string): string {
-  const prose = markdown
-    .replace(/^#.*$/gm, '')
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/`[^`\n]*`/g, '')
+  const prose = withoutLinkSyntax(
+    markdown
+      .replace(/^#.*$/gm, '')
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/`[^`\n]*`/g, ''),
+  )
     .replace(/\s+/g, ' ')
     .trim();
   return prose.length > 200 ? `${prose.slice(0, 200).trimEnd()}…` : prose;

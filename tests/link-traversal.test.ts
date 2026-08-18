@@ -925,6 +925,119 @@ test('a withheld link with no label of its own still has an accessible name', ()
   );
 });
 
+test('the title and the excerpt carry a link\'s text, never its syntax', async () => {
+  // Both fields are read as **plain text** — the excerpt lands verbatim in
+  // `content-index.json`, `rss.xml`, and every `<meta name="description">`, and
+  // the title in `<title>` and `og:title`. Neither goes through the Markdown
+  // pipeline, and both are derived from the *rewritten* body, where every
+  // internal link is already `[label](/route/)`. Measured before the fix, on a
+  // corpus with one ordinary link in a heading and one in a paragraph:
+  //
+  //     <title>See [beta](/beta/) now · Notes</title>
+  //     <meta name="description" content="See [beta](/beta/) for the numbers.">
+  //
+  // This is the same defect `aab694b` fixed for code spans, in the same
+  // function; that fix stripped backticks and stopped.
+  //
+  // **Asserted over a corpus carrying every link form**, not one: the shapes
+  // that break a naive strip are the ones a single-link fixture cannot contain —
+  // a badge (a link whose label is an image, so one pass leaves the outer
+  // construct), an escaped bracket in a label, and a reference link, which must
+  // survive untouched because nothing here resolves one.
+  //
+  // **Mutation watched fail:** deleting the `withoutLinkSyntax` call from
+  // `excerptFor` in `scripts/markdown-to-artifact.ts` turns the excerpt row red
+  // with `[beta](/beta/)`; deleting it from `titleFor` turns the title row red.
+  await scratch('exc-syntax-', async (root) => {
+    put(root, 'beta.md', '# Beta\n\nplain prose\n');
+    put(root, 'drafts/secret.md', '---\npublish: false\n---\n\n# S\n\nhidden\n');
+    put(root, 'assets/logo.png', 'not really a png\n');
+    put(
+      root,
+      'hub.md',
+      [
+        '# See [beta](beta.md) now',
+        '',
+        'See [[beta]], [[drafts/secret]] too, and ![alt](assets/logo.png).',
+        'A badge [![logo](assets/logo.png)](beta.md) and a bracket [[beta|has ] bracket]].',
+        'A ref [text][ci] and a bare https://example.invalid/p stay.',
+        '',
+        '[ci]: https://example.invalid/',
+      ].join('\n'),
+    );
+
+    const discovery = await discover(root);
+    await resolveCorpusLinks(discovery);
+    const hub = discovery.entries.find((entry) => entry.slug === 'hub')!;
+
+    // The title, whose link is in the heading itself.
+    assert.equal(hub.title, 'See beta now');
+
+    // The excerpt, every form at once. Written as one expected string rather
+    // than a set of `includes` checks: a substring test cannot see a construct
+    // that was half-stripped, which is the failure mode of the badge.
+    //
+    // The corpus is kept under `excerptFor`'s 200-character cap on purpose. An
+    // earlier draft ran to 207 and the tail — the reference link, the one form
+    // that must survive untouched — was replaced by an ellipsis, so the gate
+    // would have measured truncation while claiming to measure stripping.
+    //
+    // **The bracket row asserts a known-broken output, deliberately.** A
+    // wikilink whose display half contains `]` is a pre-existing producer
+    // defect: `escapeLabel` escapes it in the whole-span rewrite and the
+    // *split* rewrite — the one a node with a label span takes — leaves the
+    // label's own bytes in place, unescaped. Measured on `2405cb2`, before any
+    // of this ticket's work: `[[beta|has ] bracket]]` becomes
+    // `[has ] bracket](/beta/)`, which is not link syntax and renders as literal
+    // text. So there is nothing here for a stripper to strip, and asserting the
+    // *repaired* string would be asserting a fix nobody has made. Recorded so
+    // whoever fixes the escape sees this row go red and knows it is the row that
+    // should change.
+    assert.equal(
+      hub.excerpt,
+      'See beta, drafts/secret too, and alt. ' +
+        'A badge logo and a bracket [has ] bracket](/beta/). ' +
+        'A ref [text][ci] and a bare https://example.invalid/p stay. ' +
+        '[ci]: https://example.invalid/',
+    );
+    // Under the cap, so the row above is a statement about stripping rather
+    // than about the ellipsis.
+    assert.ok(!hub.excerpt.endsWith('…'), 'the fixture crossed the 200-character cap');
+
+    // Non-vacuity: the *body* still carries the syntax, so the two rows above
+    // are a statement about these two fields rather than about a build that
+    // stopped rewriting links at all.
+    assert.ok(
+      hub.markdown.includes('[beta](/beta/)'),
+      `the rewritten body carries no link syntax, so stripping it proves nothing: ${hub.markdown}`,
+    );
+    // And the withheld path is still in both, which is the 2026-08-17 decision:
+    // this strips *syntax*, never the author's words.
+    assert.ok(hub.excerpt.includes('drafts/secret'), 'the withheld path was stripped from the excerpt');
+  });
+
+  // The escaped form, which the corpus above cannot reach: only the whole-span
+  // rewrite escapes a bracket, and that path is taken by a node with no label
+  // span — an image embed. Without this the `\]` branch of the strip is
+  // unasserted, and a mutation deleting it stays green.
+  await scratch('exc-escaped-', async (root) => {
+    put(root, 'beta.md', '# Beta\n\nprose\n');
+    put(root, 'hub.md', '# Hub\n\nAn embed ![[beta|has ] bracket]] here.\n');
+
+    const discovery = await discover(root);
+    await resolveCorpusLinks(discovery);
+    const hub = discovery.entries.find((entry) => entry.slug === 'hub')!;
+
+    // The traversal wrote `[has \] bracket](/beta/)`; the reader gets the
+    // bracket, not the backslash.
+    assert.ok(
+      hub.markdown.includes('[has \\] bracket](/beta/)'),
+      `the fixture did not reach the escaping path, so the row below proves nothing: ${hub.markdown}`,
+    );
+    assert.equal(hub.excerpt, 'An embed has ] bracket here.');
+  });
+});
+
 test('a bracket in a label cannot truncate the link it lands in', () => {
   // Text moved from one construct into another has to be re-escaped for the one
   // it lands in. A wikilink's display half and an image's `alt` are not
