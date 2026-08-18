@@ -1392,8 +1392,8 @@ demo corpus is synthetic; whoever wrote it publishes their own notes with it lik
 from their own repository.
 
 Delivered for identity — a foreign build carried 126 occurrences of one owner's name across 15
-files, of which only nine were in `.html`, and now carries zero. **Not delivered for content:**
-`src/data/content.json` still holds one real personal note.
+files, of which only nine were in `.html`, and now carries zero. **And delivered for content:**
+`ff0db9d` replaced the one real personal note with a synthetic entry, `reading-a-build-log`.
 
 ## 27. Decision frontier — closed
 

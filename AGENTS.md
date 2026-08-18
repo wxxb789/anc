@@ -58,8 +58,8 @@ owner's name a foreign build carried before TK-31 removed them.
   `tests/disclosure.test.ts` still enforces it. It is no longer withheld from the rendered
   body. Both directions are deliberate.
 - `src/data/content.json` and `public/content-index.json` are this repository's own build
-  inputs. `src/data/content.json` still holds one real personal note — plan D2 says it should
-  become synthetic and TK-31 did not reach it; see "Known-stale" below.
+  inputs. `src/data/content.json` holds one synthetic entry, `reading-a-build-log`; `ff0db9d`
+  replaced the real personal note plan D2 named, so that gap is closed.
 - Publication and deployment are external side effects requiring explicit approval. A
   successful local build is not deployment authorization.
 - Keep runtime static. D1, R2, Functions, analytics, comments, or other stateful services
@@ -214,7 +214,6 @@ meeting one of these has met a known gap, not a discovery.
 
 | What | State | Owner |
 | --- | --- | --- |
-| `src/data/content.json` | one real personal note; plan D2 says synthetic | unassigned |
 | `sync:content`, and the gate that pins it | dead path, retained by `tests/packaging.test.ts` | unassigned |
 | `src/pages/about.astro`, `privacy.astro` | shipped pages; plan §4.4 says notes `init` seeds. TK-32 built `init` and deliberately did not seed them — that row is tied to deleting the two pages, which is not TK-32's scope, and a seeded note beside a shipped page contradicting it is worse than neither | unassigned |
 | `og:image` | never emitted; `SOCIAL_CARD_PATH` is `undefined` and no config key sets it | unassigned |
