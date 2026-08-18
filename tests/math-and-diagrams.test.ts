@@ -414,10 +414,37 @@ test('diagram rendering is deterministic across processes', () => {
   // and id renumbering the renderer does.
   const script = fileURLToPath(new URL('tests/support/render-diagram.ts', ROOT));
   const source = DIAGRAM_TYPES['gitGraph']!;
+  // **The inner budget is smaller than the outer one, which is the point.**
+  // `vitest.config.ts` records this gate failing as a timeout while waiting on
+  // children it had itself budgeted 120 s each, under a 90 s outer bound — a
+  // gate whose inner budget exceeds its outer cannot fail the way it intends to,
+  // because the outer clock always wins and reports a hang as "the test was
+  // slow" rather than "a child never returned".
+  //
+  // Measured: one child costs p50 14.5 s, max 24.6 s over six idle rounds, so
+  // two is ~29 s idle. Under the full run this gate was observed at 39.0 s,
+  // 44.0 s, and 69.8 s — 78% of the 90 s it inherited from the global default.
+  //
+  // 90 s per child, under a 240 s outer, and both numbers are derived rather
+  // than picked. One child costs p50 14.5 s, max 24.6 s over six idle rounds;
+  // the contention factor measured on this host is 1.4-1.7x at the median and
+  // 2.5x in the tail, which puts one child at ~61 s worst. 90 s is ~3.7x the
+  // idle max and above that projection.
+  //
+  // The outer is 240 s so that **both** children can hit their own bound and
+  // still fail inside it: 2 × 90 = 180 s. That ordering is the fix — a hung
+  // child fails at its own timeout naming the child, rather than the outer clock
+  // reporting "the test was slow".
+  //
+  // A first draft set the inner to 45 s on the idle cost alone, and that was the
+  // same error this ticket diagnosed elsewhere: 45 s sits *inside* the 34-61 s
+  // range its own contention factor projects, exactly as `disclosure`'s 300 s
+  // sat inside 219-365 s. Measured — it failed as `spawnSync … ETIMEDOUT` on a
+  // loaded host. A budget inside its own projected range is not a budget.
   const run = (): string =>
-    execFileSync(process.execPath, [script, source], { encoding: 'utf8', timeout: 120_000 });
+    execFileSync(process.execPath, [script, source], { encoding: 'utf8', timeout: 90_000 });
   assert.equal(run(), run(), 'two processes rendered the same diagram differently');
-});
+}, 240_000);
 
 test('concurrent renders do not contaminate each other', async () => {
   // Mermaid is a process-wide singleton in three ways — global config, module

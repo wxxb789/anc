@@ -264,13 +264,33 @@ test('the streams carry no name that changes when the corpus is renamed', () => 
     assert.ok(counts, `a clean build did not print the counts line:\n${alpha['a']!.output}`);
     assert.ok(Number(counts[2]) > 0, 'the clean build published nothing, so the counts prove nothing');
   });
-  // Four full CLI builds — two corpora, each built twice — plus a scan of every
-  // file in each `dist/` with the gzipped members inflated. Measured at 127 s
-  // here after the inflate landed, against a 120 s bound that predated it, so
-  // this gate began failing on a timer rather than on its property. Raised
-  // rather than narrowed: the two-corpus comparison *is* the assertion, and
-  // dropping a build to fit the clock would leave the gate green and blind.
-}, 300_000);
+  // **Ten CLI builds**, not the six this gate is usually described as buying:
+  // `runs()` builds three, and it is called three times — alpha, beta, and alpha
+  // again for the determinism half — plus the two-note sensitivity control. Each
+  // is followed by a scan of every file in its `dist/` with the gzipped members
+  // inflated.
+  //
+  // The budget is a sum over measured parts rather than a round number. Timed
+  // individually on an idle host: run (a), a clean build, 20.3 s; run (b), which
+  // dies at the content contract before Astro starts, 1.0 s; run (c), which
+  // builds through and fails at the residue scan, 20.4 s. So seven of the ten
+  // are full-length and three are nearly free. Three triples plus the control
+  // predicts 146 s; the gate measured 154 s alone, so nothing else in it is
+  // material.
+  //
+  // Under the suite's own contention the same build measured p50 29.1-35.5 s
+  // against 20.4 s idle — **1.4x to 1.7x**, and the tail worse: one build in
+  // eight took 51.6 s, 2.5x. Applied to a 146 s floor that is 219-365 s, which
+  // is why the 300 s this used to carry was not a margin. It was observed at
+  // 250 s, then at a timeout: `Test timed out in 300000ms`, on a run with no
+  // external load at all.
+  //
+  // 600 s is 4x the idle cost and ~1.6x the worst contended projection. Four
+  // times measured cost is what a gate buying seven full *processes* needs,
+  // because each carries the whole contended spread independently and they
+  // compound rather than average. A genuinely hung build still fails inside ten
+  // minutes.
+}, 600_000);
 
 test('a rejected argument is never echoed, whatever shape it has', () => {
   // The rule §2.3 states: any argv token that is not byte-equal to a spelling

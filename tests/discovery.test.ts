@@ -599,7 +599,20 @@ test('the same repository publishes the same set on Windows and Linux', async (c
     // runs would agree perfectly.
     assert.ok(mine.published.length >= 5, 'the corpus published too little to compare');
   });
-}, 120_000);
+  // Two full discovery passes over the same corpus, one of them **through WSL**
+  // — a second Node on the other side of an interop boundary, importing the
+  // producer and paying its own cold module graph.
+  //
+  // Measured across six full runs: 39, 40, 53, 63, 64, and **108 s**. The last
+  // is 90% of the 120 s this carried, and it crossed on a seventh run measured
+  // on a host 2.4x degraded. A gate whose worst observed sample uses nine-tenths
+  // of its bound is not bounded, it is coincident.
+  //
+  // 300 s is ~2.8x the observed maximum. The multiple is high for a cost that
+  // looks deterministic because the WSL half is not: it crosses a process, a
+  // filesystem translation, and a second Node's startup, none of which this side
+  // schedules. A hung interop call still fails in five minutes.
+}, 300_000);
 
 test('the walk is ordered, so a slug collision has a predictable winner', async () => {
   // `readdir` order is unspecified and measured different between platforms, and

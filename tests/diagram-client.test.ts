@@ -175,7 +175,12 @@ afterAll(async () => {
   }
   server?.close();
   if (scratch !== '') rmSync(scratch, { recursive: true, force: true });
-}, 120_000);
+  // `browser.close()`, measured under the suite's own contention at p50 22.4 s
+  // and max 43.3 s, and observed in this hook at 15.8 s, 40.2 s, and 55.8 s.
+  // 180 s is four times the contended max; `tests/search.test.ts:368` carries
+  // the full measurement and the reason a spread this wide is not budgeted from
+  // its mean.
+}, 180_000);
 
 /** A loaded page with every diagram drawn, or a skip when no browser exists. */
 async function drawn(context: TestContext): Promise<{

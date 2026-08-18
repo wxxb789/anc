@@ -1265,7 +1265,16 @@ test('a configured exclusion withholds the file from dist/, end to end', async (
     assert.match(probe.stdout, /content: 3 discovered, 1 published, 2 dropped/, probe.stdout);
     assert.deepEqual(readdirSync(join(out, 'notes')), ['public'], 'the published route set is not just the public note');
   });
-}, 120_000);
+  // One full CLI build plus a scan of every file in its `dist/` with the gzipped
+  // members inflated. Measured across six full runs: 55, 59, 62, 79, 97, and
+  // **101 s** — the last 84% of the 120 s this carried, and it crossed at 187 s
+  // on a seventh run measured on a host 2.4x degraded.
+  //
+  // A build costs 20.4 s idle and p50 29-36 s under the suite's own contention,
+  // so most of this gate is the inflating scan rather than the build. 300 s is
+  // ~3x the observed maximum, matching what `tests/disclosure.test.ts` derives
+  // for the same pair of costs.
+}, 300_000);
 
 // --- The origin has one home -----------------------------------------------------
 

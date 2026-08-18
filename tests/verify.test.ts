@@ -21,7 +21,7 @@
  * rather than yielding an empty list that would pass everything.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
@@ -551,4 +551,150 @@ test('the residue scan fails on each marker it exists to catch', () => {
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+});
+
+/**
+ * A gate's own clock cannot beat the clock it delegates to.
+ *
+ * Three gates in this repository have shipped with an inner budget larger than
+ * the outer one that contains it, and each was found the same way: as a red run
+ * whose message named the wrong thing. `tests/math-and-diagrams.test.ts`'s
+ * across-processes gate gave each of two children 120 s under a 90 s outer, so a
+ * hung child reported as "the test was slow". `tests/preview-server.test.ts`'s
+ * announce gate waited 25 s under a 40 s outer, which left no room for the
+ * command it spawns to be slow *and* fail with its own message.
+ *
+ * The shape is mechanical, so this reads it as data. For every `test(...)` in
+ * every test file, the outer budget is the trailing argument (or the global
+ * `testTimeout` when absent); the inner budgets are the `timeout:` options and
+ * `setTimeout(…, N)` bounds in its body. A test whose largest inner budget
+ * meets or exceeds its outer one is the defect.
+ *
+ * **Not a sum, a maximum**, and that is a deliberate weakening: two sequential
+ * children of 60 s each under a 100 s outer is a real hazard this will not
+ * catch. Summing would demand knowing which inner waits are sequential and which
+ * are alternatives on one path, which needs the control flow rather than the
+ * text. The property asserted is the one that can be read honestly: no single
+ * delegated wait may outlive the gate waiting on it.
+ *
+ * ### What it does not see, measured rather than assumed
+ *
+ * A budget routed through a module-level helper — `search.test.ts`'s `openSearch`
+ * carries `{ timeout: 20_000 }`, `preview-server.test.ts`'s `fetchPath` carries
+ * `{ timeout: 8000 }` — is outside every test body and is invisible here. That is
+ * the repository's own idiom, so it is the largest gap and it is real today; the
+ * six helpers involved all carry short budgets, so none is currently a defect.
+ * Closing it needs a call graph rather than a window, which is a different tool.
+ * `page.waitForTimeout(N)` is likewise unread.
+ */
+test('no gate budgets an inner wait longer than its own', () => {
+  const GLOBAL_TEST_TIMEOUT = 90_000;
+  // Recursive, because `vitest.config.ts` includes `tests/**/*.test.ts` and a
+  // flat `readdirSync` missed `tests/support/css-cascade.test.ts` — one file of
+  // 33, read by the suite and not by this gate.
+  const files: string[] = [];
+  const collect = (relative: string): void => {
+    for (const entry of readdirSync(new URL(`tests/${relative}`, ROOT), { withFileTypes: true })) {
+      if (entry.isDirectory()) collect(`${relative}${entry.name}/`);
+      else if (entry.name.endsWith('.test.ts')) files.push(`${relative}${entry.name}`);
+    }
+  };
+  collect('');
+  assert.ok(files.length > 30, `only ${files.length} test files were found, so this gate read almost nothing`);
+
+  const number = (token: string | undefined, constants: Map<string, number>): number | undefined => {
+    if (token === undefined) return undefined;
+    const bare = token.trim();
+    if (/^[0-9_]+$/.test(bare)) return Number(bare.replaceAll('_', ''));
+    return constants.get(bare);
+  };
+
+  const offenders: string[] = [];
+  /** Counted per extractor, because a sum cannot tell one of them from both. */
+  const examined = { option: 0, setTimeout: 0 };
+  let parsed = 0;
+
+  for (const file of files) {
+    const lines = readFileSync(new URL(`tests/${file}`, ROOT), 'utf8').split('\n');
+    // File-level `const NAME = 30_000;`, so a budget spelled as a named constant
+    // is read rather than skipped. A budget this cannot resolve is skipped
+    // rather than assumed, and the counts below are what keep that honest.
+    const constants = new Map<string, number>();
+    for (const line of lines) {
+      const declared = /^const ([A-Z][A-Z0-9_]*) = ([0-9_]+);/.exec(line);
+      if (declared) constants.set(declared[1]!, Number(declared[2]!.replaceAll('_', '')));
+    }
+
+    let open: { name: string; from: number; depth: number } | undefined;
+    // Brace depth, not a column-zero close. The first version matched any `});`
+    // at column 0, which fires inside a test body wherever a helper or an
+    // `assert.rejects` callback closes there — measured, `adoption.test.ts` alone
+    // truncated at nine such lines. Every truncation ended the window early, so
+    // the *real* trailing budget was never read and the global was assumed
+    // instead: an error whose direction is toward green.
+    let depth = 0;
+    for (const [index, line] of lines.entries()) {
+      // Indented too: `content-contract.test.ts` has one inside a loop and
+      // `adoption.test.ts` has a `describe` block, and an anchored `^test(`
+      // dropped both.
+      const opened = /^\s*test(?:\.\w+)?\(\s*(['"`])(.*?)\1/.exec(line);
+      if (opened !== null && open === undefined) {
+        open = { name: opened[2]!, from: index, depth };
+      }
+      // Counted after the open so the opening line's own `{` is included.
+      depth += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
+      if (open === undefined || depth > open.depth) continue;
+
+      const closed = /^\s*\}(?:,\s*([^)]+?)\s*)?\);?$/.exec(line);
+      const outer = closed === null ? GLOBAL_TEST_TIMEOUT : (number(closed[1], constants) ?? GLOBAL_TEST_TIMEOUT);
+      parsed += 1;
+      const body = lines.slice(open.from, index).join('\n');
+      // Comments carry measurements in milliseconds all over this repository —
+      // "budgeted 120 s each", "`Test timed out in 300000ms`" — and a gate that
+      // read those would measure the prose rather than the code. Verified
+      // load-bearing: planting such a comment produces a false positive without
+      // this and none with it.
+      const code = body.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      const inner: number[] = [];
+      for (const found of code.matchAll(/\btimeout:\s*([A-Za-z0-9_]+)/g)) {
+        const value = number(found[1], constants);
+        if (value !== undefined) { inner.push(value); examined.option += 1; }
+      }
+      // `[^;]*?` rather than `[\s\S]*?`: the lazy any-character form crossed
+      // statement boundaries, so a short `setTimeout(tick, 200)` followed later
+      // in the body by any four-digit number in parentheses was reported as an
+      // inner budget that no line declares. Measured — it fabricated one.
+      // Braces cannot be excluded as well: the real case
+      // (`preview-server.test.ts:702`) passes an arrow function as the callback,
+      // so a brace-free form reads none of the two bounds in the suite.
+      for (const found of code.matchAll(/\bsetTimeout\([^;]*?,\s*([0-9_]{4,})\s*\)/g)) {
+        inner.push(Number(found[1]!.replaceAll('_', '')));
+        examined.setTimeout += 1;
+      }
+
+      if (inner.length > 0) {
+        const largest = Math.max(...inner);
+        if (largest >= outer) {
+          offenders.push(`${file} > ${open.name}: waits ${largest} ms inside a ${outer} ms budget`);
+        }
+      }
+      open = undefined;
+    }
+  }
+
+  // Non-vacuity, and it has to be **per extractor**. The first version asserted
+  // one count over both, and measured, deleting the whole `setTimeout` half left
+  // 17 of 19 — green. A planted regression that only that half could see was
+  // then missed with the control still passing, which is exactly
+  // `docs/gate-reading.md` case 4: a control that cannot distinguish an intact
+  // instrument from a half-blinded one is measuring neither.
+  //
+  // Measured on the tree that wrote this: 33 files, 628 tests parsed, 33
+  // `timeout:` options and 2 `setTimeout` bounds read. The thresholds sit below
+  // those so a gate added tomorrow does not redden them, and far enough above
+  // zero that a broken extractor cannot satisfy one.
+  assert.ok(parsed > 500, `only ${parsed} tests were parsed at all, so the window never closed properly`);
+  assert.ok(examined.option >= 20, `only ${examined.option} \`timeout:\` options were read`);
+  assert.ok(examined.setTimeout >= 2, `only ${examined.setTimeout} \`setTimeout\` bounds were read`);
+  assert.deepEqual(offenders, [], `a gate cannot fail with its own message:\n${offenders.join('\n')}`);
 });

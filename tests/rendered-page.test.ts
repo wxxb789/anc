@@ -218,14 +218,28 @@ beforeAll(async () => {
 afterAll(async () => {
   if (launched !== undefined && 'browser' in launched) await launched.browser.close();
   server?.close();
-  // Vitest's default hook timeout is 10 s, and closing Chromium is a process
-  // teardown whose cost grows with how many contexts the suite opened — this
-  // file now opens sixteen. Every *test* here already carries an explicit
-  // timeout for the same reason; the hook had none, so it was the one step
-  // that could redden a run in which all sixteen tests passed. Observed doing
-  // exactly that. Matching `beforeAll`'s budget rather than raising the global
-  // `hookTimeout`, which would relax every hook in the repository to fix one.
-}, 120_000);
+  // Vitest's default hook timeout is 10 s, and closing Chromium costs far more
+  // than that. Every *test* here already carries an explicit timeout; the hook
+  // had none, so it was the one step that could redden a run in which all
+  // sixteen tests passed. Observed doing exactly that.
+  //
+  // **The reason given here was wrong and is corrected.** It said the cost
+  // "grows with how many contexts the suite opened — this file now opens
+  // sixteen". Measured directly, `browser.close()` with 0 pages open ran 1.0 s
+  // to 16.9 s over 12 rounds, and with 16 pages open 13.3 s to 25.4 s: the
+  // ranges overlap and the page count does not order them. Loading this site's
+  // own pages rather than `<p>x</p>` moved p50 from 8.5 s to 9.8 s, which is
+  // inside the noise of either. It is process teardown competing for a
+  // scheduler, and it is a spread, not a level.
+  //
+  // Under the suite's own contention — 15 workers on 16 CPUs — the same close
+  // measured p50 22.4 s and max 43.3 s. This hook was observed at 51.6 s and
+  // 115.9 s against the 120 s it used to carry: 97% of budget, on a run that
+  // passed. 180 s is four times the contended max, matching `search.test.ts`
+  // and `diagram-client.test.ts`, which close a browser for the same reason.
+  // Raised here rather than in `hookTimeout`, which would relax every hook in
+  // the repository to fix three that share one cost.
+}, 180_000);
 
 /** Skip with the install command when no browser is available. */
 function requireBrowser(context: TestContext): Browser {

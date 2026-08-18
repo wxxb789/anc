@@ -368,10 +368,24 @@ beforeAll(async () => {
 afterAll(async () => {
   if (launched !== undefined && 'browser' in launched) await launched.browser.close();
   server?.close();
-  // Closing a browser that has open pages takes longer than Vitest's 10 s
-  // default hook timeout on a cold run, and a timeout here fails the whole file
-  // with an error that says nothing about the tests.
-}, 60_000);
+  // `browser.close()` is the whole cost here, and it is a **spread rather than a
+  // level**. Measured directly, 12 rounds closing a browser with no page open at
+  // all: min 1.0 s, p50 7.9 s, max 16.9 s. The same measurement with 2 and with
+  // 16 pages open gave 31.4 s and 13.3 s respectively — so the sentence this
+  // comment used to carry, that the cost "grows with how many contexts the suite
+  // opened", is false. It is process teardown competing for a scheduler.
+  //
+  // Under the contention the suite creates — 15 workers, which is what
+  // `isolate: true` gives 33 files on this 16-CPU host — the same close measured
+  // p50 22.4 s, max 43.3 s. Observed in the run itself: 20.9 s, 32.0 s, and a
+  // timeout at 60 s.
+  //
+  // 180 s is four times the contended max, and that multiple is deliberate. A
+  // budget on a distribution this wide is not a claim about the mean; the tail
+  // is unbounded upward by anything measurable here, and this hook failing costs
+  // the whole file — all 12 gates report as one suite error naming none of them.
+  // A hung Chromium still fails inside three minutes.
+}, 180_000);
 
 function requireBrowser(context: TestContext): Browser {
   assert.ok(launched !== undefined, 'the suite setup did not run, so no browser was prepared');

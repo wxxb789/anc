@@ -65,6 +65,36 @@ export default getViteConfig({
      * two-minute run, and every gate that needs more still says so itself.
      */
     testTimeout: 90_000,
+    /**
+     * `hookTimeout` is left at Vitest's 10 s default, deliberately.
+     *
+     * Ten top-level hooks exist across four files, and every one of them now
+     * declares its own budget:
+     *
+     * | hook | cost | budget |
+     * | --- | --- | --- |
+     * | `preview-server` `beforeAll` | 35 s alone, **187 s** worst over seven runs | 360 s |
+     * | `search` / `rendered-page` / `diagram-client` `afterAll` | a Chromium close: p50 22 s, max 43 s contended | 180 s each |
+     * | `preview-server` `afterEach` (×16) / `afterAll` | 12.9 s worst over six runs / 0 ms | 45 s each |
+     * | `search` `beforeAll` | 0.4-0.9 s | 120 s |
+     * | `rendered-page` `beforeAll` | 0.5 s typical, **23.7 s** worst | 120 s |
+     * | `diagram-client` `beforeAll` | 0.8 s, but it also builds a fixture site | `BROWSER_TIMEOUT` |
+     *
+     * The `afterEach` row is the one that had to be measured twice: five runs put
+     * it at 5-6.5 s against the 10 s default, which reads as a bound worth
+     * keeping tight, and the sixth put it at 12.9 s — over, on a run that
+     * otherwise passed. A margin argued from five samples was wrong at six.
+     *
+     * Raising the global would relax all ten to accommodate six, and the
+     * argument is the same one that gave `math-and-diagrams`'s every-diagram-type
+     * gate its own 300 s rather than lifting `testTimeout`.
+     *
+     * **The gap this closes was real and cost a red run.** `search.test.ts` does
+     * its browser teardown in `afterAll` and carried 60 s, which is the one
+     * budget a `testTimeout` rise does not touch: `Hook timed out in 60000ms`,
+     * on a run whose 693 tests all passed. A hook budget is not a test budget,
+     * and a file whose work is in a hook is governed by the one you did not set.
+     */
     // Each file gets its own worker, matching what `node --test` gave us with
     // one process per file. `tests/markdown.test.ts` depends on it: Prism's
     // grammar registry is a process-wide singleton, and its determinism gate

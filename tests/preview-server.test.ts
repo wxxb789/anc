@@ -50,7 +50,22 @@ const scratch: string[] = [];
 afterEach(async () => {
   for (const server of running.splice(0)) await server.stop();
   for (const directory of scratch.splice(0)) rmSync(directory, { recursive: true, force: true });
-});
+  // Stopping a Vite preview server, on the three gates that start their own.
+  //
+  // **This one was argued both ways and the measurement settled it.** Across six
+  // full runs the worst was 5.2, 5.1, 5.7, 5.5, 6.5, and **12.9 s** — the last
+  // over the 10 s default it inherited, on a run that otherwise passed. A first
+  // draft raised it to 60 s on a 57% margin; that was reverted as raising an
+  // unbroken bound, which was right on the evidence available at the time and
+  // wrong once a sixth run existed.
+  //
+  // 45 s is ~3.5x the observed maximum. Lower than the 4x the browser hooks
+  // take, because the distribution is narrower — 5-13 s against 1-43 s — and
+  // because `server.stop()` is the product's own teardown path, so the bound is
+  // still tight enough to catch it degrading. A timeout here fails the file
+  // rather than a gate, and names a teardown rather than the test whose server
+  // it was.
+}, 45_000);
 
 /** A temporary directory removed after the test, whatever it did. */
 function temporary(): string {
@@ -147,11 +162,31 @@ beforeAll(async () => {
     'dist/ is missing or unbuilt — run `pnpm run build` before `pnpm test`',
   );
   shared = await startPreview(DIST, 0, ROOT);
-}, 120_000);
+  // Measured: 35.1 s alone, and 68.8 / 69.4 / 86.0 / 95.9 / 111.8 / 116.6 /
+  // **187.2 s** across seven full runs. The cost is Astro's cold module graph
+  // plus a Vite server, paid once, while fifteen other workers compete for the
+  // same CPUs; the file's own comment above records why it is paid once rather
+  // than sixteen times.
+  //
+  // 360 s is ~1.9x the observed maximum and ~10x the idle cost, and the second
+  // multiple is the honest way to read it: **this hook's spread is the widest in
+  // the suite**, 35 s to 187 s. The 187 s sample came from a host measured at
+  // 2.4x degraded — an idle binary build costing 48 s where it costs 20 s — and
+  // that is a plausible host, not a pathological one. A first draft set 240 s
+  // from the 86 s worst then available, and that sample used 78% of it.
+  //
+  // A hung `preview()` still fails in six minutes, and it fails as itself: this
+  // hook timing out reports all sixteen gates in the file as one error.
+}, 360_000);
 
 afterAll(async () => {
   await shared?.stop();
-});
+  // Measured at 0 ms across six full runs — `shared.stop()` on a server the
+  // file's sixteen gates have finished with, where the `afterEach` above pays
+  // the cost. It had no budget at all, which is the shape that cost a red run in
+  // `tests/search.test.ts`. 45 s matches the `afterEach`, since it is the same
+  // call on the same kind of server.
+}, 45_000);
 
 /** The shared server's port, with the reason it might be missing. */
 function sharedPort(): number {
@@ -661,7 +696,22 @@ test('a running preview prints only the lines the binary composes', async () => 
     // is already sufficient to have captured it. The extra pause is only so a
     // late writer on either stream is not missed.
     await new Promise<void>((done, fail) => {
-      const budget = setTimeout(() => fail(new Error(`the preview never announced a URL in 25 s: ${stdout}`)), 25_000);
+      // **25 s was the inner bound and it is what actually failed**, not the
+      // outer one: run 2 of three full runs reported `the preview never
+      // announced a URL in 25 s` with an empty stdout, on a gate that passed
+      // alone at 23.8 s. That is the whole margin — the idle cost *is* the
+      // budget, so any contention at all crosses it.
+      //
+      // Measured: 23.8 s alone, 19.7 s / 25.2 s / 21.3 s across three full runs.
+      // The cost is spawning Node and paying Astro's cold start twice over —
+      // once for the module graph, once for `preview()` — while fifteen other
+      // workers compete, and `startPreview` in the shared `beforeAll` measures
+      // the same thing at 35-86 s.
+      //
+      // 90 s is ~3.6x the observed maximum, under a 150 s outer that keeps the
+      // inner bound the one that fires. This resolves the moment the second line
+      // lands, so the budget is paid only by a command that is genuinely stuck.
+      const budget = setTimeout(() => fail(new Error(`the preview never announced a URL in 90 s: ${stdout}`)), 90_000);
       const check = (): void => {
         if (!/press Ctrl-C to stop/.test(stdout)) return;
         clearTimeout(budget);
@@ -691,7 +741,12 @@ test('a running preview prints only the lines the binary composes', async () => 
     child.kill('SIGTERM');
     await new Promise<void>((done) => blocker.close(() => done()));
   }
-}, 40_000);
+  // 150 s, so the inner 90 s wait above is the bound that fires and reports what
+  // was stuck. 40 s was below its own inner wait plus the 500 ms settle, which
+  // is the shape `vitest.config.ts` and the across-processes gate in
+  // `tests/math-and-diagrams.test.ts` both record: a gate whose outer clock can
+  // beat its inner one cannot fail with its own message.
+}, 150_000);
 
 /**
  * The preview subcommand's own flags are refused by its own parser.
