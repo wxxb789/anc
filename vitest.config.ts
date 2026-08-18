@@ -50,8 +50,21 @@ export default getViteConfig({
      * failing a genuine hang in under a minute. It is not a way to tolerate a
      * slow test: `tests/rendered-page.test.ts` drives a real browser and sets
      * its own longer bounds where it needs them.
+     *
+     * **Raised to 90 s after measuring it under the real run rather than alone.**
+     * The 2.9 s figure above is a cold process with the machine to itself;
+     * `isolate: true` gives all 32 files their own worker and they compete.
+     * Measured under `pnpm run verify`: `every diagram type renders to CSP-clean
+     * SVG` took 36.4 s and `diagram rendering is deterministic across processes`
+     * took 40.6 s — both timeouts, neither an assertion, and the second was
+     * waiting on children it had itself budgeted 120 s each. A gate whose inner
+     * budget is four times its outer one cannot fail the way it intends to.
+     *
+     * This is the ceiling being raised to where the work actually is, not a
+     * tolerance for slowness: 90 s still fails a hung render well inside a
+     * two-minute run, and every gate that needs more still says so itself.
      */
-    testTimeout: 30_000,
+    testTimeout: 90_000,
     // Each file gets its own worker, matching what `node --test` gave us with
     // one process per file. `tests/markdown.test.ts` depends on it: Prism's
     // grammar registry is a process-wide singleton, and its determinism gate

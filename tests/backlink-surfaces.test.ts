@@ -277,7 +277,24 @@ function buildFixture(root: string): { notes: string; out: string; stdout: strin
     cwd: root,
     encoding: 'utf8',
   });
-  assert.equal(probe.status, 0, `the fixture build failed:\n${probe.stdout}\n${probe.stderr}`);
+  // `signal` and `error` as well as the two streams. This gate has failed
+  // intermittently with **both streams empty** — roughly one run in six under
+  // `pnpm run verify`, never reproduced in isolation (4 runs) or under
+  // deliberate CPU load (12 spawns). An empty message means the process died
+  // without writing to either stream, and the three states that produce it are
+  // indistinguishable from `status` alone: killed by a signal, `spawnSync`
+  // failing before exec, and an exit that genuinely printed nothing.
+  //
+  // Diagnostic only. Nothing is fixed here, because the fault is not understood
+  // — see `.tmp/staging-collision-report.md` §7. When it next fires, this
+  // message says which of the three it was.
+  assert.equal(
+    probe.status,
+    0,
+    `the fixture build failed (status ${probe.status}, signal ${probe.signal}` +
+      `${probe.error ? `, error ${probe.error.message}` : ''}):\n` +
+      `stdout: ${probe.stdout || '(empty)'}\nstderr: ${probe.stderr || '(empty)'}`,
+  );
   return { notes, out, stdout: probe.stdout };
 }
 
