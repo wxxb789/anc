@@ -59,6 +59,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { BuildFailure } from './write-report.ts';
+import { MATH_MODE } from '../src/lib/math-mode.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 
@@ -120,6 +121,95 @@ const RESIDUE_RULES: readonly Rule[] = [
  * a paragraph — more, if anything, because a reader is likelier to copy it.
  */
 const CODE_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
+
+/**
+ * The rules that do not apply inside a **math** region, and why this is not
+ * {@link CODE_EXEMPT} with another member.
+ *
+ * Real TeX trips two of these rules by writing ordinary mathematics. `f:\mathbb{R}`
+ * and `X:\Omega` — a letter, a colon, a backslash — is the commonest way to
+ * typeset a function's signature, and it is byte-identical to a Windows drive
+ * path. `k[[x]]` is the ring of formal power series and `\mathbb{E}[[X\mid
+ * \mathcal{F}]]` a conditional expectation, both of which spell `[[`.
+ *
+ * **Widening `CODE_EXEMPT` instead was measured and is wrong.** Adding
+ * `absolute local path` there exempts *every* code region, and a real host path
+ * in a `language-bash` fence — `cd C:\Users\alice\vault\private.md`, a pasted
+ * shell transcript, which is the likeliest way a genuine host path reaches
+ * `dist/` at all — goes from FIRES to CLEAN. Measured through this scanner, not
+ * reasoned about. `FRAGMENT_EXEMPT` fails the same way in the other direction:
+ * it would take a path split by markup with it, which is the TK-29 defect the
+ * fragment pass exists for.
+ *
+ * So the exemption is keyed on the language class, which is the narrowest
+ * carrier that distinguishes "an author typeset a function" from "an author
+ * pasted a terminal". `unresolved [[wikilink]]` is already exempt in every code
+ * region via `CODE_EXEMPT`, so this set holds only the path rule; it is spelled
+ * as a set rather than a literal because the *reason* generalises to any rule a
+ * TeX corpus can spell by accident, and the next one should join it here rather
+ * than widening a different set.
+ *
+ * **Scoped to client math mode, because in build-time mode it protects nothing
+ * and costs something.** Measured: with `MATH_MODE` at `build-time` every TeX
+ * subject above renders to MathML — `f:\mathbb{R}` becomes
+ * `<mi>f</mi><mo>:</mo>…` and `k[[x]]` becomes fence elements — so none trips a
+ * rule and the exemption is never reached. Only under client rendering, where
+ * the TeX source itself ships, do the raw bytes reach the page.
+ *
+ * **And the key is author-reachable, which is why the scope matters.** A note
+ * writing a fence labelled `language-math` produces
+ * `<code class="language-math">`, and so does raw HTML the sanitizer's
+ * `allowedClasses.code: ['language-*']` preserves — so an author can put a real
+ * host path inside one and this exemption passes it. Found by review and
+ * measured: such a fence around `cd C:\Users\alice\vault\private.md` goes from
+ * FIRES to CLEAN.
+ *
+ * That is a **known and narrowed limit rather than a closed hole**. Narrowed,
+ * because in the shipped mode the exemption does not exist at all, so the
+ * reachable surface is exactly the mode a user deliberately selected. Not
+ * closed, because the pipeline has no "this is math" marker a note body cannot
+ * also write: `span.math-inline` is equally author-writable, and a `data-`
+ * attribute is stripped unless granted — at which point a body can write that
+ * too. Closing it needs a marker minted after sanitization, which is a change to
+ * the renderer's contract rather than to this scan.
+ *
+ * The residual is bounded by what the rule protects: it guards an author against
+ * leaking their *own* paths, so the reachable case is an author disabling a gate
+ * that exists for them, in a mode they chose, in a fence they labelled.
+ */
+const MATH_EXEMPT: ReadonlySet<string> =
+  MATH_MODE === 'client' ? new Set(['absolute local path']) : new Set();
+
+/**
+ * The contents of every `code` element carrying a `language-math` class,
+ * blanked.
+ *
+ * Structurally a sibling of {@link withoutCodeRegions} rather than a fresh
+ * regex, and deliberately: blanked rather than removed so byte offsets are
+ * unchanged, non-greedy, tag-anchored on both ends, and **failing closed on
+ * every ambiguity**. Measured, matching that function's own guarantee: an
+ * unclosed `<code class="language-math">` still reports, and the class name
+ * appearing in prose exempts nothing.
+ *
+ * The class is required here, where `withoutCodeRegions` deliberately does not
+ * require one — because the two are answering different questions. That
+ * function asks "is this a code region at all", and a body can legitimately
+ * write a bare `<code>`; this one asks "did an author typeset mathematics",
+ * which only the pipeline's own `language-math` class answers. A bare `<code>`
+ * containing a drive path is a pasted path and must still fail.
+ */
+function withoutMathRegions(text: string): string {
+  return text.replace(
+    /<code(\s[^>]*)?>([\s\S]*?)<\/code>/gi,
+    (whole, attributes: string | undefined, body: string) => {
+      if (attributes === undefined || !/\bclass="[^"]*\blanguage-math\b[^"]*"/.test(attributes)) {
+        return whole;
+      }
+      return whole.slice(0, whole.length - body.length - '</code>'.length) + ' '.repeat(body.length) + '</code>';
+    },
+  );
+}
+
 
 /**
  * The contents of every `<code>` and `<pre>` element blanked.
@@ -1176,13 +1266,23 @@ export function scanResidue(root: string = DIST): {
         // fences and backticks rather than by elements — the reasoning at
         // {@link CODE_EXEMPT} carried across a carrier that has no elements in
         // it yet, per {@link withoutMarkdownCode}.
-        const subject = !CODE_EXEMPT.has(what)
+        const codeExempted = !CODE_EXEMPT.has(what)
           ? text
           : isDatabase
             ? withoutMarkdownCode(text)
             : text.includes('<code') || text.includes('<pre')
               ? withoutCodeRegions(text)
               : text;
+        // And then the math regions, for the rules real TeX spells by accident.
+        // Applied over the code-exempted text rather than instead of it, because
+        // the two answer different questions and a marker can be in both kinds
+        // of region — see {@link MATH_EXEMPT}. A database carries Markdown with
+        // no elements in it yet, so this pass has nothing to find there and is
+        // skipped rather than run over source it cannot key on.
+        const subject =
+          !isDatabase && MATH_EXEMPT.has(what) && codeExempted.includes('<code')
+            ? withoutMathRegions(codeExempted)
+            : codeExempted;
         // A database stores Markdown source, and the reader receives what a
         // renderer makes of it — so the forms a *reader* can resolve a marker
         // out of include the ones inline markup joins. That is the surface

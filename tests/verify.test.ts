@@ -698,3 +698,52 @@ test('no gate budgets an inner wait longer than its own', () => {
   assert.ok(examined.setTimeout >= 2, `only ${examined.setTimeout} \`setTimeout\` bounds were read`);
   assert.deepEqual(offenders, [], `a gate cannot fail with its own message:\n${offenders.join('\n')}`);
 });
+
+/**
+ * The math residue exemption, and the limit it is scoped by.
+ *
+ * `scripts/scan-residue.ts` exempts `absolute local path` inside a
+ * `code.language-math` region, because real TeX writes drive-letter-shaped
+ * signatures — `f:\mathbb{R}` — by typesetting ordinary mathematics. Two
+ * properties make that safe enough to ship, and neither had a gate: it was added
+ * with `MATH_EXEMPT` and `withoutMathRegions` named by no test at all, which
+ * review found before any run did.
+ *
+ * 1. **It is scoped to client math mode.** In build-time mode TeX renders to
+ *    MathML and trips nothing, so the exemption protects nothing there — and
+ *    since its key is author-writable, an unscoped version is pure attack
+ *    surface in the mode that ships.
+ * 2. **It never covers a code region that is not math.** A pasted shell
+ *    transcript is the likeliest way a genuine host path reaches `dist/`, and
+ *    widening `CODE_EXEMPT` instead would have taken it.
+ */
+test('the math residue exemption is scoped, and covers only math', () => {
+  const source = readFileSync(new URL('scripts/scan-residue.ts', ROOT), 'utf8');
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  // Scoped on the mode, so build-time mode carries no exemption at all.
+  assert.match(
+    code,
+    /MATH_EXEMPT[^=]*=\s*\n?\s*MATH_MODE === 'client'/,
+    'the math exemption is no longer scoped to client mode, where alone it is needed — ' +
+      'its key is author-writable, so an unscoped version lets a note hide a real host path',
+  );
+
+  // And the rules it drops are only the ones TeX can spell by accident. A
+  // `javascript:` URL or an `msw/` marker inside a math region is a disclosure
+  // like any other.
+  const members = /MATH_EXEMPT[^[]*\[([^\]]*)\]/.exec(code)?.[1] ?? '';
+  assert.match(members, /'absolute local path'/, 'the exemption no longer covers the rule it exists for');
+  for (const forbidden of ['javascript:', 'msw/', 'source map']) {
+    assert.ok(!members.includes(forbidden), `the math exemption drops ${forbidden}, which TeX cannot spell by accident`);
+  }
+
+  // `CODE_EXEMPT` must not have grown the path rule, which is the wider fix that
+  // was measured taking a real bash-fence path with it.
+  const codeExempt = /CODE_EXEMPT[^[]*\[([^\]]*)\]/.exec(code)?.[1] ?? '';
+  assert.ok(
+    !codeExempt.includes('absolute local path'),
+    'CODE_EXEMPT now exempts absolute paths in every code region — a pasted shell transcript ' +
+      'carrying a real host path would stop being reported',
+  );
+});

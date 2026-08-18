@@ -39,6 +39,10 @@ import {
   THEME_VARIABLES,
   UNPAIRED_DIAGRAMS,
 } from '../src/lib/mermaid-render.ts';
+import temml from 'temml';
+
+import { MATH_MODE } from '../src/lib/math-mode.ts';
+import { extractStyles } from '../src/lib/math-output.ts';
 import {
   DIAGRAM_MODE,
   REQUIRED_STYLE_SRC,
@@ -704,18 +708,31 @@ test('what still blocks client mode is recorded and still true', () => {
   }
 });
 
-test('build-time mode ships no diagram runtime at all', (t: TestContext) => {
-  if (DIAGRAM_MODE !== 'build-time') return t.skip('client mode ships the runtime by design');
-  // The mode's headline property: 0 B of JavaScript for a diagram. Measured over
-  // `dist/` because the failure — Mermaid's chunks emitted but referenced by
-  // nothing — is invisible in the rendered page and was a real defect during
-  // this ticket, caught only by the residue scan.
+test('build-time mode ships no client runtime at all', (t: TestContext) => {
+  if (DIAGRAM_MODE !== 'build-time' && MATH_MODE !== 'build-time') {
+    return t.skip('both modes are client, which ships both runtimes by design');
+  }
+  // The mode's headline property: 0 B of JavaScript for a diagram or an
+  // expression. Measured over `dist/` because the failure — a runtime's chunks
+  // emitted but referenced by nothing — is invisible in the rendered page and
+  // was a real defect during TK-15, caught only by the residue scan.
+  //
+  // **Named per runtime rather than by one list of vendor strings.** The
+  // previous version grepped `mermaid|cytoscape|dagre|katex`, which is Mermaid's
+  // dependency set plus a library this project does not use — and it would not
+  // have noticed a `temml` chunk at all. A list of names is a list somebody has
+  // to remember to extend; keying each mode to its own runtime's name is the
+  // same check with nothing to forget.
   const scripts = walk(DIST, '.js').filter((file) => !file.includes('pagefind'));
+  const forbidden: readonly [boolean, RegExp, string][] = [
+    [DIAGRAM_MODE === 'build-time', /mermaid|cytoscape|dagre/i, 'a diagram runtime'],
+    [MATH_MODE === 'build-time', /temml/i, 'the math runtime'],
+  ];
   for (const file of scripts) {
-    assert.ok(
-      !/mermaid|cytoscape|dagre|katex/i.test(file),
-      `${file}: a diagram runtime chunk shipped in build-time mode`,
-    );
+    for (const [applies, pattern, what] of forbidden) {
+      if (!applies) continue;
+      assert.ok(!pattern.test(file), `${file}: ${what} chunk shipped in build-time mode`);
+    }
   }
   const bytes = scripts.reduce((total, file) => total + statSync(file).size, 0);
   assert.ok(bytes < 100 * 1024, `client JavaScript totals ${bytes} B, far above what this site ships`);
@@ -944,4 +961,168 @@ test('the per-page cost of math and diagrams is recorded', async (t: TestContext
     const gzip = gzipSync(readFileSync(file)).length;
     assert.ok(gzip < 6 * 1024, `${file}: ${gzip} B gzip, above what a per-page sheet should cost`);
   }
+});
+
+// --- Client math -------------------------------------------------------------
+
+/**
+ * The client math path's markup, asserted through the real renderer.
+ *
+ * Mode-independent by construction: it renders with the mode the tree carries
+ * and asserts whichever shape that mode owes. A gate that only ran in one mode
+ * would be skipped in the shipped one and would therefore never have caught the
+ * `data-math` attribute this path originally carried — measured, the sanitizer
+ * stripped it, and the fix keyed on it would have compiled, read correctly, and
+ * done nothing.
+ */
+test('math emits the shape its mode owes, and the sanitizer keeps all of it', async () => {
+  for (const [what, body, isDisplay] of [
+    ['display', String.raw`$$
+f:\mathbb{R} \to \mathbb{C}
+$$
+`, true],
+    ['inline', 'See $$x^2 + y^2$$ inline.\n', false],
+  ] as const) {
+    const { html, hasMath } = await renderMarkdown(body, { pageTitle: 'x' });
+    assert.ok(hasMath, `${what}: hasMath was not set — it is read before the mode branch`);
+    assert.match(html, /class="math-(?:inline|display)"/, `${what}: the carrier class was stripped`);
+    if (isDisplay) assert.match(html, /tabindex="0"/, `${what}: the display wrapper lost its keyboard stop`);
+
+    if (MATH_MODE === 'client') {
+      // The TeX source, as a text node the serializer escapes for us, inside a
+      // `code` the sanitizer's `allowedClasses.code` admits. A `pre` cannot be
+      // used: measured, a `<pre>` inside a `<p>` is torn out of the paragraph by
+      // the parser, which would break every paragraph carrying inline math.
+      assert.match(html, /<code class="language-math">/, `${what}: the source element or its class was stripped`);
+      assert.ok(!html.includes('<math'), `${what}: MathML shipped in client mode`);
+    } else {
+      assert.match(html, /<math\b/, `${what}: build-time mode shipped no MathML`);
+      assert.ok(!/<code class="language-math">/.test(html), `${what}: build-time mode shipped the source`);
+    }
+  }
+
+  // Escaping is the serializer's, not this pipeline's — asserted rather than
+  // assumed, because a text node that reached the page raw would be an injection
+  // point rather than a cosmetic defect. `a < b > c` is valid TeX in both modes;
+  // an earlier version of this row wrote `\&`, which is not, so it failed at the
+  // *renderer* and measured nothing about escaping at all.
+  const { html } = await renderMarkdown('See $$a < b > c$$ inline.\n', { pageTitle: 'x' });
+  assert.ok(!/<b\b/.test(html), `an unescaped angle bracket reached the page: ${html}`);
+  assert.match(html, /&lt;/, `the comparison operator vanished entirely: ${html}`);
+});
+
+/**
+ * Client mode's rendering happens in a browser, so the *client* path's CSP
+ * cleanliness cannot be measured from Node — but the property it depends on can.
+ *
+ * `extractStyles` is what removes every `style` attribute Temml writes, and in
+ * client mode its output goes into `innerHTML` with no sanitizer behind it. So a
+ * residual `style` is a CSP violation on a real page. Measured in Chromium under
+ * the policy from `public/_headers`: without this call `\begin{pmatrix}` violated
+ * 4 times, `\begin{aligned}` and `\begin{array}` 4 each, `\boxed` once, `\pmb`
+ * once and `\sideset` twice; with it, all six are silent.
+ *
+ * **The corpus is the six that violated**, not a convenient sample. The received
+ * account named only `\pmb` and `\sideset`, and a gate built from that account
+ * would pass while a matrix violated four times on every page carrying one.
+ */
+test('the shared extraction leaves no inline style for either mode to replay', () => {
+  const corpus = [
+    ['a matrix', String.raw`\begin{pmatrix} a & b \\ c & d \end{pmatrix}`],
+    ['aligned', String.raw`\begin{aligned} x &= 1 \\ y &= 2 \end{aligned}`],
+    ['an array', String.raw`\begin{array}{c|c} a & b \\ \hline c & d \end{array}`],
+    ['boxed', String.raw`\boxed{E=mc^2}`],
+    ['pmb', String.raw`\pmb{x}`],
+    ['sideset', String.raw`\sideset{_a^b}{_c^d}\sum`],
+  ] as const;
+
+  let styled = 0;
+  for (const [what, tex] of corpus) {
+    const raw = temml.renderToString(tex, { displayMode: false, throwOnError: false });
+    // **The expression must have rendered, not errored.** Temml's error markup is
+    // a `<span class="temml-error" style="color:#b22222…">`, which carries a
+    // `style` — so a malformed fixture satisfies the count below while measuring
+    // an error span rather than the structure it names. Three rows of this corpus
+    // were exactly that: a heredoc ate one backslash from each `\\` row, so
+    // `\begin{pmatrix} a & b \ c & d \end{pmatrix}` was a parse error that
+    // happened to be styled. `docs/gate-reading.md` case 5.
+    assert.doesNotMatch(raw, /temml-error/, `${what}: the fixture does not parse, so it measures an error span`);
+    if (/\sstyle="/.test(raw)) styled += 1;
+    assert.doesNotMatch(
+      extractStyles(raw),
+      /\sstyle="/,
+      `${what}: a style attribute survived extraction and would violate style-src in client mode`,
+    );
+  }
+  // Non-vacuity: the corpus must actually contain the thing being extracted, or
+  // this passes on six expressions Temml never styled.
+  assert.equal(styled, corpus.length, `only ${styled} of ${corpus.length} corpus expressions carried a style`);
+});
+
+/**
+ * The client runtime must actually *call* the extraction, not merely have it
+ * available.
+ *
+ * The gate above proves `extractStyles` is correct; this proves the one caller
+ * that has no sanitizer behind it uses it. Measured as a gap: deleting the call
+ * from `src/scripts/math.ts` left every other gate in this file green, because
+ * nothing here executes that module — it runs in a browser, and its failure mode
+ * is a CSP violation on a real page rather than an assertion anywhere.
+ *
+ * Read as source text rather than executed, which is the honest description of
+ * what this can check. Comments are stripped first: this file's own prose says
+ * `extractStyles` several times, and a gate matching that would match itself —
+ * `docs/gate-reading.md` case 4, which `tests/dist-lock.test.ts` already paid
+ * for once.
+ */
+test('the client math runtime extracts styles before it writes innerHTML', () => {
+  const source = readFileSync(new URL('src/scripts/math.ts', ROOT), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+
+  const write = /\binnerHTML\s*=\s*(.+);/.exec(source);
+  assert.ok(write, 'the runtime no longer writes innerHTML, so this gate is measuring nothing');
+  assert.match(
+    write[1]!,
+    /\bextractStyles\(/,
+    'the client runtime writes Temml output to innerHTML without extracting its inline styles, ' +
+      "which style-src 'self' blocks — measured at 4 violations for a single matrix",
+  );
+  assert.match(write[1]!, /\bcurrentColorRules\(/, "\rule's hardcoded black would be invisible on the dark palette");
+});
+
+/**
+ * The colour rejection runs in **both** modes.
+ *
+ * `src/lib/math.ts` refuses `\textcolor`, `\color`, `\colorbox`, `\fcolorbox`
+ * and `\pagecolor`, then re-checks the rendered output for any colour attribute
+ * whatever — a check its own docblock calls total. Client rendering moves where
+ * the MathML is produced; it does not move what an author may write.
+ *
+ * **A first version of the client branch skipped it**, and the consequence was
+ * measured rather than argued: `\colorbox{yellow}{x}` failed the build in
+ * build-time mode and, through the client branch, shipped to the browser, where
+ * the runtime rendered `<mrow mathbackground="#FFFF00">` — the 1.1:1 yellow on
+ * the light palette that the whole rejection exists to prevent. Found by review.
+ *
+ * Asserted mode-independently, so the gate holds in whichever mode the tree
+ * carries rather than skipping in the shipped one.
+ */
+test('an authored colour is refused in whichever mode renders it', async () => {
+  for (const command of [
+    String.raw`\textcolor{red}{x}`,
+    String.raw`\colorbox{yellow}{x}`,
+    String.raw`\fcolorbox{red}{yellow}{x}`,
+  ]) {
+    await assert.rejects(
+      () => renderMarkdown(`See $$${command}$$ here.\n`, { pageTitle: 'x' }),
+      (error: unknown) => error instanceof MathRejectedError,
+      `${command}: an author-chosen colour was accepted in ${MATH_MODE} mode`,
+    );
+  }
+
+  // Non-vacuity: an ordinary expression still renders, so the rows above are a
+  // statement about colour rather than about math failing wholesale.
+  const { hasMath } = await renderMarkdown('See $$x^2$$ here.\n', { pageTitle: 'x' });
+  assert.ok(hasMath, 'an ordinary expression stopped rendering, so the refusals prove nothing');
 });

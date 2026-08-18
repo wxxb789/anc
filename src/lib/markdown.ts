@@ -30,6 +30,7 @@ import prismComponents from 'prismjs/components.json' with { type: 'json' };
 import { renderMath } from './math.ts';
 import { renderDiagram } from './mermaid-render.ts';
 import { DIAGRAM_MODE } from './diagram-mode.ts';
+import { MATH_MODE } from './math-mode.ts';
 import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
 
 /** A heading authored in the Markdown body, in document order. */
@@ -895,9 +896,6 @@ function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefin
         collected.hasMath = true;
 
         const isDisplay = classes.includes('math-display');
-        const token = `${MATH_TOKEN_PREFIX}${maths.length}${MATH_TOKEN_SUFFIX}`;
-        maths.push({ tex: ctx.textContent(node), isDisplay, token });
-
         // Display math replaces the whole `pre`; inline math replaces the
         // `code`. Leaving the `pre` in place around a `<math display="block">`
         // would put a scrollable preformatted box around an element that lays
@@ -911,6 +909,81 @@ function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefin
         // sits in the text flow and never scrolls, so it gets none.
         const parent = ctx.parent(node);
         const target = parent?.type === 'element' && parent.tagName === 'pre' ? parent : node;
+
+        if (MATH_MODE === 'client') {
+          // **The source is still validated at build time**, and that is not
+          // optional. `renderMath` refuses `\textcolor`, `\color`, `\colorbox`,
+          // `\fcolorbox` and `\pagecolor`, and then re-checks the *rendered*
+          // output for any colour attribute whatever — `src/lib/math.ts` calls
+          // that check total, and it is only total if it runs.
+          //
+          // A first version of this branch returned before that call, and the
+          // consequence was measured rather than theorised: `\colorbox{yellow}`
+          // failed the build in build-time mode and, through the client branch,
+          // shipped to the browser where the runtime rendered
+          // `<mrow mathbackground="#FFFF00">` — the 1.1:1 yellow on the light
+          // palette that whole rejection exists to prevent. Client rendering
+          // moves *where* the MathML is produced; it does not move what an
+          // author is permitted to write.
+          //
+          // The result is discarded, because the TeX source is what ships here.
+          // The call is made for its refusals, which throw. That is a real cost
+          // stated plainly: every expression is rendered once at build time to
+          // validate it, and again in each reader's browser to display it.
+          renderMath(ctx.textContent(node), isDisplay);
+
+          // **The TeX source, as a hast text node**, which is what a JS-disabled
+          // reader sees and what the runtime reads back. Not a token: a token is
+          // needed only because MathML does not round-trip through the
+          // serializer and the sanitizer, and a text node does — the serializer
+          // escapes it, so `<` and `&` in an expression are safe with no work
+          // here. `diagramFigure`'s client branch does the same for the same
+          // reason.
+          //
+          // **The carrier is a `span`, not the `pre` a fence would suggest**,
+          // and that is forced rather than chosen: a `<pre>` inside a `<p>` is
+          // torn out of the paragraph by the parser — measured,
+          // `Text <pre>x</pre> more` becomes `<p>Text </p><pre>x</pre> more<p></p>`
+          // — so inline math in a `<pre>` would break every paragraph carrying
+          // one. Using the same element for both keeps one shape for the runtime
+          // to find and keeps the display case's `tabindex` where it already is.
+          //
+          // The class is `math-inline`/`math-display` rather than a new
+          // `math-source`, because `allowedClasses.pre` and `allowedClasses.code`
+          // do not carry one — measured: `<pre class="math-source">` comes back
+          // with no class at all. A fix keyed on a class the sanitizer strips
+          // compiles, reads correctly, and does nothing.
+          // **Keyed by the element pair, not by a `data-` attribute.** The
+          // diagram path carries `data-diagram` because its `figure` already had
+          // an attribute grant; a `span` does not, and measured, a `data-math`
+          // written here comes back stripped — the same silent-strip trap as a
+          // class the allowlist does not carry. `span.math-display >
+          // code.language-math` identifies client-mode math on its own, because
+          // build-time mode puts MathML inside that span rather than a `code`.
+          // Widening a security allowlist to restate what a selector already
+          // gives would be the wrong trade.
+          ctx.replaceNode(target, {
+            type: 'element',
+            tagName: 'span',
+            properties: {
+              className: [isDisplay ? 'math-display' : 'math-inline'],
+              ...(isDisplay ? { tabindex: '0' } : {}),
+            },
+            children: [
+              {
+                type: 'element',
+                tagName: 'code',
+                properties: { className: [`language-${MATH_LANGUAGE}`] },
+                children: [{ type: 'text', value: ctx.textContent(node) }],
+              },
+            ],
+          });
+          return;
+        }
+
+        const token = `${MATH_TOKEN_PREFIX}${maths.length}${MATH_TOKEN_SUFFIX}`;
+        maths.push({ tex: ctx.textContent(node), isDisplay, token });
+
         ctx.replaceNode(target, {
           type: 'element',
           tagName: 'span',

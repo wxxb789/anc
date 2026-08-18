@@ -58,6 +58,7 @@ import mathStylesheet from '../../styles/math.css?url';
 import diagramStylesheet from '../../styles/diagram.css?url';
 import graphStylesheet from '../../styles/graph.css?url';
 import { DIAGRAM_MODE } from '../../lib/diagram-mode.ts';
+import { MATH_MODE } from '../../lib/math-mode.ts';
 
 export function getStaticPaths() {
   return entries.map((entry) => ({ params: { slug: entry.slug }, props: { entry } }));
@@ -275,6 +276,22 @@ const graph = localGraph(entry, getEntry);
   {hasMermaid && DIAGRAM_MODE === 'client' && (
     <script>
       import '../../scripts/diagram.ts';
+    </script>
+  )}
+  {/*
+    The same arrangement for math, and it needs both halves for the same reason
+    the diagram one does: this condition keeps a math-free page from requesting
+    anything, and `astro.config.mjs`'s resolver keeps a build-time *build* from
+    containing Temml at all. `clientRuntimePlugin` is parameterised over the two
+    runtimes rather than duplicated.
+
+    `hasMath` needs no change to serve this: it is set in `mathPlugin` before the
+    mode branch, so it means "this page has an expression" in either mode — which
+    is what both the stylesheet above and this tag ask of it.
+  */}
+  {hasMath && MATH_MODE === 'client' && (
+    <script>
+      import '../../scripts/math.ts';
     </script>
   )}
 

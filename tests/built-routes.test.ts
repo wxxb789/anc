@@ -44,6 +44,8 @@ import {
   truncateLabel,
   type GraphNode,
 } from '../src/lib/graph.ts';
+import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
+import { MATH_MODE } from '../src/lib/math-mode.ts';
 import {
   FIXED_ROUTES,
   GRAPH_SEGMENT,
@@ -1536,8 +1538,37 @@ test('a corpus with nothing to browse renders no explorer', (context) => {
 test('no script is loaded for the explorer', () => {
   /** Selectors and identifiers a rail script would have to name to do anything. */
   const RAIL_MARKERS = /explorer|collection-navigation|details\[open\]|explorer-group/i;
-  /** Total shipped JavaScript, over which a rail script would be a visible jump. */
-  const SCRIPT_BUDGET_BYTES = 40_000;
+
+  /**
+   * The page's JavaScript ceiling, **composed from what the page contains**
+   * rather than one number for every route.
+   *
+   * A single global number cannot express the property this is reaching for. It
+   * has to hold for a plain note, which ships almost nothing, *and* for a page
+   * whose author wrote an expression or a diagram, which in client mode pulls a
+   * whole renderer — 115,541 B gzip for temml unminified, ~232 KB for mermaid. Set low it fails
+   * on a legitimate math page; set high it stops noticing a rail script on the
+   * pages that were supposed to have none. The comment this replaces already
+   * conceded the point — "the byte ceiling is deliberately loose" — which is the
+   * shape of a measurement that has stopped measuring.
+   *
+   * So the budget is a base plus what the page opted into. Each opt-in is keyed
+   * on the marker the *renderer* writes for that construct, so a page cannot
+   * claim an allowance without carrying the thing that earns it, and a runtime
+   * arriving on a page that carries neither is over budget by the whole of its
+   * own size.
+   *
+   * The allowances are the measured floors, not aspirations: a client-mode math
+   * page downloads temml's single chunk and a diagram page mermaid's grammar
+   * set. In build-time mode — what ships — every page's allowance is the base,
+   * because `astro.config.mjs` resolves both runtimes to empty stubs, so this
+   * gate is *tighter* today than the flat 40 KB it replaces.
+   */
+  const BASE_BUDGET_BYTES = 40_000;
+  const RUNTIME_ALLOWANCES: readonly { marker: RegExp; mode: string; bytes: number; what: string }[] = [
+    { marker: /class="math-(?:inline|display)"/, mode: MATH_MODE, bytes: 220_000, what: 'math' },
+    { marker: /class="diagram"/, mode: DIAGRAM_MODE, bytes: 900_000, what: 'a diagram' },
+  ];
 
   let inspected = 0;
   for (const route of ROUTES) {
@@ -1561,10 +1592,16 @@ test('no script is loaded for the explorer', () => {
       );
     }
 
-    assert.ok(
-      bytes <= SCRIPT_BUDGET_BYTES,
-      `${route}: ships ${bytes} B of JavaScript, over the ${SCRIPT_BUDGET_BYTES} B ceiling`,
+    const earned = RUNTIME_ALLOWANCES.filter(
+      (allowance) => allowance.mode === 'client' && allowance.marker.test(html),
     );
+    const budget = BASE_BUDGET_BYTES + earned.reduce((total, allowance) => total + allowance.bytes, 0);
+    const because =
+      earned.length === 0
+        ? 'the base budget, since this page carries no client-rendered construct'
+        : `${BASE_BUDGET_BYTES} B base plus ${earned.map((a) => a.what).join(' and ')}`;
+
+    assert.ok(bytes <= budget, `${route}: ships ${bytes} B of JavaScript, over the ${budget} B ceiling (${because})`);
   }
 
   // Non-vacuity: some script was read and scanned, so a build that emitted none

@@ -25,8 +25,31 @@ import { createIndex, close } from 'pagefind';
 import { fileURLToPath } from 'node:url';
 import { BuildFailure } from './write-report.ts';
 
-/** The selector whose text must not enter the index. */
-const EXCLUDE_SELECTORS = ['.heading-anchor'];
+/**
+ * The selectors whose text must not enter the index.
+ *
+ * `.heading-anchor` is the `#` link every heading carries; indexing it puts a
+ * bare `#` into every heading's searchable text.
+ *
+ * **`code.language-math` is a cost, not a free win, and the cost is stated
+ * because it is a real one: a reader can no longer find a note by an expression
+ * in it.** Under client rendering the TeX source ships as the fallback a
+ * JS-disabled reader sees, and a Pagefind fragment stores extracted *text* with
+ * markup stripped — so `f:\mathbb{R} \to \mathbb{C}` arrives in the index with
+ * no element around it, where it reads as noise beside the prose and trips the
+ * residue scan's `absolute local path` rule with no code region left to exempt
+ * it. Measured: the fragment for such a note carries the raw TeX.
+ *
+ * The alternative is exempting the rule over every fragment, which
+ * `scripts/scan-residue.ts` measures as taking a genuinely leaked path with it.
+ * Excluding the source from the index is the narrower price, and it is paid by
+ * search rather than by the privacy boundary.
+ *
+ * `src/lib/math.ts` already declines to emit Temml's `<annotation>` copy of the
+ * source for the same reason, so this is the same decision applied to the mode
+ * where the source is what ships.
+ */
+const EXCLUDE_SELECTORS = ['.heading-anchor', 'code.language-math'];
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 

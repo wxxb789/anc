@@ -2,18 +2,19 @@
 import { defineConfig } from 'astro/config';
 import { fileURLToPath } from 'node:url';
 import { DIAGRAM_MODE } from './src/lib/diagram-mode.ts';
+import { MATH_MODE } from './src/lib/math-mode.ts';
 import { configForBuild } from './scripts/load-config.ts';
 
 /**
- * Keep the diagram runtime out of the build unless client mode wants it.
+ * Keep a client runtime out of the build unless client mode wants it.
  *
- * `src/pages/notes/[slug].astro` has an Astro `<script>` importing
- * `src/scripts/diagram.ts`, and Astro bundles such a script **eagerly**:
- * wrapping the tag in a condition or guarding the import at runtime does not
- * keep it out of `dist/`. Measured, not assumed — the guarded version emitted
- * 99 Mermaid chunks on a build whose mode was `build-time`, orphaned and
- * referenced by no page, and tripped the privacy residue scan on `[[` byte
- * sequences inside the parser.
+ * `src/pages/notes/[slug].astro` has Astro `<script>` tags importing
+ * `src/scripts/diagram.ts` and `src/scripts/math.ts`, and Astro bundles such a
+ * script **eagerly**: wrapping the tag in a condition or guarding the import at
+ * runtime does not keep it out of `dist/`. Measured, not assumed — the guarded
+ * version emitted 99 Mermaid chunks on a build whose mode was `build-time`,
+ * orphaned and referenced by no page, and tripped the privacy residue scan on
+ * `[[` byte sequences inside the parser.
  *
  * A plugin rather than `resolve.alias`, because an alias is matched against the
  * *raw specifier* — here `../../scripts/diagram.ts` — before resolution, so a
@@ -27,6 +28,7 @@ import { configForBuild } from './scripts/load-config.ts';
  * as a feature. Adding `vite` to `package.json` to annotate one function would
  * spend a dependency on a type.
  *
+ * @param {'diagram' | 'math'} runtime
  * @param {'build-time' | 'client'} mode
  * @returns {{
  *   name: string,
@@ -40,8 +42,8 @@ import { configForBuild } from './scripts/load-config.ts';
  *   ) => Promise<string | null>,
  * }}
  */
-function diagramRuntimePlugin(mode) {
-  const stub = fileURLToPath(new URL('src/scripts/diagram-disabled.ts', import.meta.url));
+function clientRuntimePlugin(runtime, mode) {
+  const stub = fileURLToPath(new URL(`src/scripts/${runtime}-disabled.ts`, import.meta.url));
   // The extension is matched loosely because it is not the same in both trees:
   // this repository runs `diagram.ts` directly, while the packaged tarball ships
   // it compiled to `diagram.js` (`scripts/compile-package.ts`). Pinning `.ts`
@@ -49,9 +51,16 @@ function diagramRuntimePlugin(mode) {
   // whole runtime was then bundled into a `build-time` site, which the residue
   // scan caught on `[[` byte sequences inside the parser. Matching either
   // extension keeps one rule true of both trees.
-  const target = /[\\/]src[\\/]scripts[\\/]diagram\.(?:ts|js)$/;
+  //
+  // **Parameterised over the runtime rather than duplicated**, because math
+  // needs exactly this arrangement for exactly this reason and a second copy is
+  // a second place for the `.ts`/`.js` lesson above to be relearned. The two
+  // modes are separate constants (`DIAGRAM_MODE`, `MATH_MODE`) — the costs and
+  // the evidence differ, so one switch must not carry the other's consequences —
+  // but the mechanism that keeps an unselected runtime out of `dist/` is one.
+  const target = new RegExp(String.raw`[\\/]src[\\/]scripts[\\/]${runtime}\.(?:ts|js)$`);
   return {
-    name: 'thoughtscape:diagram-mode',
+    name: `thoughtscape:${runtime}-mode`,
     // Ahead of Vite's own resolver, so the redirect happens before the module
     // is loaded and its imports crawled.
     enforce: 'pre',
@@ -182,7 +191,7 @@ export default defineConfig({
   output: 'static',
   trailingSlash: 'always',
   vite: {
-    plugins: [diagramRuntimePlugin(DIAGRAM_MODE)],
+    plugins: [clientRuntimePlugin('diagram', DIAGRAM_MODE), clientRuntimePlugin('math', MATH_MODE)],
     build: {
       // Load-bearing for the CSP, not a size preference. Above 0, Vite inlines
       // a small `?url` asset as a `data:` URL — and `src/scripts/theme-init.js`
