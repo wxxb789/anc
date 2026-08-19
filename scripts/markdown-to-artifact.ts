@@ -79,7 +79,7 @@
 import { readFile, readdir, mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { validateArtifact } from '../src/lib/schema.ts';
+import { RESERVED_SLUGS, validateArtifact } from '../src/lib/schema.ts';
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import { BuildFailure, bySourceThenLine, type DroppedFile, type LinkFindingRow } from './write-report.ts';
 
@@ -733,6 +733,8 @@ export async function discover(
   const matched = patterns.map(() => false);
   const paths = await walk(contentDirectory);
 
+  /** Published source paths whose derived slug belongs to the site itself. */
+  const reserved: { path: string; slug: string }[] = [];
   /** Slug to the path that claimed it, so a collision can name its winner. */
   const claimed = new Map<string, string>();
   /** Slug to the path that produced it, for the link traversal. */
@@ -807,6 +809,13 @@ export async function discover(
       dropped.push({ path, reason: 'empty-slug' });
       continue;
     }
+    if (RESERVED_SLUGS.has(slug)) {
+      // Fatal candidates are not "dropped": no Discovery is returned and the
+      // failure report owns these paths. Calling this an exclusion would imply
+      // the rest of the site can still publish.
+      reserved.push({ path, slug });
+      continue;
+    }
 
     // A duplicate slug fails the contract, so two files that collide would fail
     // the build with a schema error naming neither file. Dropping the second is
@@ -868,6 +877,19 @@ export async function discover(
         'A pattern that matches nothing is usually a typo, and a mistyped exclusion ' +
         'publishes what it was meant to withhold. Correct it, or delete it.',
       idle.map((index) => `exclude[${index}] = ${JSON.stringify(patterns[index])}`).join('; '),
+    );
+  }
+
+  // The exclusion typo wins when both faults exist: it could expose content,
+  // while a reserved slug can only stop the build. Report every reserved path
+  // together once the higher-risk configuration fault is clear.
+  if (reserved.length > 0) {
+    throw new BuildFailure(
+      'reserved-slug',
+      `${reserved.length} published ${reserved.length === 1 ? 'note uses' : 'notes use'} reserved route slugs`,
+      reserved
+        .map(({ path, slug }) => `${path}: slug "${slug}" is reserved by the site; rename the source file or its directory`)
+        .join('\n'),
     );
   }
 

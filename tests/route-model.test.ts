@@ -200,8 +200,8 @@ test('two tags that would share a route key fail the build instead of merging', 
 
 test('tags differing only by case are one tag, not a build failure', () => {
   // `Gardening` and `gardening` are the same tag. Failing the build would be
-  // unfixable from this repository, since the exporter is not writable here,
-  // and publishing two pages would say the same thing twice.
+  // unnecessary for the author to fix, since the labels say the same thing,
+  // and publishing two pages would say that same thing twice.
   const facets = tagFacets([
     entry('a-note', { tags: ['Gardening'] }),
     entry('b-note', { tags: ['gardening'] }),
@@ -323,27 +323,28 @@ test('non-Latin scripts keep a readable route key rather than being encoded', ()
   }
 });
 
-test('a tag-key collision names both labels and says the fix is the exporter s', () => {
-  // Unfixable from this repository: the exporter authors tag text. The message
-  // has to say so, or the failure gets patched in the wrong place.
+test('a tag-key collision names both labels and points to source Markdown', () => {
+  // The author can act on the source note; generated output is the wrong seam.
   assert.throws(
     () => tagFacets([entry('a-note', { tags: ['C++'] }), entry('b-note', { tags: ['C#'] })]),
     (error: Error) => {
       assert.match(error.message, /"C\+\+"/, 'the first label is not named');
       assert.match(error.message, /"C#"/, 'the second label is not named');
       assert.match(error.message, /both route to \/tags\/c\//, 'the colliding route is not named');
-      assert.match(error.message, /exporter/i, 'the message does not say where the fix belongs');
+      assert.match(error.message, /source Markdown/, 'the message does not say where the fix belongs');
+      assert.doesNotMatch(error.message, /(?:exporter|vault)/i);
       return true;
     },
   );
 });
 
-test('an unroutable label also says the fix is the exporter s', () => {
+test('an unroutable label also points to source Markdown', () => {
   assert.throws(
     () => tagFacets([entry('a-note', { tags: ['---'] })]),
     (error: Error) => {
       assert.match(error.message, /"---"/, 'the label is not named');
-      assert.match(error.message, /exporter/i, 'the message does not say where the fix belongs');
+      assert.match(error.message, /source Markdown/, 'the message does not say where the fix belongs');
+      assert.doesNotMatch(error.message, /(?:exporter|vault)/i);
       return true;
     },
   );

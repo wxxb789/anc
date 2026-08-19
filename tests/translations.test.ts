@@ -32,6 +32,7 @@ import {
   partLanguage,
   translate,
 } from '../src/lib/translations.ts';
+import { REDIRECT_RULES } from '../src/lib/routes.ts';
 
 const SOURCE = fileURLToPath(new URL('../src/lib/translations.ts', import.meta.url));
 
@@ -87,6 +88,12 @@ test('a document resolves the locale its own language names', () => {
   for (const spelling of ['zh-cn', 'zh-CN', 'ZH-CN']) {
     assert.equal(translate(spelling).uncollected, '未归入合集', `${spelling} did not resolve`);
   }
+});
+
+test('404 copy promises no redirect while the route map is empty', () => {
+  assert.equal(REDIRECT_RULES.length, 0, 'redirects now ship, so revise the 404 copy and this gate together');
+  assert.doesNotMatch(translate('en').notFoundBody, /redirect/i);
+  assert.doesNotMatch(translate('zh-CN').notFoundBody, /(?:重定向|跳转|301)/);
 });
 
 test('a document with no language falls back to the navigation language', () => {

@@ -550,9 +550,8 @@ const EN = {
   notFoundTitle: 'Page not found',
   notFoundDescription: 'That page is not part of this site.',
   notFoundBody:
-    'That address does not match a published page. It may have been withdrawn, or it may never ' +
-    'have existed here — published pages that move keep a permanent redirect, so a page that was ' +
-    'once here would have brought you along.',
+    'That address does not match a published page. It may have been withdrawn, moved, or never ' +
+    'have existed here. Use one of the current destinations below.',
   notFoundWhereTo: 'Where to go instead',
 
   withheldTitle: 'Not published',
@@ -724,9 +723,7 @@ const ZH_CN = {
 
   notFoundTitle: '页面未找到',
   notFoundDescription: '该页面不属于本站。',
-  notFoundBody:
-    '该地址不对应任何已公开的页面。它可能已被撤回，也可能从未存在于此 — ' +
-    '公开页面在迁移时会保留永久重定向，所以曾经在此的页面会把你带到新地址。',
+  notFoundBody: '该地址不对应任何已公开的页面。它可能已被撤回、迁移，或从未存在于此。请从下方选择当前可用的页面。',
   notFoundWhereTo: '可以去这些地方',
 
   withheldTitle: '未公开',

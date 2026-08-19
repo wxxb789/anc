@@ -35,6 +35,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { discover } from '../scripts/markdown-to-artifact.ts';
+import { BuildFailure } from '../scripts/write-report.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -162,6 +163,27 @@ test('a nested README is prose and the root README is not', async () => {
     const found = await discover(root);
     assert.deepEqual(found.entries.map((entry) => entry.slug).sort(), ['guides-readme', 'note']);
     assert.deepEqual(found.dropped, [{ path: 'README.md', reason: 'repository-readme' }]);
+  });
+});
+
+test('reserved route slugs fail together with source paths only in private detail', async () => {
+  await scratch('reserved-slug-', async (directory) => {
+    const paths = ['about.md', 'search.md'];
+    for (const path of paths) put(directory, path, '# Reserved\n');
+
+    let failure: BuildFailure | undefined;
+    try {
+      await discover(directory);
+    } catch (error) {
+      assert.ok(error instanceof BuildFailure);
+      failure = error;
+    }
+    assert.equal(failure?.code, 'reserved-slug');
+    assert.equal(failure?.message, '2 published notes use reserved route slugs');
+    for (const path of paths) {
+      assert.ok(failure.detail.includes(path));
+      assert.ok(failure.detail.includes(`slug "${path.slice(0, -3)}" is reserved`));
+    }
   });
 });
 

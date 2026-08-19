@@ -173,9 +173,9 @@ Matching is case-insensitive and Unicode-normalised, so a link whose case differ
 filename still resolves and a macOS-decomposed filename matches an NFC link.
 
 A link that resolves to **more than one** file is reported with every candidate and the site
-still builds — `/`-anchor it to disambiguate. A link to a note you excluded renders as the
-words you wrote, with no anchor and no target, and is reported: that line is the most useful
-one in the report, because it is your exclusion seen from the other side.
+still builds — `/`-anchor it to disambiguate. A link to a note you excluded keeps the full
+label and path you wrote, points to `/private/`, and is reported; the target note's body never
+ships. That report row is your exclusion seen from the other side.
 
 Aliases are **not** link targets. Obsidian desktop and Obsidian Publish genuinely disagree
 here and this follows desktop. They are also not indexed for search or previews, because the
@@ -281,6 +281,9 @@ that rule is not negotiable.
 ## What it will not do
 
 - Publish a non-Markdown file, including images.
+- Publish a note whose derived slug is reserved by the site, such as root `about.md`,
+  `search.md`, `tags.md`, or `private.md`. Rename the source file; the private report lists
+  every conflicting note and slug together.
 - Keep a note's URL when you rename it. There is no redirect map that grows from your corpus;
   a renamed note is a new address and the old one 404s.
 - Transclude `![[note]]`. It becomes an ordinary link, and the report records the demotion as

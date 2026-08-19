@@ -127,7 +127,7 @@ export function routeKey(label: string): string {
  * Compared after the same normalizations {@link routeKey} applies, because the
  * two questions have to agree: if `café` and `café` produce one key, they
  * must also count as one label, or the merge that key implies becomes a build
- * failure the exporter cannot fix — the two are indistinguishable on screen.
+ * failure the author cannot meaningfully fix — the two are indistinguishable on screen.
  *
  * Case folding is what makes `Gardening` and `gardening` one tag. It is
  * `toLowerCase`, which is ASCII-shaped: `straße` and `STRASSE` stay separate.
@@ -138,17 +138,10 @@ function sameLabel(a: string, b: string): boolean {
   return a.normalize('NFC').toLowerCase() === b.normalize('NFC').toLowerCase();
 }
 
-/**
- * Said by both facet failures, because neither has a fix available here.
- *
- * The exporter authors tag text, and this repository never edits the artifact
- * by hand, so the only remedy is to change the label at the source. Saying so
- * in the message is the difference between a build failure someone can act on
- * and one they will try to patch in the wrong repository.
- */
-const EXPORTER_OWNS_LABELS =
-  'The label is authored by the exporter, so the fix belongs there: rename it in the ' +
-  'private vault and re-export. Do not edit the generated artifact by hand.';
+/** Actionable advice shared by both facet failures. */
+const CHANGE_SOURCE_LABEL =
+  'Change the tag or collection label in the source Markdown and rebuild. ' +
+  'Do not edit the generated artifact by hand.';
 
 /** A tag or collection, with the notes that carry it. */
 export interface Facet {
@@ -179,11 +172,10 @@ function byTitleThenSlug(a: ContentEntry, b: ContentEntry): number {
  * quietly folding them would put one tag's notes on the other tag's page. The
  * alternative — disambiguating with a numeric suffix — would make an existing
  * tag's public URL depend on what other tags exist, which breaks the stable
- * identity requirement. Failing names both labels so the exporter can fix it.
+ * identity requirement. Failing names both labels so the author can fix it.
  *
- * Both failures name {@link EXPORTER_OWNS_LABELS}, because neither is fixable
- * from this repository: the exporter authors the tag text, so the only remedy
- * is to change it there and re-export.
+ * Both failures name {@link CHANGE_SOURCE_LABEL}, so the message points to the
+ * source Markdown rather than to generated output.
  */
 function facets(
   entries: readonly ContentEntry[],
@@ -200,7 +192,7 @@ function facets(
         throw new Error(
           `${what} ${JSON.stringify(label)} has no URL-safe route key under ${base}: ` +
             `it reduces to ${JSON.stringify(key)}, which is not an addressable public route segment. ` +
-            EXPORTER_OWNS_LABELS,
+            CHANGE_SOURCE_LABEL,
         );
       }
       const existing = groups.get(key);
@@ -216,7 +208,7 @@ function facets(
         throw new Error(
           `${what}s ${JSON.stringify(existing.label)} and ${JSON.stringify(label)} ` +
             `both route to ${base}${key}/. ` +
-            EXPORTER_OWNS_LABELS,
+            CHANGE_SOURCE_LABEL,
         );
       }
       // One entry carrying two spellings of the same tag (`Gardening` and
