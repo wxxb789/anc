@@ -128,7 +128,7 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
  * twice a Latin letter to store and to serve.
  *
  * Each ceiling is set an order of magnitude above anything the corpus plausibly
- * produces, so it catches a runaway exporter rather than constraining an author.
+ * produces, so it catches a runaway producer rather than constraining an author.
  */
 const STRING_LIMITS = {
   // A path segment, and part of every redirect rule; Cloudflare caps a rule
@@ -278,7 +278,7 @@ const STRUCTURAL_MARKERS: readonly Rule[] = [
 /**
  * Schemes a browser resolves after discarding whitespace anywhere in the URL, so
  * these are matched against a whitespace-stripped form too. Mirrors the
- * exporter's own rule. `file:` carries a lookbehind so that ordinary words
+ * producer's own rule. `file:` carries a lookbehind so that ordinary words
  * ending in "file" ("profile:", "makefile:") followed by "//" stay readable.
  */
 const UNSAFE_SCHEMES: readonly Rule[] = [
@@ -407,7 +407,7 @@ function checkPrivacy(entry: Record<string, unknown>, label: string, issues: str
     // as "Option A:" above "/usr/bin" into an apparent drive path.
     const visible = decoded.replace(INVISIBLE, '');
     // Scheme rules additionally drop the tab/CR/LF a URL parser ignores, so
-    // `java\tscript:` inside one URL is caught. This mirrors the exporter.
+    // `java\tscript:` inside one URL is caught. This mirrors the producer.
     const compact = decoded.replace(URL_IGNORED, '');
     for (const text of [value, decoded, visible]) scan(text, STRUCTURAL_MARKERS, found);
     for (const text of [value, decoded, compact]) {

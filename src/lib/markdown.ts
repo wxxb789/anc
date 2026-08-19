@@ -87,7 +87,7 @@ export interface RenderOptions {
    *
    * Requirements section 9.2 puts the title, the public metadata, the summary,
    * and the table of contents *before* the article content, so the title cannot
-   * live inside the body — and the exporter writes it there anyway, as a leading
+   * live inside the body — and the producer writes it there anyway, as a leading
    * `# Title`. Passing it here removes that one duplicate heading, so the page
    * renders the title once and the document has exactly one `<h1>`.
    *
@@ -137,7 +137,7 @@ export interface RenderOptions {
 }
 
 /**
- * Today's route shape, which the exporter already emits. Keeping it as the
+ * Today's route shape, which the producer already emits. Keeping it as the
  * default means rendering is unchanged until TK-04 injects its own mapping.
  */
 export const defaultRouteForSlug = (slug: string): string => `/${slug}/`;
@@ -158,7 +158,7 @@ export const TOC_MIN_HEADINGS = 3;
  * Rendering policy, stated in one place because each flag is a decision:
  *
  * - `gfm` — tables, footnotes, strikethrough, and task lists (section 15.1).
- * - `frontmatter` off — the exporter strips frontmatter, so a leading `---` in
+ * - `frontmatter` off — the producer strips frontmatter, so a leading `---` in
  *   the body is a thematic break. Leaving this on would silently eat content.
  * - `math` — display math parses; `$…$` does not, because a single `$` in
  *   technical prose is far more often currency (`$5 to $10`) than an equation,
@@ -166,7 +166,7 @@ export const TOC_MIN_HEADINGS = 3;
  *   native MathML; see `src/lib/math.ts`.
  * - `smartPunctuation` off — it rewrites `--` to an en-dash, which is wrong for
  *   the CLI flags this corpus is full of.
- * - `wikilinks` off — the exporter resolves public wikilinks to routes, and
+ * - `wikilinks` off — the producer resolves public wikilinks to routes, and
  *   TK-01 rejects any artifact still carrying `[[`. Parsing them here would
  *   quietly render a link the projection never approved (section 15.2).
  * - `headingAttributes` off — `# text { #id .class }` would let body content
@@ -358,7 +358,7 @@ const FOOTNOTE_ID = /^(?:user-content-fn(?:ref)?-[^\s"]+|footnote-label)$/;
  * type, and nothing else. `image/svg+xml` is deliberately excluded — an SVG can
  * carry a script — as are every non-image type and the bare `data:,` form.
  * Mirrors `DISALLOWED_DATA_URI` in `schema.ts`; the two must agree, or the
- * exporter admits an image this renderer then silently drops.
+ * producer admits an image this renderer then silently drops.
  */
 const SAFE_IMAGE_DATA_URI = /^data:image\/(?:png|jpe?g|gif|webp|avif);base64,[A-Za-z0-9+/=]*$/i;
 
@@ -534,7 +534,7 @@ function rawHtmlIds(html: string): string[] {
  * heading gets a free id and the decoy is dropped with nothing to shadow.
  *
  * `pageTitle` resolves the one structural conflict between the artifact and
- * requirements section 9.2: the exporter writes the title into the body as a
+ * requirements section 9.2: the producer writes the title into the body as a
  * leading `# Title`, and the anatomy renders the title itself, above the
  * article. See {@link RenderOptions.pageTitle}. When it is given, a leading
  * `h1` whose text matches is removed — and nothing else changes, because every

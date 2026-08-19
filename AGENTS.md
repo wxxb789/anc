@@ -228,7 +228,6 @@ meeting one of these has met a known gap, not a discovery.
 
 | What | State | Owner |
 | --- | --- | --- |
-| `src/pages/about.astro`, `privacy.astro` | shipped pages; plan §4.4 says notes `init` seeds. TK-32 built `init` and deliberately did not seed them — that row is tied to deleting the two pages, which is not TK-32's scope, and a seeded note beside a shipped page contradicting it is worse than neither | unassigned |
 | `og:image` | never emitted; `SOCIAL_CARD_PATH` is `undefined` and no config key sets it | unassigned |
 | `dist/` as a shared output path | **Fixed.** `scripts/dist-lock.ts` interlocks the three commands that write or read it — the suite (vitest `globalSetup`), `pnpm run build`, and `build:fixture` — so they wait for each other instead of emptying a directory another is reading. The row this replaces blamed `.astro/`, which was wrong for three tickets: measured, `getOutDirWithinCwd` returns an `outDir` under cwd unchanged, the binary stages under `PACKAGE_ROOT` after chdir'ing there, and 24 concurrent binary builds against a live suite were all clean. What collided was `emptyDir(config.outDir)` (`astro/dist/core/build/static-build.js:64`) over the one `dist/`. See `.tmp/staging-collision-report.md` | closed |
 

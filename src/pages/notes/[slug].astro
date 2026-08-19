@@ -96,7 +96,7 @@ const lang = entry.language ?? NAV_LANGUAGE;
 // route that does not exist.
 //
 // `pageTitle` is what lets the anatomy put the title above the article: the
-// exporter writes it into the body as a leading `# Title`, and the renderer
+// producer writes it into the body as a leading `# Title`, and the renderer
 // drops that one duplicate rather than the page rendering it twice. A body that
 // keeps some *other* `h1` is left alone and fails the "exactly one h1" gate,
 // which is the honest outcome — see `RenderOptions.pageTitle`.
@@ -136,7 +136,7 @@ const breadcrumbs: { label: string; href?: string }[] = [
  *
  * The first ten characters, not a parsed and reformatted `Date`. TK-01 has
  * already validated both fields as ISO 8601, so the prefix *is* the calendar
- * date exactly as the exporter wrote it — and taking it verbatim avoids the two
+ * date exactly as the producer wrote it — and taking it verbatim avoids the two
  * ways formatting gets this wrong: a date-only value parsed as UTC midnight and
  * rendered in the build machine's zone shows the previous day west of
  * Greenwich, and a locale format would be a chrome string TK-16 then has to
@@ -414,7 +414,7 @@ const graph = localGraph(entry, getEntry);
       being unrelated to it, which is the fabrication the empty states exist to
       avoid: a wrong answer presented in the shape of a right one is worse than
       no answer. A real context excerpt needs a per-edge field; that is TK-19's
-      exporter contract work. */}
+      producer contract work. */}
   <LinkedNotes
     region="backlinks"
     heading={t.backlinksHeading}

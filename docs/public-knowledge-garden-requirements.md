@@ -383,11 +383,11 @@ Routes, verified against a built site:
 
 No dedicated `/search/` route; the dialog is available from every page.
 
-**`/about/` and `/privacy/` are shipped pages of the tool's own prose, and that is a known
-wrong shape.** They should be Markdown notes seeded into the user's repository, so that a
-privacy page can describe *the user's own configuration* — which is the only thing that makes
-one truthful under default-publish. `init` now exists and deliberately does not seed competing
-notes; whether these generic pages stay or become user-owned content remains unresolved.
+**`/about/` and `/privacy/` deliberately remain shipped product pages.** Their claims are
+generator-enforced invariants — static output, default-publish exclusions, no analytics, no
+cookies, local search, and the unavoidable host-log boundary — rather than a biography or a
+promise about user-selected infrastructure. `init` therefore seeds no competing notes. Users
+own the site title and content; the tool owns these two explanations of its runtime behavior.
 
 Slugs derive from the repository-relative path, each segment slugified and joined with `-`, so
 `projects/sub/deep.md` publishes at `/notes/projects-sub-deep/`. A path that slugifies to

@@ -1005,6 +1005,10 @@ Today they are the same repository, and three artifacts prove it.
 > false: a withheld note's title does reach the published site, through the linking author's own
 > link text, working exactly as designed.
 >
+> **Subsequently amended:** the personal artifact was replaced with a synthetic note. About and
+> privacy remain shipped deliberately because they state generator-enforced runtime invariants,
+> not user biography; `init` seeds no competing notes.
+>
 > `isPublishedArtifact` was **not** deleted either, so the index-projection check still runs
 > only for `src/data/content.json` — meaning the coverage illusion this section warns about is
 > still armed. Deleting that file today silently retires the check.

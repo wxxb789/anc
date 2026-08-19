@@ -57,7 +57,7 @@ export function projectIndex(artifact: ContentArtifact) {
  * The index ships to the browser on its own, so it must stay an exact projection
  * of the validated artifact rather than a separately generated file that could
  * drift. The comparison is key-order sensitive, which is the safe direction for
- * a privacy gate: a reordered index is a change in the exporter worth reviewing.
+ * a privacy gate: a reordered index is a change in the producer worth reviewing.
  */
 export function checkIndexProjection(index: unknown, artifact: ContentArtifact): string[] {
   return JSON.stringify(index) === JSON.stringify(projectIndex(artifact))
@@ -135,7 +135,7 @@ export function validateBuildInputs(artifactPath: string = ARTIFACT_PATH): Conte
  *   whichever one this build selected — `src/data/content.json` unless
  *   `CONTENT_ARTIFACT` names another. A caller passes a path so it can gate a
  *   candidate artifact without writing over `src/data/content.json`, which is
- *   exporter-owned generated content. The index projection is compared only
+ *   producer-owned generated content. The index projection is compared only
  *   when the artifact under test *is* the published one, since the index is its
  *   projection and nothing else's.
  */

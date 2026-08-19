@@ -1,7 +1,7 @@
 /**
  * Which artifact file this build reads.
  *
- * The default is the exporter-generated `src/data/content.json`. Setting
+ * The default is the producer-generated `src/data/content.json`. Setting
  * `CONTENT_ARTIFACT` to another path — `pnpm run build:fixture` does exactly
  * that — builds the whole site from a different artifact without touching the
  * generated one, which the agent contract forbids editing by hand.

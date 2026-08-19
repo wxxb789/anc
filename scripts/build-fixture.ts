@@ -85,7 +85,7 @@ function runStep(command: string, args: readonly string[], env: NodeJS.ProcessEn
  * copied file is already the right projection, and `validate-content.ts` proves
  * it byte for byte.
  *
- * `public/content-index.json` itself is never touched. It is exporter-generated
+ * `public/content-index.json` itself is never touched. It is producer-generated
  * and the agent contract forbids editing it here.
  */
 function writeFixtureIndex(): void {

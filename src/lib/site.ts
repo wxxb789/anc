@@ -265,17 +265,14 @@ export function escapeXml(value: string): string {
  * The timestamp for a note the artifact carries no date for.
  *
  * Atom requires `atom:updated` on every entry and on the feed, so there is no
- * option to omit it. The three candidates were: the build clock, which destroys
- * determinism — the property this ticket is measured on; dropping undated notes
- * from the feed, which on the artifact as it stands today would publish an empty
- * feed, since the exporter emits no dates at all; and a sentinel.
+ * option to omit it. The build clock would destroy determinism, while dropping
+ * undated notes would make previews from non-git directories and untracked
+ * notes disappear from an otherwise complete feed.
  *
- * The sentinel wins because it is the only one that is both deterministic and
- * complete. The epoch is chosen precisely because no reader will mistake it for
- * a real publication date. Undated notes already sort last in
- * {@link recentFirst}, so they appear at the end of the feed as well.
- *
- * The exporter's missing date fields are the actual defect; it is TK-19's.
+ * The sentinel is both deterministic and complete. The epoch is chosen precisely
+ * because no reader will mistake it for a real publication date. Tracked notes
+ * carry git dates; the honest undated fallback still sorts last in
+ * {@link recentFirst}, so it appears at the end of the feed as well.
  */
 export const UNDATED = '1970-01-01T00:00:00Z';
 
@@ -343,7 +340,7 @@ function timestamp(value: string): string {
 /**
  * Whether an entry is published, as opposed to withdrawn.
  *
- * `status` is optional in the contract and absent from the artifact the exporter
+ * `status` is optional in the contract and absent from the artifact the producer
  * emits today, so "no status" means published — which is what every entry in
  * `src/data/content.json` relies on.
  *
@@ -386,7 +383,7 @@ export function isPublished(entry: ContentEntry): boolean {
  *
  * The URL fallback keeps the feed working for the artifact as it stands today,
  * which carries no `public_id` at all — at the cost this comment names, for
- * exactly the entries the exporter has not yet given a stable identity.
+ * exactly the entries the producer has not yet given a stable identity.
  */
 function entryId(entry: ContentEntry, url: string): string {
   if (entry.public_id === undefined) return url;
