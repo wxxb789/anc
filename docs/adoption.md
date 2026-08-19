@@ -63,7 +63,8 @@ the files you chose not to publish is an index to them. The report lives inside 
 
 **Outside a git repository** the last line reads differently: the report goes under your user
 state directory (`$LOCALAPPDATA` or `$XDG_STATE_HOME`), keyed by a digest of the build
-directory, and the line tells you so. Nothing else changes.
+directory, and the line tells you so. The fallback retains at most 128 project reports and
+expires reports untouched for more than 90 days; reports inside a git directory are not pruned.
 
 ## Deciding what not to publish
 

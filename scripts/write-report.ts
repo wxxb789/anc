@@ -61,7 +61,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -313,6 +313,64 @@ function stateDirectory(): string {
   return process.env['XDG_STATE_HOME'] || join(homedir(), '.local', 'state');
 }
 
+/** Soft cap and age bound for reports that have no git directory to own them. */
+export const STATE_REPORT_MAX_PROJECTS = 128;
+export const STATE_REPORT_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const STATE_KEY = /^[a-f0-9]{16}$/;
+
+/**
+ * Remove old no-git reports without following or touching unfamiliar names.
+ *
+ * Only this tool's 16-hex project directories are candidates. The current key
+ * is retained even when its previous report is old; one slot is reserved for it
+ * before the next write, so an ordinary run leaves at most 128 projects. Races
+ * between several new projects may exceed the soft cap briefly and converge on
+ * the next run. Cleanup is best-effort: inability to delete history must never
+ * replace the report for the build in progress.
+ */
+export function pruneStateReports(root: string, currentKey: string, now: number = Date.now()): void {
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  const candidates: { directory: string; modified: number }[] = [];
+  for (const entry of entries) {
+    if (entry.name === currentKey || !STATE_KEY.test(entry.name) || !entry.isDirectory()) continue;
+    const directory = join(root, entry.name);
+    let modified: number;
+    try {
+      modified = statSync(join(directory, 'content-report.json')).mtimeMs;
+    } catch {
+      try {
+        modified = statSync(directory).mtimeMs;
+      } catch {
+        continue;
+      }
+    }
+    candidates.push({ directory, modified });
+  }
+
+  const remove = (directory: string): void => {
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch {
+      // Best-effort retention only; the current report still has to be written.
+    }
+  };
+  const retained = candidates.filter(({ directory, modified }) => {
+    if (now - modified <= STATE_REPORT_MAX_AGE_MS) return true;
+    remove(directory);
+    return false;
+  });
+  retained
+    .sort((left, right) => right.modified - left.modified)
+    .slice(Math.max(0, STATE_REPORT_MAX_PROJECTS - 1))
+    .forEach(({ directory }) => remove(directory));
+}
+
 /**
  * The report's path for this invocation, and whether git answered.
  *
@@ -336,8 +394,10 @@ function destinationFor(userDirectory: string): { path: string; hasGitDirectory:
   // overwrite each other's report. It names the user's own directory on the
   // user's own machine and is never interpolated into a stream.
   const key = createHash('sha256').update(realpath(userDirectory)).digest('hex').slice(0, 16);
+  const root = join(stateDirectory(), 'publish-report');
+  pruneStateReports(root, key);
   return {
-    path: join(stateDirectory(), 'publish-report', key, 'content-report.json'),
+    path: join(root, key, 'content-report.json'),
     hasGitDirectory: false,
   };
 }

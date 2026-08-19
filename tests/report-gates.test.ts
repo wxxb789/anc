@@ -22,7 +22,7 @@
  * hand-written fixture, because no hand-written fixture gzips anything.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
@@ -32,6 +32,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { scanResidue } from '../scripts/scan-residue.ts';
+import { STATE_REPORT_MAX_AGE_MS } from '../scripts/write-report.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
@@ -656,6 +657,17 @@ test('with no repository, the report lands outside the invocation directory', ()
     writeFileSync(join(directory, '.git'), 'not a gitdir\n', 'utf8');
     const state = join(directory, 'state');
     mkdirSync(state, { recursive: true });
+    // A real stale fallback report, so this end-to-end gate proves the binary
+    // reaches retention rather than only the unit helper doing so.
+    const old = new Date(Date.now() - STATE_REPORT_MAX_AGE_MS - 60_000);
+    for (const key of ['0000000000000001', '0000000000000002']) {
+      const expired = join(state, 'publish-report', key);
+      const expiredReport = join(expired, 'content-report.json');
+      mkdirSync(expired, { recursive: true });
+      writeFileSync(expiredReport, '{}\n', 'utf8');
+      utimesSync(expiredReport, old, old);
+      utimesSync(expired, old, old);
+    }
     const notes = join(directory, 'notes');
     mkdirSync(notes, { recursive: true });
     writeFileSync(join(notes, 'alpha.md'), '# Alpha\n\nprose.\n', 'utf8');
@@ -665,6 +677,12 @@ test('with no repository, the report lands outside the invocation directory', ()
       XDG_STATE_HOME: state,
     });
     assert.equal(run.status, 0, `the fixture did not build:\n${run.output}`);
+    for (const key of ['0000000000000001', '0000000000000002']) {
+      assert.ok(
+        !existsSync(join(state, 'publish-report', key)),
+        `the binary left expired fallback report ${key} in state`,
+      );
+    }
 
     // The pointer is the fallback spelling, and it names no path.
     assert.match(
