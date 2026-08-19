@@ -1234,8 +1234,8 @@ Not in the original plan, and it displaced Phase 2 entirely:
 - a report that lives where nothing can publish it;
 - packaging as an installable command, and local preview.
 
-Remaining: the GitHub Action and `init`; the publish-set review of 5.1; the producer's
-underived fields from 8.1.
+The GitHub Action and `init` are delivered; this repository has no remote, so the workflow has
+not run. Remaining: the publish-set review of 5.1 and the producer's underived fields from 8.1.
 
 ### Phase 2 — interactive graph via SQLite WASM — **not started**
 
@@ -1280,9 +1280,9 @@ launch; there is a release, and each release meets these:
 - static backlinks match the edge set, and the rendered article's hrefs match it in both
   directions;
 - normal article reading works without JavaScript;
-- search works for representative Chinese and English queries. **The query term must be drawn
-  from the corpus under test**, which today it is not — `tests/search.test.ts` uses a fixed
-  English constant, green for the wrong reason on a Chinese-only repository;
+- search works for representative Chinese and English queries. `tests/search.test.ts` segments
+  a query from the corpus under test and requires it in both inflated Pagefind text and the
+  rendered note before querying; its CJK control rejects an unsplit whole-title token;
 - accessibility tests meet WCAG 2.2 AA gates;
 - performance budgets are measured on a named corpus;
 - CSP is strict and the browser console is clean;
@@ -1358,7 +1358,7 @@ it reaches a CDN and a search index.
 | Withheld and unresolved links are distinct outcomes, both reported | shipped |
 | The report cannot be committed and cannot reach the output | shipped, gated |
 | The build's log carries counts and never names | shipped, gated |
-| Removing a note removes its page, feed entry, sitemap entry, and search record | **not gated.** It follows from the build writing into an empty directory, and no test performs the round trip |
+| Removing a note removes its page, feed entry, sitemap entry, and search record | shipped, gated by `tests/deletion-roundtrip.test.ts` with retained-route and retained-search controls; browser search derives its positive query from the corpus under test |
 | An asset reaches the output only from a published note | vacuously true — no asset ships |
 | **The publish set is reviewed as a diff before it publishes** | **not built.** `published.txt` was designed and killed; nothing replaced it. This is the open half of the trade |
 

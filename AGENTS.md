@@ -166,6 +166,8 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 ### Properties the gates assert
 
 - Generated routes and `content-index.json` are readable.
+- Removing a note and rebuilding removes its route, content-index entry, feed and sitemap entry,
+  and Pagefind record while a retained note remains on all five surfaces.
 - No horizontal overflow, browser console error, or broken internal link.
 - Search opens and indexes published pages.
 - Backlinks carry only the linked note's title and route, checked against an allowlist of both

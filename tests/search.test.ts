@@ -16,6 +16,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 import { extname, join, normalize, relative, sep } from 'node:path';
 import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test, type TestContext } from 'vitest';
@@ -32,16 +33,72 @@ const DIST = fileURLToPath(new URL('dist/', ROOT));
 /** Where the search bundle is served from, matching `src/scripts/search-dialog.ts`. */
 const BUNDLE_PATH_SEGMENT = '/pagefind/';
 
+function indexedFragmentText(): string {
+  const pending = [join(DIST, 'pagefind')];
+  const fragments: string[] = [];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    for (const name of readdirSync(directory)) {
+      const path = join(directory, name);
+      if (statSync(path).isDirectory()) pending.push(path);
+      else if (path.endsWith('.pf_fragment')) fragments.push(path);
+    }
+  }
+  assert.ok(fragments.length > 0, 'Pagefind wrote no fragment from which to derive a search query');
+  return fragments.map((path) => gunzipSync(readFileSync(path)).toString('utf8')).join('\n');
+}
+
+const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' });
+
+function searchableTerms(text: string): string[] {
+  return [...WORD_SEGMENTER.segment(text)]
+    .filter((part) => part.isWordLike)
+    .map((part) => part.segment)
+    .filter((term) => [...term].length <= 32)
+    .sort((a, b) => [...b].length - [...a].length);
+}
+
 /**
- * A word every corpus contains, so a query for it must return results.
+ * A query segmented from whichever built corpus this run is measuring.
  *
- * Used where the question is "does search still work", not "does this term
- * match" — a gate that measured a term the corpus lacks would be green for the
- * wrong reason.
+ * A fixed English word made the gate vacuous for a Chinese-only repository.
+ * Intl.Segmenter avoids turning an entire CJK title into one synthetic "word";
+ * the content index, rendered note, and inflated Pagefind text independently
+ * prove the term exists before the browser asks Pagefind to find it.
  */
-const PRIMARY_QUERY = 'the';
+const SEARCH_PROJECTION = JSON.parse(readFileSync(join(DIST, 'content-index.json'), 'utf8')) as {
+  entries: { slug: string; title: string; excerpt: string }[];
+};
+const INDEXED_FRAGMENT_TEXT = indexedFragmentText();
+
+function queryForLanguage(language?: string): string {
+  assert.ok(SEARCH_PROJECTION.entries.length > 0, 'the built corpus has no entry from which to derive a search query');
+  for (const entry of SEARCH_PROJECTION.entries) {
+    const page = readFileSync(join(DIST, 'notes', entry.slug, 'index.html'), 'utf8');
+    const pageLanguage = /<html lang="([^"]+)"/.exec(page)?.[1]?.toLowerCase();
+    if (language !== undefined && pageLanguage !== language.toLowerCase()) continue;
+    const query = searchableTerms(entry.title + ' ' + entry.excerpt)
+      .find((term) => INDEXED_FRAGMENT_TEXT.includes(term));
+    if (query === undefined) continue;
+    assert.ok(page.includes(query), `derived query ${JSON.stringify(query)} is absent from its built note`);
+    return query;
+  }
+  throw new Error(
+    language === undefined
+      ? 'no indexed title or excerpt contains a corpus-derived search term'
+      : `no indexed ${JSON.stringify(language)} note contains a corpus-derived search term`,
+  );
+}
+
+const PRIMARY_QUERY = queryForLanguage();
 
 /* ------------------------------------------------------------------ pure -- */
+
+test('corpus query segmentation does not collapse a CJK title into one synthetic word', () => {
+  const terms = searchableTerms('星图与笔记');
+  assert.ok(terms.length > 1, 'the CJK title was not segmented into searchable terms');
+  assert.ok(!terms.includes('星图与笔记'), 'the complete CJK title became one synthetic query term');
+});
 
 /**
  * Which language partitions a page must merge to search the whole corpus.
@@ -739,6 +796,9 @@ test('a lost merged language leaves the rest of the search working', async (cont
         'run `pnpm run build:fixture` for the bilingual gate',
     );
   }
+  const primaryLanguage = Object.keys(entry.languages ?? {}).find((language) => !merged.includes(language));
+  assert.ok(primaryLanguage !== undefined, `no index partition serves a ${JSON.stringify(homeLanguage)} page`);
+  const homeQuery = queryForLanguage(primaryLanguage);
 
   try {
     for (const language of merged) {
@@ -768,12 +828,12 @@ test('a lost merged language leaves the rest of the search working', async (cont
             `"${homeLanguage}" index for the page they are on, and partial results beat none`,
         );
 
-        await page.fill('#search-input', PRIMARY_QUERY);
+        await page.fill('#search-input', homeQuery);
         await page.waitForTimeout(1_500);
         const rows = await page.$$eval('#search-results a', (links) => links.length);
         assert.ok(
           rows > 0,
-          `losing the merged "${language}" index left a query for ${JSON.stringify(PRIMARY_QUERY)} with no ` +
+          `losing the merged "${language}" index left a query for ${JSON.stringify(homeQuery)} with no ` +
             `results, so a broken secondary partition has poisoned the working "${homeLanguage}" one`,
         );
       } finally {
@@ -1164,9 +1224,9 @@ test('a result excerpt carries public body text and links to a real route', asyn
   try {
     const route = anyNoteRoute();
     await page.goto(`${origin}${route}`);
-    // A word certain to be in an article body on both corpora.
+    // Use the corpus-derived term so a Chinese-only artifact exercises this path.
     await openSearch(page);
-    await page.fill('#search-input', 'the');
+    await page.fill('#search-input', PRIMARY_QUERY);
     await page.waitForSelector('#search-results a', { timeout: 20_000 });
 
     const excerpts = await page.$$eval('.pagefind-modular-list-excerpt', (nodes) =>
