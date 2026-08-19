@@ -1489,3 +1489,110 @@ test('the walk itself loads without a parser, which the cross-platform gate need
     'the traversal is no longer loaded dynamically, so this gate measures nothing',
   );
 });
+
+test('the title and the excerpt carry no TeX, on every surface that serves them', async () => {
+  // **Three surfaces, and a gate on one of them would have passed.** An excerpt
+  // is plain text in `content-index.json`, in `rss.xml`, and in every page's
+  // `<meta name="description">`; a title reaches `<title>` and `og:title`.
+  // Measured on `cabcc6a`, one note containing `$$\frac{a}{b} = \sqrt{c}$$`:
+  // all three carried the TeX verbatim, and the heading form put it in the
+  // browser tab.
+  //
+  // Same defect class as `aab694b` (backticks) and `4cae152` (link syntax) —
+  // `excerptFor` strips what it has been taught to strip and nothing else, and
+  // this is the third time. `titleFor` shared it, as it shared the link one.
+  //
+  // Every fixture below is a `String.raw` literal. That is not style: a shell
+  // heredoc ate one backslash from each of three CSP fixtures in the previous
+  // ticket and the gate passed anyway, measuring Temml's error markup instead of
+  // the matrices it named. TeX is nothing but backslashes.
+  await scratch('tex-excerpt-', async (root) => {
+    put(root, 'inline.md', ['# The identity', '', String.raw`The identity $$\frac{a}{b} = \sqrt{c}$$ holds for all cases.`, ''].join('\n'));
+    // **Two spans in one sentence, which is the ordinary shape of a maths note
+    // and the shape a one-span corpus cannot measure.** A version of the seam
+    // repair that looked for the expression and its trailing punctuation in one
+    // match backtracked past the first closing `$$` to find one, and ate
+    // everything between: measured, this line produced `The bound is.` — eight
+    // words of the author's prose gone. Every fixture here carried one span, so
+    // the gate was byte-identical with the offending rule deleted.
+    put(root, 'two-spans.md', ['# Two', '', String.raw`The bound is $$\alpha$$ and the limit is $$\beta$$.`, ''].join('\n'));
+    // No math at all, and brackets the author wrote. The same repair deleted
+    // `()` and `[]` across the whole string, so a shell-recipes note lost the
+    // parens from every function name in its description — a regression for
+    // users with no maths in their corpus at all.
+    put(root, 'brackets.md', ['# Brackets', '', 'The function main() returns zero, and the [] literal is empty.', ''].join('\n'));
+    // A backticked example in a heading. The renderer reads it as code, not
+    // math; `titleFor` had no code-span strip, so it ate the example and shipped
+    // stray backticks into `<title>`.
+    put(root, 'code-heading.md', ['# Writing `$$x$$` in a note', '', 'Prose.', ''].join('\n'));
+    put(root, 'block.md', ['# Block', '', 'Prose before.', '', '$$', String.raw`\frac{\partial \mathcal{L}}{\partial \theta} = 0`, '$$', '', 'Prose after.', ''].join('\n'));
+    put(root, 'fenced.md', ['# Fenced', '', 'Prose before.', '', '```math', String.raw`f:\mathbb{R} \to \mathbb{C}`, '```', '', 'Prose after.', ''].join('\n'));
+    put(root, 'heading.md', [String.raw`# The $$\alpha$$ theorem`, '', 'Ordinary prose here.', ''].join('\n'));
+    put(root, 'prices.md', ['# Prices', '', 'It costs $5 and then $10 later.', ''].join('\n'));
+    // An odd number of `$$`. The renderer pairs left to right and leaves the
+    // leftover as literal text, so the page itself shows a `$$` — that is a
+    // separate defect and not a licence to ship the same byte into a
+    // description. Without the unpaired-delimiter removal this excerpt reads
+    // `A b y$$ done.`
+    put(root, 'unpaired.md', ['# Unpaired', '', String.raw`A $$x$$ b $$ c, and $$y$$ done.`, ''].join('\n'));
+
+    const discovery = await discover(root);
+    await resolveCorpusLinks(discovery);
+    const bySlug = new Map(discovery.entries.map((entry) => [entry.slug, entry]));
+
+    // The fixtures reached the producer intact. Without this, a mangled fixture
+    // carrying no backslash at all satisfies every assertion below by having no
+    // TeX to strip — which is exactly how the previous ticket's corpus passed.
+    assert.match(
+      bySlug.get('inline')!.markdown,
+      /\\frac\{a\}\{b\}/,
+      'the fixture lost its backslashes before the producer saw them, so this gate strips nothing',
+    );
+
+    // Exact strings rather than `includes` checks: a substring test cannot see a
+    // construct that was half-removed, and cannot see a seam left broken.
+    assert.equal(bySlug.get('inline')!.excerpt, 'The identity holds for all cases.');
+    assert.equal(bySlug.get('block')!.excerpt, 'Prose before. Prose after.');
+    // The fenced form was already clean — fenced code is stripped a line above —
+    // so this row is what makes the two delimiter forms agree rather than a
+    // second copy of the same assertion.
+    assert.equal(bySlug.get('fenced')!.excerpt, 'Prose before. Prose after.');
+    assert.equal(bySlug.get('heading')!.title, 'The theorem');
+
+    // **`singleDollarTextMath: false`, verified rather than trusted.** A single
+    // `$` is not a delimiter, so ordinary prices must survive untouched — a
+    // stripper wider than the renderer eats an author's prose.
+    assert.equal(bySlug.get('prices')!.excerpt, 'It costs $5 and then $10 later.');
+
+    // **The prose between two spans survives**, which is what the one-span
+    // corpus above cannot state. Compare against what the page shows: the
+    // renderer keeps `and the limit is`, so an excerpt that dropped it would
+    // disagree with the note it summarises.
+    assert.equal(bySlug.get('two-spans')!.excerpt, 'The bound is and the limit is.');
+
+    // **A note with no math keeps its brackets.** The repair may only reach text
+    // it just changed; a rule ranging over the whole string cannot tell an empty
+    // pair it created from one the author typed.
+    assert.equal(
+      bySlug.get('brackets')!.excerpt,
+      'The function main() returns zero, and the [] literal is empty.',
+    );
+
+    // **A backticked `$$` in a heading is code, not math** — the renderer says
+    // so, and the title must agree. Both halves matter: the example survives and
+    // no backtick reaches `<title>`.
+    assert.equal(bySlug.get('code-heading')!.title, 'Writing in a note');
+
+    // **No `$$` survives, even when the delimiters do not pair.** The `TeX`
+    // sweep below would catch this too, but stating the expected string is what
+    // distinguishes "the delimiter was removed" from "the whole sentence was".
+    assert.equal(bySlug.get('unpaired')!.excerpt, 'A b y done.');
+
+    // And no TeX command reaches any of the four, whatever shape it took.
+    for (const [slug, entry] of bySlug) {
+      for (const field of ['title', 'excerpt'] as const) {
+        assert.doesNotMatch(entry[field], /\$\$|\\frac|\\sqrt|\\mathbb|\\alpha|\\partial/, `${slug}.${field}`);
+      }
+    }
+  });
+});

@@ -320,6 +320,135 @@ function withoutLinkSyntax(markdown: string): string {
 }
 
 /**
+ * Every math expression removed, and the punctuation it stranded repaired.
+ *
+ * ## Why an excerpt carries nothing for an expression
+ *
+ * This is a judgement and the alternatives were read as a reader gets them,
+ * because the sentence on the page is the whole of the evidence:
+ *
+ * | | `The identity $$\frac{a}{b}$$ holds.` | `Consider $$…$$. It follows.` |
+ * | --- | --- | --- |
+ * | keep the TeX (today) | `The identity $$\frac{a}{b} = \sqrt{c}$$ holds.` | `Consider $$\frac{\partial \mathcal{L}}{\partial \theta} = 0$$. It follows.` |
+ * | drop it, no repair | `The identity holds.` | `Consider . It follows.` |
+ * | a `[math]` placeholder | `The identity [math] holds.` | `Consider [math]. It follows.` |
+ * | **drop and repair** | `The identity holds.` | `Consider. It follows.` |
+ *
+ * **Keeping the TeX is what ships today and it is the worst of the four.** An
+ * excerpt is plain text on a card, in `rss.xml`, and in every page's
+ * `<meta name="description">` — `\frac{\partial \mathcal{L}}{\partial \theta}`
+ * is noise in all three, and it crowds out the prose that would have told a
+ * reader what the note is about.
+ *
+ * **A placeholder was rejected**, though it reads well. `[math]` is a chrome
+ * string minted in the producer, which is outside the components TK-16's
+ * bilingual sweep covers — so a zh-CN note would carry an English marker in its
+ * own description. Translating it would put a locale lookup in a module that has
+ * no document language to look up. And it is not free of judgement either: it
+ * asserts to a reader that something was removed, which is a claim about the
+ * note the excerpt is not otherwise in the business of making.
+ *
+ * **What is dropped is a real loss, stated plainly**: a note whose sentence is
+ * mostly one expression yields a thinner excerpt than it deserves, and
+ * `$$E = mc^2$$ is the relation everyone knows.` becomes
+ * `is the relation everyone knows.` — a sentence starting mid-clause. There is
+ * no rendered form available at this stage to substitute, because the excerpt is
+ * derived from Markdown before any renderer runs. Given that, the honest options
+ * were the four above and this is the least bad.
+ *
+ * It also makes the two delimiter forms agree. A ```` ```math ```` fence already
+ * produces exactly this today — fenced code is stripped a line above — so the
+ * change is that `$$…$$` stops being the exception rather than that anything new
+ * starts happening.
+ *
+ * ## What counts as math, taken from the renderer rather than guessed
+ *
+ * `renderMarkdown` sets `singleDollarTextMath: false`, so a single `$` is not a
+ * delimiter and ordinary prices are left alone. Verified rather than trusted —
+ * measured through the real renderer: `It costs $5 and then $10 later.` sets
+ * `hasMath: false`, and `The price is $$ and rising.` does too, because an
+ * unpaired `$$` is not a span. Both survive this function unchanged.
+ *
+ * `From $$5 to $$10 in a year.` *does* parse as math — the two `$$` pair up
+ * across the prose between them — and is stripped here in consequence. That is
+ * the renderer's reading and this follows it: an excerpt disagreeing with the
+ * page about what is math would be a second, quieter defect.
+ *
+ * ## The seam
+ *
+ * Removing a span strands whatever punctuation surrounded it. A space before a
+ * comma or a stop is an artefact of the removal rather than anything the author
+ * wrote, so it is closed up; a bracket left holding nothing — `($$\alpha$$)`
+ * becoming `()` — is the same artefact in a worse form, and goes entirely.
+ *
+ * **The span is found once, and the seam is decided from its own boundaries.**
+ * That shape is forced by two defects a chained-regex version had, both found by
+ * review and both measured through the producer:
+ *
+ * - A rule that looked for the span *and* its trailing punctuation in one match
+ *   backtracked past the closing `$$` to find one. Measured:
+ *   `The bound is $$\alpha$$ and the limit is $$\beta$$.` came out as
+ *   `The bound is.` — eight words of the author's prose eaten, on what is the
+ *   ordinary shape of a sentence in a maths note. The docstring claimed the
+ *   repair was "structurally unable to reach prose it did not just alter", and
+ *   a lazy quantifier with a forced trailing anchor is not bounded at all.
+ * - A rule deleting `()` and `[]` across the whole string fired on notes with no
+ *   math in them: `The function main() returns zero, and init() does not.`
+ *   became `The function main returns zero, and init does not.`, and a GFM
+ *   `- [ ]` task marker vanished. Deciding it at the removal site makes it
+ *   reachable only by text this function just changed.
+ *
+ * A `while` loop with `lastIndex` rather than `replace`, because the decision
+ * needs the characters on both sides of the match and a replacer callback does
+ * not get them.
+ */
+function withoutMath(markdown: string): string {
+  const span = /\$\$[\s\S]*?\$\$/g;
+  let result = '';
+  let read = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = span.exec(markdown)) !== null) {
+    const before = markdown.slice(read, match.index);
+    const after = markdown.slice(span.lastIndex);
+
+    // Whitespace either side of the span belongs to the seam rather than to the
+    // prose, and is taken with it. What replaces the whole seam is decided by
+    // what sits immediately outside: a space, unless the removal would leave a
+    // gap before punctuation or inside a bracket, where it would be visible.
+    const leading = /\s*$/.exec(before)?.[0].length ?? 0;
+    const trailing = /^\s*/.exec(after)?.[0].length ?? 0;
+    const prose = before.slice(0, before.length - leading);
+    const next = after[trailing];
+
+    // A bracket pair whose entire content was the expression is an artefact of
+    // the removal, not the author's — but only when *this* removal emptied it.
+    const opensHere = /[([]$/.test(prose);
+    const closesNext = next !== undefined && /[)\]]/.test(next);
+    if (opensHere && closesNext) {
+      result += prose.slice(0, -1);
+      read = span.lastIndex + trailing + 1;
+      continue;
+    }
+
+    const joinTight = next !== undefined && /[.,;:!?)\]]/.test(next);
+    result += prose + (prose === '' || joinTight ? '' : ' ');
+    read = span.lastIndex + trailing;
+  }
+
+  const stripped = result + markdown.slice(read);
+  // **An unpaired `$$` still ships, so it is removed too.** The renderer pairs
+  // delimiters left to right and leaves a leftover one as literal text — so
+  // `A $$x$$ b $$ c, and $$y$$ done.` renders with a visible `$$`, and the loop
+  // above, which pairs the same way, leaves the same one behind. It is exactly
+  // the byte this whole function exists to keep out of a description, and the
+  // page carrying it too is a separate defect rather than a licence to ship it
+  // here. What is left is the delimiter alone; the author's surrounding words
+  // are untouched.
+  return stripped.replace(/\$\$/g, '');
+}
+
+/**
  * The first heading's text, or the filename.
  *
  * A title is required and must be non-empty, and the renderer removes a leading
@@ -329,10 +458,36 @@ function withoutLinkSyntax(markdown: string): string {
  * Link syntax is stripped for the reason {@link withoutLinkSyntax} gives: this
  * value reaches `<title>` and `og:title` as plain text, and a heading may carry
  * a link like any other line.
+ *
+ * **Math goes the same way, and the title path had the defect too** — checked
+ * rather than assumed, because `4cae152` found `titleFor` shared the link-syntax
+ * defect and this is the third repair of the same shape. Measured before the
+ * fix: `# The $$\alpha$$ theorem` produced the title `The $$\alpha$$ theorem`,
+ * which reaches `<title>`, `og:title`, and the browser tab.
+ *
+ * The whitespace collapse is this path's own. `excerptFor` collapses as its last
+ * step and a title never went through one, because nothing it stripped used to
+ * leave a gap mid-line — a removed expression does. Measured without it:
+ * `The   theorem`, three spaces, in the browser tab.
+ *
+ * **Code spans are removed first, exactly as `excerptFor` does**, and a first
+ * version of this omitted them while its own comment defended the ordering that
+ * only the other function had. Measured: `` # Writing `$$x$$` in a note ``
+ * rendered as `Writing $$x$$ in a note` on the page — the renderer treats a
+ * backticked `$$` as code, not math — while the title came back
+ * ``Writing ` ` in a note``: the author's example eaten *and* stray backticks
+ * shipped into `<title>` and `og:title`, which is the defect `aab694b` fixed for
+ * excerpts arriving on the other surface.
  */
 function titleFor(markdown: string, fallback: string): string {
   const heading = /^#\s+(.+)$/m.exec(markdown)?.[1]?.trim();
-  return (heading === undefined ? '' : withoutLinkSyntax(heading).trim()) || fallback;
+  const stripped =
+    heading === undefined
+      ? ''
+      : withoutMath(withoutLinkSyntax(heading.replace(/`[^`\n]*`/g, '')))
+          .replace(/\s+/g, ' ')
+          .trim();
+  return stripped || fallback;
 }
 
 /**
@@ -363,13 +518,28 @@ function titleFor(markdown: string, fallback: string): string {
  * description. See {@link withoutLinkSyntax}. Code spans are removed *before*
  * links, so a note documenting `` `[label](/route/)` `` loses the span whole
  * rather than having its example rewritten into prose.
+ *
+ * **And math, one ticket later again, found by measuring the three surfaces
+ * rather than by a build break.** `The identity $$\frac{a}{b} = \sqrt{c}$$
+ * holds.` shipped verbatim into `content-index.json`, `rss.xml`, and every meta
+ * description. See {@link withoutMath} for what an excerpt carries instead and
+ * what that costs.
+ *
+ * **Ordered last, after the code strips.** A note documenting math syntax writes
+ * `` `$$x^2$$` `` or a fenced block, and the renderer treats neither as math —
+ * measured, `hasMath` is `false` for both. Stripping code first means this
+ * function never sees them, so the excerpt agrees with the page about which
+ * dollar signs were delimiters. Reversing the order would eat an author's
+ * example out of a note about writing math.
  */
 function excerptFor(markdown: string): string {
-  const prose = withoutLinkSyntax(
-    markdown
-      .replace(/^#.*$/gm, '')
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/`[^`\n]*`/g, ''),
+  const prose = withoutMath(
+    withoutLinkSyntax(
+      markdown
+        .replace(/^#.*$/gm, '')
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/`[^`\n]*`/g, ''),
+    ),
   )
     .replace(/\s+/g, ' ')
     .trim();

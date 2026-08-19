@@ -15,7 +15,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
-import { test } from 'vitest';
+import { test, type TestContext } from 'vitest';
 
 import { rawStartTags, startTags } from './support/css-cascade.ts';
 import { DIAGRAM_MODE, REQUIRED_STYLE_SRC, STYLE_SRC_BY_MODE } from '../src/lib/diagram-mode.ts';
@@ -419,3 +419,84 @@ test('no page requests a search asset before the reader opens search', () => {
  * by a reimplementation of it. Both directions are checked there: hidden
  * without scripting, offered with it. Owner decision D3.
  */
+
+test('no surface that serves an excerpt or a title carries TeX', (context: TestContext) => {
+  // **Three surfaces, and a gate on one of them would have passed.** An excerpt
+  // is plain text in `content-index.json`, in `rss.xml`, and in every page's
+  // `<meta name="description">`; a title reaches `<title>` and `og:title`. The
+  // three are written by different code — the feed is built from the artifact
+  // separately from the page's head — so a defect can live in one and not the
+  // others, and this asserts over the shipped bytes rather than over the
+  // producer that `tests/link-traversal.test.ts` already covers.
+  //
+  // Measured on `cabcc6a`, one note containing `$$\frac{a}{b} = \sqrt{c}$$`: all
+  // three carried the TeX verbatim.
+  // **The rule, not a list of commands.** A first version enumerated `\frac`,
+  // `\sqrt`, `\partial`, `\theta`, `\mathbb{`, `\sum_`, `\prod_` — true the day
+  // it was written and blind to `\int`, `\lim`, `\begin{`, `\left`, `\cdot`,
+  // `\alpha`, `\nabla`, `\infty`, `\pi`. An excerpt reading `Let \alpha be the
+  // learning rate` passed it clean. `docs/gate-reading.md`'s enumeration
+  // corollary: a hand-listed member set measures the list.
+  //
+  // What TeX actually looks like on these surfaces is a backslash followed by a
+  // command name, or a surviving `$$` delimiter. Prose does not contain either —
+  // a Windows path is caught by the residue scan on its own rule, and a literal
+  // backslash in prose is not followed by two letters.
+  const TEX = /\$\$|\\[a-zA-Z]{2,}/;
+
+  const index = JSON.parse(readFileSync(new URL('content-index.json', DIST), 'utf8')) as {
+    entries: { slug: string; title: string; excerpt: string }[];
+  };
+  assert.ok(index.entries.length > 0, 'the index is empty, so this gate inspected nothing');
+  for (const entry of index.entries) {
+    assert.doesNotMatch(entry.excerpt, TEX, `content-index.json: ${entry.slug}'s excerpt carries TeX`);
+    assert.doesNotMatch(entry.title, TEX, `content-index.json: ${entry.slug}'s title carries TeX`);
+  }
+
+  // The feed's per-entry `<summary>` is the same excerpt through a different
+  // writer, and its `<title>` the same title. **Atom, not RSS**, despite the
+  // filename: measured, `dist/rss.xml` is `<feed xmlns=".../2005/Atom">` with
+  // `<summary type="text">` elements. A first version of this gate matched
+  // `<description>`, found none, and failed on its own non-vacuity check rather
+  // than passing on a regex that matched nothing — which is the direction that
+  // check exists for.
+  const feed = readFileSync(new URL('rss.xml', DIST), 'utf8');
+  let summaries = 0;
+  for (const [, text] of feed.matchAll(/<summary[^>]*>([\s\S]*?)<\/summary>/g)) {
+    assert.doesNotMatch(text!, TEX, 'rss.xml: a feed summary carries TeX');
+    summaries += 1;
+  }
+  for (const [, text] of feed.matchAll(/<entry>[\s\S]*?<title>([\s\S]*?)<\/title>/g)) {
+    assert.doesNotMatch(text!, TEX, 'rss.xml: a feed entry title carries TeX');
+  }
+  assert.ok(summaries > 0, 'the feed carried no entry summary, so its surface was not measured');
+
+  // And the head of every built page: the meta description and the title.
+  let heads = 0;
+  for (const file of builtFiles('.html').filter(OURS)) {
+    const html = readFileSync(file, 'utf8');
+    for (const [, content] of html.matchAll(/<meta name="description" content="([^"]*)"/g)) {
+      assert.doesNotMatch(content!, TEX, `${file}: the meta description carries TeX`);
+      heads += 1;
+    }
+    const title = /<title>([\s\S]*?)<\/title>/.exec(html)?.[1];
+    if (title !== undefined) assert.doesNotMatch(title, TEX, `${file}: the document title carries TeX`);
+  }
+  assert.ok(heads > 0, 'no meta description was read, so the third surface was not measured');
+
+  // **Non-vacuity, and it is the one that matters here.** The published corpus
+  // has one note and may carry no math at all, in which case every assertion
+  // above is satisfied by a corpus with nothing to strip — which is the same
+  // green as a pipeline that strips correctly. Reported as a skip rather than as
+  // a pass, so the difference is visible: `pnpm run build:fixture` is what puts
+  // math in `dist/`.
+  const withMath = builtFiles('.html')
+    .filter(OURS)
+    .filter((file) => /class="math-(?:inline|display)"/.test(readFileSync(file, 'utf8')));
+  if (withMath.length === 0) {
+    return context.skip(
+      'no built page carries math, so the surfaces above were clean with nothing to be clean of — ' +
+        'run `pnpm run build:fixture` to exercise them',
+    );
+  }
+});

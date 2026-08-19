@@ -215,7 +215,7 @@
     {
       "slug": "math-and-diagrams",
       "title": "Notation That Has Not Landed Yet",
-      "excerpt": "Math and diagrams currently render as their own source, which is the honest downgrade: readable, inert, and obviously unfinished rather than subtly broken.",
+      "excerpt": "Both of these render as plain source today. That is a downgrade, recorded as one. A diagram renderer that needs to evaluate strings at runtime buys a picture at the cost of the entire script policy. S…",
       "markdown": "# Notation That Has Not Landed Yet\n\nBoth of these render as plain source today. That is a downgrade, recorded as one.\n\n## Why the downgrade is the right default\n\nA diagram renderer that needs to evaluate strings at runtime buys a picture at the\ncost of the entire script policy. Source is worse than a picture and much better\nthan a relaxed policy.\n\n## Display math\n\n$$\n\\sum_{i=1}^{n} w_i x_i \\geq \\theta\n$$\n\nAnd a second one, because one is never representative:\n\n$$\nP(\\text{leak}) = 1 - \\prod_{g \\in G} (1 - p_g)\n$$\n\n## A diagram\n\n```mermaid\ngraph TD\n  A[Private vault] -->|allowlist| B[Exporter]\n  B --> C[Artifact]\n  C -->|validate| D{Valid?}\n  D -->|no| E[Build fails]\n  D -->|yes| F[Static site]\n```\n\n## A second diagram\n\n```mermaid\nsequenceDiagram\n  Reader->>Site: request a note\n  Site-->>Reader: static HTML\n  Reader->>Site: open search\n  Site-->>Reader: index chunk\n```\n\nBack to [the pipeline](/markdown-pipeline/), or\n[the no-JavaScript baseline](/no-javascript/).\n",
       "outgoing": [
         "markdown-pipeline",
