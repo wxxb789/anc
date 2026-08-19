@@ -2,9 +2,9 @@
  * Hover and focus link previews.
  *
  * A preview is a **projection lookup, not a page fetch**. The slug in the link's
- * path is looked up in `/content-index.json`, which the exporter authored as an
- * exact `{slug, title, excerpt}` projection of the published artifact and which
- * `scripts/validate-content.ts` compares against that artifact byte for byte. A
+ * path is looked up in `/content-index.json`, which the producer authored as an
+ * exact `{slug, title, excerpt, aliases?}` projection of the published artifact.
+ * `scripts/validate-content.ts` compares it against that artifact byte for byte. A
  * link whose target is not in the projection previews nothing, and there is no
  * code path that could read anything else: no page is fetched, no markup is
  * parsed, and no field outside the projection exists to show. That is the
@@ -12,8 +12,8 @@
  * anchor happens to point at, which on a privacy projection is a hole rather
  * than an inconsistency.
  *
- * Everything the panel shows is already on the page it links to and on that
- * note's card, so a preview adds speed and never information (requirements
+ * Everything the panel shows is already on the page it links to and in the
+ * public preview projection, so a preview adds speed and never information (requirements
  * section 14: it never replaces the underlying link). A reader with no pointer,
  * no scripting, or no interest loses nothing.
  *
@@ -30,6 +30,7 @@ import { noteSlugFromPath } from '../lib/route-path.ts';
 import {
   placePreview,
   previewFragment,
+  previewTitle,
   readPreviewIndex,
   type PreviewIndex,
 } from '../lib/preview-model.ts';
@@ -214,7 +215,7 @@ function install(panel: HTMLElement): void {
     // Text nodes throughout — `textContent`, never `innerHTML` — so every string
     // from the index stays data and is never parsed as markup.
     const title = document.createElement('strong');
-    title.textContent = entry.title;
+    title.textContent = previewTitle(entry);
     const excerpt = document.createElement('p');
     excerpt.textContent = entry.excerpt;
     const fragment = previewFragment(link.hash);

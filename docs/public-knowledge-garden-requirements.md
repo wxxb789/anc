@@ -325,9 +325,9 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | 404 and redirects | Static 404 plus versioned redirect map | 404 yes. `REDIRECT_RULES` is `[]` and cannot grow from a corpus |
 | Responsive layout | Mobile-first, no horizontal overflow | Static CSS, gated at 320 px |
 
-**The remaining producer-specific field gap is `aliases`.** Slug, language, description, tags,
-first-folder collections, and git dates flow through the shipped producer. The delivery column
-separately
+**Every version-1 producer field now has an owning source.** Slug, language, description, tags,
+aliases, first-folder collections, and git dates flow through the shipped producer. Aliases are
+display/search/preview metadata, deliberately not link targets. The delivery column separately
 marks every other partial capability, including redirects, graph storage, active-section TOC,
 and code-copy affordances.
 
@@ -1241,7 +1241,7 @@ Not in the original plan, and it displaced Phase 2 entirely:
 - packaging as an installable command, and local preview.
 
 The GitHub Action, `init`, and reviewed release boundary are delivered; this repository has no
-remote, so the workflow has not run. The remaining producer field gap is aliases.
+remote, so the workflow has not run. No version-1 producer field remains underived.
 
 ### Phase 2 — interactive graph via SQLite WASM — **not started**
 

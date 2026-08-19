@@ -907,8 +907,9 @@ main:focus:not(:focus-visible) {
   margin: 0;
 }
 
-/* A tag list inside a metadata row: links, wrapping, comma-free. */
-.note-tags {
+/* Public label lists inside metadata rows: semantic lists, wrapping, comma-free. */
+.note-tags,
+.note-aliases {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);

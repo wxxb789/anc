@@ -40,11 +40,16 @@ function readJson(url: URL): unknown {
   return JSON.parse(readFileSync(url, 'utf8'));
 }
 
-/** The public index carries `{slug, title, excerpt}` and nothing else. */
+/** The public preview index carries summary fields plus optional aliases. */
 export function projectIndex(artifact: ContentArtifact) {
   return {
     version: artifact.version,
-    entries: artifact.entries.map(({ slug, title, excerpt }) => ({ slug, title, excerpt })),
+    entries: artifact.entries.map(({ slug, title, excerpt, aliases }) => ({
+      slug,
+      title,
+      excerpt,
+      ...(aliases === undefined ? {} : { aliases }),
+    })),
   };
 }
 
@@ -57,7 +62,7 @@ export function projectIndex(artifact: ContentArtifact) {
 export function checkIndexProjection(index: unknown, artifact: ContentArtifact): string[] {
   return JSON.stringify(index) === JSON.stringify(projectIndex(artifact))
     ? []
-    : ['public/content-index.json: is not an exact {slug, title, excerpt} projection of src/data/content.json'];
+    : ['public/content-index.json: is not the exact public preview projection of src/data/content.json'];
 }
 
 /**

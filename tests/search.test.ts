@@ -33,7 +33,12 @@ const DIST = fileURLToPath(new URL('dist/', ROOT));
 /** Where the search bundle is served from, matching `src/scripts/search-dialog.ts`. */
 const BUNDLE_PATH_SEGMENT = '/pagefind/';
 
-function indexedFragmentText(): string {
+interface IndexedFragment {
+  content: string;
+  meta?: Record<string, unknown>;
+}
+
+function indexedFragments(): IndexedFragment[] {
   const pending = [join(DIST, 'pagefind')];
   const fragments: string[] = [];
   while (pending.length > 0) {
@@ -45,7 +50,12 @@ function indexedFragmentText(): string {
     }
   }
   assert.ok(fragments.length > 0, 'Pagefind wrote no fragment from which to derive a search query');
-  return fragments.map((path) => gunzipSync(readFileSync(path)).toString('utf8')).join('\n');
+  return fragments.map((path) => {
+    const decoded = gunzipSync(readFileSync(path)).toString('utf8');
+    const objectStart = decoded.indexOf('{');
+    assert.ok(objectStart >= 0, `${path}: Pagefind fragment contains no JSON object`);
+    return JSON.parse(decoded.slice(objectStart)) as IndexedFragment;
+  });
 }
 
 const WORD_SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' });
@@ -67,9 +77,10 @@ function searchableTerms(text: string): string[] {
  * prove the term exists before the browser asks Pagefind to find it.
  */
 const SEARCH_PROJECTION = JSON.parse(readFileSync(join(DIST, 'content-index.json'), 'utf8')) as {
-  entries: { slug: string; title: string; excerpt: string }[];
+  entries: { slug: string; title: string; excerpt: string; aliases?: string[] }[];
 };
-const INDEXED_FRAGMENT_TEXT = indexedFragmentText();
+const INDEXED_FRAGMENTS = indexedFragments();
+const INDEXED_FRAGMENT_TEXT = INDEXED_FRAGMENTS.map((fragment) => fragment.content).join('\n');
 
 function queryForLanguage(language?: string): string {
   assert.ok(SEARCH_PROJECTION.entries.length > 0, 'the built corpus has no entry from which to derive a search query');
@@ -562,6 +573,41 @@ test('a query returns a result under the shipped CSP, with a clean console', asy
     await page.close();
   }
 }, 120_000);
+
+test.runIf(SEARCH_PROJECTION.entries.length > 1)(
+  'an alias that appears nowhere else finds its note',
+  async (context) => {
+    const alias = '别名笔记';
+    const expected = SEARCH_PROJECTION.entries.find((entry) => entry.aliases?.includes(alias));
+    assert.equal(expected?.slug, 'alias-heavy', 'the fixture no longer carries the alias this gate measures');
+    assert.ok(
+      INDEXED_FRAGMENTS.some((fragment) => {
+        const metadata = fragment.meta?.['aliases'];
+        return (
+          (typeof metadata === 'string' && metadata.includes(alias)) ||
+          (Array.isArray(metadata) && metadata.includes(alias))
+        );
+      }),
+      'Pagefind did not store the alias as searchable metadata',
+    );
+
+    const browser = requireBrowser(context);
+    const page = await browser.newPage();
+    try {
+      await page.goto(`${origin}/`);
+      await openSearch(page);
+      await page.fill('#search-input', alias);
+      await page.waitForSelector('#search-results a', { timeout: 20_000 });
+      const hrefs = await page.$$eval('#search-results a', (links) =>
+        links.map((link) => link.getAttribute('href')),
+      );
+      assert.ok(hrefs.some((href) => href === '/notes/alias-heavy/'));
+    } finally {
+      await page.close();
+    }
+  },
+  120_000,
+);
 
 /**
  * The three load states are three different sentences.

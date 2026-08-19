@@ -34,7 +34,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import { discover } from '../scripts/markdown-to-artifact.ts';
+import { discover, resolveCorpusLinks } from '../scripts/markdown-to-artifact.ts';
 import { FIELD_LIMITS } from '../src/lib/schema.ts';
 import { BuildFailure } from '../scripts/write-report.ts';
 
@@ -318,7 +318,7 @@ test('frontmatter tags and the first folder become artifact facets', async () =>
     put(
       root,
       'Projects/deep/note.md',
-      '---\ntags:\n  - Security\n  - field notes\n---\n\n# Note\n',
+      '---\ntags:\n  - Security\n  - field notes\naliases:\n  - Project Note\n  - 计划笔记\n---\n\n# Note\n',
     );
     put(root, 'root.md', '---\ntags: []\n---\n\n# Root\n');
 
@@ -326,6 +326,7 @@ test('frontmatter tags and the first folder become artifact facets', async () =>
     const nested = found.entries.find((entry) => entry.slug === 'projects-deep-note');
     const rootEntry = found.entries.find((entry) => entry.slug === 'root');
     assert.deepEqual(nested?.tags, ['Security', 'field notes']);
+    assert.deepEqual(nested?.aliases, ['Project Note', '计划笔记']);
     assert.equal(nested?.collection, 'projects');
     assert.equal(rootEntry?.tags, undefined);
     assert.equal(rootEntry?.collection, undefined);
@@ -502,6 +503,63 @@ test('producer limits and safety failures identify the source only in private de
     assert.equal(failure?.code, 'collection-folder-too-long');
     assert.ok(failure?.detail.includes('/note.md'));
     assert.ok(!failure?.message.includes('/note.md'));
+  });
+});
+
+test('invalid alias lists fail with the source only in private detail', async () => {
+  const limit = FIELD_LIMITS.arrays.aliases;
+  const cases = [
+    'Older Name',
+    '["Same", "Same"]',
+    '["private/path"]',
+    JSON.stringify(['x'.repeat(limit.itemChars + 1)]),
+    JSON.stringify(Array.from({ length: limit.items + 1 }, (_, index) => `alias-${index}`)),
+  ];
+  for (const aliases of cases) {
+    await scratch('producer-alias-invalid-', async (root) => {
+      put(root, 'private-alias.md', `---\naliases: ${aliases}\n---\n\n# Note\n`);
+      const failure = await discover(root).then(
+        () => undefined,
+        (error: unknown) => error as BuildFailure,
+      );
+      assert.equal(failure?.code, 'invalid-aliases-frontmatter');
+      assert.equal(failure?.message, 'frontmatter aliases must be a YAML list of non-empty text');
+      assert.ok(failure?.detail.includes('private-alias.md'));
+      assert.ok(!failure?.message.includes('private-alias.md'));
+    });
+  }
+});
+
+test('alias conflicts fail by count with both source paths only in private detail', async () => {
+  for (const [secondSlug, secondAlias] of [
+    ['second', 'Shared Name'],
+    ['shared-name', 'first'],
+  ] as const) {
+    await scratch('producer-alias-conflict-', async (root) => {
+      put(root, 'first.md', '---\naliases: ["Shared Name"]\n---\n\n# First\n');
+      put(root, `${secondSlug}.md`, `---\naliases: [${JSON.stringify(secondAlias)}]\n---\n\n# Second\n`);
+      const failure = await discover(root).then(
+        () => undefined,
+        (error: unknown) => error as BuildFailure,
+      );
+      assert.equal(failure?.code, 'alias-collision');
+      assert.match(failure?.message ?? '', /^1 published alias claim conflicts$/);
+      assert.ok(failure?.detail.includes('first.md'));
+      assert.ok(failure?.detail.includes(`${secondSlug}.md`));
+      assert.ok(!failure?.message.includes('Shared Name'));
+      assert.ok(!failure?.message.includes('first.md'));
+    });
+  }
+});
+
+test('aliases remain metadata rather than wikilink targets', async () => {
+  await scratch('producer-alias-link-', async (root) => {
+    put(root, 'target.md', '---\naliases: ["Old Name"]\n---\n\n# Target\n');
+    put(root, 'source.md', '# Source\n\n[[Old Name]]\n');
+    const found = await discover(root);
+    const findings = await resolveCorpusLinks(found);
+    assert.deepEqual(found.entries.find((entry) => entry.slug === 'source')?.outgoing, []);
+    assert.ok(findings.some((row) => row.outcome === 'unresolved' && row.link === '[[Old Name]]'));
   });
 });
 

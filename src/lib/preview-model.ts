@@ -16,6 +16,20 @@
 export interface PreviewEntry {
   title: string;
   excerpt: string;
+  aliases?: string[];
+}
+
+export const PREVIEW_TITLE_LIMIT = 400;
+
+/** A bounded title plus its public aliases, all rendered as text. */
+export function previewTitle(entry: PreviewEntry): string {
+  const text =
+    entry.aliases === undefined || entry.aliases.length === 0
+      ? entry.title
+      : `${entry.title} (${entry.aliases.join(', ')})`;
+  return text.length <= PREVIEW_TITLE_LIMIT
+    ? text
+    : `${text.slice(0, PREVIEW_TITLE_LIMIT - 1)}…`;
 }
 
 /**
@@ -105,9 +119,16 @@ export function readPreviewIndex(payload: unknown): PreviewIndex {
 
   for (const candidate of entries as unknown[]) {
     if (typeof candidate !== 'object' || candidate === null) continue;
-    const { slug, title, excerpt } = candidate as Record<string, unknown>;
+    const { slug, title, excerpt, aliases } = candidate as Record<string, unknown>;
     if (typeof slug !== 'string' || typeof title !== 'string' || typeof excerpt !== 'string') continue;
-    index.set(slug, { title, excerpt });
+    if (aliases !== undefined && (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== 'string'))) {
+      continue;
+    }
+    index.set(slug, {
+      title,
+      excerpt,
+      ...(aliases === undefined ? {} : { aliases: [...aliases] as string[] }),
+    });
   }
   return index;
 }

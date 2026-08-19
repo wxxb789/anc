@@ -153,11 +153,16 @@ test('the served content index describes the corpus the site was built from', ()
   // nothing, with no error anywhere. The first fixture build did exactly that:
   // one index entry alongside thirty-two note pages.
   const served = JSON.parse(readFileSync(new URL('content-index.json', DIST), 'utf8')) as {
-    entries: { slug: string; title: string; excerpt: string }[];
+    entries: { slug: string; title: string; excerpt: string; aliases?: string[] }[];
   };
   assert.deepEqual(
     served.entries,
-    entries.map(({ slug, title, excerpt }) => ({ slug, title, excerpt })),
+    entries.map(({ slug, title, excerpt, aliases }) => ({
+      slug,
+      title,
+      excerpt,
+      ...(aliases === undefined ? {} : { aliases }),
+    })),
     'dist/content-index.json is not the projection of the artifact this site was built from',
   );
 });

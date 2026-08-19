@@ -19,9 +19,11 @@ import { test } from 'vitest';
 import {
   FRAGMENT_LIMIT,
   PREVIEW_GAP_PX,
+  PREVIEW_TITLE_LIMIT,
   VIEWPORT_MARGIN_PX,
   placePreview,
   previewFragment,
+  previewTitle,
   readPreviewIndex,
   type PreviewSize,
 } from '../src/lib/preview-model.ts';
@@ -182,33 +184,57 @@ test('the panel flips above only when there is more room above, not merely less 
   );
 });
 
+test('preview titles include aliases as text and remain bounded', () => {
+  assert.equal(
+    previewTitle({ title: 'Current', excerpt: '', aliases: ['Older', '旧名'] }),
+    'Current (Older, 旧名)',
+  );
+  const bounded = previewTitle({
+    title: 'Current',
+    excerpt: '',
+    aliases: ['x'.repeat(PREVIEW_TITLE_LIMIT * 2)],
+  });
+  assert.equal(bounded.length, PREVIEW_TITLE_LIMIT);
+  assert.ok(bounded.endsWith('…'));
+});
+
 // --- Payload lookup -----------------------------------------------------------
 
 test('a well-formed payload becomes a lookup by slug', () => {
   const index = readPreviewIndex({
     version: 1,
     entries: [
-      { slug: 'first-note', title: 'First Note', excerpt: 'An excerpt.' },
+      { slug: 'first-note', title: 'First Note', excerpt: 'An excerpt.', aliases: ['Earlier Name'] },
       { slug: 'second-note', title: 'Second Note', excerpt: '' },
     ],
   });
-  assert.deepEqual(index.get('first-note'), { title: 'First Note', excerpt: 'An excerpt.' });
+  assert.deepEqual(index.get('first-note'), {
+    title: 'First Note',
+    excerpt: 'An excerpt.',
+    aliases: ['Earlier Name'],
+  });
   // An empty excerpt is legal in the content contract and must survive: it is
   // the one required string the schema admits empty.
   assert.deepEqual(index.get('second-note'), { title: 'Second Note', excerpt: '' });
   assert.equal(index.get('no-such-note'), undefined);
 });
 
-test('the lookup carries only the three public preview fields', () => {
-  // The projection is `{slug, title, excerpt}`. If a future artifact leaked a
-  // private field into the index, the panel must still be structurally incapable
+test('the lookup carries only the four public preview fields', () => {
+  // The projection is `{slug, title, excerpt, aliases?}`. If a future artifact
+  // leaked a private field into the index, the panel must still be structurally incapable
   // of showing it — the reader is what bounds this, not the exporter alone.
   const index = readPreviewIndex({
     entries: [
-      { slug: 'a-note', title: 'A Note', excerpt: 'Public.', source_path: 'C:/vault/private.md' },
+      {
+        slug: 'a-note',
+        title: 'A Note',
+        excerpt: 'Public.',
+        aliases: ['Older Name'],
+        source_path: 'C:/vault/private.md',
+      },
     ],
   });
-  assert.deepEqual(Object.keys(index.get('a-note')!).sort(), ['excerpt', 'title']);
+  assert.deepEqual(Object.keys(index.get('a-note')!).sort(), ['aliases', 'excerpt', 'title']);
 });
 
 test('a malformed payload yields an empty lookup rather than throwing', () => {
@@ -240,6 +266,7 @@ test('an entry missing or mistyping a preview field is skipped, not half-rendere
       { title: 'no slug', excerpt: 'x' },
       { slug: 'bad-title', title: 42, excerpt: 'x' },
       { slug: 'bad-excerpt', title: 'x', excerpt: ['x'] },
+      { slug: 'bad-alias', title: 'x', excerpt: 'x', aliases: [42] },
       { slug: 'good-note', title: 'Good', excerpt: 'Fine.' },
     ],
   });

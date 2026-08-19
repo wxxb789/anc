@@ -640,8 +640,8 @@
     {
       "slug": "alias-heavy",
       "title": "A Note Under Several Names",
-      "excerpt": "Four aliases, none of which is a route. An alias resolves a link written under an older name; it does not create a second page saying the same thing.",
-      "markdown": "# A Note Under Several Names\n\nAn alias is a resolution key, not a second address.\n\n## What an alias does\n\nIt lets a link written under an older name resolve to this note. It does not\npublish a second page, which would be duplicate content under two URLs and a\nwithdrawal problem the day either is removed.\n\n## What the contract enforces\n\nNo two notes may claim the same alias, and no alias may collide with another\nnote's slug. Both are corpus-level checks, so they fail with both names in the\nmessage.\n\nRelated: [the content contract](/content-contract/).\n",
+      "excerpt": "Four public aliases, none of which is a route or a link target. They make the note findable and visible under older names without creating duplicate pages.",
+      "markdown": "# A Note Under Several Names\n\nAn alias is public display and search metadata, not a second address or a link target.\n\n## What an alias does\n\nIt lets a reader find this note under an older name and appears in previews. It does not\npublish a second page or change wikilink resolution, which follows Obsidian desktop.\n\n## What the contract enforces\n\nNo two notes may claim the same alias, and no alias may collide with another\nnote's slug. Both are corpus-level checks whose source details stay in the private report.\n\nRelated: [the content contract](/content-contract/).\n",
       "outgoing": [
         "content-contract"
       ],
@@ -661,7 +661,7 @@
         "别名笔记",
         "AKA"
       ],
-      "description": "Aliases are link-resolution keys, not routes."
+      "description": "Aliases are public search and preview metadata, not routes or link targets."
     },
     {
       "slug": "undated-note-a",

@@ -202,9 +202,9 @@ default, and the message should say how to raise it. One constant, one message.
 > ticket raising the constant does not make the document wrong.
 >
 > **AMENDED on the derived-field table above:** frontmatter now supplies `slug`, `language`,
-> `description`, and `tags`; the first folder supplies the flat `collection`; full git history
-> supplies `created` and `updated`. `aliases` remain underived. `title` and `markdown` continue
-> to ship as drafted.
+> `description`, `tags`, and `aliases`; the first folder supplies the flat `collection`; full git
+> history supplies `created` and `updated`. Aliases are indexed/displayed but remain deliberately
+> excluded from link resolution. `title` and `markdown` continue to ship as drafted.
 
 ### 2.3 Exclusion
 
@@ -1586,8 +1586,8 @@ documentation revisions in §7. Each carries the acceptance criteria stated ther
 >    section's framing throughout is "a requirement met by a different mechanism", and these are
 >    requirements met by no mechanism.
 >
-> **Subsequently amended:** tags, first-folder collections, and git dates are now derived;
-> aliases remain.
+> **Subsequently amended:** tags, aliases, first-folder collections, and git dates are now
+> derived; no version-1 producer field remains underived.
 >
 > Two further corrections to this section's own claims: the requirements document was **not**
 > "still marked Draft for owner review while eighteen tickets shipped" in any misleading sense —

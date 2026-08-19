@@ -208,9 +208,11 @@ label and path you wrote, points to `/private/`, and is reported; the target not
 ships. That report row is your exclusion seen from the other side.
 
 Aliases are **not** link targets. Obsidian desktop and Obsidian Publish genuinely disagree
-here and this follows desktop. They are also not indexed for search or previews, because the
-producer does not read them at all — an `aliases:` key in your frontmatter currently reaches
-nothing.
+here and this follows desktop. A YAML `aliases:` list is still public metadata: the note shows
+it, search indexes it, and hover previews include it, but it creates no route and changes no
+link resolution. The public `content-index.json` downloaded for previews contains every alias
+of every published note. Duplicate aliases, or an alias colliding with another note's slug,
+stop the build; the private report names both sources.
 
 ## Reading the report
 

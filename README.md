@@ -16,8 +16,8 @@ document a stranger needs.
   target body remains unpublished. An ambiguous link warns with every candidate named.
 - Renders backlinks, outgoing links, a graph, breadcrumbs, tags, collections, and a table of
   contents as build-time HTML — no fetch, no database. YAML frontmatter can set slug, language,
-  description, and tags; the first folder supplies the collection, and git history supplies
-  dates.
+  description, tags, and searchable/displayed aliases; aliases deliberately remain non-link
+  targets. The first folder supplies the collection, and git history supplies dates.
 - Pagefind for search, bilingual chrome resolved per document, client-rendered math and Mermaid
   with source fallbacks, RSS, sitemap, and a strict CSP.
 - Writes the names of everything it dropped to a file under `.git/` that cannot be committed,

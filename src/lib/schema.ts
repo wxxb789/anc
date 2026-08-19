@@ -157,7 +157,7 @@ const ARRAY_LIMITS = {
   // note. There is no matching ceiling on the *corpus* — see the note below
   // on why the entry limit was removed.
   tags: { items: 50, itemChars: 128 },
-  // Every alias is a link-resolution key.
+  // Aliases are bounded public display/search/preview metadata.
   aliases: { items: 50, itemChars: 300 },
   // Each member must already resolve to a published slug, so member length is
   // bounded transitively by the slug ceiling; only the count needs one.
@@ -509,8 +509,9 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
     issues.push(`${label}.status: must be one of ${[...STATUS_VALUES].join(', ')} when present`);
   }
 
-  // Tags become `/tags/<tag>/` route keys and aliases become link-resolution keys.
-  // A "/" would break routing and could carry a private path fragment; a control
+  // Tags become `/tags/<tag>/` route keys; aliases enter display, search, and
+  // preview payloads but deliberately not link resolution. A "/" would break
+  // tag routing and could carry a private path fragment in either field; a control
   // or format character (bidi overrides, soft hyphens) could disguise either.
   // U+200D is exempt: it joins emoji sequences such as a person-at-keyboard glyph.
   for (const field of ['tags', 'aliases'] as const) {
@@ -540,6 +541,33 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
   return issues.length === before ? (value as unknown as ContentEntry) : undefined;
 }
 
+export interface AliasConflict {
+  alias: string;
+  claimant: string;
+  kind: 'alias' | 'slug';
+  other: string;
+}
+
+export function aliasConflictsFor(entries: readonly ContentEntry[]): AliasConflict[] {
+  const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+  const aliasOwner = new Map<string, string>();
+  const conflicts: AliasConflict[] = [];
+  for (const entry of entries) {
+    for (const alias of entry.aliases ?? []) {
+      const owner = aliasOwner.get(alias);
+      if (owner !== undefined && owner !== entry.slug) {
+        conflicts.push({ alias, claimant: entry.slug, kind: 'alias', other: owner });
+      }
+      const slugOwner = bySlug.get(alias);
+      if (slugOwner !== undefined && slugOwner !== entry) {
+        conflicts.push({ alias, claimant: entry.slug, kind: 'slug', other: slugOwner.slug });
+      }
+      aliasOwner.set(alias, entry.slug);
+    }
+  }
+  return conflicts;
+}
+
 function checkCorpus(entries: readonly ContentEntry[], issues: string[]): void {
   const bySlug = new Map<string, ContentEntry>();
   for (const entry of entries) {
@@ -547,16 +575,16 @@ function checkCorpus(entries: readonly ContentEntry[], issues: string[]): void {
     else bySlug.set(entry.slug, entry);
   }
 
-  const aliasOwner = new Map<string, string>();
-  for (const entry of entries) {
-    for (const alias of entry.aliases ?? []) {
-      const owner = aliasOwner.get(alias);
-      if (owner !== undefined && owner !== entry.slug) {
-        issues.push(`entries: alias "${alias}" is claimed by both "${owner}" and "${entry.slug}"`);
-      } else if (bySlug.has(alias) && bySlug.get(alias) !== entry) {
-        issues.push(`entries: alias "${alias}" on "${entry.slug}" collides with another entry's slug`);
-      }
-      aliasOwner.set(alias, entry.slug);
+  for (const conflict of aliasConflictsFor(entries)) {
+    if (conflict.kind === 'alias') {
+      issues.push(
+        `entries: alias "${conflict.alias}" is claimed by both "${conflict.other}" and ` +
+          `"${conflict.claimant}"`,
+      );
+    } else {
+      issues.push(
+        `entries: alias "${conflict.alias}" on "${conflict.claimant}" collides with another entry's slug`,
+      );
     }
   }
 

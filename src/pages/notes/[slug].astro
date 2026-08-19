@@ -320,7 +320,8 @@ const graph = localGraph(entry, getEntry);
     {(entry.created !== undefined ||
       entry.updated !== undefined ||
       collection !== undefined ||
-      (entry.tags?.length ?? 0) > 0) && (
+      (entry.tags?.length ?? 0) > 0 ||
+      (entry.aliases?.length ?? 0) > 0) && (
       <dl class="note-meta">
         {entry.created !== undefined && (
           <div>
@@ -348,6 +349,18 @@ const graph = localGraph(entry, getEntry);
                 {entry.tags.map((tag) => (
                   <li><a href={tagRoute(routeKey(tag))}>{tag}</a></li>
                 ))}
+              </ul>
+            </dd>
+          </div>
+        )}
+        {/* Pagefind searches metadata outside `data-pagefind-body`, so aliases
+            remain findable without becoming the body-derived result excerpt. */}
+        {entry.aliases !== undefined && entry.aliases.length > 0 && (
+          <div>
+            <dt>{t.metaAliases}</dt>
+            <dd>
+              <ul class="note-aliases" data-pagefind-meta="aliases">
+                {entry.aliases.map((alias) => <li>{alias}</li>)}
               </ul>
             </dd>
           </div>

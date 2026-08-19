@@ -1185,6 +1185,41 @@ test('the link preview opens on hover and on focus, and never leaves the viewpor
   }
 }, 180_000);
 
+test.runIf(entries.some((entry) => (entry.aliases?.length ?? 0) > 0))(
+  'a hover preview includes the target note aliases as text',
+  async (context) => {
+    const target = entries.find((entry) => entry.slug === 'alias-heavy');
+    assert.ok(target?.aliases !== undefined && target.aliases.length > 0);
+    const browser = requireBrowser(context);
+    const page = await browser.newPage();
+    try {
+      await visit(page, '/');
+      // This fixture intentionally keeps alias-heavy isolated. Injecting one real
+      // note-route anchor isolates the preview payload branch without inventing
+      // a relationship edge that would violate the backlink contract.
+      await page.evaluate(() => {
+        const link = document.createElement('a');
+        link.id = 'alias-preview-probe';
+        link.href = '/notes/alias-heavy/';
+        link.textContent = 'alias preview probe';
+        document.querySelector('main')!.append(link);
+      });
+      const link = page.locator('#alias-preview-probe');
+      await link.hover();
+      await page.waitForFunction(
+        () => document.querySelector<HTMLElement>('#link-preview')?.hidden === false,
+        undefined,
+        { timeout: 5_000 },
+      );
+      const title = await page.textContent('#link-preview strong');
+      assert.equal(title, `${target.title} (${target.aliases.join(', ')})`);
+    } finally {
+      await page.close();
+    }
+  },
+  120_000,
+);
+
 /**
  * No link on a note page previews the note the reader is already reading.
  *
@@ -1753,6 +1788,7 @@ test('the preview renders its payload as text, never as markup', async (context)
 
   const EXCERPT = '<img src=x onerror="throw new Error(1)"><b>bold</b> & plain';
   const TITLE = '<i>Title</i>';
+  const ALIAS = '<em>Older</em>';
 
   try {
     let route: string | undefined;
@@ -1774,7 +1810,10 @@ test('the preview renders its payload as text, never as markup', async (context)
     await page.route('**/content-index.json', (route_) =>
       route_.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify({ version: 1, entries: [{ slug, title: TITLE, excerpt: EXCERPT }] }),
+        body: JSON.stringify({
+          version: 1,
+          entries: [{ slug, title: TITLE, excerpt: EXCERPT, aliases: [ALIAS] }],
+        }),
       }),
     );
 
@@ -1800,7 +1839,7 @@ test('the preview renders its payload as text, never as markup', async (context)
       ['p', 'strong'],
       'a payload string became elements in the panel, so it was parsed as markup',
     );
-    assert.equal(rendered.title, TITLE, 'the title was not rendered verbatim');
+    assert.equal(rendered.title, `${TITLE} (${ALIAS})`, 'the title and alias were not rendered verbatim');
     assert.equal(rendered.excerpt, EXCERPT, 'the excerpt was not rendered verbatim');
   } finally {
     await browserContext.close();

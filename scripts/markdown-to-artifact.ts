@@ -59,10 +59,11 @@
  *
  * ## What this file still does not do, and who owns each
  *
- * The link pass below derives backlinks. `aliases` remain underived. Tracked
- * notes take `created` and `updated` from the first and last visible commits.
- * Frontmatter can supply `slug`, `language`/`lang`, `description`,
- * and `tags`; the first folder becomes the flat `collection`. All reuse fields
+ * The link pass below derives backlinks. Frontmatter aliases remain display and
+ * search metadata rather than link targets. Tracked notes take `created` and
+ * `updated` from the first and last visible commits. Frontmatter can supply
+ * `slug`, `language`/`lang`, `description`, `tags`, and `aliases`; the first
+ * folder becomes the flat `collection`. All reuse fields
  * and routes the site already owns. `title:` is read because the frontmatter
  * had to be parsed and stripped regardless.
  *
@@ -83,6 +84,7 @@ import { parse as parseYaml } from 'yaml';
 import {
   FIELD_LIMITS,
   RESERVED_SLUGS,
+  aliasConflictsFor,
   contentLimitIssues,
   contentPrivacyIssues,
   isLanguageTag,
@@ -181,15 +183,21 @@ function collectionFor(relativePath: string): string | undefined {
   return collection === '' ? undefined : collection;
 }
 
-/** Read a YAML tag list without silently coercing scalars or whitespace. */
-function tagsFor(data: Record<string, unknown> | undefined, path: string): string[] | undefined {
-  const value = data?.['tags'];
+/** Read a bounded public-label list without silently coercing YAML values. */
+function publicLabelsFor(
+  data: Record<string, unknown> | undefined,
+  field: 'tags' | 'aliases',
+  path: string,
+): string[] | undefined {
+  const value = data?.[field];
   if (value === undefined) return undefined;
   let reason: string | undefined;
-  if (!Array.isArray(value)) reason = 'tags must be a YAML list';
+  if (!Array.isArray(value)) reason = `${field} must be a YAML list`;
   else {
-    const limits = contentLimitIssues({ tags: value }, 'frontmatter');
+    const limits = contentLimitIssues({ [field]: value }, 'frontmatter');
+    const privacy = contentPrivacyIssues({ [field]: value }, 'frontmatter');
     if (limits.length > 0) reason = limits.join('; ');
+    else if (privacy.length > 0) reason = privacy.join('; ');
     else {
       const invalid = value.findIndex(
         (item) =>
@@ -198,18 +206,19 @@ function tagsFor(data: Record<string, unknown> | undefined, path: string): strin
           item !== item.trim() ||
           !isSafeTagOrAlias(item),
       );
-      if (invalid >= 0) reason = `tags[${invalid}] must be non-empty public text`;
+      if (invalid >= 0) reason = `${field}[${invalid}] must be non-empty public text`;
+      else if (new Set(value).size !== value.length) reason = `${field} must not contain duplicates`;
     }
   }
   if (reason !== undefined) {
     throw new BuildFailure(
-      'invalid-tags-frontmatter',
-      'frontmatter tags must be a YAML list of non-empty text',
-      `${path}: ${reason}; tags must not contain "/" or control characters`,
+      `invalid-${field}-frontmatter`,
+      `frontmatter ${field} must be a YAML list of non-empty text`,
+      `${path}: ${reason}; ${field} must not contain "/" or control characters`,
     );
   }
-  const tags = value as string[];
-  return tags.length === 0 ? undefined : [...tags];
+  const labels = value as string[];
+  return labels.length === 0 ? undefined : [...labels];
 }
 
 function slugOverrideFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
@@ -1070,7 +1079,8 @@ export async function discover(
     claimed.set(slug, path);
 
     const { title, declared: titleDeclared } = titleFrom(parsed.data, parsed.body, slug, path);
-    const tags = tagsFor(parsed.data, path);
+    const tags = publicLabelsFor(parsed.data, 'tags', path);
+    const aliases = publicLabelsFor(parsed.data, 'aliases', path);
     const collection = collectionFor(path);
     const language = languageFor(parsed.data, path);
     const description = descriptionFor(parsed.data, path);
@@ -1080,6 +1090,7 @@ export async function discover(
       ...(dates?.created === undefined ? {} : { created: dates.created }),
       ...(dates?.updated === undefined ? {} : { updated: dates.updated }),
       ...(tags === undefined ? {} : { tags }),
+      ...(aliases === undefined ? {} : { aliases }),
       ...(collection === undefined ? {} : { collection }),
       ...(language === undefined ? {} : { language }),
       ...(description === undefined ? {} : { description }),
@@ -1139,6 +1150,27 @@ export async function discover(
       `${reserved.length} published ${reserved.length === 1 ? 'note uses' : 'notes use'} reserved route slugs`,
       reserved
         .map(({ path, slug }) => `${path}: slug "${slug}" is reserved by the site; rename the source file or its directory`)
+        .join('\n'),
+    );
+  }
+
+  // Aliases are public search/display metadata, not link targets, but the
+  // version-1 contract still promises one owner for each alias and no collision
+  // with another note's slug. Check here so the private report names both source
+  // paths instead of the schema error putting public labels on a workflow stream.
+  const aliasConflicts = aliasConflictsFor(entries);
+  if (aliasConflicts.length > 0) {
+    throw new BuildFailure(
+      'alias-collision',
+      `${aliasConflicts.length} published alias ${aliasConflicts.length === 1 ? 'claim conflicts' : 'claims conflict'}`,
+      aliasConflicts
+        .map((conflict) => {
+          const claimant = pathBySlug.get(conflict.claimant);
+          const other = pathBySlug.get(conflict.other);
+          return conflict.kind === 'alias'
+            ? `${claimant}: alias ${JSON.stringify(conflict.alias)} is also claimed by ${other}`
+            : `${claimant}: alias ${JSON.stringify(conflict.alias)} collides with the slug from ${other}`;
+        })
         .join('\n'),
     );
   }
@@ -1356,6 +1388,7 @@ export interface Discovery {
 export interface ContentEntryInput {
   slug: string;
   tags?: string[];
+  aliases?: string[];
   collection?: string;
   language?: string;
   description?: string;

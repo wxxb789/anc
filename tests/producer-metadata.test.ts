@@ -1,8 +1,9 @@
 /** Producer metadata must reach the routes and links readers receive. */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
@@ -13,6 +14,13 @@ import { routeKey, tagRoute } from '../src/lib/routes.ts';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
 
+function filesUnder(root: string): string[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(root, entry.name);
+    return entry.isDirectory() ? filesUnder(path) : [path];
+  });
+}
+
 test('frontmatter tags and the first folder reach their public routes', () => {
   const directory = mkdtempSync(join(tmpdir(), 'producer-metadata-'));
   try {
@@ -21,7 +29,7 @@ test('frontmatter tags and the first folder reach their public routes', () => {
     writeFileSync(
       join(notes, 'note.md'),
       '---\nslug: custom-note\nlanguage: zh-CN\ndescription: A concise public summary.\n' +
-        'tags:\n  - Security\n  - field notes\n---\n\n# Tagged note\n\nBody.\n',
+        'tags:\n  - Security\n  - field notes\naliases:\n  - Earlier Note\n  - 旧标题\n---\n\n# Tagged note\n\nBody.\n',
       'utf8',
     );
     writeFileSync(join(directory, 'notes', 'source.md'), '# Source\n\n[[Projects/deep/note]]\n', 'utf8');
@@ -40,6 +48,22 @@ test('frontmatter tags and the first folder reach their public routes', () => {
     assert.match(note, /<html lang="zh-CN"/);
     assert.ok(note.includes('链出笔记'));
     assert.ok(note.includes('A concise public summary.'));
+    assert.ok(note.includes('别名'));
+    assert.ok(note.includes('<li>Earlier Note</li>'));
+    assert.ok(note.includes('<li>旧标题</li>'));
+    const index = JSON.parse(readFileSync(join(directory, 'dist', 'content-index.json'), 'utf8')) as {
+      entries: { slug: string; aliases?: string[] }[];
+    };
+    assert.deepEqual(index.entries.find((entry) => entry.slug === 'custom-note')?.aliases, [
+      'Earlier Note',
+      '旧标题',
+    ]);
+    const fragments = filesUnder(join(directory, 'dist', 'pagefind'))
+      .filter((path) => path.endsWith('.pf_fragment') && statSync(path).isFile())
+      .map((path) => gunzipSync(readFileSync(path)).toString('utf8'))
+      .join('\n');
+    assert.ok(fragments.includes('Earlier Note'));
+    assert.ok(fragments.includes('旧标题'));
     const sourcePage = readFileSync(join(directory, 'dist', 'notes', 'source', 'index.html'), 'utf8');
     assert.ok(sourcePage.includes(`href="${noteRoute}"`));
     for (const label of ['Security', 'field notes']) {

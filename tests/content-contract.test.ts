@@ -8,6 +8,7 @@ import {
   RESERVED_SLUGS,
   SCHEMA_VERSION,
   ContentValidationError,
+  aliasConflictsFor,
   validateArtifact,
   type ContentArtifact,
 } from '../src/lib/schema.ts';
@@ -34,6 +35,27 @@ function expectRejection(run: () => unknown): ContentValidationError {
 function rejection(name: string): ContentValidationError {
   return expectRejection(() => validateArtifact(load(new URL(`${name}.json`, INVALID)), name));
 }
+
+test('one alias can report both an owner and a slug collision', () => {
+  const entry = (slug: string, aliases?: string[]) => ({
+    slug,
+    title: slug,
+    excerpt: '',
+    markdown: `# ${slug}`,
+    outgoing: [],
+    backlinks: [],
+    ...(aliases === undefined ? {} : { aliases }),
+  });
+  assert.deepEqual(aliasConflictsFor([
+    entry('first', ['shared']),
+    entry('shared'),
+    entry('third', ['shared']),
+  ]), [
+    { alias: 'shared', claimant: 'first', kind: 'slug', other: 'shared' },
+    { alias: 'shared', claimant: 'third', kind: 'alias', other: 'first' },
+    { alias: 'shared', claimant: 'third', kind: 'slug', other: 'shared' },
+  ]);
+});
 
 test('minimal artifact passes the contract', () => {
   const artifact = validateArtifact(load(new URL('valid-minimal.json', FIXTURES)));

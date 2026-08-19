@@ -243,6 +243,7 @@ export interface Translation {
   metaUpdated: string;
   metaCollection: string;
   metaTags: string;
+  metaAliases: string;
   tocHeading: string;
   /**
    * Accessible name of a heading's own anchor link.
@@ -485,6 +486,7 @@ const EN = {
   metaUpdated: 'Updated',
   metaCollection: 'Collection',
   metaTags: 'Tags',
+  metaAliases: 'Also known as',
   tocHeading: 'On this page',
   headingAnchorLabel: (heading) => `Link to section: ${heading}`,
   footnotesHeading: 'Footnotes',
@@ -669,6 +671,7 @@ const ZH_CN = {
   metaUpdated: '更新于',
   metaCollection: '所属合集',
   metaTags: '标签',
+  metaAliases: '别名',
   tocHeading: '本页目录',
   headingAnchorLabel: (heading) => `跳转到章节：${heading}`,
   footnotesHeading: '脚注',
