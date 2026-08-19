@@ -42,8 +42,9 @@
  * - *Slugs absent from the reviewed publish set* are enforced by `review` plus
  *   `build --release`, because they are a publication-event property rather than
  *   a byte pattern.
- * - *Unexpected routes or assets* belongs to TK-09's deny-by-default gate
- *   (parity plan C5), and is not attempted here.
+ * - *Unexpected routes or assets* is enforced by
+ *   `scripts/verify-output-inventory.ts`, because it is a route-model and
+ *   provenance property rather than a byte pattern.
  * - *Secrets, via Gitleaks or equivalent*, is **not covered**. A credential
  *   pattern set is a different tool with a different false-positive profile,
  *   and adding an entropy heuristic here would be a worse version of one. A

@@ -70,8 +70,8 @@ owner's name a foreign build carried before TK-31 removed them.
 ## Workflow
 
 ```bash
-pnpm run build          # Astro static build + Pagefind + residue scan
-pnpm run verify         # every gate: lint, type check, build, residue scan, tests
+pnpm run build          # Astro + Pagefind + output inventory + residue scan
+pnpm run verify         # every gate: lint, type check, build, inventory, residue, tests
 pnpm run build:fixture  # rebuild against the 32-note corpus, un-skipping the multi-entry gates
 pnpm run pack:tarball   # compile TypeScript and produce the installable tarball
 pnpm run preview        # `astro preview` over this repository's own dist/
@@ -107,10 +107,10 @@ called `pack` cannot coexist.
 
 ## Verification
 
-`pnpm run verify` is the gate. It runs lint, type check, build (which ends in the privacy
-residue scan), and the test suite, chained with `&&` so a failure anywhere aborts the run
-rather than letting a later step measure a half-written `dist/` and pass it. Run it before
-proposing a merge and report the pass count.
+`pnpm run verify` is the gate. It runs lint, type check, build (which ends in the exact
+output inventory and privacy residue scan), and the test suite, chained with `&&` so a failure
+anywhere aborts the run rather than letting a later step measure a half-written `dist/` and
+pass it. Run it before proposing a merge and report the pass count.
 
 ### What runs where
 
@@ -120,6 +120,7 @@ proposing a merge and report the pass count.
 | `astro check` | yes | — | yes | — |
 | Content contract + derived-route validation | yes | yes | yes | yes |
 | Astro build, redirects, Pagefind index | yes | yes | yes | yes |
+| Exact output inventory: routes, package assets, Astro/Pagefind namespaces | yes | yes | yes | yes |
 | Residue scan over the output — markers, paths, schemes, source maps, the search index | yes | yes | yes | yes |
 | Configuration parse: unknown key, wrong type, malformed YAML | — | — | — | yes |
 | Exclusion: `publish: false`, globs, zero-match refusal | — | — | — | yes |
@@ -145,10 +146,9 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 - Deployment. Requirements section 21.1 stage 13 makes it a separately approved action; CI
   deliberately cannot deploy and needs no secrets.
 - Post-deploy smoke tests (stage 14), which need a deployed origin.
-- Secret scanning (section 19.1's Gitleaks item) and unexpected routes or assets. The reviewed
-  publish-set item is closed by `review` plus `build --release`; the remaining route/asset
-  property belongs to TK-09's deny-by-default gate, which still does not exist —
-  `scripts/scan-residue.ts` names it as not attempted.
+- Secret scanning (section 19.1's Gitleaks item). The reviewed publish set and exact
+  route/asset inventory are enforced in every relevant release/build path; credential pattern
+  matching remains a separate external tool with its own false-positive policy.
 - `pnpm run build:fixture`, the 32-note corpus that un-skips the multi-entry gates. Not in
   `verify` because it builds the site twice. It *can* now run concurrently with the suite — the
   two interlock over `dist/` and wait for each other (`scripts/dist-lock.ts`), which the
@@ -167,7 +167,9 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 
 ### Properties the gates assert
 
-- Generated routes and `content-index.json` are readable.
+- Generated routes are exactly the route model; package assets are byte-bound to `public/`;
+  Astro owns only flat hashed JS/CSS; Pagefind has an exact runtime allowlist and metadata-bound
+  content-addressed index members.
 - Release mode requires a public origin and a committed ledger exactly equal to the computed
   public slugs; missing, dirty, added, and removed states fail, and shrink-then-re-include fails
   as a new addition rather than inheriting stale approval.

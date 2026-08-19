@@ -498,6 +498,9 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     const { indexWithPagefind } = await import('../scripts/run-pagefind.ts');
     await indexWithPagefind(staging);
 
+    const { assertOutputInventory } = await import('../scripts/verify-output-inventory.ts');
+    assertOutputInventory(staging, validated);
+
     const { assertNoResidue } = await import('../scripts/scan-residue.ts');
     console.log(`residue scan ok: ${assertNoResidue(staging)} files, 0 findings`);
 

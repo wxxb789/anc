@@ -4,8 +4,8 @@
 **Document type:** Product requirements + architecture decision baseline
 **Target project:** A general-purpose static publisher for a repository of Markdown
 **Last updated:** 2026-08-19; first drafted 2026-08-06
-**Implementation status:** The general-purpose plan and reviewed release boundary are
-delivered. Deployment remains a separately approved external action this document does not
+**Implementation status:** The general-purpose plan, reviewed release boundary, and exact
+output inventory are delivered. Deployment remains a separately approved external action this document does not
 authorize.
 
 ## 0. How to read this document, after the inversion
@@ -982,8 +982,8 @@ entries built by `pnpm run build:fixture`, and it is what a budget claim must be
 against. A number measured on a one-note site is not a smaller sample of the same thing.
 
 Budgets are release gates in intent. **In fact CI records no values and fails on no limit** —
-`tests/built-output.test.ts` measures CSS and records that TK-09 owns whether it becomes an
-enforced gate, and TK-09 has not run. Stated rather than left implying enforcement.
+`tests/built-output.test.ts` measures CSS but still enforces no limit. TK-09's route/asset slice
+now ships as the output-inventory gate; its performance-budget slice remains unbuilt.
 
 ## 19. Security and privacy
 
@@ -1003,11 +1003,13 @@ Scan the built output for:
 - unsafe link schemes and non-image `data:` URLs;
 - slugs absent from the reviewed publish set — enforced for release builds by exact comparison
   with the committed `.publish-set.json` (see 5.1);
-- unexpected routes or assets — **not covered**; TK-09's deny-by-default assets gate does not
-  exist.
+- unexpected routes or assets — enforced by `scripts/verify-output-inventory.ts`: HTML files must
+  equal the fixed, note, tag, and collection route model; package assets are byte-bound to
+  `public/`; Astro owns flat hashed JS/CSS, while Pagefind uses an exact runtime allowlist and
+  metadata-bound content-addressed index members.
 
-Six of the eight are enforced. Secret scanning and the route/asset gate are the two remaining
-items, and each says which tool or ticket owns it.
+Seven of the eight are enforced. Secret scanning is the one remaining item, and it names the
+external tool that owns it.
 
 **Every rule must be individually proven non-vacuous.** An aggregate "nine rules, zero
 findings" cannot distinguish nine working rules from one working rule and eight broken ones,
@@ -1089,7 +1091,8 @@ or SharedArrayBuffer-dependent feature needs cross-origin isolation.
    run is a requirement, not an incidental**: deletion is only structural if a stale page
    cannot survive a rebuild.
 8. Build the Pagefind index.
-9. Scan the built output for privacy and security residue.
+9. Verify the exact route/asset inventory, then scan the built output for privacy and security
+   residue.
 10. Run unit, integration, accessibility, and browser tests.
 11. Verify CSP and absence of inline scripts/events.
 12. Run `review`, inspect and commit `.publish-set.json`, then require exact equality with
@@ -1142,8 +1145,8 @@ separate external approval.
 - a user exclusion pattern matching zero files fails the build, naming the pattern's index and
   its config file, while a structural ignore matching nothing does not;
 - an ambiguous link warns with all candidates and still builds;
-- an asset is reachable only from a published note — unsatisfiable today, because nothing emits
-  assets, and recorded as blocked rather than as covered;
+- the output inventory is exact: unexpected routes/assets, missing expected routes, altered
+  package assets, nested Astro output, and unreferenced Pagefind members fail independently;
 - the publish set is diffed against an exact committed record; missing, malformed, untracked,
   dirty, added, removed, and stale re-inclusion states all fail release mode;
 - deletion round trip: removing a Markdown file removes the page, the feed entry, the sitemap
@@ -1276,6 +1279,8 @@ launch; there is a release, and each release meets these:
 - ~~every deployed page is present in the approved public manifest~~ → every release build's
   computed public slugs exactly equal the committed `.publish-set.json` the user reviewed;
 - scans of the built output, including the search index inflated, find zero residue;
+- the complete output inventory contains exactly modeled routes, byte-bound package assets,
+  hashed Astro JS/CSS, and the fixed/metadata-bound Pagefind members;
 - all routes, headings, and redirects resolve;
 - no unresolved wikilink remains outside a code region in built output;
 - build output is deterministic, and identical on win32 and Linux;
@@ -1361,7 +1366,7 @@ it reaches a CDN and a search index.
 | The report cannot be committed and cannot reach the output | shipped, gated |
 | The build's log carries counts and never names | shipped, gated |
 | Removing a note removes its page, feed entry, sitemap entry, and search record | shipped, gated by `tests/deletion-roundtrip.test.ts` with retained-route and retained-search controls; browser search derives its positive query from the corpus under test |
-| An asset reaches the output only from a published note | vacuously true — no asset ships |
+| An asset reaches the output only from a published note | enforced more narrowly: no note asset may ship; exact routes, byte-bound package assets, and constrained Astro/Pagefind namespaces are the complete output inventory |
 | **The publish set is reviewed as a diff before it publishes** | shipped: `review` writes exact public slugs; `build --release` requires a clean committed equality match, and the Action cannot disable it |
 
 **Why the asymmetry between the two exclusion mechanisms.** The two failure modes are not

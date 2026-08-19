@@ -1,11 +1,11 @@
 # General-Purpose SSG — Plan
 
 **Status:** all 12 tickets delivered; the Action, `init`, shipped preview, tarball adoption smoke,
-and reviewed release boundary are implemented. All three fatal findings closed.
+reviewed release boundary, and exact output inventory are implemented. All three fatal findings closed.
 **Document type:** Architecture decision + revised backlog
 **Derived from:** three research agents, three drafted sections, and two adversarial reviews
 that returned 25 substantiated findings
-**Describes:** the delivered general-purpose architecture through client rendering and reviewed release qualification
+**Describes:** the delivered general-purpose architecture through client rendering, reviewed release qualification, and exact output inventory
 **Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md),
 which was revised in place through 2026-08-19 — §7 below is that revision's source and is now
 **executed**, so where the two disagree the requirements document is current
@@ -650,7 +650,7 @@ that is how it shipped.
 
 | Deferred | Why |
 | --- | --- |
-| An asset/attachment pipeline | not writing one is what keeps deny-by-default assets true. `unpublished` + report is the honest interim behaviour |
+| An asset/attachment pipeline | still absent. `scripts/verify-output-inventory.ts` now makes that absence enforceable: note assets and every other unowned output fail the build |
 | Nested collections | `schema.ts:418-420` validates `collection` as a flat slug and `collection-navigation.ts:14-22` already declines to invent the nesting. It is a schema version bump and belongs with one |
 | A `source_path` artifact field | wanted for edit-on-GitHub links, but `schema.ts:390` rejects unknown entry fields and the privacy model treats source paths as *the* canonical leak. The report already carries them, outside the artifact |
 | Per-edge context and source heading | requirements §13.1; `notes/[slug].astro:358-373` explains why edges are bare slugs. Unchanged here |
@@ -738,8 +738,8 @@ Every row is a build failure, not an intention. The last column is the seeded de
 must turn the gate red; a gate whose mutation has never been run is a gate this repository
 has shipped green four times already.
 
-> **Delivery status. Six of seven shipped; G6 remains vacuous by construction because the
-> product emits no note assets.**
+> **Delivery status. All seven shipped. G6 remains a no-asset policy, but it is no longer
+> vacuous: the final inventory rejects any route or asset outside the route model and tool-owned namespaces.**
 >
 > | Gate | State |
 > | --- | --- |
@@ -748,7 +748,7 @@ has shipped green four times already.
 > | G3 report reached the output | shipped, TK-25/TK-29, both halves, over inflated gzip members |
 > | G4 link into excluded content | shipped, TK-27/TK-28 — with the equality corrected (§2.6) |
 > | G5 residue | shipped, TK-29 — the search index is now scanned, which is where the leak was. **`checkPrivacy`'s split into `{findings, blockers}` did not ship**: `scanResidue` returns `{findings, detailed, scannedCount}`, and "the built site is missing or unreadable" was reported as a *finding* until it was made to throw instead — the ambiguity is closed at the definition and its reasoning now lives in `scripts/scan-residue.ts`, not in `src/lib/diagram-mode.ts`. The user-configurable marker list did not ship either, so `msw/` stays hardcoded |
-> | G6 asset reachability | **vacuously true.** Nothing emits assets, so "an asset reaches `dist/` only from a published note" holds because the antecedent is never satisfied. H4 in §8 refused to build an asset pipeline to make a gate satisfiable, and that is still right — but the gate proves nothing and should be read as a policy, not a check |
+> | G6 asset reachability | **shipped as exact output inventory.** No note asset may ship; HTML must equal the route model, package assets are byte-bound to `public/`, Astro owns only flat hashed JS/CSS, and Pagefind has an exact runtime allowlist plus metadata-bound index members. Independent mutations add a route, root asset, unhashed/nested Astro file, and unreferenced fragment |
 > | G7 deletion round trip | **shipped.** `tests/deletion-roundtrip.test.ts` builds a two-note foreign repository, removes one note, rebuilds, and checks route, content index, feed, sitemap, and inflated Pagefind fragments in both directions. A retained note and retained search token prevent a broken empty build/index from passing. `tests/search.test.ts` derives its primary query from the built corpus and proves the term is present before querying |
 
 | # | Gate | Fails when | Proven non-vacuous by |
@@ -760,6 +760,12 @@ has shipped green four times already.
 | **G5** | **Residue.** `checkPrivacy` splits. The universal rules — absolute local path, home-directory path, `javascript:`/`vbscript:`/`file:`/non-image `data:`, source-map reference (`scripts/scan-residue.ts:80-89`) — stay hardcoded and non-configurable. `msw/` (`src/lib/schema.ts:206`, `scripts/scan-residue.ts:81`) becomes a user-configured marker list defaulting to empty, because `msw` is a widely used HTTP-mocking library and one owner's path prefix is another user's false build failure. `[[` (`src/lib/schema.ts:207`) **moves out of the artifact gate entirely** and stays only over `dist/`: under five link forms and real ambiguity an unresolvable wikilink is a normal authoring outcome, so the producer degrades it to plain text and records it in the ambiguity report, and a residual `[[` in output now means the degradation failed — a producer defect, not a user's | any universal marker appears in `dist/`; or a configured user marker appears; or a file shipped that the scan could not classify | The existing fail-closed-on-unknown-extension rule (`scripts/scan-residue.ts:257-263`) and the two non-vacuity guards (`:282-286`) are already the right design — preserve both. Add per-rule non-vacuity: seed each universal rule individually against a synthetic `dist/` and assert each fires alone. An aggregate "9 rules, 0 findings" cannot tell nine working rules from one working rule and eight broken ones. **The documented defect is fixed**: `scanResidue` used to report "I couldn't look" as a *finding*, so a caller counting findings could not distinguish it from residue. It throws a `residue-scan-vacuous` `BuildFailure` instead — which turned out cheaper than the `{findings, blockers}` split proposed here, and needed no caller changes (verified: every caller passes a directory it created) |
 | **G6** | **Asset reachability.** An asset reaches `dist/` only because a published note references it. There is no `**` copy pass and there must never be one | any file in `dist/` traces to none of: a published entry's referenced asset, `public/`, or a build-tool output (`_astro/`, `pagefind/`) | Quartz's own docs concede *"all non-markdown files will be emitted and available publically"*, so a `draft: true` note publishes every image it embedded — and undocumented defect (b) is worse: discovery globs `**/*.*` while the asset emitter globs `**`, so an extensionless file (`secrets`, `TODO`) is copied verbatim while being invisible to every filter. Three mutations, all required together: an unreferenced image beside a published note must be **absent**; an image referenced only by an excluded note must be **absent**; an image referenced by a published note must be **present**. Without the third the gate passes on a build that copied nothing. Fourth: an extensionless file must be absent, tested by name |
 | **G7** | **Deletion round trip.** Removing a Markdown file removes the page, the feed entry, the sitemap entry, and the search record | after removing a fixture note and rebuilding, its route exists in `dist/`, or its title appears in `sitemap.xml`, `feed.xml`, or returns a Pagefind result | The Digital Garden plugin's trap is that removing the inclusion marker leaves the page live — unpublishing is two steps. Ours must be one, and structurally so. Mutation: build the fixture corpus, remove one note, rebuild, assert all four absences **and** assert a retained note still returns a Pagefind result for its own title. Without the second, "zero results" proves the index is broken, not that deletion worked. This also forces `tests/search.test.ts:42` — `PRIMARY_QUERY = 'the'`, whose own comment already says a gate measuring a term the corpus lacks is "green for the wrong reason" — to become a term drawn from the corpus under test and asserted present in it before the query runs. On a Chinese-only user repo the current constant is exactly the failure its comment describes |
+
+> **AMENDED on G6.** The drafted positive case required a published note asset to ship. The
+> product deliberately has no asset pipeline, so making that case pass would add the privacy
+> surface the gate exists to constrain. The shipped gate instead proves the complete final
+> inventory and fails on any note asset, unexpected route, altered package asset, nested Astro
+> member, or unreferenced Pagefind member.
 
 > **AMENDED on G1.** The drafted `published.txt` row is preserved as the design that was
 > rejected. Its "removal must pass" rule is exactly what left stale authorization behind. The

@@ -128,7 +128,8 @@ folder is an ordinary note. Re-include the root one with `"!README.md"`.
 Non-Markdown files are discovered and never emitted. **There is no asset pipeline**: an
 embedded image does not ship, and a link to one degrades to text and is reported. That is
 deliberate rather than pending — the alternative shape, copying every non-Markdown file, is
-how comparable tools publish the images belonging to notes their users excluded.
+how comparable tools publish the images belonging to notes their users excluded. The final
+output inventory fails if any note asset or unexpected route reaches the site anyway.
 
 Run `thoughtscape-publish init` before your first `git add -A`. It seeds `.gitignore` with
 `node_modules/` and your build's output directory — which follows `--content`, so a build into

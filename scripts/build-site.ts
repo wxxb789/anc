@@ -3,12 +3,12 @@
  *
  * ## Why a wrapper rather than a lock inside one of the steps
  *
- * The chain is five processes — validate, `astro build`, redirects, Pagefind,
- * residue scan — and `dist/` is being written from the second to the fourth. No
- * single step spans that: a lock taken in `validate-content.ts` releases when
+ * The chain is six processes — validate, `astro build`, redirects, Pagefind,
+ * output inventory, residue scan. Astro, redirects, and Pagefind write `dist/`;
+ * the final two gates read it. No single step spans that: a lock taken in `validate-content.ts` releases when
  * that process exits, which is *before* `astro build` starts, and one taken in
  * `scan-residue.ts` is taken after the writing is done. Something has to
- * outlive all five, and this is the smallest thing that does.
+ * outlive all six, and this is the smallest thing that does.
  *
  * ## Why `pnpm run build` needs the lock at all
  *
@@ -47,6 +47,7 @@ const STEPS: readonly (readonly [string, ...string[]])[] = [
   ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/emit-redirects.ts'],
   ['node', 'scripts/run-pagefind.ts'],
+  ['node', 'scripts/verify-output-inventory.ts'],
   ['node', 'scripts/scan-residue.ts'],
 ];
 

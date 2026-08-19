@@ -6,7 +6,7 @@
  * script on Windows. pnpm can paper over that with `shellEmulator`, but that
  * setting changes how *every* script in the manifest is interpreted, which is a
  * much larger blast radius than the one line of `process.env` it would save —
- * and it would not shorten this file, which orchestrates four build steps, the
+ * and it would not shorten this file, which orchestrates five build steps, the
  * test run, and the restore below rather than setting one variable.
  *
  * Why it runs the tests too: TK-11's acceptance criterion is that
@@ -63,8 +63,8 @@ function runStep(command: string, args: readonly string[], env: NodeJS.ProcessEn
     // Node deprecates `shell: true` with an args array (DEP0190) because the
     // arguments are concatenated rather than escaped. That is a real hazard for
     // caller-supplied input and not for this: every argument is a literal in
-    // `STEPS` or in `restorePublishedBuild`, none contains a shell
-    // metacharacter, and nothing here interpolates a path, a filename, or an
+    // this file; none contains a shell metacharacter, and nothing here
+    // interpolates a path, a filename, or an
     // environment value. The artifact path travels in `env`, not in `argv`.
     shell: process.platform === 'win32',
   });
@@ -119,6 +119,11 @@ async function main(): Promise<number> {
       }
     }
     writeFixtureIndex();
+    const inventoryStatus = runStep('node', ['scripts/verify-output-inventory.ts'], env);
+    if (inventoryStatus !== 0) {
+      console.error('\noutput inventory failed with status ' + inventoryStatus);
+      return inventoryStatus;
+    }
   } finally {
     releaseBuild();
   }

@@ -20,7 +20,8 @@ document a stranger needs.
 - Pagefind for search, bilingual chrome resolved per document, client-rendered math and Mermaid
   with source fallbacks, RSS, sitemap, and a strict CSP.
 - Writes the names of everything it dropped to a file under `.git/` that cannot be committed,
-  and only counts to the log.
+  and only counts to the log. Every build also rejects routes or assets outside the exact
+  route model and the package/Astro/Pagefind-owned output inventory.
 
 ## Architecture
 
@@ -35,7 +36,7 @@ document a stranger needs.
 
 ```bash
 pnpm install
-pnpm run verify          # lint, type check, build, residue scan, tests — the gate
+pnpm run verify          # lint, check, build, inventory, residue, tests — the gate
 pnpm run build           # the build chain alone
 pnpm run build:fixture   # rebuild against the 32-note corpus
 pnpm run pack:tarball    # compile TypeScript and pack the installable tarball
