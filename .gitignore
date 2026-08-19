@@ -1,6 +1,6 @@
 # build output
 dist/
-# packaged CLI staging (bin/thoughtscape-publish.mjs; one per run, removed after)
+# packaged CLI staging (one per run; interrupted/deferred workspaces prune after 24 hours)
 .thoughtscape-build-*/
 # compiled package staging (scripts/compile-package.ts; rebuilt by `pnpm run pack`)
 .package/

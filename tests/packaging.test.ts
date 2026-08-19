@@ -277,6 +277,7 @@ test('the trace reaches the modules whose devDependency imports broke the adopti
     'src/lib/markdown.ts',
     'src/lib/mermaid-environment.ts',
     'src/lib/mermaid-render.ts',
+    'scripts/build-workspace.ts',
     'scripts/scan-residue.ts',
     'scripts/scan-secrets.ts',
     'scripts/validate-content.ts',

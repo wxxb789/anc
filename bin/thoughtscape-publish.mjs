@@ -119,6 +119,7 @@ import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, join, relative, resolve } from 'node:path';
+import { pruneStaleBuildWorkspaces, removeBuildWorkspace } from '../scripts/build-workspace.ts';
 import { failureFor, isDisclosureChecked, openReport, BuildFailure } from '../scripts/write-report.ts';
 
 /** This package's own root — the directory holding `astro.config.mjs`. */
@@ -363,13 +364,15 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
   // `Q:`, which reproduces the very EXDEV this staging exists to avoid.
   //
   // Per-run rather than a fixed name, so two builds cannot delete each other's
-  // intermediate output — the `finally` below removes the whole workspace, and
-  // with a shared path the first run to finish would take the second's with it.
+  // intermediate output. The `finally` removes the workspace on an ordinary
+  // exit; a later run prunes interrupted or deferred workspaces after 24 hours.
+  // The age bound keeps concurrent workspaces out of that sweep.
   // Under a normal install the package root is inside `node_modules`, so this is
   // already ignored by anything ignoring that; it matters when the binary is run
   // from a checkout of this repository, where scratch state in the working tree
   // is one `git add -A` from being committed. `.gitignore` names the prefix for
   // that case.
+  await pruneStaleBuildWorkspaces(PACKAGE_ROOT);
   const workspace = await mkdtemp(join(PACKAGE_ROOT, '.thoughtscape-build-'));
 
   // The `try` opens on the line after the directory exists, and deliberately
@@ -546,7 +549,9 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     // it printed on the bad run said nothing about what was actually wrong. A
     // left-behind workspace is a wasted directory; a swallowed diagnostic is a
     // build nobody can debug.
-    await rm(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(() => {});
+    if (!(await removeBuildWorkspace(workspace))) {
+      console.error('staging cleanup deferred: 1 directory');
+    }
   }
 }
 
