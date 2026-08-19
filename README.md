@@ -17,8 +17,8 @@ document a stranger needs.
 - Renders backlinks, an outgoing-links list, a graph, breadcrumbs, and a table of contents as
   build-time HTML — no fetch, no database. Tag and collection routes exist and are empty: the
   producer does not derive those fields yet.
-- Pagefind for search, bilingual chrome resolved per document, native MathML, build-time
-  Mermaid, RSS, sitemap, and a strict CSP.
+- Pagefind for search, bilingual chrome resolved per document, client-rendered math and Mermaid
+  with source fallbacks, RSS, sitemap, and a strict CSP.
 - Writes the names of everything it dropped to a file under `.git/` that cannot be committed,
   and only counts to the log.
 
@@ -27,8 +27,8 @@ document a stranger needs.
 - Astro `output: "static"`; the build output is `dist/`.
 - Content is produced by `scripts/markdown-to-artifact.ts` and `scripts/resolve-links.ts`, then
   validated against `src/lib/schema.ts` before anything renders.
-- About 4.7 KB gzip of vanilla client script in total, across four interactive surfaces. No
-  framework.
+- About 4.7 KB gzip of vanilla script for the base interactive surfaces. Pages containing math
+  or diagrams lazy-load the accepted client renderers (~116 KB or ~232 KB gzip respectively).
 - No D1, R2, Functions, or network access at build time or runtime.
 
 ## Working on the tool
@@ -39,6 +39,7 @@ pnpm run verify          # lint, type check, build, residue scan, tests — the 
 pnpm run build           # the build chain alone
 pnpm run build:fixture   # rebuild against the 32-note corpus
 pnpm run pack:tarball    # compile TypeScript and pack the installable tarball
+pnpm run smoke:tarball   # install that tarball in a foreign repo and build/read it
 ```
 
 `packageManager` in `package.json` pins the pnpm version, which Corepack honours when enabled
@@ -62,8 +63,8 @@ and that specifier resolves for nobody. Until it is published, run
 builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with configuration, exclusion,
 links, and hosting.
 
-**The GitHub Action and the `init` command do not exist yet** (TK-32). Deploying today means
-assembling a workflow by hand; the adoption document gives one and marks it as such.
+The GitHub Action and `init` command both ship. The package is still private, so adoption uses
+the Action by git ref or the tarball until a registry release exists.
 
 ## Deployment
 

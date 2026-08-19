@@ -455,6 +455,23 @@ test('the tarball carries what the build reads and none of this owner\'s content
     );
   }
 
+  // Release and repository-only scripts either import devDependencies or operate
+  // on this checkout. Shipping one gives a consumer dead commands at best and a
+  // devDependency import failure at worst, so every exclusion is named here.
+  for (const excluded of [
+    'scripts/build-fixture.ts',
+    'scripts/build-site.ts',
+    'scripts/compile-package.ts',
+    'scripts/dist-lock.ts',
+    'scripts/npm-command.ts',
+    'scripts/smoke-tarball.ts',
+  ]) {
+    assert.ok(
+      MANIFEST.files.includes(`!${excluded}`),
+      `package.json "files" no longer excludes release-only ${excluded}`,
+    );
+  }
+
   // Nothing here may be published by accident. The plan's §5 adoption path is
   // `npx @thoughtscape/publish@<pinned>`, but no ticket has authorized a
   // publication, and `AGENTS.md` makes publication "an external side effect

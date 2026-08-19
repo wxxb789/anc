@@ -83,7 +83,7 @@
 
 import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnNpm } from './npm-command.ts';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 import { parse as parseYaml } from 'yaml';
@@ -462,11 +462,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { compiled, rewritten } = compilePackage(staging);
   console.log(`compiled ${compiled} TypeScript files, rewrote specifiers in ${rewritten}`);
 
-  const packed = spawnSync('npm', ['pack', '--pack-destination', ROOT], {
-    cwd: staging,
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-  });
+  const packed = spawnNpm(['pack', '--pack-destination', ROOT], staging);
   if (packed.status !== 0) {
     console.error(packed.stderr || packed.stdout);
     process.exit(1);

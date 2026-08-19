@@ -1,11 +1,11 @@
 # General-Purpose SSG — Plan
 
-**Status:** 11 of 12 tickets delivered; TK-32 (the Action and `init`) is the only one open.
-All three fatal findings closed.
+**Status:** all 12 tickets delivered; the Action, `init`, shipped preview, and tarball adoption
+smoke are implemented. All three fatal findings closed.
 **Document type:** Architecture decision + revised backlog
 **Derived from:** three research agents, three drafted sections, and two adversarial reviews
 that returned 25 substantiated findings
-**Describes:** `main` at `d547ab0`, measured **607 passed / 46 skipped / 28 files**, zero red
+**Describes:** `main` through `8464046`, measured **710 passed / 29 skipped / 35 files**, zero red
 **Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md),
 which TK-35 revised in place on 2026-08-15 — §7 below is that revision's source and is now
 **executed**, so where the two disagree the requirements document is current
@@ -949,10 +949,10 @@ error can never be masked by a build that otherwise succeeded.
 >   - exclude[0] (line 2): must be a string, found a number
 > ```
 >
-> **Rows 3 and 4 are not built**, because there is no deploy gate — TK-32 owns it. A build with
-> no `title` succeeds and ships `Notes`; a build with the loopback origin succeeds and ships
-> canonical links pointing at loopback. Nothing in this repository can refuse to deploy, so the
-> honest statement lives in `astro.config.mjs` as a comment.
+> **Rows 3 and 4 remain manual by design.** TK-32 delivered the Action and `init`, but deployment
+> is a separately approved external side effect (requirements stage 13). A build with no `title`
+> succeeds and ships `Notes`; a build with the loopback origin succeeds for preview. The operator
+> supplies the public origin before an approved deployment.
 >
 > The last three rows are delivered as written, and the disclosure gate that holds the whole
 > rule is worth one line: its first two versions were both near-vacuous — one searched for
@@ -1057,12 +1057,10 @@ And it must run on the fixture build, because a one-corpus assumption is the fai
 
 ## 5. The GitHub Action and adoption path
 
-> **Nothing in this section is built. TK-32 owns all of it**, and it is the last thing between
-> the tool as it stands — a command that works when you run it — and the adoption path this
-> plan was written for. What *is* built and this section did not anticipate needing:
-> `thoughtscape-publish preview`, because `astro preview` is not reachable from a pnpm install
-> at all (§5.5). `docs/adoption.md` documents the hand-assembled equivalent of the workflow
-> below, marked as hand-assembled.
+> **AMENDED — TK-32 delivered this section.** The composite Action, `init`, and shipped
+> `thoughtscape-publish preview` command exist; `docs/adoption.md` documents the measured path.
+> The release-only `pnpm run smoke:tarball` now installs the packed product in a synthetic
+> foreign repository and exercises the same public init/build path end to end.
 
 ### 5.1 What the user adds
 
@@ -1339,14 +1337,13 @@ producer is split into four tickets that can each be implemented *and* reviewed 
 | TK-29 | The report file and its gates | TK-26, TK-28 | P0 | D | delivered `fa35d37`, `4947787` |
 | TK-30 | Configuration file and loader | TK-24 | P0 | B | delivered `324c3e6` |
 | TK-31 | Site-identity extraction | TK-30 | P0 | D | delivered `95f16c4`, `db4d0f9` |
-| TK-32 | The GitHub Action and `init` | TK-24, TK-30, TK-25 | P0 | E | **open** |
+| TK-32 | The GitHub Action and `init` | TK-24, TK-30, TK-25 | P0 | E | delivered |
 | TK-33 | Local preview at `publish.localhost` | TK-30 | P1 | D | delivered `ae11023`, `6d48f26` |
 | TK-34 | Scale evidence at 1,000 and 10,000 notes | TK-28 | P1 | F | delivered `d547ab0` |
 | TK-35 | Requirements-document revisions | all above | P1 | F | this pass |
 
-**TK-32 is now the critical path**, and it carries more than its own scope: the deploy gate
-(§4.3 rows 3 and 4), `init`'s seeding of `.gitignore` and the two prose notes (§4.4), and the
-publish-set review that is §3's open half all wait on it or on a decision it forces.
+**TK-32 is closed.** Deployment remains separately approved and the publish-set review in
+§3 remains the open safety half; neither is blocked on the Action or `init` anymore.
 
 ### 6.2 Parallelism, keyed on file ownership
 

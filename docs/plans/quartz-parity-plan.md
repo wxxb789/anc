@@ -300,7 +300,8 @@ files.
 | TK-05b, TK-08 | `c5a92c9` | Relationship surfaces; canonical URLs, Atom feed, sitemap, social card |
 | TK-14 | `4ccd5c9` | `verify`, the residue scan, and the CI workflow |
 | TK-06 | `1164c72` | Search that runs under the shipped CSP, on the modular UI |
-| TK-15 | `116b15c` | Temml math and build-time Mermaid, both zero-JS |
+| TK-15 | `116b15c` | Temml math and build-time Mermaid, both zero-JS at that milestone |
+| Client rendering | `8464046` | Math and Mermaid moved to client runtimes with source fallbacks and mode-matched CSP |
 | TK-05c | `e002113` | The collection rail, complete and collapsible without script |
 | TK-07 | `22cd841` | Hover and focus previews from the projected index only |
 | TK-16 | `410aad2` | Per-document chrome: a zh-CN note renders Chinese chrome in the same build |

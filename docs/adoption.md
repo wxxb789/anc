@@ -7,8 +7,10 @@ rendered ahead of time, full-text search, backlinks, a graph, no server and no d
 start. There is no allowlist and no `publish: true` to opt in with — a file that is in the
 repository and ends in `.md` becomes a page, so the work is deciding what to withhold.
 
-**Status: the tool builds, previews, and ships the Action and `init` (TK-32).** Everything
-below has been executed against a scratch repository and is reported as measured.
+**Status: the tool builds, previews, and ships the Action and `init` (TK-32).** The release
+gate `pnpm run smoke:tarball` installs the packed product into a foreign git repository, runs
+those public commands, and reads the resulting site and private report. Everything below is
+reported as measured.
 
 ## What you need
 
@@ -47,7 +49,7 @@ Two commands. The first writes `dist/`; the second serves it at
 `build` prints four lines and no filenames:
 
 ```
-residue scan ok: 27 files, 0 findings
+residue scan ok: … files, 0 findings
 site written
 content: 4 discovered, 2 published, 2 dropped
 report: cat "$(git rev-parse --git-path publish-report/content-report.json)"

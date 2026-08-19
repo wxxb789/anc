@@ -158,9 +158,10 @@ every gate above is enforced only by running `pnpm run verify` on the host.
   asserts it carries no `.ts`, `.map`, or `.d.ts`, and no surviving `.ts` specifier.
 - `git diff --check`, which reads the working tree rather than the artifact and so belongs to
   the commit step, not the build.
-- The adoption path end to end — install the tarball into a foreign directory, run the binary,
-  read the site. No gate in this repository covers it, and every ticket that ran it found
-  something no test had: see TK-24's two packaging blockers, TK-27 §9, and TK-31 §1.
+- `pnpm run smoke:tarball`, the release gate over the adoption path end to end. It packs the
+  current tree, installs the tarball with npm into a synthetic foreign git repository, runs the
+  shipped `init` and `build`, and reads the public artifact plus private report. It is not in
+  `verify` because installing the full production dependency tree needs the npm cache or network.
 
 ### Properties the gates assert
 
