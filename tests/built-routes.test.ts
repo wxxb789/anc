@@ -1499,7 +1499,7 @@ test('the explorer is excluded from the search index', (context) => {
   // The article body must not contain the rail: `data-pagefind-body` is on the
   // article, so a rail rendered inside it would be indexed whatever the
   // attribute said.
-  const body = /<article class="prose" data-pagefind-body>[\s\S]*?<\/article>/.exec(html)?.[0];
+  const body = /<article class="prose" data-pagefind-body(?:\s[^>]*)?>[\s\S]*?<\/article>/.exec(html)?.[0];
   assert.ok(body, 'the note page has no indexed article body');
   assert.doesNotMatch(body, /class="explorer/, 'the explorer renders inside the indexed article body');
 });
