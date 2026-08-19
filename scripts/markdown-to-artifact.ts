@@ -80,7 +80,16 @@ import { spawnSync } from 'node:child_process';
 import { readFile, readdir, mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { FIELD_LIMITS, RESERVED_SLUGS, isLanguageTag, isSlug, validateArtifact } from '../src/lib/schema.ts';
+import {
+  FIELD_LIMITS,
+  RESERVED_SLUGS,
+  contentLimitIssues,
+  contentPrivacyIssues,
+  isLanguageTag,
+  isSafeTagOrAlias,
+  isSlug,
+  validateArtifact,
+} from '../src/lib/schema.ts';
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import { BuildFailure, bySourceThenLine, type DroppedFile, type LinkFindingRow } from './write-report.ts';
 
@@ -161,6 +170,14 @@ function collectionFor(relativePath: string): string | undefined {
   const separator = relativePath.indexOf('/');
   if (separator === -1) return undefined;
   const collection = slugSegment(relativePath.slice(0, separator));
+  const limits = contentLimitIssues({ collection }, 'frontmatter');
+  if (limits.length > 0) {
+    throw new BuildFailure(
+      'collection-folder-too-long',
+      'one published note exceeds the collection field limit',
+      `${relativePath}: ${limits.join('; ')}`,
+    );
+  }
   return collection === '' ? undefined : collection;
 }
 
@@ -168,17 +185,31 @@ function collectionFor(relativePath: string): string | undefined {
 function tagsFor(data: Record<string, unknown> | undefined, path: string): string[] | undefined {
   const value = data?.['tags'];
   if (value === undefined) return undefined;
-  if (
-    !Array.isArray(value) ||
-    value.some((item) => typeof item !== 'string' || item.trim() === '' || item !== item.trim())
-  ) {
+  let reason: string | undefined;
+  if (!Array.isArray(value)) reason = 'tags must be a YAML list';
+  else {
+    const limits = contentLimitIssues({ tags: value }, 'frontmatter');
+    if (limits.length > 0) reason = limits.join('; ');
+    else {
+      const invalid = value.findIndex(
+        (item) =>
+          typeof item !== 'string' ||
+          item.trim() === '' ||
+          item !== item.trim() ||
+          !isSafeTagOrAlias(item),
+      );
+      if (invalid >= 0) reason = `tags[${invalid}] must be non-empty public text`;
+    }
+  }
+  if (reason !== undefined) {
     throw new BuildFailure(
       'invalid-tags-frontmatter',
       'frontmatter tags must be a YAML list of non-empty text',
-      `${path}: tags must be written as a YAML list whose members are non-empty strings`,
+      `${path}: ${reason}; tags must not contain "/" or control characters`,
     );
   }
-  return value.length === 0 ? undefined : [...value] as string[];
+  const tags = value as string[];
+  return tags.length === 0 ? undefined : [...tags];
 }
 
 function slugOverrideFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
@@ -233,18 +264,57 @@ function languageFor(data: Record<string, unknown> | undefined, path: string): s
 function descriptionFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
   const value = data?.['description'];
   if (value === undefined) return undefined;
-  if (
-    typeof value !== 'string' ||
-    value.trim() === '' ||
-    value.length > FIELD_LIMITS.strings.description
-  ) {
+  if (typeof value !== 'string' || value.trim() === '') {
     throw new BuildFailure(
       'invalid-description-frontmatter',
-      'frontmatter description must be non-empty text',
+      'frontmatter description must be valid public text',
       `${path}: description must be a non-empty string`,
     );
   }
+  const limits = contentLimitIssues({ description: value }, 'frontmatter');
+  if (limits.length > 0) {
+    throw new BuildFailure(
+      'invalid-description-frontmatter',
+      'frontmatter description must be valid public text',
+      `${path}: ${limits.join('; ')}`,
+    );
+  }
+  const privacy = contentPrivacyIssues({ description: value }, 'frontmatter');
+  if (privacy.length > 0) {
+    throw new BuildFailure(
+      'invalid-description-frontmatter',
+      'frontmatter description must be valid public text',
+      `${path}: ${privacy.join('; ')}`,
+    );
+  }
   return value;
+}
+
+function titleFrom(
+  data: Record<string, unknown> | undefined,
+  body: string,
+  slug: string,
+  path: string,
+): { title: string; declared: boolean } {
+  const authored = data?.['title'];
+  if (authored !== undefined && (typeof authored !== 'string' || authored.trim() === '')) {
+    throw new BuildFailure(
+      'invalid-title-frontmatter',
+      'frontmatter title must be non-empty text',
+      `${path}: title must be a non-empty string`,
+    );
+  }
+  const declared = typeof authored === 'string';
+  const title = declared ? authored.trim() : titleFor(body, slug);
+  const limits = contentLimitIssues({ title }, 'frontmatter');
+  if (limits.length > 0) {
+    throw new BuildFailure(
+      'title-too-long',
+      'one published note has a title over the content limit',
+      `${path}: ${limits.join('; ')}`,
+    );
+  }
+  return { title, declared };
 }
 
 interface GitDates {
@@ -999,7 +1069,7 @@ export async function discover(
     }
     claimed.set(slug, path);
 
-    const title = typeof parsed.data?.['title'] === 'string' ? parsed.data['title'].trim() : '';
+    const { title, declared: titleDeclared } = titleFrom(parsed.data, parsed.body, slug, path);
     const tags = tagsFor(parsed.data, path);
     const collection = collectionFor(path);
     const language = languageFor(parsed.data, path);
@@ -1022,7 +1092,7 @@ export async function discover(
       // them only *there* would leave a caller that never runs the traversal
       // with an untitled entry, which is a second way to be wrong. So both, and
       // the second overwrites the first.
-      title: title || titleFor(parsed.body, slug),
+      title,
       excerpt: excerptFor(parsed.body),
       markdown: parsed.body,
       outgoing: [],
@@ -1031,7 +1101,7 @@ export async function discover(
     // The frontmatter title, kept apart from the derived one: the traversal
     // re-derives a title from the rewritten body, and it must not overwrite a
     // title the author wrote down.
-    if (title !== '') declaredTitles.add(slug);
+    if (titleDeclared) declaredTitles.add(slug);
     // The path a link resolves *from*, kept beside the entry it produced rather
     // than inside it: `slug` is a public route and `path` is a host-relative
     // filename, and `schema.ts` rejects an artifact carrying an unknown field

@@ -174,7 +174,8 @@ transliterated and leaves the note uncollected, while the note itself still publ
 Three other optional frontmatter fields reach the page: `slug` overrides the path-derived URL
 with a lowercase ASCII route key; `language` (or `lang`) sets the BCP 47 document locale and
 its chrome; `description` supplies the public note summary. Invalid shapes stop the build and
-the private report identifies the source note.
+the private report identifies the source note. If a slug override collides with another note,
+the first path in sorted order wins and the private report records the dropped path and winner.
 
 Tracked notes take `created` and `updated` from the first and last commits that touch their
 current paths. Creation requires full history — the Action example below uses `fetch-depth: 0`;

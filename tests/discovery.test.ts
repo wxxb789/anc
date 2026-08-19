@@ -354,9 +354,13 @@ test('slug language and description come from frontmatter', async () => {
 test('invalid remaining frontmatter fields fail with the source path only in detail', async () => {
   const cases = [
     ['slug', 'Bad Slug', 'invalid-slug-frontmatter'],
+    ['slug', '[]', 'invalid-slug-frontmatter'],
+    ['slug', '""', 'invalid-slug-frontmatter'],
+    ['slug', '../private', 'invalid-slug-frontmatter'],
     ['language', 'not_a_locale', 'invalid-language-frontmatter'],
     ['description', '[]', 'invalid-description-frontmatter'],
     ['description', '"   "', 'invalid-description-frontmatter'],
+    ['title', '[]', 'invalid-title-frontmatter'],
   ] as const;
   for (const [field, value, code] of cases) {
     await scratch('producer-frontmatter-invalid-', async (root) => {
@@ -395,6 +399,7 @@ test('frontmatter metadata limits fail at the source-path seam', async () => {
       );
       assert.equal(failure?.code, code);
       assert.ok(failure?.detail.includes('bounded.md'));
+      assert.ok(!failure?.message.includes('bounded.md'));
     });
   }
 });
@@ -439,6 +444,74 @@ test('a non-ASCII first folder stays publishable and uncollected', async () => {
     const found = await discover(root);
     assert.deepEqual(found.entries.map((entry) => entry.slug), ['note']);
     assert.equal(found.entries[0]?.collection, undefined);
+  });
+});
+
+test('producer limits and safety failures identify the source only in private detail', async () => {
+  const tagLimit = FIELD_LIMITS.arrays.tags;
+  const tagCases = [
+    Array.from({ length: tagLimit.items + 1 }, (_, index) => `tag-${index}`),
+    ['x'.repeat(tagLimit.itemChars + 1)],
+    ['private/path'],
+    [`safe${String.fromCharCode(0x202e)}name`],
+  ];
+  for (const tags of tagCases) {
+    await scratch('producer-tag-limit-', async (root) => {
+      const yaml = tags.map((tag) => `  - ${JSON.stringify(tag)}`).join('\n');
+      put(root, 'bounded-tags.md', `---\ntags:\n${yaml}\n---\n\n# Note\n`);
+      const failure = await discover(root).then(
+        () => undefined,
+        (error: unknown) => error as BuildFailure,
+      );
+      assert.equal(failure?.code, 'invalid-tags-frontmatter');
+      assert.ok(failure?.detail.includes('bounded-tags.md'));
+      assert.ok(!failure?.message.includes('bounded-tags.md'));
+    });
+  }
+
+  await scratch('producer-description-safety-', async (root) => {
+    put(root, 'bounded-description.md', '---\ndescription: "javascript:alert(1)"\n---\n\n# Note\n');
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as BuildFailure,
+    );
+    assert.equal(failure?.code, 'invalid-description-frontmatter');
+    assert.equal(failure?.message, 'frontmatter description must be valid public text');
+    assert.ok(failure?.detail.includes('bounded-description.md'));
+    assert.ok(!failure?.message.includes('bounded-description.md'));
+  });
+
+  await scratch('producer-title-limit-', async (root) => {
+    put(root, 'bounded-title.md', `# ${'x'.repeat(FIELD_LIMITS.strings.title + 1)}\n`);
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as BuildFailure,
+    );
+    assert.equal(failure?.code, 'title-too-long');
+    assert.ok(failure?.detail.includes('bounded-title.md'));
+    assert.ok(!failure?.message.includes('bounded-title.md'));
+  });
+
+  await scratch('producer-collection-limit-', async (root) => {
+    const folder = 'x'.repeat(FIELD_LIMITS.strings.collection + 1);
+    put(root, `${folder}/note.md`, '# Note\n');
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as BuildFailure,
+    );
+    assert.equal(failure?.code, 'collection-folder-too-long');
+    assert.ok(failure?.detail.includes('/note.md'));
+    assert.ok(!failure?.message.includes('/note.md'));
+  });
+});
+
+test('a path that derives no slug is dropped rather than published or failed', async () => {
+  await scratch('producer-empty-slug-', async (root) => {
+    put(root, '___.md', '# No route key\n');
+    put(root, 'note.md', '# Note\n');
+    const found = await discover(root);
+    assert.deepEqual(found.entries.map((entry) => entry.slug), ['note']);
+    assert.deepEqual(found.dropped, [{ path: '___.md', reason: 'empty-slug' }]);
   });
 });
 

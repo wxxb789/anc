@@ -87,6 +87,10 @@ export function isLanguageTag(value: string): boolean {
 /** Joins emoji sequences into one glyph, so it is allowed inside a tag or alias. */
 const ZERO_WIDTH_JOINER = String.fromCharCode(0x200d);
 
+export function isSafeTagOrAlias(value: string): boolean {
+  return !value.includes('/') && !/[\p{Cc}\p{Cf}]/u.test(value.replaceAll(ZERO_WIDTH_JOINER, ''));
+}
+
 const STATUS_VALUES: ReadonlySet<string> = new Set(['published', 'tombstone']);
 
 const REQUIRED_STRINGS = ['slug', 'title', 'excerpt', 'markdown'] as const;
@@ -230,6 +234,12 @@ function checkLimits(value: Record<string, unknown>, label: string, issues: stri
       }
     }
   }
+}
+
+export function contentLimitIssues(value: Record<string, unknown>, label: string): string[] {
+  const issues: string[] = [];
+  checkLimits(value, label, issues);
+  return issues;
 }
 
 type Rule = readonly [RegExp, string];
@@ -406,7 +416,13 @@ function checkPrivacy(entry: Record<string, unknown>, label: string, issues: str
     }
   }
 
-  for (const marker of [...found].sort()) issues.push(`${label}: forbidden ${marker} in serialized entry`);
+  for (const marker of [...found].sort()) issues.push(`${label}: forbidden ${marker} in serialized content`);
+}
+
+export function contentPrivacyIssues(value: Record<string, unknown>, label: string): string[] {
+  const issues: string[] = [];
+  checkPrivacy(value, label, issues);
+  return issues;
 }
 
 function checkStringArray(
@@ -502,7 +518,7 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
     if (item === undefined) continue;
     if (checkStringArray(item, `${label}.${field}`, issues, { sorted: false })) {
       for (const [position, member] of item.entries()) {
-        if (member.includes('/') || /[\p{Cc}\p{Cf}]/u.test(member.replaceAll(ZERO_WIDTH_JOINER, ''))) {
+        if (!isSafeTagOrAlias(member)) {
           issues.push(`${label}.${field}[${position}]: must not contain "/" or a control character`);
         }
       }
@@ -516,10 +532,10 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
   // field or a bad slug is still privacy-scanned, so no violation goes
   // unreported for an entry that would otherwise have been merely malformed.
   const beforeLimits = issues.length;
-  checkLimits(value, label, issues);
+  issues.push(...contentLimitIssues(value, label));
   if (issues.length !== beforeLimits) return undefined;
 
-  checkPrivacy(value, label, issues);
+  issues.push(...contentPrivacyIssues(value, label));
 
   return issues.length === before ? (value as unknown as ContentEntry) : undefined;
 }
