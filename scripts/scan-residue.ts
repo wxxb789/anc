@@ -59,6 +59,8 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { BuildFailure } from './write-report.ts';
+import { readVendorProvenance, type VendorProvenanceReadOptions } from './vendor-provenance.ts';
+import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { MARKED_ATTRIBUTE, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
 
@@ -100,7 +102,7 @@ const RESIDUE_RULES: readonly Rule[] = [
   [/javascript:/i, 'javascript: URL'],
   [/vbscript:/i, 'vbscript: URL'],
   [/(?<![A-Za-z])file:\/\//i, 'file:// URL'],
-  [/data:(?!image\/(?:png|jpe?g|gif|webp|avif);base64,)(?:,|[^,\s]*(?:\/|;base64)[^,\s]*,)/i, 'non-image data: URL'],
+  [/data:(?!(?:image\\?\/(?:png|jpe?g|gif|webp|avif)|image\\\/\(\?:png\|jpe\?g\|gif\|webp\|avif\));base64,)(?:,|[^,\s]*(?:\/|;base64)[^,\s]*,)/i, 'non-image data: URL'],
   [/sourceMappingURL/, 'source map reference'],
 ];
 
@@ -1066,7 +1068,12 @@ function walk(directory: string): string[] {
  *   findings" means something was read, and `rowCount` is what lets it trust
  *   that for a corpus that has collapsed into one file — see the vacuity guards.
  */
-export function scanResidue(root: string = DIST): {
+export interface ResidueScanOptions {
+  vendoredChunksPath?: string;
+  requireVendorProvenance?: boolean;
+}
+
+export function scanResidue(root: string = DIST, options: ResidueScanOptions = {}): {
   findings: string[];
   detailed: string[];
   scannedCount: number;
@@ -1134,9 +1141,16 @@ export function scanResidue(root: string = DIST): {
     );
   }
 
+  const provenanceOptions: VendorProvenanceReadOptions = {
+    ...(options.vendoredChunksPath === undefined ? {} : { path: options.vendoredChunksPath }),
+    required: options.requireVendorProvenance ?? false,
+  };
+  const vendoredChunks = readVendorProvenance(root, provenanceOptions);
+
   for (const path of files) {
     const name = basename(path);
     const where = relative(root, path);
+    const posixWhere = where.split(sep).join('/');
     const extension = extname(name).toLowerCase();
     // Anchored at the root of the built site: `pagefind/…` and nothing else.
     // Its fragments are the one member read anyway — see {@link THIRD_PARTY}.
@@ -1151,6 +1165,10 @@ export function scanResidue(root: string = DIST): {
     const inBundle = where.split(sep)[0] === THIRD_PARTY;
     const isFragment = inBundle && extension === FRAGMENT_EXTENSION;
     if (inBundle && !isFragment) continue;
+    // Exact membership in build-minted provenance, never a basename or path
+    // pattern. Mixed and first-party chunks are absent and keep falling through
+    // to the full scan; an invalid or stale grant already threw above.
+    if (vendoredChunks.has(posixWhere)) continue;
 
     // **A fragment's own filename may not be printed.** Measured: Pagefind names
     // each fragment for a digest of the text in it, so two corpora differing
@@ -1408,8 +1426,11 @@ export function scanResidue(root: string = DIST): {
  *
  * @throws {BuildFailure} listing every finding, when the scan is not clean.
  */
-export function assertNoResidue(root: string = DIST): number {
-  const { findings, detailed, scannedCount } = scanResidue(root);
+export function assertNoResidue(
+  root: string = DIST,
+  options: ResidueScanOptions = { requireVendorProvenance: DIAGRAM_MODE === 'client' },
+): number {
+  const { findings, detailed, scannedCount } = scanResidue(root, options);
   if (findings.length > 0) {
     const count = `${findings.length} finding${findings.length === 1 ? '' : 's'}`;
     throw new BuildFailure(

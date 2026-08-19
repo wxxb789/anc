@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { DIAGRAM_MODE } from './src/lib/diagram-mode.ts';
 import { MATH_MODE } from './src/lib/math-mode.ts';
 import { configForBuild } from './scripts/load-config.ts';
+import { vendorProvenancePlugin } from './scripts/vendor-provenance.ts';
 
 /**
  * Keep a client runtime out of the build unless client mode wants it.
@@ -191,7 +192,11 @@ export default defineConfig({
   output: 'static',
   trailingSlash: 'always',
   vite: {
-    plugins: [clientRuntimePlugin('diagram', DIAGRAM_MODE), clientRuntimePlugin('math', MATH_MODE)],
+    plugins: [
+      clientRuntimePlugin('diagram', DIAGRAM_MODE),
+      clientRuntimePlugin('math', MATH_MODE),
+      vendorProvenancePlugin(fileURLToPath(new URL('.', import.meta.url))),
+    ],
     build: {
       // Load-bearing for the CSP, not a size preference. Above 0, Vite inlines
       // a small `?url` asset as a `data:` URL — and `src/scripts/theme-init.js`

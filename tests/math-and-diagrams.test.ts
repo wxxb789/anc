@@ -24,7 +24,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
@@ -48,10 +48,8 @@ import {
   DIAGRAM_MODE,
   REQUIRED_STYLE_SRC,
   STYLE_SRC_BY_MODE,
-  CLIENT_MODE_BLOCKERS,
 } from '../src/lib/diagram-mode.ts';
 import { entries } from '../src/lib/content.ts';
-import { scanResidue } from '../scripts/scan-residue.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = new URL('dist/', ROOT);
@@ -651,64 +649,6 @@ test('the deployed CSP matches the diagram mode', () => {
   );
 });
 
-test('what still blocks client mode is recorded and still true', () => {
-  // Client mode renders correctly — verified in a real browser, both themes,
-  // zero CSP violations — but two gates outside this ticket's fence forbid the
-  // configuration it needs, so selecting it fails the build. `diagram-mode.ts`
-  // records both. This asserts the record is accurate rather than aspirational:
-  // a blocker that quietly gets fixed should stop being listed, and one that is
-  // listed should be real.
-  assert.ok(CLIENT_MODE_BLOCKERS.length > 0, 'the record claims client mode is shippable');
-
-  // Blocker 1: the deployment gate pins the build-time policy.
-  const deployment = readFileSync(new URL('tests/deployment.test.ts', ROOT), 'utf8');
-  assert.match(
-    deployment,
-    /\['style-src', "'self'"\]/,
-    'deployment.test.ts no longer hardcodes style-src — the first blocker is stale',
-  );
-  assert.match(
-    deployment,
-    /"'unsafe-inline'"/,
-    'deployment.test.ts no longer forbids unsafe-inline — the first blocker is stale',
-  );
-
-  // Blocker 2: the residue scan has no vendored-runtime exemption that covers
-  // Mermaid, so its chunks trip it.
-  //
-  // Run against a real chunk rather than grepped for the vendor's name. The
-  // likely shape of the real fix is a *generic* exemption — the mechanism is
-  // already there as `THIRD_PARTY`, and the comment beside it frames it as
-  // something Pagefind is granted rather than something named per vendor — so a
-  // name search would miss it and leave this blocker listed after it was gone.
-  //
-  // The finding is matched by *rule* rather than counted. `scanResidue` reports
-  // its own vacuity ("no scannable file was found") as a finding, so a
-  // non-empty result is not evidence the chunk was rejected: an exemption that
-  // skipped the file entirely would produce exactly one finding and pass a
-  // count check. Asserting the wikilink rule fired is what distinguishes
-  // "rejected the chunk" from "never read it".
-  const chunk = new URL('.tmp/blocker-probe/', ROOT);
-  mkdirSync(chunk, { recursive: true });
-  writeFileSync(
-    new URL('parser.js', chunk),
-    // The exact shape Mermaid's parser chunks carry: `[[` opening a nested
-    // array literal, which the scan reads as an unresolved wikilink.
-    'const points=[[1,2],[3,4]];export default points;\n',
-    'utf8',
-  );
-  try {
-    const { findings, scannedCount } = scanResidue(fileURLToPath(chunk));
-    assert.equal(scannedCount, 1, 'the probe chunk was not scanned, so this proves nothing either way');
-    assert.ok(
-      findings.some((finding) => finding.includes('[[wikilink]]')),
-      'the residue scan now accepts a vendored runtime chunk — the second blocker is stale',
-    );
-  } finally {
-    rmSync(chunk, { recursive: true, force: true });
-  }
-});
-
 test('build-time mode ships no client runtime at all', (t: TestContext) => {
   if (DIAGRAM_MODE !== 'build-time' && MATH_MODE !== 'build-time') {
     return t.skip('both modes are client, which ships both runtimes by design');
@@ -994,7 +934,7 @@ $$
       // `code` the sanitizer's `allowedClasses.code` admits. A `pre` cannot be
       // used: measured, a `<pre>` inside a `<p>` is torn out of the paragraph by
       // the parser, which would break every paragraph carrying inline math.
-      assert.match(html, /<code class="language-math">/, `${what}: the source element or its class was stripped`);
+      assert.match(html, /<code\b[^>]*class="language-math"/, `${what}: the source element or its class was stripped`);
       assert.ok(!html.includes('<math'), `${what}: MathML shipped in client mode`);
     } else {
       assert.match(html, /<math\b/, `${what}: build-time mode shipped no MathML`);

@@ -502,12 +502,32 @@ test('the residue scan fails on each marker it exists to catch', () => {
       ['<p>msw&#x2F secret</p>', 'msw/'],
       ['<p>msw\u200d/secret</p>', 'msw/'],
       ['<a href="data:text/html;base64,PHNjcmlwdD4=">x</a>', 'data:'],
+      ['<a href="data:image/svg+xml;base64,PHN2Zz4=">x</a>', 'data:'],
+      ['<a href="data:image/png,not-base64">x</a>', 'data:'],
     ] as const) {
       writeFileSync(join(scratch, 'index.html'), planted, 'utf8');
       const { findings } = scanResidue(scratch);
       assert.ok(
         findings.some((finding) => finding.toLowerCase().includes(expected.toLowerCase())),
         `the scan passed ${JSON.stringify(planted)}, or failed without naming ${expected}: ${findings.join('; ')}`,
+      );
+    }
+
+    // Raster data is the one allowed data: form. The second control is the
+    // first-party source line that client diagrams ship: a JavaScript regex
+    // escapes its slash as `\/`, which must not turn the same allowlist into a
+    // false positive. Read the actual line so this cannot pass on a fixture that
+    // drifted away from the runtime.
+    const diagramRuntime = readFileSync(new URL('src/scripts/diagram.ts', ROOT), 'utf8');
+    const rasterGuard = diagramRuntime.split('\n').find((line) => line.includes('const isInlineRaster'));
+    assert.ok(rasterGuard !== undefined, 'the runtime no longer carries the raster guard under test');
+    assert.ok(rasterGuard.includes('data:image\\/'), 'the runtime raster guard no longer escapes its slash');
+    for (const allowed of ['data:image/png;base64,AA==', rasterGuard]) {
+      writeFileSync(join(scratch, 'index.html'), allowed, 'utf8');
+      assert.deepEqual(
+        scanResidue(scratch).findings,
+        [],
+        `an allowed raster spelling was reported as residue: ${allowed}`,
       );
     }
 

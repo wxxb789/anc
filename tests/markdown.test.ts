@@ -5,6 +5,7 @@ import { test } from 'vitest';
 import Slugger from 'github-slugger';
 import { TOC_MIN_HEADINGS, defaultRouteForSlug, renderMarkdown, type TocEntry } from '../src/lib/markdown.ts';
 import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
+import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { translate } from '../src/lib/translations.ts';
 
 const FIXTURES = new URL('./fixtures/markdown/', import.meta.url);
@@ -304,13 +305,13 @@ test('inline marks and external links survive', () => {
 // --- Rendered constructs (requirements 15.1) ---------------------------------
 //
 // Both of these were downgrades to escaped source until TK-15, recorded under
-// requirements 15.2. Owner decisions 2 and 5 superseded them: math is native
-// MathML from Temml and a diagram is build-time SVG, both at zero client
-// JavaScript. `tests/math-and-diagrams.test.ts` carries the full coverage; what
+// requirements 15.2. Owner decisions 2 and 5 superseded them: both constructs
+// render in the selected mode, with source fallbacks in client mode.
+// `tests/math-and-diagrams.test.ts` carries the full coverage; what
 // is pinned here is that the *pipeline* produces them, since this file owns the
 // renderer's contract.
 
-test('a Mermaid fence becomes a rendered diagram, never a runtime renderer', () => {
+test('a Mermaid fence emits the shape selected by the diagram mode', () => {
   assert.match(kitchenSink.html, /<figure class="diagram" data-diagram="mermaid">/);
   assert.equal(kitchenSink.hasMermaid, true);
   // Neither mode may put a script or anything `style-src 'self'` blocks into
@@ -329,25 +330,31 @@ test('a Mermaid fence becomes a rendered diagram, never a runtime renderer', () 
     // The diagram is the source until the runtime replaces it, which is also
     // what a reader without JavaScript is left with — the deliberate §5.2/§5.3
     // carve-out that TK-10 records.
-    assert.match(kitchenSink.html, /<pre class="diagram-source" tabindex="0"><code class="language-mermaid">/);
+    assert.match(
+      kitchenSink.html,
+      /<pre\b[^>]*class="diagram-source"[^>]*tabindex="0"[^>]*><code class="language-mermaid">/,
+    );
   }
 });
 
-test('math becomes MathML and single dollars stay literal', () => {
-  // The property is the element pair — a `span.math-display` wrapping a
-  // `<math display="block">` — not the byte order of the root's attributes.
-  // Pinned as one literal, this went red when `substituteRendered` began minting
-  // `data-rendered` onto the root: `<math data-rendered="math" display="block">`
-  // is the same structure with an attribute in front.
-  assert.match(kitchenSink.html, /<span class="math-display" tabindex="0"><math\b/);
-  assert.match(kitchenSink.html, /<math[^>]*\sdisplay="block"/, 'display math must declare block mode');
-  assert.match(kitchenSink.html, /<mi>m<\/mi>/, 'the expression is marked up, not escaped');
+test('math emits the shape selected by the math mode and leaves single dollars literal', () => {
   assert.equal(kitchenSink.hasMath, true);
   assert.match(kitchenSink.html, /\$5 to \$10/, 'currency must not be parsed as inline math');
-  // Math is not a code block: no copy button, no highlighting shell, and no
-  // `pre` wrapper — which would make it a keyboard stop with nothing to scroll.
+  assert.match(kitchenSink.html, /<span class="math-display" tabindex="0">/);
+
+  if (MATH_MODE === 'client') {
+    assert.match(kitchenSink.html, /<code\b[^>]*class="language-math"[^>]*>E = mc\^2<\/code>/);
+    assert.doesNotMatch(kitchenSink.html, /<math\b/, 'client mode shipped build-time MathML');
+  } else {
+    // The property is the element pair, not the byte order of the MathML root's
+    // attributes: the rendered marker may precede display="block".
+    assert.match(kitchenSink.html, /<span class="math-display" tabindex="0"><math\b/);
+    assert.match(kitchenSink.html, /<math[^>]*\sdisplay="block"/, 'display math must declare block mode');
+    assert.match(kitchenSink.html, /<mi>m<\/mi>/, 'the expression is marked up, not escaped');
+  }
+
+  // Math is not a code block: no copy-button shell is emitted.
   assert.doesNotMatch(kitchenSink.html, /data-code-language="math"/);
-  assert.doesNotMatch(kitchenSink.html, /language-math/);
 });
 
 test('unsupported plugin syntax renders as inert source, not executed', () => {
@@ -405,7 +412,7 @@ test('every obfuscated javascript: URL variant is stripped', async () => {
     'javascript&colon;window.alert(1)',
     'java\tscript:window.alert(1)',
     'java\nscript:window.alert(1)',
-    ' javascript:window.alert(1)',
+    '\0javascript:window.alert(1)',
     '   javascript:window.alert(1)',
     'JAVASCRIPT:window.alert(1)',
     'vbscript:msgbox(1)',

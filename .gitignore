@@ -8,6 +8,8 @@ dist/
 *.tgz
 # generated types
 .astro/
+# per-build private metadata consumed before dist is published
+*.publish-state/
 
 # dependencies
 node_modules/

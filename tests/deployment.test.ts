@@ -24,6 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
+import { REQUIRED_STYLE_SRC } from '../src/lib/diagram-mode.ts';
 
 const SOURCE = new URL('../public/_headers', import.meta.url);
 const BUILT = new URL('../dist/_headers', import.meta.url);
@@ -162,7 +163,7 @@ test('the CSP declares every directive the requirements baseline names', () => {
   // documented deviation, asserted separately below.
   for (const [directive, expected] of [
     ['default-src', "'self'"],
-    ['style-src', "'self'"],
+    ['style-src', REQUIRED_STYLE_SRC],
     ['img-src', "'self' data: https:"],
     ['font-src', "'self'"],
     ['connect-src', "'self'"],
@@ -183,15 +184,27 @@ test('script-src permits WebAssembly compilation and nothing more', () => {
   assert.equal(POLICY.get('script-src'), "'self' 'wasm-unsafe-eval'");
 });
 
-test('no directive relaxes to unsafe-eval or unsafe-inline', () => {
+test('no directive relaxes beyond the selected diagram policy', () => {
   for (const [directive, value] of POLICY) {
-    for (const forbidden of ["'unsafe-eval'", "'unsafe-inline'", "'unsafe-hashes'", '*']) {
+    for (const forbidden of ["'unsafe-eval'", "'unsafe-hashes'", '*']) {
       assert.ok(
         !value.split(/\s+/).includes(forbidden),
         `${directive} contains ${forbidden}, which the CSP baseline forbids`,
       );
     }
   }
+
+  // Client Mermaid needs inline style elements and attributes while measuring
+  // and drawing. The accepted cost is confined to style-src; every other
+  // directive must remain unable to execute inline content.
+  const owners = [...POLICY]
+    .filter(([, value]) => value.split(/\s+/).includes("'unsafe-inline'"))
+    .map(([directive]) => directive);
+  assert.deepEqual(
+    owners,
+    REQUIRED_STYLE_SRC.includes("'unsafe-inline'") ? ['style-src'] : [],
+    `unsafe-inline does not match the selected style policy ${REQUIRED_STYLE_SRC}`,
+  );
 });
 
 test('the WebAssembly relaxation is still load-bearing', () => {

@@ -1678,7 +1678,7 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
         // whole point of routing both through this one post-sanitization step.
         markup: withRenderedMarker(
           request.sourceOnly === true
-            ? `<pre class="diagram-source"><code class="language-${MERMAID_LANGUAGE}">${escapeHtml(request.source)}</code></pre>` +
+            ? `<pre class="diagram-source" tabindex="0"><code class="language-${MERMAID_LANGUAGE}">${escapeHtml(request.source)}</code></pre>` +
               `<figcaption>${escapeHtml(request.caption ?? '')}</figcaption>`
             : await renderDiagram(
                 request.source,

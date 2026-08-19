@@ -14,9 +14,8 @@
  * | Render call | **synchronous** | asynchronous |
  *
  * **Math needs no CSP relaxation, and diagrams do.** That asymmetry is the whole
- * reason for two constants: `CLIENT_MODE_BLOCKERS`' first blocker — that
- * `tests/deployment.test.ts` forbids the relaxed `style-src` client diagrams
- * need — does not apply here.
+ * reason for two constants: selecting client math does not itself widen
+ * `style-src`, while selecting client diagrams does.
  *
  * ## Zero CSP violations, and what it took to get there
  *
@@ -51,23 +50,21 @@
  */
 export type MathMode = 'build-time' | 'client';
 
-export const MATH_MODE: MathMode = 'build-time';
+export const MATH_MODE: MathMode = 'client';
 
 /**
- * What selecting `client` still requires, beyond flipping the constant above.
+ * The costs carried by the selected client mode.
  *
- * The sibling of `CLIENT_MODE_BLOCKERS`, and much shorter, because the two
- * blockers that hold diagrams back are both about CSP and Mermaid's bundle.
- * Neither applies to math: temml needs no relaxation at all — measured at 0 CSP
+ * Unlike Mermaid, temml needs no relaxation at all — measured at 0 CSP
  * violations across every expression tried — and its single chunk carries no
  * `[[`, no `data:` URL, and no drive-letter-shaped string, measured against the
  * residue scan.
  *
- * What does remain is the cost this mode moves onto the reader, recorded so that
- * flipping the constant is a decision rather than a default:
+ * What remains is the cost this selected mode moves onto the reader, recorded so
+ * the choice stays explicit rather than becoming an unexplained default:
  *
- * 1. **~116 KB gzip per math page**, against 0 today. A page with no math pays
- *    nothing either way; the loader is gated on `hasMath`.
+ * 1. **~116 KB gzip per math page**, against 0 in build-time mode. A page with
+ *    no math pays nothing either way; the loader is gated on `hasMath`.
  *
  *    **The received figure was ~59 KB and it is wrong**, which matters because
  *    it is the number the whole cost/benefit rests on. 59 KB is
