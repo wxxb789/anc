@@ -112,12 +112,15 @@ test('Pagefind manifest failures are distinct and a null WASM uses its fixed fal
 
     const namedPath = join(namedRoot, 'pagefind', 'pagefind-entry.json');
     const named = JSON.parse(readFileSync(namedPath, 'utf8')) as typeof entry;
-    Object.values(named.languages)[0]!.wasm = 'zzq-missing';
+    const namedLanguage = Object.values(named.languages).find((language) => typeof language.wasm === 'string');
+    assert.ok(namedLanguage, 'the real Pagefind manifest has no named WASM branch to mutate');
+    const originalWasm = namedLanguage.wasm!;
+    namedLanguage.wasm = 'zzq-missing';
     writeFileSync(namedPath, JSON.stringify(named), 'utf8');
     const namedError = mismatch(namedRoot);
     assert.match(namedError.message, /1 unexpected, 1 missing, 0 altered/);
     assert.match(namedError.detail, /wasm\.zzq-missing\.pagefind/);
-    assert.match(namedError.detail, /wasm\.en\.pagefind/);
+    assert.ok(namedError.detail.includes(`wasm.${originalWasm}.pagefind`));
   } finally {
     rmSync(unreadableRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     rmSync(invalidRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
@@ -143,10 +146,11 @@ test('a missing route and an altered package asset fail in distinct directions',
   const missingRoot = copyDist();
   const alteredRoot = copyDist();
   try {
-    rmSync(join(missingRoot, 'notes', 'reading-a-build-log', 'index.html'));
+    const removedRoute = `notes/${ARTIFACT.entries[0]!.slug}/index.html`;
+    rmSync(join(missingRoot, ...removedRoute.split('/')));
     const missing = mismatch(missingRoot);
     assert.match(missing.message, /0 unexpected, 1 missing, 0 altered/);
-    assert.match(missing.detail, /notes\/reading-a-build-log\/index\.html/);
+    assert.ok(missing.detail.includes(removedRoute));
 
     const favicon = join(alteredRoot, 'favicon.svg');
     writeFileSync(favicon, readFileSync(favicon, 'utf8') + '\n<!-- changed -->\n', 'utf8');

@@ -37,7 +37,7 @@
     "emit:redirects": "node scripts/emit-redirects.ts",
     "check": "astro check",
     "lint": "oxlint",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=4",
     "test:watch": "vitest",
     "index:search": "node scripts/run-pagefind.ts",
     "build": "node scripts/build-site.ts",
@@ -46,7 +46,7 @@
     "smoke:tarball": "node scripts/smoke-tarball.ts",
     "prepack": "node -e \"throw new Error('run pnpm run pack:tarball -- a bare pack ships the .ts sources Node cannot strip under node_modules')\"",
     "scan:residue": "node scripts/scan-residue.ts",
-    "verify": "pnpm run lint && pnpm run check && pnpm run build && pnpm run test",
+    "verify": "pnpm run lint && pnpm run check && node scripts/build-site.ts --scan-secrets && pnpm run test",
     "preview": "astro preview",
     "astro": "astro"
   },

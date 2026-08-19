@@ -501,6 +501,11 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     const { assertOutputInventory } = await import('../scripts/verify-output-inventory.ts');
     assertOutputInventory(staging, validated);
 
+    if (release) {
+      const { scanSecrets } = await import('../scripts/scan-secrets.ts');
+      console.log(`secret scan ok: ${scanSecrets(staging)} files, 0 findings`);
+    }
+
     const { assertNoResidue } = await import('../scripts/scan-residue.ts');
     console.log(`residue scan ok: ${assertNoResidue(staging)} files, 0 findings`);
 

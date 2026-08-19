@@ -3,12 +3,10 @@
  *
  * ## Why a wrapper rather than a lock inside one of the steps
  *
- * The chain is six processes — validate, `astro build`, redirects, Pagefind,
- * output inventory, residue scan. Astro, redirects, and Pagefind write `dist/`;
- * the final two gates read it. No single step spans that: a lock taken in `validate-content.ts` releases when
- * that process exits, which is *before* `astro build` starts, and one taken in
- * `scan-residue.ts` is taken after the writing is done. Something has to
- * outlive all six, and this is the smallest thing that does.
+ * Preview is six processes — validate, Astro, redirects, Pagefind, inventory,
+ * residue. Repository `verify` opts into a seventh, secret scan, before residue.
+ * Astro, redirects, and Pagefind write `dist/`; the final gates read it. No one
+ * child spans that sequence, so this wrapper owns the lock across every child.
  *
  * ## Why `pnpm run build` needs the lock at all
  *
@@ -20,8 +18,8 @@
  * constantly; `build:fixture` is minutes and run rarely. The ticket was named
  * for the rare one.
  *
- * `pnpm run verify` chains `lint && check && build && test` sequentially, so the
- * build releases before the suite starts and there is no self-deadlock. The one
+ * `pnpm run verify` passes `--scan-secrets`, keeping build and credential scan
+ * atomic before the suite starts; ordinary `build` keeps the preview chain. The one
  * caller that *does* nest is `build-fixture.ts`'s restore step, which spawns
  * this while holding the lock — see `PUBLISH_DIST_LOCK_HELD`.
  */
@@ -41,8 +39,10 @@ import { lockDist } from './dist-lock.ts';
  */
 export const LOCK_HELD_VARIABLE = 'PUBLISH_DIST_LOCK_HELD';
 
-/** The chain `package.json`'s `build` used to name, in order. */
-const STEPS: readonly (readonly [string, ...string[]])[] = [
+type Step = readonly [string, ...string[]];
+
+/** The preview chain `package.json`'s `build` used to name, in order. */
+const STEPS: readonly Step[] = [
   ['node', 'scripts/validate-content.ts'],
   ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/emit-redirects.ts'],
@@ -50,9 +50,13 @@ const STEPS: readonly (readonly [string, ...string[]])[] = [
   ['node', 'scripts/verify-output-inventory.ts'],
   ['node', 'scripts/scan-residue.ts'],
 ];
+const SECRET_STEP: Step = ['node', 'scripts/scan-secrets.ts'];
 
-function runSteps(): number {
-  for (const [command, ...args] of STEPS) {
+function runSteps(includeSecrets: boolean): number {
+  const sequence: readonly Step[] = includeSecrets
+    ? [...STEPS.slice(0, -1), SECRET_STEP, STEPS.at(-1)!]
+    : STEPS;
+  for (const [command, ...args] of sequence) {
     const result = spawnSync(command, [...args], {
       stdio: 'inherit',
       // `pnpm` resolves to a `.CMD` shim under some installers and a `.CMD`
@@ -71,10 +75,16 @@ function runSteps(): number {
 }
 
 async function main(): Promise<number> {
-  if (process.env[LOCK_HELD_VARIABLE] === '1') return runSteps();
-  const release = await lockDist('pnpm run build');
+  const arguments_ = process.argv.slice(2);
+  if (arguments_.some((argument) => argument !== '--scan-secrets')) {
+    console.error('build-site accepts only --scan-secrets');
+    return 1;
+  }
+  const includeSecrets = arguments_.includes('--scan-secrets');
+  if (process.env[LOCK_HELD_VARIABLE] === '1') return runSteps(includeSecrets);
+  const release = await lockDist(includeSecrets ? 'pnpm run verify (building)' : 'pnpm run build');
   try {
-    return runSteps();
+    return runSteps(includeSecrets);
   } finally {
     release();
   }

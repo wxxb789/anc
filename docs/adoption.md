@@ -212,9 +212,11 @@ producer just computed. Additions and removals both stop the release until you r
 again. Requiring the removal too is what prevents stale approval: a note cannot be published,
 excluded, then silently re-included under its old ledger entry.
 
-`--release` also refuses the loopback default origin. It qualifies a build for deployment; it
-does not deploy anything. The shipped Action always uses this mode and has no switch that
-disables the review.
+`--release` also refuses the loopback default origin and requires the exact Gitleaks version
+named by `scripts/scan-secrets.ts` on `PATH`. It scans raw output plus explicitly inflated gzip,
+with findings redacted. It qualifies a build for deployment; it does not deploy anything. The
+Linux Action installs a checksum-pinned scanner before reading notes, always uses release mode,
+and has no switch that disables either gate.
 
 ## Hosting it
 
@@ -238,12 +240,14 @@ worth more than a shorter install line.
   Action refuse it.
 - **Commit the reviewed publish set.** The Action runs `build --release`, so a missing, dirty,
   or stale `.publish-set.json` stops before any deployable artifact is produced.
+- **Use a Linux Action runner.** The checksum-pinned scanner installer supports Linux x64 and
+  arm64. Manual release builds on other platforms may use the same Gitleaks version from PATH.
 
 The output is a directory of static files. Any static host serves it. `dist/_headers` carries
 a Content-Security-Policy and three other security headers in Cloudflare Pages' format; a host
 that does not read that file serves the site without them, which works and is weaker.
 
-A rough GitHub Pages workflow, given the three caveats above:
+A rough GitHub Pages workflow, given the four caveats above:
 
 ```yaml
 name: publish
@@ -259,9 +263,8 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
-      - uses: actions/setup-node@v5
-        with: { node-version: 24 }
-      - run: npx @thoughtscape/publish build --release
+      - uses: <owner>/<repo>@v1
+        with: { content-dir: ., out-dir: dist }
       - uses: actions/upload-pages-artifact@v3
         with: { path: dist }
       - uses: actions/deploy-pages@v4

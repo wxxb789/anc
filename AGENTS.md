@@ -71,7 +71,7 @@ owner's name a foreign build carried before TK-31 removed them.
 
 ```bash
 pnpm run build          # Astro + Pagefind + output inventory + residue scan
-pnpm run verify         # every gate: lint, type check, build, inventory, residue, tests
+pnpm run verify         # every gate: lint, check, build, scans, tests
 pnpm run build:fixture  # rebuild against the 32-note corpus, un-skipping the multi-entry gates
 pnpm run pack:tarball   # compile TypeScript and produce the installable tarball
 pnpm run preview        # `astro preview` over this repository's own dist/
@@ -82,6 +82,11 @@ pnpm run preview        # `astro preview` over this repository's own dist/
 `scripts/markdown-to-artifact.ts`, reached through the binary — and it is retained only
 because `tests/packaging.test.ts:394-407` asserts a note about the vault exporter's own
 target-name check. Do not run it. Deleting it is a live option and takes that gate with it.
+
+`pnpm run verify`, `build:fixture`, and packaged `build --release` require the exact
+`GITLEAKS_VERSION` exported by `scripts/scan-secrets.ts` on `PATH`. CI and the composite Action
+install checksum-pinned Linux archives before any scan or note read; ordinary preview builds
+do not require the external tool. A manual release host must install that version itself.
 
 `pnpm run preview` is not the same command a user gets. `astro preview` serves *this*
 repository's build, and `scripts/preview-site.ts` records the measurement that a stranger
@@ -107,10 +112,9 @@ called `pack` cannot coexist.
 
 ## Verification
 
-`pnpm run verify` is the gate. It runs lint, type check, build (which ends in the exact
-output inventory and privacy residue scan), and the test suite, chained with `&&` so a failure
-anywhere aborts the run rather than letting a later step measure a half-written `dist/` and
-pass it. Run it before proposing a merge and report the pass count.
+`pnpm run verify` is the gate. It runs lint and type check, then one locked build chain ending
+in exact inventory, pinned redacted secret, and residue scans, then the test suite. `&&` stops
+on the first failure. Run it before proposing a merge and report the pass count.
 
 ### What runs where
 
@@ -121,6 +125,7 @@ pass it. Run it before proposing a merge and report the pass count.
 | Content contract + derived-route validation | yes | yes | yes | yes |
 | Astro build, redirects, Pagefind index | yes | yes | yes | yes |
 | Exact output inventory: routes, package assets, Astro/Pagefind namespaces | yes | yes | yes | yes |
+| Pinned Gitleaks over raw and inflated output | yes | — | yes | `build --release` |
 | Residue scan over the output — markers, paths, schemes, source maps, the search index | yes | yes | yes | yes |
 | Configuration parse: unknown key, wrong type, malformed YAML | — | — | — | yes |
 | Exclusion: `publish: false`, globs, zero-match refusal | — | — | — | yes |
@@ -129,10 +134,11 @@ pass it. Run it before proposing a merge and report the pass count.
 | Rendered-browser gates (Playwright) | when Chromium is installed | — | yes, always | — |
 
 The last column replaces what used to say "Cloudflare Pages". `bin/thoughtscape-publish.mjs`
-runs the same chain `package.json`'s `build` script names, link for link, and
-`tests/packaging.test.ts` asserts the two chains name the same steps — so a gate added to one
-is added to the other. Cloudflare Pages is now one deployment target among several and builds
-nothing this repository owns; [`docs/adoption.md`](docs/adoption.md) covers hosting.
+runs the same generated-output chain `package.json`'s `build` names, link for link. Secret
+scanning is the deliberate exception: repository `verify` and packaged `build --release` run
+it, while an ordinary preview does not require an external binary. Both relationships are
+gated. Cloudflare Pages is one deployment target among several and builds nothing this
+repository owns; [`docs/adoption.md`](docs/adoption.md) covers hosting.
 
 CI (`.github/workflows/verify.yml`) runs `pnpm run verify` rather than restating its steps, so
 the two cannot drift; `tests/verify.test.ts` fails if a gate is ever spelled out in the
@@ -146,9 +152,6 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 - Deployment. Requirements section 21.1 stage 13 makes it a separately approved action; CI
   deliberately cannot deploy and needs no secrets.
 - Post-deploy smoke tests (stage 14), which need a deployed origin.
-- Secret scanning (section 19.1's Gitleaks item). The reviewed publish set and exact
-  route/asset inventory are enforced in every relevant release/build path; credential pattern
-  matching remains a separate external tool with its own false-positive policy.
 - `pnpm run build:fixture`, the 32-note corpus that un-skips the multi-entry gates. Not in
   `verify` because it builds the site twice. It *can* now run concurrently with the suite — the
   two interlock over `dist/` and wait for each other (`scripts/dist-lock.ts`), which the
@@ -170,6 +173,9 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 - Generated routes are exactly the route model; package assets are byte-bound to `public/`;
   Astro owns only flat hashed JS/CSS; Pagefind has an exact runtime allowlist and metadata-bound
   content-addressed index members.
+- Gitleaks is exact-version pinned, cannot inherit user config or allow comments, scans one
+  decode layer plus raw and explicitly inflated gzip, and never preserves or prints matched
+  secret values.
 - Release mode requires a public origin and a committed ledger exactly equal to the computed
   public slugs; missing, dirty, added, and removed states fail, and shrink-then-re-include fails
   as a new addition rather than inheriting stale approval.

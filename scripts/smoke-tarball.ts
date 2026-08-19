@@ -142,11 +142,12 @@ function main(): void {
     run('git', ['commit', '--quiet', '-m', 'review publish set'], scratch);
     const buildOutput = run(process.execPath, [binary, 'build', '--release'], scratch);
     const lines = buildOutput.trim().split(/\r?\n/);
-    assert(lines.length === 4, 'build wrote more or fewer than the four documented lines: ' + buildOutput);
-    assert(lines[0]?.startsWith('residue scan ok:'), 'build did not finish its residue scan');
-    assert(lines[1] === 'site written', 'build did not report a written site');
-    assert(lines[2]?.includes('1 published'), 'build did not publish exactly the public fixture note');
-    assert(lines[3]?.startsWith('report:'), 'build did not point to its private report');
+    assert(lines.length === 5, 'release build wrote more or fewer than its five documented lines: ' + buildOutput);
+    assert(lines[0]?.startsWith('secret scan ok:'), 'release build did not finish its secret scan');
+    assert(lines[1]?.startsWith('residue scan ok:'), 'build did not finish its residue scan');
+    assert(lines[2] === 'site written', 'build did not report a written site');
+    assert(lines[3]?.includes('1 published'), 'build did not publish exactly the public fixture note');
+    assert(lines[4]?.startsWith('report:'), 'build did not point to its private report');
 
     const dist = join(scratch, 'dist');
     const welcome = readFileSync(join(dist, 'notes', 'welcome', 'index.html'), 'utf8');
@@ -182,8 +183,9 @@ function main(): void {
     };
     assert(index.entries.length === 1 && index.entries[0]?.slug === 'welcome', 'content index is not the reviewed public set');
 
+    const reportPath = join(scratch, '.git', 'publish-report', 'content-report.json');
     const report = JSON.parse(
-      readFileSync(join(scratch, '.git', 'publish-report', 'content-report.json'), 'utf8'),
+      readFileSync(reportPath, 'utf8'),
     ) as {
       status: string;
       dropped: { path: string; reason: string }[];
@@ -197,6 +199,26 @@ function main(): void {
       report.dropped.some((item) => item.path === 'drafts/roadmap.md' && item.reason === 'excluded-by-pattern'),
       'pattern exclusion is absent from the private report',
     );
+
+    const planted = 'ghp_4fJ9xQ2mN7vL5sT8yR1cW6kP3dH0bA9eZ7uC';
+    const sourcePath = join(scratch, 'welcome.md');
+    writeFileSync(sourcePath, readFileSync(sourcePath, 'utf8') + `\ntoken=${planted}\n`, 'utf8');
+    const rejected = spawnSync(process.execPath, [binary, 'build', '--release'], {
+      cwd: scratch,
+      encoding: 'utf8',
+    });
+    assert(rejected.status !== 0, 'a release carrying a credential passed the scan');
+    const rejectedStreams = rejected.stdout + rejected.stderr;
+    assert(
+      /secret scan found [1-9]\d* findings?/.test(rejectedStreams),
+      'release failure did not report a finding count: ' + rejectedStreams.replaceAll(planted, '<REDACTED>'),
+    );
+    assert(!rejectedStreams.includes(planted), 'release failure printed the matched credential');
+    assert(!rejectedStreams.includes('welcome.md'), 'release failure printed the source filename');
+    const failedReport = readFileSync(reportPath, 'utf8');
+    assert(!failedReport.includes(planted), 'private report preserved the matched credential');
+    assert(failedReport.includes('github-pat'), 'private report omitted the sanitized rule id');
+    assert(readFileSync(join(dist, 'notes', 'welcome', 'index.html'), 'utf8') === welcome, 'failed release replaced the last good output');
 
     console.log('tarball adoption smoke ok: 1 published note, 2 withheld notes');
     console.log('tarball: ' + basename(TARBALL));

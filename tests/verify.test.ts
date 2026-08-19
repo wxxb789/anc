@@ -229,7 +229,10 @@ test('verify runs every gate, and the build it measures happens before the tests
   // comparing order — `pnpm run build:fixture && pnpm test && pnpm run build`
   // satisfied "build before test" while genuinely running the tests first.
   const links = verify.split('&&').map((link) => link.trim());
-  const gateAt = (gate: string) => links.findIndex((link) => new RegExp(`^pnpm (?:run )?${gate}$`).test(link));
+  const gateAt = (gate: string) => links.findIndex((link) => gate === 'build'
+    ? link === 'node scripts/build-site.ts --scan-secrets'
+    : new RegExp(`^pnpm (?:run )?${gate}$`).test(link),
+  );
 
   // Named individually rather than as a count: a count stays satisfied while
   // one gate is swapped for another. Validation and the residue scan are links
@@ -242,6 +245,11 @@ test('verify runs every gate, and the build it measures happens before the tests
   // `dist/` — the CSP gates, the residue-adjacent page scans, the byte budget —
   // and a suite that runs before the build measures the *previous* build, so a
   // change that breaks the output would pass on stale files.
+  assert.equal(
+    links[gateAt('build')],
+    'node scripts/build-site.ts --scan-secrets',
+    'verify must scan the output before releasing the build lock',
+  );
   assert.ok(
     gateAt('build') < gateAt('test'),
     'verify runs the tests before the build, so they would measure the previous build',
@@ -257,14 +265,14 @@ test('the residue scan is a blocking link of the build, not an advisory step', (
   const build = SCRIPTS['build'];
   assert.ok(build, 'package.json declares no `build` script');
 
-  // In `build` rather than only in `verify` for one specific reason: Cloudflare
-  // Pages runs `pnpm run build` and nothing else. A scan that lived only in
-  // `verify` would be enforced on this machine and absent from the host that
-  // publishes the artifact — which is the wrong way round for a privacy gate.
+  // In `build` rather than only in `verify`: any host invoking the build chain
+  // must receive a residue-gated artifact. The external secret scanner differs:
+  // it gates repository `verify` and packaged release qualification while an
+  // ordinary preview remains usable without an extra host tool.
   //
   // **The chain moved out of `package.json` and into `scripts/build-site.ts`**,
   // a wrapper that holds the `dist/` lock across every step — which no single
-  // step can do, since the five are five processes and the writing spans three
+  // step can do, since the six are separate processes and writing spans three
   // of them. So the property is read where the chain now lives. It is a stronger
   // form than the string match it replaces: the steps are an ordered array, so
   // "last" is a position rather than a regex anchor, and "blocking" is a
@@ -272,7 +280,9 @@ test('the residue scan is a blocking link of the build, not an advisory step', (
   assert.match(build, /scripts\/build-site\.ts/, '`build` no longer runs the chain wrapper');
 
   const wrapper = readFileSync(new URL('../scripts/build-site.ts', import.meta.url), 'utf8');
-  const steps = [...wrapper.matchAll(/\['node', 'scripts\/([\w-]+)\.ts'\]|\['pnpm', 'exec', '(astro)'/g)].map(
+  const previewSteps = /const STEPS[^=]*= \[([\s\S]*?)\n\];/.exec(wrapper)?.[1] ?? '';
+  assert.ok(previewSteps, 'the build wrapper preview step array is unreadable');
+  const steps = [...previewSteps.matchAll(/\['node', 'scripts\/([\w-]+)\.ts'\]|\['pnpm', 'exec', '(astro)'/g)].map(
     (match) => match[1] ?? match[2]!,
   );
   assert.ok(steps.length >= 4, `the wrapper declares only ${steps.length} steps`);

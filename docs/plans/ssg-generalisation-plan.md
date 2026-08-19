@@ -1,11 +1,13 @@
 # General-Purpose SSG — Plan
 
 **Status:** all 12 tickets delivered; the Action, `init`, shipped preview, tarball adoption smoke,
-reviewed release boundary, and exact output inventory are implemented. All three fatal findings closed.
+reviewed release boundary, exact output inventory, and pinned secret scan are implemented. All
+three fatal findings closed.
 **Document type:** Architecture decision + revised backlog
 **Derived from:** three research agents, three drafted sections, and two adversarial reviews
 that returned 25 substantiated findings
-**Describes:** the delivered general-purpose architecture through client rendering, reviewed release qualification, and exact output inventory
+**Describes:** the delivered general-purpose architecture through client rendering, reviewed
+release qualification, exact output inventory, and pinned secret scanning
 **Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md),
 which was revised in place through 2026-08-19 — §7 below is that revision's source and is now
 **executed**, so where the two disagree the requirements document is current

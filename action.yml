@@ -59,13 +59,11 @@
 # in a report under the git directory that no `git add` can reach.
 #
 # The commands that are not ours are `git rev-parse`, which answers `true` or
-# `false`, and the two installers, both at `--loglevel=error`. What each prints
-# there was measured rather than assumed, because they differ: `pnpm install`
-# prints nothing at all on success, while `npm install -g` still prints one line
-# of the form `added 1 package in 2s` — a count and a duration, naming nothing.
-# On failure both report, and their output carries paths into the *action's*
-# dependency tree on the runner — never the user's notes, which neither installer
-# reads. A dependency install that failed silently would be the worse trade.
+# `false`, and the dependency installers at `--loglevel=error`. `pnpm install`
+# prints nothing on success; `npm install -g` prints one count and duration. The
+# checksum-pinned Gitleaks installer is silent on success. On failure these steps
+# can name only the action's dependency/tool directories — they run before any
+# command reads the user's notes. A failed install reported silently is worse.
 
 name: Publish a site from a directory of Markdown
 description: >-
@@ -255,6 +253,10 @@ runs:
       run: |
         npm install -g "$PNPM_SPEC" --loglevel=error
         pnpm install --frozen-lockfile --prod --loglevel=error
+
+    - name: Provide the pinned secret scanner
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/.github/scripts/install-gitleaks.sh"
 
     # The one step that reads the user's notes. Every path here is the user's own
     # input echoed back into an argument, never into the log: the binary prints

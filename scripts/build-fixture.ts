@@ -124,11 +124,18 @@ async function main(): Promise<number> {
       console.error('\noutput inventory failed with status ' + inventoryStatus);
       return inventoryStatus;
     }
+    const secretStatus = runStep('node', ['scripts/scan-secrets.ts'], env);
+    if (secretStatus !== 0) {
+      console.error('\nsecret scan failed with status ' + secretStatus);
+      return secretStatus;
+    }
   } finally {
     releaseBuild();
   }
 
-  const testStatus = runStep('pnpm', ['exec', 'vitest', 'run'], env);
+  // The bilingual corpus drives many nested Astro/Pagefind builds; two workers
+  // prevent their temporary manifests competing under peak host load.
+  const testStatus = runStep('pnpm', ['exec', 'vitest', 'run', '--maxWorkers=2'], env);
   if (testStatus !== 0) {
     console.error(`\nvitest run failed with status ${testStatus}`);
     // Still restore the published build: leaving a fixture `dist/` behind makes

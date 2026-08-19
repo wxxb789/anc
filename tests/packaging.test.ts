@@ -278,6 +278,7 @@ test('the trace reaches the modules whose devDependency imports broke the adopti
     'src/lib/mermaid-environment.ts',
     'src/lib/mermaid-render.ts',
     'scripts/scan-residue.ts',
+    'scripts/scan-secrets.ts',
     'scripts/validate-content.ts',
     // Reached only through an Astro `<script>` tag, which is the region an
     // earlier version of this trace never read. `diagram.ts` imports `mermaid`,

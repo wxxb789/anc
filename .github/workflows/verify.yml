@@ -69,4 +69,6 @@ jobs:
       # them rather than reporting a green run that skipped them.
       - run: pnpm exec playwright install --with-deps chromium
 
+      - run: bash .github/scripts/install-gitleaks.sh
+
       - run: pnpm run verify

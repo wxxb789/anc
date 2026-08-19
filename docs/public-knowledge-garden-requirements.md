@@ -4,9 +4,9 @@
 **Document type:** Product requirements + architecture decision baseline
 **Target project:** A general-purpose static publisher for a repository of Markdown
 **Last updated:** 2026-08-19; first drafted 2026-08-06
-**Implementation status:** The general-purpose plan, reviewed release boundary, and exact
-output inventory are delivered. Deployment remains a separately approved external action this document does not
-authorize.
+**Implementation status:** The general-purpose plan, reviewed release boundary, exact output
+inventory, and pinned secret scan are delivered. Deployment remains a separately approved
+external action this document does not authorize.
 
 ## 0. How to read this document, after the inversion
 
@@ -991,8 +991,9 @@ now ships as the output-inventory gate; its performance-budget slice remains unb
 
 Scan the built output for:
 
-- secrets with Gitleaks or equivalent — **not covered**, and deliberately: a credential pattern
-  set is a different tool with a different false-positive profile;
+- secrets with checksum-pinned Gitleaks — enforced over the final artifact and explicitly
+  inflated gzip members; release builds and repository CI require the exact scanner version,
+  redact secret values, and put only sanitized rule/path/position metadata in the private report;
 - path markers. **These are hardcoded and should be user configuration**: the only config keys
   are `title`, `origin`, and `exclude`, and the scanner reads no config at all, so every user
   inherits one owner's `msw/` prefix — a widely used HTTP-mocking library, and therefore a
@@ -1008,11 +1009,11 @@ Scan the built output for:
   `public/`; Astro owns flat hashed JS/CSS, while Pagefind uses an exact runtime allowlist and
   metadata-bound content-addressed index members.
 
-Seven of the eight are enforced. Secret scanning is the one remaining item, and it names the
-external tool that owns it.
+All eight are enforced. Gitleaks owns the maintained credential rules; the residue scanner
+deliberately does not duplicate them with ad-hoc entropy heuristics.
 
-**Every rule must be individually proven non-vacuous.** An aggregate "nine rules, zero
-findings" cannot distinguish nine working rules from one working rule and eight broken ones,
+**Every rule must be individually proven non-vacuous.** An aggregate "eight rules, zero
+findings" cannot distinguish eight working rules from one working rule and seven broken ones,
 and the scan must additionally refuse to pass over an empty or unreadable output, and over a
 file whose type it cannot classify.
 
@@ -1091,8 +1092,8 @@ or SharedArrayBuffer-dependent feature needs cross-origin isolation.
    run is a requirement, not an incidental**: deletion is only structural if a stale page
    cannot survive a rebuild.
 8. Build the Pagefind index.
-9. Verify the exact route/asset inventory, then scan the built output for privacy and security
-   residue.
+9. Verify the exact route/asset inventory, run the pinned redacted secret scan, then scan the
+   built output for privacy and security residue.
 10. Run unit, integration, accessibility, and browser tests.
 11. Verify CSP and absence of inline scripts/events.
 12. Run `review`, inspect and commit `.publish-set.json`, then require exact equality with

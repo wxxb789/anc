@@ -36,8 +36,8 @@
  * **What it does not cover**, stated here so the gate is not mistaken for the
  * whole of requirements section 19.1. That list has eight items; this scanner
  * closes five — path markers, unresolved wikilinks, absolute local paths, source
- * maps, and unsafe link schemes. The remaining three are covered elsewhere or
- * not at all:
+ * maps, and unsafe link schemes. The remaining three are covered by separate
+ * publication-event, provenance, and credential-rule owners:
  *
  * - *Slugs absent from the reviewed publish set* are enforced by `review` plus
  *   `build --release`, because they are a publication-event property rather than
@@ -45,11 +45,9 @@
  * - *Unexpected routes or assets* is enforced by
  *   `scripts/verify-output-inventory.ts`, because it is a route-model and
  *   provenance property rather than a byte pattern.
- * - *Secrets, via Gitleaks or equivalent*, is **not covered**. A credential
- *   pattern set is a different tool with a different false-positive profile,
- *   and adding an entropy heuristic here would be a worse version of one. A
- *   release build's reviewed slug set lowers the risk; it does not scan bodies
- *   and is not a reason to call secret scanning covered.
+ * - *Secrets* are enforced by `scripts/scan-secrets.ts` using the exact pinned
+ *   Gitleaks rule set. A credential pattern set has a different false-positive
+ *   profile, so duplicating it here with an entropy heuristic would be weaker.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';

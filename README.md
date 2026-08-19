@@ -21,7 +21,8 @@ document a stranger needs.
   with source fallbacks, RSS, sitemap, and a strict CSP.
 - Writes the names of everything it dropped to a file under `.git/` that cannot be committed,
   and only counts to the log. Every build also rejects routes or assets outside the exact
-  route model and the package/Astro/Pagefind-owned output inventory.
+  route model and the package/Astro/Pagefind-owned output inventory. Release builds additionally
+  run an exact-version, redacted Gitleaks scan over raw and inflated output.
 
 ## Architecture
 
@@ -36,12 +37,15 @@ document a stranger needs.
 
 ```bash
 pnpm install
-pnpm run verify          # lint, check, build, inventory, residue, tests — the gate
+pnpm run verify          # lint, check, build, inventory, secret/residue scans, tests
 pnpm run build           # the build chain alone
 pnpm run build:fixture   # rebuild against the 32-note corpus
 pnpm run pack:tarball    # compile TypeScript and pack the installable tarball
 pnpm run smoke:tarball   # install that tarball in a foreign repo and build/read it
 ```
+
+`pnpm run verify` also requires the exact Gitleaks version exported by
+`scripts/scan-secrets.ts` on `PATH`; ordinary `pnpm run build` does not.
 
 `packageManager` in `package.json` pins the pnpm version, which Corepack honours when enabled
 (`corepack enable`). Dependencies install into a symlinked `node_modules`, so a package not
@@ -57,7 +61,7 @@ cd your-notes
 npx @thoughtscape/publish build          # unrestricted local preview build
 npx @thoughtscape/publish preview
 npx @thoughtscape/publish review         # write .publish-set.json for inspection
-npx @thoughtscape/publish build --release # require its committed exact set
+npx @thoughtscape/publish build --release # exact set + pinned Gitleaks on PATH
 ```
 
 **Not yet, though:** `package.json` carries `"private": true`, so the package is on no registry
@@ -66,8 +70,10 @@ and that specifier resolves for nobody. Until it is published, run
 builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with configuration, exclusion,
 links, and hosting.
 
-The GitHub Action and `init` command both ship. The package is still private, so adoption uses
-the Action by git ref or the tarball until a registry release exists.
+The GitHub Action and `init` command both ship. The Linux Action installs checksum-pinned
+Gitleaks automatically; a manual release build must install the exact version itself. The
+package is still private, so adoption uses the Action by git ref or the tarball until a registry
+release exists.
 
 ## Deployment
 
