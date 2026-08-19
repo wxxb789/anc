@@ -309,7 +309,7 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | Full-text search | Keyboard-accessible search with CJK support, excerpts, and tag filtering | Pagefind static index; vanilla dialog |
 | Explorer | Browse published collections and nested routes | `src/components/CollectionExplorer.astro`; the producer maps the first folder to one flat collection |
 | Breadcrumbs | Stable hierarchy independent of source paths | Static HTML |
-| Table of contents | Heading navigation with active-section enhancement | Static HTML. **No script**: `TableOfContents.astro` states there is none, so the active-section enhancement is unbuilt |
+| Table of contents | Heading navigation with active-section enhancement | **Delivered.** Complete nested HTML works without JavaScript; a lazy progressive script marks the section crossing the reading offset |
 | Tags | Tag listing pages and per-page tag links | Static routes derived from YAML frontmatter tag lists |
 | Folder/collection listings | Published collections | Static routes; see the Explorer row |
 | Hover previews | Safe title, summary, metadata, and bounded excerpt | Static preview payload + `src/scripts/link-preview.ts` |
@@ -328,8 +328,7 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 **Every version-1 producer field now has an owning source.** Slug, language, description, tags,
 aliases, first-folder collections, and git dates flow through the shipped producer. Aliases are
 display/search/preview metadata, deliberately not link targets. The delivery column separately
-marks every other partial capability, including redirects, graph storage, and active-section
-TOC highlighting.
+marks every other partial capability, including redirects and deferred graph storage.
 
 ### 8.2 P1 — post-launch enhancements
 

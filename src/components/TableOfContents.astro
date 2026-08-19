@@ -10,8 +10,8 @@
  *    2 items" rather than reading eleven siblings and leaving the reader to
  *    infer the hierarchy from indentation they cannot see.
  * 2. **Complete in the server-rendered HTML.** Requirements section 5.3 makes
- *    reading and navigation work without JavaScript, and a table of contents is
- *    navigation. Nothing here is hydrated; there is no client script at all.
+ *    reading and navigation work without JavaScript. A small progressive script
+ *    may mark the current section, but it never creates or removes a TOC link.
  * 3. **Collapse costs zero JavaScript.** `<details>`/`<summary>` is the native
  *    disclosure widget: keyboard-operable, announced correctly, and `open` by
  *    default so a reader who never interacts sees the whole list.

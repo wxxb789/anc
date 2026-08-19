@@ -640,6 +640,43 @@ test('the table of contents is visible and operable with scripting disabled', as
   }
 }, 180_000);
 
+test.runIf(entries.length > 1)(
+  'the TOC marks the section crossing the reading offset',
+  async (context) => {
+    const browser = requireBrowser(context);
+    const browserContext = await browser.newContext({
+      viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
+      reducedMotion: 'reduce',
+    });
+    const page = await browserContext.newPage();
+    try {
+      await visit(page, '/notes/long-form-essay/');
+      const links = page.locator('.toc a[href^="#"]');
+      const count = await links.count();
+      assert.ok(count > 2, 'the fixture page has too few TOC entries to track scrolling');
+      const target = links.nth(Math.floor(count / 2));
+      const hash = await target.getAttribute('href');
+      if (!hash?.startsWith('#')) assert.fail('the tracked TOC link has no heading fragment');
+      await target.click();
+      await page.waitForFunction(
+        (href) => document.querySelector(`.toc a[href="${href}"]`)?.getAttribute('aria-current') === 'location',
+        hash,
+      );
+      assert.equal(await target.getAttribute('aria-current'), 'location');
+      assert.equal(await page.locator('.toc a[aria-current="location"]').count(), 1);
+      const position = await page.evaluate((id) => {
+        const heading = document.getElementById(id)!;
+        const padding = Number.parseFloat(getComputedStyle(document.documentElement).scrollPaddingTop);
+        return { top: heading.getBoundingClientRect().top, padding };
+      }, decodeURIComponent(hash.slice(1)));
+      assert.ok(Math.abs(position.top - position.padding) <= 2);
+    } finally {
+      await browserContext.close();
+    }
+  },
+  120_000,
+);
+
 /**
  * The controls *are* offered once scripting is available.
  *
