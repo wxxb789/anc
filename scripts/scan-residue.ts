@@ -60,6 +60,7 @@ import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { BuildFailure } from './write-report.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
+import { MARKED_ATTRIBUTE, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 
@@ -141,7 +142,7 @@ const CODE_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
  * it would take a path split by markup with it, which is the TK-29 defect the
  * fragment pass exists for.
  *
- * So the exemption is keyed on the language class, which is the narrowest
+ * So the exemption is keyed on the minted marker, which is the narrowest
  * carrier that distinguishes "an author typeset a function" from "an author
  * pasted a terminal". `unresolved [[wikilink]]` is already exempt in every code
  * region via `CODE_EXEMPT`, so this set holds only the path rule; it is spelled
@@ -156,53 +157,79 @@ const CODE_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
  * rule and the exemption is never reached. Only under client rendering, where
  * the TeX source itself ships, do the raw bytes reach the page.
  *
- * **And the key is author-reachable, which is why the scope matters.** A note
- * writing a fence labelled `language-math` produces
+ * **The key used to be author-reachable, and that is what the minted marker
+ * fixed.** A note writing a fence labelled `language-math` produces
  * `<code class="language-math">`, and so does raw HTML the sanitizer's
- * `allowedClasses.code: ['language-*']` preserves — so an author can put a real
- * host path inside one and this exemption passes it. Found by review and
- * measured: such a fence around `cd C:\Users\alice\vault\private.md` goes from
- * FIRES to CLEAN.
+ * `allowedClasses.code: ['language-*']` preserves — so an author could put a
+ * real host path inside one and this exemption passed it. Measured with
+ * `MATH_MODE` at `client`, where the exemption is live: a fence around
+ * `cd C:\Users\alice\vault\private.md` went **CLEAN**, and against
+ * {@link RENDERED_MARKER} it **FIRES**.
  *
- * That is a **known and narrowed limit rather than a closed hole**. Narrowed,
- * because in the shipped mode the exemption does not exist at all, so the
- * reachable surface is exactly the mode a user deliberately selected. Not
- * closed, because the pipeline has no "this is math" marker a note body cannot
- * also write: `span.math-inline` is equally author-writable, and a `data-`
- * attribute is stripped unless granted — at which point a body can write that
- * too. Closing it needs a marker minted after sanitization, which is a change to
- * the renderer's contract rather than to this scan.
+ * **The scope stays anyway**, because the two reasons are independent: the
+ * marker makes the key unforgeable, and the mode scope means that in the shipped
+ * configuration there is no exemption to reach at all. Removing either would be
+ * a widening.
  *
- * The residual is bounded by what the rule protects: it guards an author against
- * leaking their *own* paths, so the reachable case is an author disabling a gate
- * that exists for them, in a mode they chose, in a fence they labelled.
+ * **What remains, and it is not closed by the marker.** The exemption's *subject*
+ * is still an author's own TeX, so an author can put a path-shaped string in a
+ * genuine expression: measured, `$$D:/vault/clients/acme/renewal.md$$` is valid
+ * TeX, renders, and goes CLEAN, as does `\texttt{…}` around anything. The
+ * backslash form throws at the renderer, so the Windows spelling is blocked and
+ * the forward-slash one is not. That is the rule protecting an author from their
+ * own paths being disabled by that same author, deliberately, inside content
+ * they wrote — a different thing from a *forged* marker, and bounded the same
+ * way: nobody else's disclosure is at stake.
  */
 const MATH_EXEMPT: ReadonlySet<string> =
   MATH_MODE === 'client' ? new Set(['absolute local path']) : new Set();
 
 /**
- * The contents of every `code` element carrying a `language-math` class,
- * blanked.
+ * The contents of every `code` element the renderer marked as math, blanked.
  *
  * Structurally a sibling of {@link withoutCodeRegions} rather than a fresh
  * regex, and deliberately: blanked rather than removed so byte offsets are
  * unchanged, non-greedy, tag-anchored on both ends, and **failing closed on
- * every ambiguity**. Measured, matching that function's own guarantee: an
- * unclosed `<code class="language-math">` still reports, and the class name
- * appearing in prose exempts nothing.
+ * every ambiguity** — an unmarked region is left alone and therefore scanned.
  *
- * The class is required here, where `withoutCodeRegions` deliberately does not
- * require one — because the two are answering different questions. That
- * function asks "is this a code region at all", and a body can legitimately
- * write a bare `<code>`; this one asks "did an author typeset mathematics",
- * which only the pipeline's own `language-math` class answers. A bare `<code>`
- * containing a drive path is a pasted path and must still fail.
+ * **One ambiguity it does not fail closed on, measured rather than claimed.** A
+ * marked `<code>` left unclosed swallows up to the *next* `</code>`, so a real
+ * region after it is blanked too. That is inherited from `withoutCodeRegions`'s
+ * shape and is unreachable through this pipeline — the renderer emits balanced
+ * tags and the sanitizer rebuilds them — but the honest description of the
+ * regex is that it trusts its input to be well formed.
+ *
+ * The marker is required here, where `withoutCodeRegions` deliberately requires
+ * no class — because the two are answering different questions. That function
+ * asks "is this a code region at all", and a body can legitimately write a bare
+ * `<code>`; this one asks "did a *renderer* produce this", which only the minted
+ * marker answers. A bare `<code>` containing a drive path is a pasted path and
+ * must still fail.
  */
 function withoutMathRegions(text: string): string {
   return text.replace(
     /<code(\s[^>]*)?>([\s\S]*?)<\/code>/gi,
     (whole, attributes: string | undefined, body: string) => {
-      if (attributes === undefined || !/\bclass="[^"]*\blanguage-math\b[^"]*"/.test(attributes)) {
+      // **Keyed on the minted marker, not on the language class.** A note can
+      // write a fence labelled `language-math` and produce
+      // `<code class="language-math">` itself — measured, a host path inside one
+      // went FIRES → CLEAN, which is this exemption disabled by the author it
+      // exists to protect. `RENDERED_MARKER` is written at
+      // `src/lib/markdown.ts`'s substitution step, *after* the sanitizer, so no
+      // author byte can carry it; an attempt to write it is stripped, and an
+      // attempt to write the substitution token makes the build throw.
+      //
+      // **Fails closed**: an unmarked region is left alone and therefore
+      // scanned. That is the direction an exemption has to err in, and it is
+      // what makes a renderer whose output shape changes — or a marker that
+      // failed to mint — cost a false positive rather than a silent hole.
+      // **Anchored at an attribute boundary, not merely contained.** A bare
+      // `includes` matches the marker inside *another* attribute's value —
+      // `class="x data-rendered="math""` — which is a shape this pipeline cannot
+      // emit, because the sanitizer entity-escapes an inner quote. Relying on
+      // that is relying on a layer away from here; requiring whitespace before
+      // the attribute name makes the test hold on its own.
+      if (attributes === undefined || !MARKED_ATTRIBUTE(RENDERED_MATH).test(attributes)) {
         return whole;
       }
       return whole.slice(0, whole.length - body.length - '</code>'.length) + ' '.repeat(body.length) + '</code>';

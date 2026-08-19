@@ -710,9 +710,9 @@ test('no gate budgets an inner wait longer than its own', () => {
  * review found before any run did.
  *
  * 1. **It is scoped to client math mode.** In build-time mode TeX renders to
- *    MathML and trips nothing, so the exemption protects nothing there — and
- *    since its key is author-writable, an unscoped version is pure attack
- *    surface in the mode that ships.
+ *    MathML and trips nothing, so the exemption protects nothing there. Keeping
+ *    it active outside the only mode that needs it would be needless attack
+ *    surface.
  * 2. **It never covers a code region that is not math.** A pasted shell
  *    transcript is the likeliest way a genuine host path reaches `dist/`, and
  *    widening `CODE_EXEMPT` instead would have taken it.

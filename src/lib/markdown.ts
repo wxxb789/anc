@@ -31,6 +31,7 @@ import { renderMath } from './math.ts';
 import { renderDiagram } from './mermaid-render.ts';
 import { DIAGRAM_MODE } from './diagram-mode.ts';
 import { MATH_MODE } from './math-mode.ts';
+import { RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH, type RenderedKind } from './rendered-marker.ts';
 import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
 
 /** A heading authored in the Markdown body, in document order. */
@@ -323,12 +324,23 @@ const MATH_TOKEN_SUFFIX = 'End';
 interface DiagramRequest {
   source: string;
   token: string;
+  /** Client mode: substitute the source fence rather than rendered SVG. */
+  sourceOnly?: boolean;
+  /** The figcaption text, needed only on the source-only path. */
+  caption?: string;
 }
 
 interface MathRequest {
   tex: string;
   isDisplay: boolean;
   token: string;
+  /**
+   * Client mode: substitute the TeX *source* rather than rendered MathML, so a
+   * JS-disabled reader sees the expression and the runtime has its input. Both
+   * modes route through the same substitution because that is the one point
+   * after the sanitizer — see {@link RENDERED_MARKER}.
+   */
+  source?: boolean;
 }
 
 /** A hast node this module constructs. satteri's own content type. */
@@ -781,26 +793,22 @@ function diagramFigure(
     };
   }
 
+  const clientToken = `${DIAGRAM_TOKEN_PREFIX}${diagrams.length}${DIAGRAM_TOKEN_SUFFIX}`;
+  diagrams.push({ source, token: clientToken, sourceOnly: true, caption });
   return {
+    // **Client mode routes through the token too**, for the same reason the math
+    // client branch does: {@link RENDERED_MARKER} is minted after the sanitizer,
+    // and this node is built before it. A first version returned the figure
+    // directly and pushed no request, so client-mode diagrams were never marked
+    // — measured with `DIAGRAM_MODE='client'`, a diagram page earned no
+    // allowance and would have been held to the base budget while shipping
+    // ~232 KB of Mermaid. Not minting is the safe direction for the residue scan
+    // and the *wrong* one for the budget, which is why this path cannot simply
+    // be skipped.
     type: 'element',
     tagName: 'figure',
     properties: { className: ['diagram'], 'data-diagram': MERMAID_LANGUAGE },
-    children: [
-      {
-        type: 'element',
-        tagName: 'pre',
-        properties: { className: ['diagram-source'] },
-        children: [
-          {
-            type: 'element',
-            tagName: 'code',
-            properties: { className: [`language-${MERMAID_LANGUAGE}`] },
-            children: [{ type: 'text', value: source }],
-          },
-        ],
-      },
-      { type: 'element', tagName: 'figcaption', properties: {}, children: [{ type: 'text', value: caption }] },
-    ],
+    children: [{ type: 'text', value: clientToken }],
   };
 }
 
@@ -962,6 +970,18 @@ function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefin
           // build-time mode puts MathML inside that span rather than a `code`.
           // Widening a security allowlist to restate what a selector already
           // gives would be the wrong trade.
+          //
+          // **The unforgeable marker takes the same route the MathML does**, and
+          // for the same reason: it is minted at {@link substituteRendered},
+          // after the sanitizer. So this branch emits a token here and the
+          // marked `<code>` is substituted in later — see
+          // {@link RENDERED_MARKER}. Writing the attribute directly on this node
+          // would put it in front of the sanitizer, which strips it (measured),
+          // and adding it to the allowlist to make it survive would make an
+          // author's copy survive too.
+          const clientToken = `${MATH_TOKEN_PREFIX}${maths.length}${MATH_TOKEN_SUFFIX}`;
+          maths.push({ tex: ctx.textContent(node), isDisplay, token: clientToken, source: true });
+
           ctx.replaceNode(target, {
             type: 'element',
             tagName: 'span',
@@ -969,14 +989,7 @@ function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefin
               className: [isDisplay ? 'math-display' : 'math-inline'],
               ...(isDisplay ? { tabindex: '0' } : {}),
             },
-            children: [
-              {
-                type: 'element',
-                tagName: 'code',
-                properties: { className: [`language-${MATH_LANGUAGE}`] },
-                children: [{ type: 'text', value: ctx.textContent(node) }],
-              },
-            ],
+            children: [{ type: 'text', value: clientToken }],
           });
           return;
         }
@@ -1443,6 +1456,100 @@ function sanitize(
 }
 
 /**
+ * The attribute that says "this region was produced by a renderer, not typed by
+ * an author", and the one place it may be written.
+ *
+ * ## The problem it closes
+ *
+ * Two consumers outside this module need to identify a rendered region in
+ * `dist/`, and both keyed on something an author can forge:
+ *
+ * - `scripts/scan-residue.ts` exempts `absolute local path` inside a math region,
+ *   because real TeX writes `f:\mathbb{R}` — a letter, a colon, a backslash,
+ *   byte-identical to a Windows drive path. It keyed on `code.language-math`,
+ *   and **a note writing a fence labelled `language-math` produces exactly
+ *   that**: measured, a host path inside one goes FIRES → CLEAN.
+ * - `tests/built-routes.test.ts` grants a per-page JavaScript allowance to a
+ *   page carrying a client-rendered construct, keyed on `class="math-inline"` —
+ *   which any body can write, minting itself 220 KB of budget.
+ *
+ * ## Why an allowlisted attribute cannot be the answer
+ *
+ * The obvious fix — a `data-` attribute on the rendered element — fails on a
+ * measurement rather than on taste. The sanitizer's `allowedAttributes` is what
+ * would make such an attribute *survive*, and it is exactly what would make an
+ * author's copy survive too. Measured, on the two this repository already
+ * allows: `<figure class="diagram" data-diagram="mermaid">forged</figure>`
+ * written in a note body comes through the pipeline **intact**. Any attribute
+ * added to that list inherits the same property the day it is added.
+ *
+ * ## Where it is minted instead
+ *
+ * Here, at {@link substituteRendered} — *after* `sanitize()` has run. An
+ * author's bytes have already been through the allowlist by this point, so
+ * nothing a body wrote can acquire this attribute: the only writer is the
+ * replacement markup, and that markup is chosen by index from this render's own
+ * list rather than by anything in the document.
+ *
+ * The forgery defence is the one the token mechanism already has, and it is
+ * stronger than "the string is unusual": substitution is positional and
+ * exhausting, and a body writing a token makes the build **throw** rather than
+ * receive somebody else's render. Measured — all three shapes refuse:
+ *
+ * ```
+ * Prose thoughtscapeMathPlaceholder0End more.       -> a rendering placeholder survived substitution
+ * thoughtscapeMathPlaceholder0End and $$x^2$$ here. -> appeared 2 times, expected exactly once
+ * ```
+ *
+ * So this attribute needs no allowlist entry, and deliberately has none: it is
+ * written after the only pass that could remove it.
+ *
+ * ## What it is not
+ *
+ * Not a security boundary on its own. It says "a renderer wrote this", which is
+ * what both consumers actually need to know; it says nothing about the content
+ * being safe, which is `renderMath` and `renderDiagram`'s own responsibility for
+ * their own output.
+ *
+ * ## Two things measured the hard way
+ *
+ * **The name is `data-rendered`, not `data-thoughtscape-rendered`.** A first
+ * version carried this project's name, and `tests/site-identity.test.ts` went
+ * red on it: every stranger's note containing an expression or a diagram shipped
+ * the string into their own `dist/`, which is the headline TK-31 criterion. The
+ * attribute has to be unforgeable, not branded.
+ *
+ * **A consumer must check the marker's *position*, not merely its presence in
+ * the page.** The string has no character `escapeHtml` rewrites, so a note body
+ * typing it in a paragraph puts it in the output as ordinary text — measured,
+ * and also through numeric character references. That is fine for the residue
+ * scan, which reads it out of a matched attribute region, and was a hole in the
+ * script-budget gate, which tested it against the whole page. `MARKED_ROOT`
+ * exists so a consumer cannot make that mistake by accident.
+ */
+export { MARKED_ROOT, RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH } from './rendered-marker.ts';
+
+/**
+ * Write {@link RENDERED_MARKER} onto a replacement's root element.
+ *
+ * String surgery on the opening tag rather than a parse, because the input is
+ * one renderer's own output rather than arbitrary HTML, and the alternative is a
+ * second parse of every expression and diagram on the page. The root element is
+ * the first tag in the string by construction: `renderMath` returns `<math…>`
+ * and `renderDiagram` a `<figure…>`.
+ *
+ * Returns the markup unchanged when it does not begin with a tag, so a renderer
+ * whose output shape changes degrades to *unmarked* rather than to corrupt. That
+ * is the safe direction for both consumers: the residue scan treats an unmarked
+ * region as ordinary text and scans it, and the budget gate grants no allowance.
+ */
+function withRenderedMarker(markup: string, kind: RenderedKind): string {
+  const opening = /^<([a-zA-Z][a-zA-Z0-9-]*)/.exec(markup);
+  if (opening === null) return markup;
+  return `${markup.slice(0, opening[0].length)} ${RENDERED_MARKER}="${kind}"${markup.slice(opening[0].length)}`;
+}
+
+/**
  * Replace each placeholder with the markup it stands for.
  *
  * Positional and exhausting, which is what makes it safe to splice
@@ -1551,17 +1658,34 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
   const replacements = [
     ...maths.map((request) => ({
       token: request.token,
-      markup: renderMath(request.tex, request.isDisplay),
+      // Client mode ships the source for the browser to render; build-time mode
+      // ships the MathML. Both are marked here, which is the whole point of
+      // routing both through this one post-sanitization step.
+      markup: withRenderedMarker(
+        request.source === true
+          ? `<code class="language-${MATH_LANGUAGE}">${escapeHtml(request.tex)}</code>`
+          : renderMath(request.tex, request.isDisplay),
+        RENDERED_MATH,
+      ),
     })),
     // `diagramIdFor` namespaces element ids by the diagram's position, so two
     // diagrams on one page cannot both define `#arrowhead`.
     ...(await Promise.all(
       diagrams.map(async (request, index) => ({
         token: request.token,
-        markup: await renderDiagram(
-          request.source,
-          `diagram-${index}`,
-          diagramCaption(request.source, chrome.diagramCaption),
+        // Client mode ships the source fence for the browser to render;
+        // build-time mode ships the SVG. Both are marked here, which is the
+        // whole point of routing both through this one post-sanitization step.
+        markup: withRenderedMarker(
+          request.sourceOnly === true
+            ? `<pre class="diagram-source"><code class="language-${MERMAID_LANGUAGE}">${escapeHtml(request.source)}</code></pre>` +
+              `<figcaption>${escapeHtml(request.caption ?? '')}</figcaption>`
+            : await renderDiagram(
+                request.source,
+                `diagram-${index}`,
+                diagramCaption(request.source, chrome.diagramCaption),
+              ),
+          RENDERED_DIAGRAM,
         ),
       })),
     )),

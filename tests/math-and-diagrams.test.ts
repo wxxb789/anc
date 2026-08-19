@@ -43,6 +43,7 @@ import temml from 'temml';
 
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { extractStyles } from '../src/lib/math-output.ts';
+import { MARKED_ROOT, RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
 import {
   DIAGRAM_MODE,
   REQUIRED_STYLE_SRC,
@@ -1125,4 +1126,82 @@ test('an authored colour is refused in whichever mode renders it', async () => {
   // statement about colour rather than about math failing wholesale.
   const { hasMath } = await renderMarkdown('See $$x^2$$ here.\n', { pageTitle: 'x' });
   assert.ok(hasMath, 'an ordinary expression stopped rendering, so the refusals prove nothing');
+});
+
+test('the rendered marker cannot be written by a note body', async () => {
+  // **The property the two consumers rest on.** `scripts/scan-residue.ts` uses
+  // this marker to decide that a region is real TeX rather than a pasted host
+  // path, and `tests/built-routes.test.ts` uses it to grant a page a JavaScript
+  // allowance. Both were previously keyed on things a body can write —
+  // `code.language-math` and `class="math-inline"` — and measured, a fence
+  // labelled `language-math` took a host path from FIRES to CLEAN.
+  //
+  // Three ways a body could try, and each must fail differently but safely.
+  for (const [what, body] of [
+    ['the attribute directly', `<code ${RENDERED_MARKER}="${RENDERED_MATH}">C:\\Users\\alice</code>`],
+    ['on a figure', `<figure class="diagram" ${RENDERED_MARKER}="${RENDERED_DIAGRAM}">forged</figure>`],
+    ['the old forgeable key', '```language-math\nC:\\Users\\alice\\private.md\n```'],
+    ['the class alone', '<span class="math-inline">forged</span>'],
+  ] as const) {
+    const { html } = await renderMarkdown(body, { pageTitle: 'x' });
+    assert.ok(
+      !html.includes(RENDERED_MARKER),
+      `${what}: a note body produced the marker — the sanitizer's allowlist must not carry it: ${html}`,
+    );
+  }
+
+  // **The marker as ordinary text, which is the shape the four rows above miss
+  // entirely.** The string has no character an HTML escaper rewrites, so a body
+  // typing it in a paragraph puts it in the output verbatim — and so does a body
+  // writing it as numeric character references. Neither is stopped, and neither
+  // should be: it is the author's text.
+  //
+  // What this means is that **presence in the page is not the property**, and a
+  // consumer testing for the bare string is forgeable by a paragraph. Measured
+  // as a real defect in the first version of the script-budget gate, which was
+  // then *strictly worse* than the author-writable class it replaced.
+  // `MARKED_ROOT` is the shape a consumer must use, and these rows pin the
+  // difference between the two.
+  for (const [what, body] of [
+    ['plain prose', `The attribute ${RENDERED_MARKER}="${RENDERED_MATH}" written in prose.`],
+    ['a code span', `Inline \`${RENDERED_MARKER}="${RENDERED_MATH}"\` here.`],
+    ['numeric references', 'x &#100;&#97;&#116;&#97;-rendered=&#34;math&#34; y'],
+  ] as const) {
+    const { html } = await renderMarkdown(body, { pageTitle: 'x' });
+    assert.ok(
+      !MARKED_ROOT(RENDERED_MATH).test(html),
+      `${what}: text in a body satisfied MARKED_ROOT, so a consumer keyed on it is forgeable: ${html}`,
+    );
+  }
+
+  // And the substitution token, which is the other half: a body writing one does
+  // not receive somebody else's render, it stops the build. Positional and
+  // exhausting, which is what `substituteRendered` documents.
+  await assert.rejects(
+    () => renderMarkdown('Prose thoughtscapeMathPlaceholder0End more.\n', { pageTitle: 'x' }),
+    /placeholder survived substitution/,
+    'a body writing a substitution token did not stop the build',
+  );
+
+  // Non-vacuity: the pipeline really does mint it, in the position a consumer
+  // looks for, or every assertion above is satisfied by a marker that never
+  // exists.
+  const { html } = await renderMarkdown('See $$x^2$$ here.\n', { pageTitle: 'x' });
+  assert.match(html, MARKED_ROOT(RENDERED_MATH), 'the pipeline minted no marker in an attribute position');
+});
+
+test('the marker reaches no reader as visible text', async () => {
+  // The real Pagefind index is asserted in `tests/client-marker.test.ts`; an
+  // earlier version claimed that property here after stripping tags with a
+  // regex, which only measured its own projection. This test owns the reader's
+  // visible-text surface and nothing broader.
+  for (const [what, body] of [
+    ['math', '$$\nx^2\n$$\n'],
+    ['a diagram', '```mermaid\ngraph TD\n  A --> B\n```\n'],
+  ] as const) {
+    const { html } = await renderMarkdown(body, { pageTitle: 'x' });
+    assert.match(html, new RegExp(RENDERED_MARKER), `${what}: nothing was minted, so this measures nothing`);
+    const visible = html.replace(/<[^>]+>/g, '');
+    assert.ok(!visible.includes(RENDERED_MARKER), `${what}: the marker is visible to a reader: ${visible}`);
+  }
 });

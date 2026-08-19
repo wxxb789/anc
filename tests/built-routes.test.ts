@@ -44,8 +44,7 @@ import {
   truncateLabel,
   type GraphNode,
 } from '../src/lib/graph.ts';
-import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
-import { MATH_MODE } from '../src/lib/math-mode.ts';
+import { scriptBudgetFor } from './support/runtime-budget.ts';
 import {
   FIXED_ROUTES,
   GRAPH_SEGMENT,
@@ -1564,12 +1563,6 @@ test('no script is loaded for the explorer', () => {
    * because `astro.config.mjs` resolves both runtimes to empty stubs, so this
    * gate is *tighter* today than the flat 40 KB it replaces.
    */
-  const BASE_BUDGET_BYTES = 40_000;
-  const RUNTIME_ALLOWANCES: readonly { marker: RegExp; mode: string; bytes: number; what: string }[] = [
-    { marker: /class="math-(?:inline|display)"/, mode: MATH_MODE, bytes: 220_000, what: 'math' },
-    { marker: /class="diagram"/, mode: DIAGRAM_MODE, bytes: 900_000, what: 'a diagram' },
-  ];
-
   let inspected = 0;
   for (const route of ROUTES) {
     const page = pageFor(route);
@@ -1592,16 +1585,11 @@ test('no script is loaded for the explorer', () => {
       );
     }
 
-    const earned = RUNTIME_ALLOWANCES.filter(
-      (allowance) => allowance.mode === 'client' && allowance.marker.test(html),
+    const budget = scriptBudgetFor(html);
+    assert.ok(
+      bytes <= budget.ceiling,
+      `${route}: ships ${bytes} B of JavaScript, over the ${budget.ceiling} B ceiling (${budget.because})`,
     );
-    const budget = BASE_BUDGET_BYTES + earned.reduce((total, allowance) => total + allowance.bytes, 0);
-    const because =
-      earned.length === 0
-        ? 'the base budget, since this page carries no client-rendered construct'
-        : `${BASE_BUDGET_BYTES} B base plus ${earned.map((a) => a.what).join(' and ')}`;
-
-    assert.ok(bytes <= budget, `${route}: ships ${bytes} B of JavaScript, over the ${budget} B ceiling (${because})`);
   }
 
   // Non-vacuity: some script was read and scanned, so a build that emitted none

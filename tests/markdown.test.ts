@@ -334,7 +334,13 @@ test('a Mermaid fence becomes a rendered diagram, never a runtime renderer', () 
 });
 
 test('math becomes MathML and single dollars stay literal', () => {
-  assert.match(kitchenSink.html, /<span class="math-display" tabindex="0"><math display="block"/);
+  // The property is the element pair — a `span.math-display` wrapping a
+  // `<math display="block">` — not the byte order of the root's attributes.
+  // Pinned as one literal, this went red when `substituteRendered` began minting
+  // `data-rendered` onto the root: `<math data-rendered="math" display="block">`
+  // is the same structure with an attribute in front.
+  assert.match(kitchenSink.html, /<span class="math-display" tabindex="0"><math\b/);
+  assert.match(kitchenSink.html, /<math[^>]*\sdisplay="block"/, 'display math must declare block mode');
   assert.match(kitchenSink.html, /<mi>m<\/mi>/, 'the expression is marked up, not escaped');
   assert.equal(kitchenSink.hasMath, true);
   assert.match(kitchenSink.html, /\$5 to \$10/, 'currency must not be parsed as inline math');
