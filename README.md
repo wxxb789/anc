@@ -15,8 +15,8 @@ document a stranger needs.
   a note you withheld keeps its full label and path, points to `/private/`, and is reported; the
   target body remains unpublished. An ambiguous link warns with every candidate named.
 - Renders backlinks, outgoing links, a graph, breadcrumbs, tags, collections, and a table of
-  contents as build-time HTML — no fetch, no database. YAML frontmatter supplies tags; the
-  first folder supplies the flat collection.
+  contents as build-time HTML — no fetch, no database. YAML frontmatter can set slug, language,
+  description, and tags; the first folder supplies the flat collection.
 - Pagefind for search, bilingual chrome resolved per document, client-rendered math and Mermaid
   with source fallbacks, RSS, sitemap, and a strict CSP.
 - Writes the names of everything it dropped to a file under `.git/` that cannot be committed,

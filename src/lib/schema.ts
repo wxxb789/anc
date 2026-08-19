@@ -1,10 +1,10 @@
 /**
  * Authoritative schema for the generated public content artifact.
  *
- * The artifact is produced by the reviewed exporter in the private vault and is
- * never hand-edited here. Validation is deliberately strict: unknown fields are
- * rejected so that a future exporter change is a loud build failure rather than
- * a silent privacy leak.
+ * The artifact is produced from the user's notes by the shipped producer, or by
+ * this repository's fixture build, and is never hand-edited. Validation is
+ * deliberately strict: unknown fields are rejected so a producer change is a
+ * loud build failure rather than a silent privacy leak.
  */
 
 export interface ContentEntry {
@@ -70,10 +70,19 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
  * The two rules are asserted to agree in `tests/route-model.test.ts`.
  */
 const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+export function isSlug(value: string): boolean {
+  return SLUG.test(value);
+}
+
 /** ISO 8601 calendar date, optionally with a time and explicit offset. */
 const DATE = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))?$/;
 /** BCP 47 shape, e.g. `en`, `zh-CN`, `zh-Hans-CN`. */
 const LANGUAGE = /^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/;
+
+export function isLanguageTag(value: string): boolean {
+  return LANGUAGE.test(value);
+}
 
 /** Joins emoji sequences into one glyph, so it is allowed inside a tag or alias. */
 const ZERO_WIDTH_JOINER = String.fromCharCode(0x200d);
@@ -117,7 +126,7 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
  * Each ceiling is set an order of magnitude above anything the corpus plausibly
  * produces, so it catches a runaway exporter rather than constraining an author.
  */
-const STRING_LIMITS: Partial<Record<keyof ContentEntry, number>> = {
+const STRING_LIMITS = {
   // A path segment, and part of every redirect rule; Cloudflare caps a rule
   // line at 1,000 characters and a rule carries the slug twice.
   slug: 128,
@@ -135,10 +144,10 @@ const STRING_LIMITS: Partial<Record<keyof ContentEntry, number>> = {
   // BCP 47 language tags are capped at 35 characters by the registry itself.
   language: 35,
   collection: 128,
-};
+} as const satisfies Partial<Record<keyof ContentEntry, number>>;
 
 /** Array ceilings: how many members, and how long each member may be. */
-const ARRAY_LIMITS: Partial<Record<keyof ContentEntry, { items: number; itemChars?: number }>> = {
+const ARRAY_LIMITS = {
   // Every tag is a public route, so an unbounded tag list is an unbounded page
   // count. A note carrying more than this is a classification failure, not a
   // note. There is no matching ceiling on the *corpus* — see the note below
@@ -148,9 +157,9 @@ const ARRAY_LIMITS: Partial<Record<keyof ContentEntry, { items: number; itemChar
   aliases: { items: 50, itemChars: 300 },
   // Each member must already resolve to a published slug, so member length is
   // bounded transitively by the slug ceiling; only the count needs one.
-  outgoing: { items: 500 },
-  backlinks: { items: 500 },
-};
+  outgoing: { items: 500, itemChars: undefined },
+  backlinks: { items: 500, itemChars: undefined },
+} as const satisfies Partial<Record<keyof ContentEntry, { items: number; itemChars?: number }>>;
 
 /** Size ceilings for a field, exposed so a consumer can state the same number. */
 export const FIELD_LIMITS = { strings: STRING_LIMITS, arrays: ARRAY_LIMITS } as const;
@@ -445,7 +454,7 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
   }
 
   if (typeof slug === 'string') {
-    if (!SLUG.test(slug)) {
+    if (!isSlug(slug)) {
       issues.push(`${label}.slug: must be lowercase [a-z0-9-] without a leading or trailing hyphen`);
     } else if (RESERVED_SLUGS.has(slug)) {
       issues.push(`${label}.slug: collides with reserved route segment "${slug}"`);
@@ -463,7 +472,7 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
       issues.push(`${label}.${field}: must be a non-empty string when present`);
     }
   }
-  if (typeof value['collection'] === 'string' && !SLUG.test(value['collection'])) {
+  if (typeof value['collection'] === 'string' && !isSlug(value['collection'])) {
     issues.push(`${label}.collection: must be lowercase [a-z0-9-] without a leading or trailing hyphen`);
   }
 
@@ -475,7 +484,7 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
   }
 
   const language = value['language'];
-  if (language !== undefined && (typeof language !== 'string' || !LANGUAGE.test(language))) {
+  if (language !== undefined && (typeof language !== 'string' || !isLanguageTag(language))) {
     issues.push(`${label}.language: must be a BCP 47 language tag when present`);
   }
 

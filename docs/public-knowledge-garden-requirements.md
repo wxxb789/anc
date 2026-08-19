@@ -224,7 +224,7 @@ over built output must inflate gzip members or it is asserting about a surface i
 | Projection | The sanitized, deterministic public representation produced from the Publish Set. |
 | Public Document | One published page with public metadata, sanitized Markdown/HTML, and a stable public identifier. |
 | Public ID | An immutable opaque identifier for a public document. It does not encode a source path. |
-| Slug | The public route key, derived from the repository-relative path with each segment slugified and joined by `-`. The planned frontmatter override remains unbuilt. |
+| Slug | The public route key, supplied by valid `slug:` frontmatter or derived from the repository-relative path with each segment slugified and joined by `-`. |
 | Public Link | A link whose source and target are both in the Publish Set. |
 | Withheld Link | A link whose target is a real file the user excluded. It keeps the author's full label/path, links to `/private/`, withholds the target body, and is reported. Distinct from an unresolved link, which pointed at nothing at all — different events with different fixes. |
 | Edge | A typed, directed relationship between two public nodes. |
@@ -325,9 +325,8 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | 404 and redirects | Static 404 plus versioned redirect map | 404 yes. `REDIRECT_RULES` is `[]` and cannot grow from a corpus |
 | Responsive layout | Mobile-first, no horizontal overflow | Static CSS, gated at 320 px |
 
-**The producer-specific gaps above are now `aliases`, git commit dates, and the planned
-frontmatter slug override.** Tags and first-folder collections flow through the shipped
-producer. The delivery column separately
+**The producer-specific gaps above are now `aliases` and git commit dates.** Slug, language,
+description, tags, and first-folder collections flow through the shipped producer. The delivery column separately
 marks every other partial capability, including redirects, graph storage, active-section TOC,
 and code-copy affordances.
 
@@ -1241,8 +1240,7 @@ Not in the original plan, and it displaced Phase 2 entirely:
 - packaging as an installable command, and local preview.
 
 The GitHub Action, `init`, and reviewed release boundary are delivered; this repository has no
-remote, so the workflow has not run. Remaining producer fields: aliases and git dates; the
-planned frontmatter slug override also remains unbuilt.
+remote, so the workflow has not run. Remaining producer fields: aliases and git dates.
 
 ### Phase 2 — interactive graph via SQLite WASM — **not started**
 

@@ -201,11 +201,9 @@ default, and the message should say how to raise it. One constant, one message.
 > mechanism — configuration with a message — rather than against a value, so that a scale
 > ticket raising the constant does not make the document wrong.
 >
-> **AMENDED on the derived-field table above:** `tags` now comes from a YAML frontmatter list
-> and the first folder now supplies the flat `collection`, making both route families reachable.
-> Git dates and `aliases` remain underived. The `slug`, `title`, and `markdown` rows shipped as
-> drafted, frontmatter-`slug:` excepted — it was offered to TK-26, then TK-27, then TK-30, and
-> taken by none of them.
+> **AMENDED on the derived-field table above:** frontmatter now supplies `slug`, `language`,
+> `description`, and `tags`; the first folder supplies the flat `collection`. Git dates and
+> `aliases` remain underived. `title` and `markdown` continue to ship as drafted.
 
 ### 2.3 Exclusion
 

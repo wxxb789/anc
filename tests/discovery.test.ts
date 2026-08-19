@@ -35,6 +35,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { discover } from '../scripts/markdown-to-artifact.ts';
+import { FIELD_LIMITS } from '../src/lib/schema.ts';
 import { BuildFailure } from '../scripts/write-report.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -168,8 +169,11 @@ test('a nested README is prose and the root README is not', async () => {
 
 test('reserved route slugs fail together with source paths only in private detail', async () => {
   await scratch('reserved-slug-', async (directory) => {
-    const paths = ['about.md', 'search.md'];
-    for (const path of paths) put(directory, path, '# Reserved\n');
+    const conflicts = [
+      ['about.md', 'about', '# Reserved\n'],
+      ['renamed.md', 'search', '---\nslug: search\n---\n\n# Reserved\n'],
+    ] as const;
+    for (const [path, , body] of conflicts) put(directory, path, body);
 
     let failure: BuildFailure | undefined;
     try {
@@ -180,9 +184,9 @@ test('reserved route slugs fail together with source paths only in private detai
     }
     assert.equal(failure?.code, 'reserved-slug');
     assert.equal(failure?.message, '2 published notes use reserved route slugs');
-    for (const path of paths) {
+    for (const [path, slug] of conflicts) {
       assert.ok(failure.detail.includes(path));
-      assert.ok(failure.detail.includes(`slug "${path.slice(0, -3)}" is reserved`));
+      assert.ok(failure.detail.includes(`slug "${slug}" is reserved`));
     }
   });
 });
@@ -325,6 +329,107 @@ test('frontmatter tags and the first folder become artifact facets', async () =>
     assert.equal(nested?.collection, 'projects');
     assert.equal(rootEntry?.tags, undefined);
     assert.equal(rootEntry?.collection, undefined);
+  });
+});
+
+test('slug language and description come from frontmatter', async () => {
+  await scratch('producer-frontmatter-fields-', async (root) => {
+    put(
+      root,
+      '研究/简介.md',
+      '---\nslug: zh-introduction\nlanguage: zh-CN\n' +
+        'description: A concise public summary.\n---\n\n# 简介\n',
+    );
+    put(root, 'alternate.md', '---\nlang: EN-gb\nlanguage: en-GB\n---\n\n# Alternate\n');
+
+    const found = await discover(root);
+    const introduction = found.entries.find((entry) => entry.slug === 'zh-introduction');
+    assert.equal(introduction?.language, 'zh-CN');
+    assert.equal(introduction?.description, 'A concise public summary.');
+    assert.equal(introduction?.collection, undefined);
+    assert.equal(found.entries.find((entry) => entry.slug === 'alternate')?.language, 'en-GB');
+  });
+});
+
+test('invalid remaining frontmatter fields fail with the source path only in detail', async () => {
+  const cases = [
+    ['slug', 'Bad Slug', 'invalid-slug-frontmatter'],
+    ['language', 'not_a_locale', 'invalid-language-frontmatter'],
+    ['description', '[]', 'invalid-description-frontmatter'],
+    ['description', '"   "', 'invalid-description-frontmatter'],
+  ] as const;
+  for (const [field, value, code] of cases) {
+    await scratch('producer-frontmatter-invalid-', async (root) => {
+      put(root, 'private-project.md', `---\n${field}: ${value}\n---\n\n# Note\n`);
+      const failure = await discover(root).then(
+        () => undefined,
+        (error: unknown) => error as BuildFailure,
+      );
+      assert.equal(failure?.code, code);
+      assert.ok(failure?.detail.includes('private-project.md'));
+      assert.ok(!failure?.message.includes('private-project.md'));
+    });
+  }
+});
+
+test('frontmatter metadata limits fail at the source-path seam', async () => {
+  const values = [
+    ['slug', 'a'.repeat(FIELD_LIMITS.strings.slug + 1), 'invalid-slug-frontmatter'],
+    [
+      'language',
+      `en-${Array.from({ length: 6 }, () => 'abcdef').join('-')}`,
+      'invalid-language-frontmatter',
+    ],
+    [
+      'description',
+      'x'.repeat(FIELD_LIMITS.strings.description + 1),
+      'invalid-description-frontmatter',
+    ],
+  ] as const;
+  for (const [field, value, code] of values) {
+    await scratch('producer-frontmatter-limit-', async (root) => {
+      put(root, 'bounded.md', `---\n${field}: ${value}\n---\n\n# Note\n`);
+      const failure = await discover(root).then(
+        () => undefined,
+        (error: unknown) => error as BuildFailure,
+      );
+      assert.equal(failure?.code, code);
+      assert.ok(failure?.detail.includes('bounded.md'));
+    });
+  }
+});
+
+test('a slug override colliding with a path slug keeps the sorted first source', async () => {
+  await scratch('producer-slug-collision-', async (root) => {
+    put(root, 'first.md', '---\nslug: shared\n---\n\n# First\n');
+    put(root, 'shared.md', '# Shared\n');
+    const found = await discover(root);
+    assert.deepEqual(found.entries.map((entry) => entry.slug), ['shared']);
+    assert.deepEqual(found.dropped, [
+      { path: 'shared.md', reason: 'slug-collision', collidedWith: 'first.md' },
+    ]);
+  });
+});
+
+test('lang and language must agree when both are present', async () => {
+  await scratch('producer-language-type-', async (root) => {
+    put(root, 'note.md', '---\nlang: []\nlanguage: en\n---\n\n# Note\n');
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as BuildFailure,
+    );
+    assert.equal(failure?.code, 'invalid-language-frontmatter');
+  });
+
+  await scratch('producer-language-conflict-', async (root) => {
+    put(root, 'note.md', '---\nlang: en\nlanguage: zh-CN\n---\n\n# Note\n');
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as BuildFailure,
+    );
+    assert.equal(failure?.code, 'conflicting-language-frontmatter');
+    assert.equal(failure?.message, 'frontmatter lang and language must name the same locale');
+    assert.ok(failure?.detail.includes('note.md'));
   });
 });
 

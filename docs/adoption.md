@@ -170,6 +170,11 @@ note is uncollected. Deeper folders remain part of the note slug, not nested col
 collection field is currently ASCII; a first folder with no ASCII letters or digits is not
 transliterated and leaves the note uncollected, while the note itself still publishes.
 
+Three other optional frontmatter fields reach the page: `slug` overrides the path-derived URL
+with a lowercase ASCII route key; `language` (or `lang`) sets the BCP 47 document locale and
+its chrome; `description` supplies the public note summary. Invalid shapes stop the build and
+the private report identifies the source note.
+
 ## Links
 
 Five spellings, all resolved by one pass, following Obsidian's own order:

@@ -60,10 +60,10 @@
  * ## What this file still does not do, and who owns each
  *
  * The link pass below derives backlinks. Git commit dates and `aliases` remain
- * underived. `tags` now comes from a YAML list in frontmatter, and the first
- * folder becomes the flat `collection`; both reuse fields and routes the site
- * already owns. `title:` is read because the frontmatter had to be parsed and
- * stripped regardless, and a note whose title lived only there would lose it.
+ * underived. Frontmatter can supply `slug`, `language`/`lang`, `description`,
+ * and `tags`; the first folder becomes the flat `collection`. All reuse fields
+ * and routes the site already owns. `title:` is read because the frontmatter
+ * had to be parsed and stripped regardless.
  *
  * ## Link resolution runs after the whole walk, and that ordering is forced
  *
@@ -78,7 +78,7 @@
 import { readFile, readdir, mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { RESERVED_SLUGS, validateArtifact } from '../src/lib/schema.ts';
+import { FIELD_LIMITS, RESERVED_SLUGS, isLanguageTag, isSlug, validateArtifact } from '../src/lib/schema.ts';
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import { BuildFailure, bySourceThenLine, type DroppedFile, type LinkFindingRow } from './write-report.ts';
 
@@ -162,13 +162,13 @@ function collectionFor(relativePath: string): string | undefined {
   return collection === '' ? undefined : collection;
 }
 
-/** Read a YAML tag list without silently coercing strings or empty members. */
+/** Read a YAML tag list without silently coercing scalars or whitespace. */
 function tagsFor(data: Record<string, unknown> | undefined, path: string): string[] | undefined {
   const value = data?.['tags'];
   if (value === undefined) return undefined;
   if (
     !Array.isArray(value) ||
-    value.some((tag) => typeof tag !== 'string' || tag.trim() === '' || tag !== tag.trim())
+    value.some((item) => typeof item !== 'string' || item.trim() === '' || item !== item.trim())
   ) {
     throw new BuildFailure(
       'invalid-tags-frontmatter',
@@ -177,6 +177,72 @@ function tagsFor(data: Record<string, unknown> | undefined, path: string): strin
     );
   }
   return value.length === 0 ? undefined : [...value] as string[];
+}
+
+function slugOverrideFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
+  const value = data?.['slug'];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || !isSlug(value) || value.length > FIELD_LIMITS.strings.slug) {
+    throw new BuildFailure(
+      'invalid-slug-frontmatter',
+      'frontmatter slug must be a lowercase public route key',
+      `${path}: slug must use lowercase ASCII letters, digits, and single interior hyphens`,
+    );
+  }
+  return value;
+}
+
+function languageFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
+  const language = data?.['language'];
+  const lang = data?.['lang'];
+  for (const [field, value] of [
+    ['language', language],
+    ['lang', lang],
+  ] as const) {
+    if (value === undefined) continue;
+    if (
+      typeof value !== 'string' ||
+      value !== value.trim() ||
+      !isLanguageTag(value) ||
+      value.length > FIELD_LIMITS.strings.language
+    ) {
+      throw new BuildFailure(
+        'invalid-language-frontmatter',
+        'frontmatter language must be a BCP 47 tag',
+        `${path}: ${field} must be a BCP 47 tag such as en, zh-CN, or zh-Hans-CN`,
+      );
+    }
+  }
+
+  const preferred = language as string | undefined;
+  const short = lang as string | undefined;
+  if (preferred !== undefined && short !== undefined && preferred.toLowerCase() !== short.toLowerCase()) {
+    throw new BuildFailure(
+      'conflicting-language-frontmatter',
+      'frontmatter lang and language must name the same locale',
+      `${path}: lang and language disagree; keep one key or make their BCP 47 tags equal`,
+    );
+  }
+  // `language` is the artifact field and therefore owns the spelling when both
+  // equivalent keys exist. BCP 47 comparison itself is case-insensitive.
+  return preferred ?? short;
+}
+
+function descriptionFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
+  const value = data?.['description'];
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string' ||
+    value.trim() === '' ||
+    value.length > FIELD_LIMITS.strings.description
+  ) {
+    throw new BuildFailure(
+      'invalid-description-frontmatter',
+      'frontmatter description must be non-empty text',
+      `${path}: description must be a non-empty string`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -835,7 +901,7 @@ export async function discover(
       continue;
     }
 
-    const slug = slugFor(path);
+    const slug = slugOverrideFor(parsed.data, path) ?? slugFor(path);
     if (slug === undefined) {
       dropped.push({ path, reason: 'empty-slug' });
       continue;
@@ -864,10 +930,14 @@ export async function discover(
     const title = typeof parsed.data?.['title'] === 'string' ? parsed.data['title'].trim() : '';
     const tags = tagsFor(parsed.data, path);
     const collection = collectionFor(path);
+    const language = languageFor(parsed.data, path);
+    const description = descriptionFor(parsed.data, path);
     entries.push({
       slug,
       ...(tags === undefined ? {} : { tags }),
       ...(collection === undefined ? {} : { collection }),
+      ...(language === undefined ? {} : { language }),
+      ...(description === undefined ? {} : { description }),
       // Derived from the body as authored, and derived **again** from the
       // rewritten body by {@link resolveCorpusLinks}. Not merely deferred:
       // deriving them only here was measured wrong in the loudest possible way —
@@ -1142,6 +1212,8 @@ export interface ContentEntryInput {
   slug: string;
   tags?: string[];
   collection?: string;
+  language?: string;
+  description?: string;
   title: string;
   excerpt: string;
   markdown: string;

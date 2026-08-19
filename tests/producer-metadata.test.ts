@@ -20,9 +20,11 @@ test('frontmatter tags and the first folder reach their public routes', () => {
     mkdirSync(notes, { recursive: true });
     writeFileSync(
       join(notes, 'note.md'),
-      '---\ntags:\n  - Security\n  - field notes\n---\n\n# Tagged note\n\nBody.\n',
+      '---\nslug: custom-note\nlanguage: zh-CN\ndescription: A concise public summary.\n' +
+        'tags:\n  - Security\n  - field notes\n---\n\n# Tagged note\n\nBody.\n',
       'utf8',
     );
+    writeFileSync(join(directory, 'notes', 'source.md'), '# Source\n\n[[Projects/deep/note]]\n', 'utf8');
     const git = spawnSync('git', ['init', '--quiet'], { cwd: directory, encoding: 'utf8' });
     assert.equal(git.status, 0, git.stderr);
 
@@ -33,8 +35,13 @@ test('frontmatter tags and the first folder reach their public routes', () => {
     );
     assert.equal(build.status, 0, build.stdout + build.stderr);
 
-    const noteRoute = '/notes/projects-deep-note/';
-    const note = readFileSync(join(directory, 'dist', 'notes', 'projects-deep-note', 'index.html'), 'utf8');
+    const noteRoute = '/notes/custom-note/';
+    const note = readFileSync(join(directory, 'dist', 'notes', 'custom-note', 'index.html'), 'utf8');
+    assert.match(note, /<html lang="zh-CN"/);
+    assert.ok(note.includes('链出笔记'));
+    assert.ok(note.includes('A concise public summary.'));
+    const sourcePage = readFileSync(join(directory, 'dist', 'notes', 'source', 'index.html'), 'utf8');
+    assert.ok(sourcePage.includes(`href="${noteRoute}"`));
     for (const label of ['Security', 'field notes']) {
       const route = tagRoute(routeKey(label));
       const page = readFileSync(
