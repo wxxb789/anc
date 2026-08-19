@@ -59,8 +59,9 @@
  *
  * ## What this file still does not do, and who owns each
  *
- * The link pass below derives backlinks. Git commit dates and `aliases` remain
- * underived. Frontmatter can supply `slug`, `language`/`lang`, `description`,
+ * The link pass below derives backlinks. `aliases` remain underived. Tracked
+ * notes take `created` and `updated` from the first and last visible commits.
+ * Frontmatter can supply `slug`, `language`/`lang`, `description`,
  * and `tags`; the first folder becomes the flat `collection`. All reuse fields
  * and routes the site already owns. `title:` is read because the frontmatter
  * had to be parsed and stripped regardless.
@@ -75,6 +76,7 @@
  * builds it. See {@link resolveCorpusLinks}.
  */
 
+import { spawnSync } from 'node:child_process';
 import { readFile, readdir, mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -243,6 +245,75 @@ function descriptionFor(data: Record<string, unknown> | undefined, path: string)
     );
   }
   return value;
+}
+
+interface GitDates {
+  created?: string;
+  updated: string;
+}
+
+/**
+ * First and last commit dates for current paths, from one history scan.
+ *
+ * Git emits newest commits first. The first date seen for a path is `updated`;
+ * each older one replaces `created`. A shallow clone cannot establish creation,
+ * so it emits only the latest visible update rather than asserting a false first
+ * date. Dates use the committer timestamp, so a rebase may change them, and the
+ * scan follows current path names rather than identities across renames. Merge
+ * commits use Git's default no-diff view; their ordinary side commits still
+ * count, while a resolution-only edit does not move `updated`. `-z` both keeps
+ * non-ASCII names unquoted and uses NUL boundaries; names remain `/`-separated
+ * on every platform, matching the walk. Outside git, for untracked files, or
+ * after the 30-second/64 MiB bounds, the map is empty and the existing undated
+ * behavior remains.
+ */
+function gitDatesFor(contentDirectory: string, paths: readonly string[]): ReadonlyMap<string, GitDates> {
+  const options = {
+    cwd: contentDirectory,
+    encoding: 'utf8' as const,
+    env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' },
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: 30_000,
+    windowsHide: true,
+  };
+  const shallowProbe = spawnSync('git', ['rev-parse', '--is-shallow-repository'], options);
+  if (shallowProbe.status !== 0) return new Map();
+  const shallow = shallowProbe.stdout.trim() === 'true';
+  const history = spawnSync(
+    'git',
+    [
+      '--no-pager',
+      'log',
+      '-z',
+      '--format=%x1e%cI',
+      '--name-only',
+      '--relative',
+      '--',
+      '.',
+    ],
+    options,
+  );
+  if (history.status !== 0) return new Map();
+
+  const wanted = new Set(paths);
+  const dates = new Map<string, GitDates>();
+  let commitDate: string | undefined;
+  for (const raw of history.stdout.split('\0')) {
+    if (raw.startsWith('\x1e')) {
+      const candidate = raw.slice(1).trim();
+      commitDate = Number.isNaN(Date.parse(candidate)) ? undefined : candidate;
+      continue;
+    }
+    if (commitDate === undefined) continue;
+    const path = raw.startsWith('\r\n') ? raw.slice(2) : raw.startsWith('\n') ? raw.slice(1) : raw;
+    if (path === '' || !wanted.has(path)) continue;
+    const previous = dates.get(path);
+    dates.set(path, {
+      updated: previous?.updated ?? commitDate,
+      ...(shallow ? {} : { created: commitDate }),
+    });
+  }
+  return dates;
 }
 
 /**
@@ -829,6 +900,7 @@ export async function discover(
   const patterns = options.exclude ?? [];
   const matched = patterns.map(() => false);
   const paths = await walk(contentDirectory);
+  const gitDates = gitDatesFor(contentDirectory, paths);
 
   /** Published source paths whose derived slug belongs to the site itself. */
   const reserved: { path: string; slug: string }[] = [];
@@ -932,8 +1004,11 @@ export async function discover(
     const collection = collectionFor(path);
     const language = languageFor(parsed.data, path);
     const description = descriptionFor(parsed.data, path);
+    const dates = gitDates.get(path);
     entries.push({
       slug,
+      ...(dates?.created === undefined ? {} : { created: dates.created }),
+      ...(dates?.updated === undefined ? {} : { updated: dates.updated }),
       ...(tags === undefined ? {} : { tags }),
       ...(collection === undefined ? {} : { collection }),
       ...(language === undefined ? {} : { language }),
@@ -1214,6 +1289,8 @@ export interface ContentEntryInput {
   collection?: string;
   language?: string;
   description?: string;
+  created?: string;
+  updated?: string;
   title: string;
   excerpt: string;
   markdown: string;

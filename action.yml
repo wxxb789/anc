@@ -104,17 +104,15 @@ runs:
     # so this fires for anyone who has not set `fetch-depth: 0` — which is the
     # point: it makes the documented setting non-optional rather than advisory.
     #
-    # Stated honestly, because a reader will otherwise assume it is load-bearing
-    # today: **the producer derives no dates from git at present.** `created` and
-    # `updated` are unset, so a shallow clone currently costs nothing. This check
-    # is here for the commit that changes that, since the alternative is somebody
-    # remembering to add it on the day it starts mattering, and the failure it
-    # guards against is silent.
+    # The producer derives `updated` from the latest visible commit and `created`
+    # from the first commit touching each current path. A shallow clone cannot
+    # prove the latter. The CLI degrades by omitting `created`; the release Action
+    # refuses that valid-looking incomplete metadata instead.
     - name: Refuse a shallow clone
       shell: bash
       run: |
         if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-          echo "::error::This repository was cloned shallowly, so commit dates are unavailable." >&2
+          echo "::error::This repository was cloned shallowly, so note creation dates cannot be established." >&2
           echo "Add fetch-depth: 0 to the actions/checkout step in this workflow:" >&2
           echo "" >&2
           echo "      - uses: actions/checkout@v5" >&2

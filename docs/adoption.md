@@ -175,6 +175,11 @@ with a lowercase ASCII route key; `language` (or `lang`) sets the BCP 47 documen
 its chrome; `description` supplies the public note summary. Invalid shapes stop the build and
 the private report identifies the source note.
 
+Tracked notes take `created` and `updated` from the first and last commits that touch their
+current paths. Creation requires full history — the Action example below uses `fetch-depth: 0`;
+a shallow clone emits only `updated`. Untracked notes and directories outside git stay undated.
+`created:` and `updated:` frontmatter are not read; git is the sole date authority.
+
 ## Links
 
 Five spellings, all resolved by one pass, following Obsidian's own order:
@@ -253,10 +258,9 @@ package name, and that is deliberate rather than temporary. The package is not p
 pinned to a package name does not. A user's adopted workflow surviving a rename of this tool is
 worth more than a shorter install line.
 
-- **Clone at full depth.** `created` and `updated` are meant to come from git commit dates, and
-  a shallow clone would produce a site that looks correct and carries wrong dates — the failure
-  class documentation does not prevent. Measured today, the producer derives neither field at
-  all, so this costs nothing yet and matters from the commit that changes that.
+- **Clone at full depth.** `created` needs the first commit touching each current path. A
+  shallow clone cannot prove that date, so the producer deliberately omits `created` there and
+  keeps only the latest visible `updated`; `fetch-depth: 0` supplies both.
 - **Set `origin` before you deploy.** With no `origin` the canonical links, the feed id, the
   sitemap, and `robots.txt` all point at `http://publish.localhost/`, which is loopback by
   RFC 6761 and reaches nobody. Ordinary preview builds allow it; `build --release` and the
@@ -311,6 +315,4 @@ that rule is not negotiable.
   a renamed note is a new address and the old one 404s.
 - Transclude `![[note]]`. It becomes an ordinary link, and the report records the demotion as
   `embed-not-transcluded`.
-- Read dates from git. `created` and `updated` are unset, so `/recent/` falls back to slug
-  order, the feed stamps its undated sentinel, and the sitemap omits `<lastmod>`.
 - Run Dataview, Tasks, arbitrary HTML, or any script from a note.
