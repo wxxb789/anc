@@ -77,12 +77,6 @@ pnpm run pack:tarball   # compile TypeScript and produce the installable tarball
 pnpm run preview        # `astro preview` over this repository's own dist/
 ```
 
-`pnpm run sync:content` still exists in `package.json` and still shells the private vault's
-`export.py`. It is **dead on the general-purpose path** — the producer that replaced it is
-`scripts/markdown-to-artifact.ts`, reached through the binary — and it is retained only
-because `tests/packaging.test.ts:394-407` asserts a note about the vault exporter's own
-target-name check. Do not run it. Deleting it is a live option and takes that gate with it.
-
 `pnpm run verify`, `build:fixture`, and packaged `build --release` require the exact
 `GITLEAKS_VERSION` exported by `scripts/scan-secrets.ts` on `PATH`. CI and the composite Action
 install checksum-pinned Linux archives before any scan or note read; ordinary preview builds
@@ -105,9 +99,8 @@ producing an artifact, not for managing this repository's dependencies.
 
 The name is `pack:tarball` rather than `pack` because npm runs `pre`/`post` hooks around *any*
 script name. `package.json`'s `prepack` refuses a bare `npm pack` — which would otherwise ship
-this repository's `.ts` sources, which Node cannot strip under `node_modules`, plus a
-`package.json` naming the private vault's exporter path — and measured, a hook by that name
-fires for `npm run pack` too and never reaches the script's body. A refusing hook and a script
+this repository's `.ts` sources, which Node cannot strip under `node_modules` — and measured,
+a hook by that name fires for `npm run pack` too and never reaches the script's body. A refusing hook and a script
 called `pack` cannot coexist.
 
 ## Verification
@@ -235,7 +228,6 @@ meeting one of these has met a known gap, not a discovery.
 
 | What | State | Owner |
 | --- | --- | --- |
-| `sync:content`, and the gate that pins it | dead path, retained by `tests/packaging.test.ts` | unassigned |
 | `src/pages/about.astro`, `privacy.astro` | shipped pages; plan §4.4 says notes `init` seeds. TK-32 built `init` and deliberately did not seed them — that row is tied to deleting the two pages, which is not TK-32's scope, and a seeded note beside a shipped page contradicting it is worse than neither | unassigned |
 | `og:image` | never emitted; `SOCIAL_CARD_PATH` is `undefined` and no config key sets it | unassigned |
 | The report state directory | grows without pruning. **The key is per-directory, not per-build** — `sha256(realpath(cwd))`, a pure function of the path. A count rising once per build was three agents and a `mkdtemp`-heavy suite sharing a host, and reading that count as an identity is lesson 1 of `docs/gate-reading.md` committed against itself | unassigned |

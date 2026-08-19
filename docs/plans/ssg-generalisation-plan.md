@@ -144,7 +144,7 @@ itself) — but that is the owner's call, not this plan's.
 > **AMENDED.** `scripts/` is now twelve files. `render-og-card.ts` was deleted by TK-31 along
 > with `public/og-card.png`, because a shipped card carries a brand onto a stranger's site;
 > `og:image` is now emitted only when a card is configured, and no config key configures one.
-> `sync:content` still exists in `package.json` and is dead — see the AGENTS.md note.
+> The dead `sync:content` private-vault command was removed after the shipped producer replaced it.
 
 The producer runs **in the user's notes repository**, not here. It never reads
 `src/data/content.json`; it writes one.
@@ -1735,8 +1735,8 @@ fixture rather than as publication. Owned by TK-31.
 > carrier.
 > After: zero, on three corpora, asserted over every file as bytes.
 >
-> **The personal note is still in `src/data/content.json`.** So is `sync:content`, pointing at
-> the private vault's `export.py`. D2's content half is unowned.
+> **D2's content half is closed.** `ff0db9d` replaced the personal note with the synthetic
+> `reading-a-build-log` fixture; the superseded private-vault command was then removed.
 >
 > One thing the decision did not anticipate and TK-31 got right: interpolating the *configured*
 > title into the social card would be **worse** than the hardcoded name it replaced, because it

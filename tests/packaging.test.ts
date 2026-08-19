@@ -404,21 +404,14 @@ test('the manifest declares what npm needs to install and run this package', () 
   assert.notEqual(MANIFEST.version, '0.0.1', 'the version is still the placeholder');
   assert.match(MANIFEST.version, /^\d+\.\d+\.\d+/, 'the version is not a release version');
 
-  // The rename has one known consequence outside this repository, recorded
-  // rather than silently accepted: `sync:content` runs the private vault's
-  // `export.py`, which refuses a target whose `package.json` name is not the
-  // literal `thoughtscape-publish` (its `publisher target identity mismatch`
-  // check). So `pnpm run sync:content` fails until the exporter's constant is
-  // updated — a change in the vault, which this repository may not make and
-  // `AGENTS.md` puts behind its own review. It is not in `verify`, has never run
-  // anywhere but a trusted host, and plan decision D2 retires it: the owner's
-  // site becomes a consumer of this tool rather than its content. Named here so
-  // the next person to run it learns why from a test rather than from a stack
-  // trace in another repository.
-  assert.equal(
-    MANIFEST.scripts['sync:content']?.includes('export.py'),
-    true,
-    'sync:content no longer runs the vault exporter — if it was removed, delete this note with it',
+  // The trusted-host vault exporter was superseded by the shipped producer. A
+  // manifest command would falsely advertise a path no adopter has and preserve
+  // one owner's repository layout in the general-purpose tool.
+  assert.equal(MANIFEST.scripts['sync:content'], undefined, 'the dead private exporter command returned');
+  assert.doesNotMatch(
+    readFileSync(join(ROOT, 'package.json'), 'utf8'),
+    /(?:export\.py|ob-flow)/,
+    'the public manifest still names the retired private exporter',
   );
 
   const binary = MANIFEST.bin['thoughtscape-publish'];
@@ -488,11 +481,10 @@ test('the tarball carries what the build reads and none of this owner\'s content
 
 test('a bare pack is refused, and the refusal names the script that works', () => {
   // The second publication guard, beside `private: true` above. A bare `npm
-  // pack` in this repository ships 29 `.ts` files Node refuses to strip under
+  // pack` in this repository ships `.ts` files Node refuses to strip under
   // `node_modules` — so the tarball dies at its first import in a consumer's
-  // repository — and a `package.json` byte-identical to this one, including
-  // `sync:content`'s path into the private vault, which this repository may not
-  // carry to a consumer. The compiled path strips both.
+  // repository — and runtime scripts still naming uncompiled sources. The
+  // compiled path strips both.
   //
   // The cause is *not* that `npm pack` skips lifecycle hooks. Measured on npm
   // 12.0.2 and pnpm 11.18.0, `prepack` fires for `npm pack`, `npm pack

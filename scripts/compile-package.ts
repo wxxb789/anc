@@ -453,9 +453,9 @@ export function compilePackage(destination: string): { compiled: number; rewritt
  * The inner `npm pack` does **not** trip `package.json`'s `prepack` refusal,
  * and that is structural rather than lucky: it runs inside `.package/`, whose
  * staged manifest has had its `scripts` key deleted above. The refusal exists to
- * stop a bare `npm pack` at the repository root, which would ship 29 `.ts` files
- * Node refuses to strip under `node_modules` — and, measured, a `package.json`
- * byte-identical to this one, private-vault path in `sync:content` included.
+ * stop a bare `npm pack` at the repository root, which would ship `.ts` files
+ * Node refuses to strip under `node_modules` and scripts naming sources absent
+ * from that uncompiled package.
  */
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const staging = join(ROOT, '.package');

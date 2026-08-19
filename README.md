@@ -12,8 +12,8 @@ document a stranger needs.
 - Walks a repository of Markdown and publishes every `.md` file, minus what you withhold by
   glob or by `publish: false` in frontmatter.
 - Resolves five link forms in one pass, following Obsidian's own resolution order. A link into
-  a note you withheld degrades to text and is reported; an ambiguous link warns with every
-  candidate named.
+  a note you withheld keeps its full label and path, points to `/private/`, and is reported; the
+  target body remains unpublished. An ambiguous link warns with every candidate named.
 - Renders backlinks, an outgoing-links list, a graph, breadcrumbs, and a table of contents as
   build-time HTML — no fetch, no database. Tag and collection routes exist and are empty: the
   producer does not derive those fields yet.
