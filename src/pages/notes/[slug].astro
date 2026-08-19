@@ -24,8 +24,9 @@
  * | 12 previous/next or collection navigation | here |
  * | 13 footer with provenance and canonical URL | here; the absolute URL is TK-08 |
  *
- * Nothing on this page needs JavaScript. The table of contents is server
- * rendered, the breadcrumbs are static, and the collapse is a `<details>`.
+ * Reading and navigation need no JavaScript. The table of contents is server
+ * rendered, the breadcrumbs are static, and code-copy is a progressive control
+ * inserted only when scripting runs.
  */
 import Layout from '../../layouts/Layout.astro';
 import LinkedNotes from '../../components/LinkedNotes.astro';
@@ -384,7 +385,13 @@ const graph = localGraph(entry, getEntry);
   {toc.length > 0 && <TableOfContents entries={toc} isRoot lang={entry.language} />}
 
   {/* § 9.2.7 — the sanitized article body. */}
-  <article class="prose" data-pagefind-body>
+  <article
+    class="prose"
+    data-pagefind-body
+    data-code-copy={t.codeCopy}
+    data-code-copied={t.codeCopied}
+    data-code-copy-failed={t.codeCopyFailed}
+  >
     <div set:html={html} />
   </article>
 

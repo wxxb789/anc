@@ -316,7 +316,7 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | Local graph | One-hop incoming/outgoing neighborhood | **Static SVG plus an equivalent table.** Not the SQLite WASM island section 12 describes; that path was never built and is deferred |
 | Dark mode | System preference plus explicit user toggle | CSS + minimal script |
 | Reader mode | Distraction-reduced layout | CSS + minimal script |
-| Syntax highlighting | Build-time highlighted code with copy affordance | Build-time highlighting. **No copy affordance**: TK-03 emitted a hidden button for a handler nobody wrote and TK-12 deleted it, per `src/lib/markdown.ts` |
+| Syntax highlighting | Build-time highlighted code with copy affordance | **Delivered.** Highlighting is static; localized copy controls are inserted only when JavaScript runs, so no dead button or copy chrome enters Pagefind |
 | Math | Build-time rendering | Native MathML via Temml. The "where approved" clause is deleted — there is no approval step |
 | Mermaid | Render safely; lazy-load only on pages that contain diagrams | Build-time markup by default |
 | RSS/Atom | Public notes feed with canonical URLs | Build-time |
@@ -328,8 +328,8 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 **Every version-1 producer field now has an owning source.** Slug, language, description, tags,
 aliases, first-folder collections, and git dates flow through the shipped producer. Aliases are
 display/search/preview metadata, deliberately not link targets. The delivery column separately
-marks every other partial capability, including redirects, graph storage, active-section TOC,
-and code-copy affordances.
+marks every other partial capability, including redirects, graph storage, and active-section
+TOC highlighting.
 
 ### 8.2 P1 — post-launch enhancements
 

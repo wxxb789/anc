@@ -182,6 +182,9 @@ current paths. Creation requires full history — the Action example below uses 
 a shallow clone emits only `updated`. Untracked notes and directories outside git stay undated.
 `created:` and `updated:` frontmatter are not read; git is the sole date authority.
 
+Fenced code is highlighted at build time. When JavaScript is available, each fence gains a
+localized copy control; without JavaScript the code remains complete and no dead button appears.
+
 ## Links
 
 Five spellings, all resolved by one pass, following Obsidian's own order:

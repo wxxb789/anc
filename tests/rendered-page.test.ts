@@ -1185,6 +1185,69 @@ test('the link preview opens on hover and on focus, and never leaves the viewpor
   }
 }, 180_000);
 
+test.runIf(entries.length > 1)(
+  'a code fence gains a working copy control only with scripting',
+  async (context) => {
+    const browser = requireBrowser(context);
+    const page = await browser.newPage();
+    try {
+      await page.addInitScript(() => {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: {
+            writeText: async (text: string) => {
+              const state = window as typeof window & { __copiedCode?: string; __copyFails?: boolean };
+              if (state.__copyFails) {
+                state.__copyFails = false;
+                throw new Error('simulated clipboard denial');
+              }
+              state.__copiedCode = text;
+            },
+          },
+        });
+        (window as typeof window & { __copyFails?: boolean }).__copyFails = true;
+      });
+      await visit(page, '/notes/code-heavy-shell-recipes/');
+      const button = page.locator('.code-copy').first();
+      const code = page.locator('.code-block > pre > code').first();
+      assert.ok((await button.count()) > 0, 'a code page has no runtime copy control');
+      const expected = await code.textContent();
+      const copiedLabel = await page.getAttribute('.prose', 'data-code-copied');
+      const failedLabel = await page.getAttribute('.prose', 'data-code-copy-failed');
+      assert.ok(copiedLabel !== null && copiedLabel !== '');
+      assert.ok(failedLabel !== null && failedLabel !== '');
+      await button.click();
+      await page.waitForFunction(
+        (label) => document.querySelector('.code-copy')?.textContent === label,
+        failedLabel,
+      );
+      assert.equal(await page.textContent('.code-block [role="status"]'), failedLabel);
+      await button.click();
+      await page.waitForFunction(
+        (label) => document.querySelector('.code-copy')?.textContent === label,
+        copiedLabel,
+      );
+      const copied = await page.evaluate(
+        () => (window as typeof window & { __copiedCode?: string }).__copiedCode,
+      );
+      assert.equal(copied, expected);
+      assert.equal(await page.textContent('.code-block [role="status"]'), copiedLabel);
+
+      const noScriptContext = await browser.newContext({ javaScriptEnabled: false });
+      try {
+        const noScriptPage = await noScriptContext.newPage();
+        await noScriptPage.goto(`${origin}/notes/code-heavy-shell-recipes/`);
+        assert.equal(await noScriptPage.locator('.code-copy').count(), 0);
+      } finally {
+        await noScriptContext.close();
+      }
+    } finally {
+      await page.close();
+    }
+  },
+  120_000,
+);
+
 test.runIf(entries.some((entry) => (entry.aliases?.length ?? 0) > 0))(
   'a hover preview includes the target note aliases as text',
   async (context) => {

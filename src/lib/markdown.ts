@@ -674,11 +674,9 @@ function calloutPlugin(): HastPluginDefinition {
  * Code fences become `figure > pre > code` with build-time highlighting; math
  * and Mermaid fences become rendered content instead.
  *
- * No copy button. TK-03 emitted one `hidden`, for a handler that was never
- * written: it had no CSS and no script, and the word `Copy` was welded into
- * every code block Pagefind indexed. TK-12 deleted it. TK-05a may reintroduce
- * it in the same commit as its handler and its styling — the point at which it
- * stops being dead code.
+ * Copy controls are not serialized into article HTML: `code-copy.ts` inserts
+ * them only when scripting runs, so Pagefind never indexes their chrome and a
+ * no-script reader meets no dead button.
  *
  * Math reaches this visitor too — satteri renders `$$…$$` as
  * `pre > code.language-math` with no fence language — and is handled by

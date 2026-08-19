@@ -40,10 +40,10 @@
  * it produces nonsense the moment it is applied to a language with no plural.
  * Each locale states its own rule.
  *
- * **Zero client JavaScript.** Resolution happens during the build. The two
- * scripts that write text into the page — the theme toggle and the search status
- * line — read strings the build already resolved out of `data-` attributes, so
- * neither ships a locale table and neither knows a locale exists.
+ * **Zero client-side locale lookup.** Resolution happens during the build. The
+ * scripts that write text — theme, search status, and code copy — read strings
+ * the build already resolved out of `data-` attributes, so none ships a locale
+ * table or knows a locale exists.
  */
 
 /** The theme names the toggle cycles through, in cycle order. */
@@ -254,6 +254,9 @@ export interface Translation {
    * it as an option, which is why it reaches a per-document locale at all.
    */
   headingAnchorLabel: (heading: string) => string;
+  codeCopy: string;
+  codeCopied: string;
+  codeCopyFailed: string;
   /**
    * The heading that opens the footnotes section, which GFM emits at the end of
    * an article that has any. Visually hidden, so a screen reader is the only
@@ -489,6 +492,9 @@ const EN = {
   metaAliases: 'Also known as',
   tocHeading: 'On this page',
   headingAnchorLabel: (heading) => `Link to section: ${heading}`,
+  codeCopy: 'Copy code',
+  codeCopied: 'Copied',
+  codeCopyFailed: 'Copy failed',
   footnotesHeading: 'Footnotes',
   footnoteBackLabel: (reference) => `Back to reference ${reference}`,
   diagramCaption: (kind) => `${kind} diagram`,
@@ -674,6 +680,9 @@ const ZH_CN = {
   metaAliases: '别名',
   tocHeading: '本页目录',
   headingAnchorLabel: (heading) => `跳转到章节：${heading}`,
+  codeCopy: '复制代码',
+  codeCopied: '已复制',
+  codeCopyFailed: '复制失败',
   footnotesHeading: '脚注',
   footnoteBackLabel: (reference) => `返回正文引用 ${reference}`,
   diagramCaption: (kind) => `${kind} 图示`,

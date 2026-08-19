@@ -242,6 +242,9 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncol
       import '../scripts/preferences.ts';
       import '../scripts/search-dialog.ts';
       import '../scripts/link-preview.ts';
+      if (document.querySelector('.prose[data-code-copy] .code-block')) {
+        void import('../scripts/code-copy.ts');
+      }
     </script>
   </body>
 </html>

@@ -561,7 +561,11 @@ test('every note page carries the anatomy this ticket owns', () => {
       `${slug}: no breadcrumbs named in this page's own language`,
     );
     assert.match(html, /<h1 class="note-title">/, `${slug}: no page title`);
-    assert.match(html, /<article class="prose" data-pagefind-body>/, `${slug}: no article body`);
+    assert.match(
+      html,
+      /<article class="prose" data-pagefind-body(?:\s[^>]*)?>/,
+      `${slug}: no article body`,
+    );
     assert.match(html, /<footer class="note-footer">/, `${slug}: no provenance footer`);
     // TK-05a emitted the route here and said TK-08 would upgrade it once `site:`
     // was configured; it now carries the absolute canonical URL, which is what

@@ -117,6 +117,25 @@
   color: var(--color-text);
 }
 
+/* Inserted by `code-copy.ts`, so no scripting means no dead control. */
+.code-copy {
+  display: block;
+  margin: 0 0 var(--space-2) auto;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.code-copy:disabled {
+  cursor: wait;
+  opacity: 0.75;
+}
+
 /*
  * Deliberately unstyled classes are recorded once, in `global.css`'s
  * "deliberately unstyled" block, which is the list `tests/built-output.test.ts`

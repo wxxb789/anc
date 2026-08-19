@@ -241,9 +241,9 @@ test('a code block is a bare figure with no dead controls', () => {
   // rather than highlighted, so neither is a `code-block` figure since TK-15.
   const figures = kitchenSink.html.match(/<figure class="code-block"[^>]*>/g) ?? [];
   assert.equal(figures.length, 2, `expected one figure per fence, got ${figures.length}`);
-  // TK-03 shipped a `hidden` copy button with no handler and no CSS, which
-  // welded the word `Copy` onto every indexed code block. TK-05a may bring one
-  // back in the same commit as its handler and its styling.
+  // TK-03 shipped a dead button that polluted every search fragment. The live
+  // copy control is now inserted after load, so sanitized HTML and Pagefind stay
+  // control-free and no-script readers still meet a bare figure.
   assert.doesNotMatch(kitchenSink.html, /<button/i, 'a control with no handler is dead markup');
   assert.doesNotMatch(kitchenSink.html, /data-copy-code/);
   assert.doesNotMatch(kitchenSink.html, />Copy</);
