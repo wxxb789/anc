@@ -469,6 +469,24 @@ function checkOrigin(value: unknown, line: number | undefined, issues: string[],
   }
 }
 
+/** Whether a validated origin names only the current host rather than a public server. */
+export function isLoopbackOrigin(origin: string): boolean {
+  let hostname: string;
+  try {
+    hostname = new URL(origin).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  } catch {
+    return true;
+  }
+  if (hostname === 'localhost' || hostname.endsWith('.localhost')) return true;
+  if (hostname === '0.0.0.0' || hostname.startsWith('127.')) return true;
+  if (hostname === '::' || hostname === '::1') return true;
+  if (!hostname.startsWith('::ffff:')) return false;
+  const mapped = hostname.slice('::ffff:'.length);
+  if (mapped === '0.0.0.0' || mapped.startsWith('127.') || mapped === '0:0') return true;
+  const first = Number.parseInt(mapped.split(':')[0] ?? '', 16);
+  return Number.isFinite(first) && first >= 0x7f00 && first <= 0x7fff;
+}
+
 /**
  * A non-empty site title carrying nothing XML cannot represent.
  *

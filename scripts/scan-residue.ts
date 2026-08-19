@@ -34,23 +34,21 @@
  * not open.
  *
  * **What it does not cover**, stated here so the gate is not mistaken for the
- * whole of requirements section 19.1. That list has nine items; this closes
- * six of them — private path markers, work/MSW markers, unresolved wikilinks,
- * absolute local paths, source maps, and unsafe link schemes. The remaining
- * three are covered elsewhere or not at all:
+ * whole of requirements section 19.1. That list has eight items; this scanner
+ * closes five — path markers, unresolved wikilinks, absolute local paths, source
+ * maps, and unsafe link schemes. The remaining three are covered elsewhere or
+ * not at all:
  *
- * - *Non-allowlisted titles or slugs*, and *unexpected routes or assets*, are
- *   properties of the route model rather than of file bytes. `checkCorpus` and
- *   the facet gates in `scripts/validate-content.ts` decide what may exist;
- *   asserting that `dist/` contains nothing beyond what the manifest implies is
- *   TK-09's deny-by-default assets gate (parity plan C5), and it is not
- *   attempted here.
+ * - *Slugs absent from the reviewed publish set* are enforced by `review` plus
+ *   `build --release`, because they are a publication-event property rather than
+ *   a byte pattern.
+ * - *Unexpected routes or assets* belongs to TK-09's deny-by-default gate
+ *   (parity plan C5), and is not attempted here.
  * - *Secrets, via Gitleaks or equivalent*, is **not covered**. A credential
  *   pattern set is a different tool with a different false-positive profile,
- *   and adding an entropy heuristic here would be a worse version of one. The
- *   structural argument that it matters less on this repository — every byte in
- *   `dist/` derives from a reviewed allowlist — is a reason it is lower risk,
- *   not a reason it is covered.
+ *   and adding an entropy heuristic here would be a worse version of one. A
+ *   release build's reviewed slug set lowers the risk; it does not scan bodies
+ *   and is not a reason to call secret scanning covered.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';

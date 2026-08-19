@@ -121,6 +121,8 @@ function main(): void {
     );
 
     run('git', ['init', '--quiet'], scratch);
+    run('git', ['config', 'user.name', 'Release Smoke'], scratch);
+    run('git', ['config', 'user.email', 'release-smoke@example.invalid'], scratch);
     runNpm(['install', TARBALL, '--no-audit', '--no-fund'], scratch);
 
     const binary = join(scratch, 'node_modules', ...MANIFEST.name.split('/'), 'bin', 'thoughtscape-publish.mjs');
@@ -134,7 +136,11 @@ function main(): void {
       'title: Foreign Garden\norigin: https://notes.example.org/\nexclude:\n  - "drafts/**"\n',
       'utf8',
     );
-    const buildOutput = run(process.execPath, [binary, 'build'], scratch);
+    const reviewOutput = run(process.execPath, [binary, 'review'], scratch);
+    assert(reviewOutput.includes('publish set review written: 1 notes'), 'review did not record the public set');
+    run('git', ['add', '--', '.publish-set.json'], scratch);
+    run('git', ['commit', '--quiet', '-m', 'review publish set'], scratch);
+    const buildOutput = run(process.execPath, [binary, 'build', '--release'], scratch);
     const lines = buildOutput.trim().split(/\r?\n/);
     assert(lines.length === 4, 'build wrote more or fewer than the four documented lines: ' + buildOutput);
     assert(lines[0]?.startsWith('residue scan ok:'), 'build did not finish its residue scan');

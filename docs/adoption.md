@@ -191,6 +191,30 @@ Per dropped file: the path and which rule dropped it. Per link finding: the sour
 1-indexed line, the link exactly as you wrote it, the outcome, and the candidates. Nothing in
 it reaches `dist/`, and nothing in it can be committed.
 
+## Reviewing the publish set
+
+An ordinary `build` is for local preview and needs no approval file. Before producing an
+artifact for deployment, record and commit the exact public note set:
+
+```bash
+npx @thoughtscape/publish review
+git add --intent-to-add .publish-set.json
+git diff -- .publish-set.json
+git add .publish-set.json
+git commit -m "review publish set"
+npx @thoughtscape/publish build --release
+```
+
+The review file contains sorted public slugs only — no source paths and no withheld names.
+Release mode requires it to be tracked, committed, unchanged, and exactly equal to the set the
+producer just computed. Additions and removals both stop the release until you run `review`
+again. Requiring the removal too is what prevents stale approval: a note cannot be published,
+excluded, then silently re-included under its old ledger entry.
+
+`--release` also refuses the loopback default origin. It qualifies a build for deployment; it
+does not deploy anything. The shipped Action always uses this mode and has no switch that
+disables the review.
+
 ## Hosting it
 
 **The Action exists.** `action.yml` at the root of this repository is what a user adds; the
@@ -209,14 +233,16 @@ worth more than a shorter install line.
   all, so this costs nothing yet and matters from the commit that changes that.
 - **Set `origin` before you deploy.** With no `origin` the canonical links, the feed id, the
   sitemap, and `robots.txt` all point at `http://publish.localhost/`, which is loopback by
-  RFC 6761 and reaches nobody. The build will not stop you — there is no deploy gate here yet,
-  because there is no deploy step.
+  RFC 6761 and reaches nobody. Ordinary preview builds allow it; `build --release` and the
+  Action refuse it.
+- **Commit the reviewed publish set.** The Action runs `build --release`, so a missing, dirty,
+  or stale `.publish-set.json` stops before any deployable artifact is produced.
 
 The output is a directory of static files. Any static host serves it. `dist/_headers` carries
 a Content-Security-Policy and three other security headers in Cloudflare Pages' format; a host
 that does not read that file serves the site without them, which works and is weaker.
 
-A rough GitHub Pages workflow, given the two caveats above:
+A rough GitHub Pages workflow, given the three caveats above:
 
 ```yaml
 name: publish
@@ -234,7 +260,7 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v5
         with: { node-version: 24 }
-      - run: npx @thoughtscape/publish build
+      - run: npx @thoughtscape/publish build --release
       - uses: actions/upload-pages-artifact@v3
         with: { path: dist }
       - uses: actions/deploy-pages@v4

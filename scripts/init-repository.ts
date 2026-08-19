@@ -122,6 +122,9 @@ export const CONFIG_TEMPLATE = `# ${CONFIG_FILENAME} — every key is optional, 
 #   ---
 #   publish: false
 #   ---
+#
+# Before deployment, run the installed command's "review" subcommand, inspect and
+# commit .publish-set.json, then build with "--release". Ordinary builds remain previews.
 `;
 
 /** What `init` did, for a caller to report. */

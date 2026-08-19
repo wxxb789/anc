@@ -169,6 +169,10 @@ test('init is safe to run twice before git init', () => {
   // with every gate green. `docs/gate-reading.md` case 3: the fixture did not
   // contain the case.
   scratch('tk32-norepo-', (root) => {
+    // Stop git discovery at this fixture even when the host's temp directory is
+    // nested under an unrelated worktree. A broken gitfile makes the no-repo
+    // branch real rather than environmental.
+    writeFileSync(join(root, '.git'), 'not a gitdir\n', 'utf8');
     writeFileSync(join(root, 'alpha.md'), '# Alpha\n\nProse.\n', 'utf8');
 
     assert.equal(cli(root, 'init').status, 0);
@@ -614,6 +618,18 @@ test('the action declares an input for every argument it passes', () => {
       `the "${input}" input reaches a step's env as ${variable} and no run body uses it`,
     );
   }
+});
+
+test('the action always qualifies a reviewed release and exposes no bypass input', () => {
+  const build = runBodies().find((body) => body.includes('build --content'));
+  assert.ok(build, 'no step runs the build');
+  assert.match(build, /(?:^|\s)--release(?:\s|$)/, 'the Action can produce an unreviewed deployment artifact');
+  const document = parseYaml(ACTION) as { inputs?: Record<string, unknown> };
+  assert.deepEqual(
+    Object.keys(document.inputs ?? {}).sort(),
+    ['content-dir', 'out-dir'],
+    'the Action exposes an input outside the two path arguments, which could bypass release qualification',
+  );
 });
 
 test('the action refuses a shallow clone', () => {

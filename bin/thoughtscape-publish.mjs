@@ -128,15 +128,17 @@ const USAGE = `thoughtscape-publish — build a static site from a directory of 
 
 Usage
   thoughtscape-publish init [options]
+  thoughtscape-publish review [options]
   thoughtscape-publish build [options]
   thoughtscape-publish preview [options]
 
-Options for init
+Options for init and review
   --content <dir>  directory holding the Markdown (default: the working directory)
 
 Options for build
   --content <dir>  directory holding the Markdown (default: the working directory)
   --out <dir>      where to write the site (default: <working directory>/dist)
+  --release        require a non-loopback origin and committed exact publish-set review
 
 Options for preview
   --dist <dir>     the built site to serve (default: <working directory>/dist)
@@ -174,10 +176,14 @@ Options for preview
  * does not take the third argument as a promise that it is stored somewhere.
  */
 function parseArguments(argv) {
-  const options = { content: undefined, out: undefined };
+  const options = { content: undefined, out: undefined, release: false };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') return 'help';
+    if (argument === '--release') {
+      options.release = true;
+      continue;
+    }
     const key = argument === '--content' ? 'content' : argument === '--out' ? 'out' : undefined;
     if (key === undefined) {
       throw new BuildFailure('unknown-option', `unrecognised option\n\n${USAGE}`, argument);
@@ -193,6 +199,16 @@ function parseArguments(argv) {
     index += 1;
   }
   return options;
+}
+
+function parseReviewArguments(argv) {
+  const options = parseArguments(argv);
+  if (options === 'help') return options;
+  if (options.out !== undefined || options.release) {
+    const option = options.out !== undefined ? '--out' : '--release';
+    throw new BuildFailure('unknown-option', `review does not accept ${option}\n\n${USAGE}`, option);
+  }
+  return { content: options.content };
 }
 
 /**
@@ -315,7 +331,7 @@ async function build(options) {
     }
     assertSafeOutput(outDirectory, contentDirectory, userDirectory);
 
-    await buildInto(contentDirectory, outDirectory, report);
+    await buildInto(contentDirectory, outDirectory, report, options.release);
     return report;
   } catch (error) {
     // Recording the failure must not *replace* it. If this second write throws —
@@ -333,7 +349,7 @@ async function build(options) {
   }
 }
 
-async function buildInto(contentDirectory, outDirectory, report) {
+async function buildInto(contentDirectory, outDirectory, report, release) {
   // Build inside the package, then copy out. Not an ad-hoc workaround but the
   // shape the two constraints in this file's header force: cwd must be inside
   // the package for prerender chunks to resolve their imports, Astro stages
@@ -365,13 +381,19 @@ async function buildInto(contentDirectory, outDirectory, report) {
     const staging = join(workspace, 'dist');
 
     const { discover, resolveCorpusLinks, writeArtifact } = await import('../scripts/markdown-to-artifact.ts');
-    const { exclusionOptions, loadConfig, CONFIG_DIRECTORY_VARIABLE } = await import('../scripts/load-config.ts');
+    const { exclusionOptions, isLoopbackOrigin, loadConfig, CONFIG_DIRECTORY_VARIABLE } = await import('../scripts/load-config.ts');
     const artifact = join(workspace, 'content.json');
 
     // Read from the *content* directory, not from cwd: `--content` may name a
     // subdirectory, and the configuration belongs with the notes it governs.
     // Absent is the ordinary case and yields the documented defaults.
     const config = loadConfig(contentDirectory);
+    if (release && (config.origin === undefined || isLoopbackOrigin(config.origin))) {
+      throw new BuildFailure(
+        'release-origin-missing',
+        'release blocked: publish.config.yaml must declare a non-loopback public origin',
+      );
+    }
 
     // Tell `astro.config.mjs` where to read the same file from, and this line is
     // the difference between a configured site and a silently ignored
@@ -439,6 +461,10 @@ async function buildInto(contentDirectory, outDirectory, report) {
     // Measured; the feature was reachable only from the test suite.
     const links = await resolveCorpusLinks(discovery);
     report.discovered(discovery.counts, discovery.dropped, links);
+    if (release) {
+      const { assertPublishSetReviewed } = await import('../scripts/publish-set-review.ts');
+      assertPublishSetReviewed(contentDirectory, discovery.entries.map((entry) => entry.slug));
+    }
     await writeArtifact(discovery, artifact);
 
     // From here on the process runs as if it had been started in the package, so
@@ -571,6 +597,27 @@ async function init(argv) {
   );
 }
 
+/** Compute the public note set and write the candidate review ledger. */
+async function review(argv) {
+  const options = parseReviewArguments(argv);
+  const contentDirectory = resolve(process.cwd(), options.content ?? '.');
+  if (!existsSync(contentDirectory)) {
+    throw new BuildFailure(
+      'content-directory-not-found',
+      'content directory not found: the directory named by --content does not exist',
+      contentDirectory,
+    );
+  }
+  const { discover } = await import('../scripts/markdown-to-artifact.ts');
+  const { exclusionOptions, loadConfig } = await import('../scripts/load-config.ts');
+  const { PUBLISH_SET_REVIEW_FILE, writePublishSetReview } = await import('../scripts/publish-set-review.ts');
+  const config = loadConfig(contentDirectory);
+  const discovery = await discover(contentDirectory, exclusionOptions(config));
+  const count = writePublishSetReview(contentDirectory, discovery.entries.map((entry) => entry.slug));
+  console.log(`publish set review written: ${count} notes`);
+  console.log(`inspect and commit ${PUBLISH_SET_REVIEW_FILE} before a release build`);
+}
+
 /**
  * Serve a built site, and stay in the foreground until interrupted.
  *
@@ -620,13 +667,14 @@ async function main(argv) {
     console.log(USAGE);
     return command === undefined ? 1 : 0;
   }
-  if (command === 'init' || command === 'preview') {
+  if (command === 'init' || command === 'review' || command === 'preview') {
     const rest = argv.slice(1);
     if (rest.includes('--help') || rest.includes('-h')) {
       console.log(USAGE);
       return 0;
     }
     if (command === 'init') await init(rest);
+    else if (command === 'review') await review(rest);
     else await preview(rest);
     return 0;
   }

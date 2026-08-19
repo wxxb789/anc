@@ -884,6 +884,7 @@ test('ensureIgnored seeds what a stranger\'s repository needs', () => {
   // 4. No repository at all: write the block unconditionally, and say so. It
   // costs one file and is correct the moment they run `git init`.
   scratch('tk25-g7-norepo-', (root) => {
+    writeFileSync(join(root, '.git'), 'not a gitdir\n', 'utf8');
     const { outcomes, unprobed } = ensureIgnored(root);
     assert.equal(unprobed, true, 'a directory with no repository was probed anyway');
     assert.deepEqual(

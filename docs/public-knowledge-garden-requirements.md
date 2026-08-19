@@ -1,12 +1,12 @@
 # Public Knowledge Garden — Product Requirements and Architecture
 
-**Status:** Revised against the delivered code, 2026-08-15 (TK-35)
+**Status:** Revised against the delivered code, 2026-08-19
 **Document type:** Product requirements + architecture decision baseline
 **Target project:** A general-purpose static publisher for a repository of Markdown
-**Last updated:** 2026-08-15; first drafted 2026-08-06
-**Implementation status:** Eleven of the twelve general-purpose tickets delivered; 607 tests
-passing, 46 skipped, measured on `d547ab0`. Deployment remains a separately approved action
-this document does not authorize.
+**Last updated:** 2026-08-19; first drafted 2026-08-06
+**Implementation status:** The general-purpose plan and reviewed release boundary are
+delivered. Deployment remains a separately approved external action this document does not
+authorize.
 
 ## 0. How to read this document, after the inversion
 
@@ -121,9 +121,8 @@ The initial product does not include:
 - bidirectional synchronization with an authoring tool;
 - public comments, reactions, accounts, or personalization;
 - exposing withheld pages through client-side encryption;
-- treating an exclusion glob as sufficient authorization without a reviewed publish set — the
-  replacement for the two non-goals struck below, and the open half of the safety argument;
-  see DR-7;
+- treating an exclusion glob as sufficient authorization without a reviewed publish set —
+  `review` plus `build --release` now enforce this boundary; see DR-7;
 - runtime rendering of normal content pages;
 - D1 as the canonical content database;
 - client-side access to D1 credentials or hosting administrative APIs;
@@ -159,12 +158,13 @@ publish it. Default-publish deletes that: every Markdown file is readable by con
 replacement is at the publication event — the exclusion rules, the refusal to accept a pattern
 that matched nothing, and the report a user can read before they deploy.
 
-**The replacement is weaker, and the gap is named rather than papered over.** DR-7 records what
-the owner accepted, and section 3.1 goal 7 states the target. The reviewed publish-set diff
-that would close it has no implementation: `published.txt` was designed and killed (plan §8;
-it never shrank, so a note published then excluded republished with the gate green), and no
-successor exists. Today the guard is the zero-match refusal and the report, and a user who
-does not read the report has an unreviewed publication.
+The replacement remains weaker at authoring time and is now fail-closed at the publication
+event. `thoughtscape-publish review` writes the exact sorted public slugs to
+`.publish-set.json`; `build --release` requires that file to be tracked, committed, unchanged,
+and exactly equal to the set just computed. Additions and removals both block. Requiring a
+removal corrects the flaw that killed the drafted `published.txt`: after the ledger shrinks, a
+formerly excluded note cannot be re-included under stale authorization. Ordinary `build` stays
+an unrestricted local-preview command; the shipped Action always uses release mode.
 
 ### 5.2 Static is the product baseline
 
@@ -218,7 +218,9 @@ over built output must inflate gzip members or it is asserting about a surface i
 | ~~Publication Manifest~~ | **Deleted.** There is no allowlist. What replaced it is the Exclusion Rule set plus the Publish Set. |
 | Exclusion Rule | One decision that withholds a file: a glob in `publish.config.yaml`, `publish: false` in a note's frontmatter, or a structural ignore the tool applies without being asked. |
 | Structural Ignore | A path the tool never offers to the user's rules at all — `.git/`, any dot-prefixed name, `node_modules/`, the root `README.md`. A structural ignore matching nothing is normal; a user pattern matching nothing is a probable typo and fails the build. |
-| Publish Set | The files that survived every Exclusion Rule. Computed per build, reported, and — as of today — not diffed against a committed record; see 5.1. |
+| Publish Set | The files that survived every Exclusion Rule. Computed per build and represented publicly by their slugs. |
+| Publish Set Review | `.publish-set.json`: the exact sorted public slugs a human inspected and committed. It records no source path or withheld name. |
+| Release Build | `build --release`: a build requiring a configured public origin and a committed, unchanged Publish Set Review exactly equal to the computed set. It qualifies an artifact but does not deploy it. |
 | Projection | The sanitized, deterministic public representation produced from the Publish Set. |
 | Public Document | One published page with public metadata, sanitized Markdown/HTML, and a stable public identifier. |
 | Public ID | An immutable opaque identifier for a public document. It does not encode a source path. |
@@ -999,14 +1001,13 @@ Scan the built output for:
 - absolute local and home-directory paths;
 - source maps;
 - unsafe link schemes and non-image `data:` URLs;
-- slugs absent from the publish set — **not covered**; there is no committed publish set to
-  compare against (see 5.1);
+- slugs absent from the reviewed publish set — enforced for release builds by exact comparison
+  with the committed `.publish-set.json` (see 5.1);
 - unexpected routes or assets — **not covered**; TK-09's deny-by-default assets gate does not
   exist.
 
-Five of the eight are enforced. Three are not, and each says which. `AGENTS.md` and
-`scripts/scan-residue.ts` both still say "six of nine", counting an earlier spelling of this
-list; the identity of the three uncovered items is the same in all three places.
+Six of the eight are enforced. Secret scanning and the route/asset gate are the two remaining
+items, and each says which tool or ticket owns it.
 
 **Every rule must be individually proven non-vacuous.** An aggregate "nine rules, zero
 findings" cannot distinguish nine working rules from one working rule and eight broken ones,
@@ -1091,12 +1092,14 @@ or SharedArrayBuffer-dependent feature needs cross-origin isolation.
 9. Scan the built output for privacy and security residue.
 10. Run unit, integration, accessibility, and browser tests.
 11. Verify CSP and absence of inline scripts/events.
-12. Produce a reviewable build manifest and artifact hashes.
+12. Run `review`, inspect and commit `.publish-set.json`, then require exact equality with
+    `build --release`. Artifact hashes beyond the existing hashed assets remain unbuilt.
 13. Deploy only through a separately approved action.
 14. Run post-deploy route, header, search, graph, and privacy smoke tests.
 
-Stages 1 through 9 are the shipped binary's own chain and its own exit codes. Stages 10 through
-12 are this repository's gates over itself. Stages 13 and 14 are manual.
+Stages 1 through 9 are the shipped binary's build chain. Stages 10 and 11 are this repository's
+gates over itself. Stage 12 is the shipped release-qualification boundary; stages 13 and 14
+remain separately approved/manual.
 
 ### 21.2 Environments
 
@@ -1109,11 +1112,11 @@ Stages 1 through 9 are the shipped binary's own chain and its own exit codes. St
 - production: an approved static build;
 - D1 preview/production: absent until an explicit ADR enables runtime data.
 
-**The origin's fail-loud moved from build to deploy, and the deploy half is missing.** A
-missing origin was never a local-build problem and is always a deployment problem, so the
-build no longer throws when one is absent. Nothing yet refuses to *deploy* a site whose
-canonical links point at loopback — the Action that would is unbuilt. `astro.config.mjs`
-records this at the line.
+The origin's fail-loud belongs to release qualification, not local preview. Ordinary `build`
+allows the RFC 6761 loopback default; `build --release` refuses it and also requires the exact
+committed Publish Set Review. The Action is delivered and always selects release mode, but
+this repository has no remote so that workflow has not run here. Deployment itself remains a
+separate external approval.
 
 ## 22. Testing requirements
 
@@ -1141,7 +1144,8 @@ records this at the line.
 - an ambiguous link warns with all candidates and still builds;
 - an asset is reachable only from a published note — unsatisfiable today, because nothing emits
   assets, and recorded as blocked rather than as covered;
-- the publish set is diffed against a reviewed record — **no implementation**, see 5.1;
+- the publish set is diffed against an exact committed record; missing, malformed, untracked,
+  dirty, added, removed, and stale re-inclusion states all fail release mode;
 - deletion round trip: removing a Markdown file removes the page, the feed entry, the sitemap
   entry, and the search record, with a *retained* note still returning a search result for its
   own title. Without that second half, "zero results" proves the index is broken rather than
@@ -1234,8 +1238,8 @@ Not in the original plan, and it displaced Phase 2 entirely:
 - a report that lives where nothing can publish it;
 - packaging as an installable command, and local preview.
 
-The GitHub Action and `init` are delivered; this repository has no remote, so the workflow has
-not run. Remaining: the publish-set review of 5.1 and the producer's underived fields from 8.1.
+The GitHub Action, `init`, and reviewed release boundary are delivered; this repository has no
+remote, so the workflow has not run. Remaining: the producer's underived fields from 8.1.
 
 ### Phase 2 — interactive graph via SQLite WASM — **not started**
 
@@ -1269,10 +1273,8 @@ Only after a measured static limitation:
 **"Launch" is retired as a frame.** This is a tool a stranger installs, so there is no single
 launch; there is a release, and each release meets these:
 
-- ~~every deployed page is present in the approved public manifest~~ → every deployed page is
-  in the computed publish set, and the user has had the chance to read the report before
-  deploying. **The stronger form — the publish set was reviewed as a diff — has no
-  implementation; see 5.1;**
+- ~~every deployed page is present in the approved public manifest~~ → every release build's
+  computed public slugs exactly equal the committed `.publish-set.json` the user reviewed;
 - scans of the built output, including the search index inflated, find zero residue;
 - all routes, headings, and redirects resolve;
 - no unresolved wikilink remains outside a code region in built output;
@@ -1360,7 +1362,7 @@ it reaches a CDN and a search index.
 | The build's log carries counts and never names | shipped, gated |
 | Removing a note removes its page, feed entry, sitemap entry, and search record | shipped, gated by `tests/deletion-roundtrip.test.ts` with retained-route and retained-search controls; browser search derives its positive query from the corpus under test |
 | An asset reaches the output only from a published note | vacuously true — no asset ships |
-| **The publish set is reviewed as a diff before it publishes** | **not built.** `published.txt` was designed and killed; nothing replaced it. This is the open half of the trade |
+| **The publish set is reviewed as a diff before it publishes** | shipped: `review` writes exact public slugs; `build --release` requires a clean committed equality match, and the Action cannot disable it |
 
 **Why the asymmetry between the two exclusion mechanisms.** The two failure modes are not
 equal. A note the user meant to publish and did not is an inconvenience they will notice; a
@@ -1418,8 +1420,8 @@ The user's own workflow decides, and the shape the tool is designed for is push-
 The option "scheduled publication of already-approved manifest entries" is **deleted** — there
 are no approved entries to schedule.
 
-Note the dependency: push-to-publish is safe to choose in proportion to how good the
-publication-event guard is, and 5.1 records that the strongest guard is unbuilt.
+Push-to-publish is bounded by the publication-event guard in 5.1: the Action refuses a release
+until the exact slug set matches the committed review.
 
 ### Q4 — URL and deletion policy — **answered: delete and recreate**
 
@@ -1475,19 +1477,17 @@ reports and in `docs/plans/ssg-generalisation-plan.md` §2 and §5 rather than h
 
 The dedicated project exists and is this repository. Each item's outcome:
 
-- [x] Requirements baseline copied and versioned. This document, revised 2026-08-15.
+- [x] Requirements baseline copied and versioned. This document, revised 2026-08-19.
 - [x] Project `AGENTS.md`. It is the contract every agent reads first, and over eighty source
       comment lines cite this document by section number — which is why section 27's numbering
       survived a revision that emptied it.
 - [x] Decision frontier resolved. Section 27, all eight.
-- [ ] Context glossary. Not created; section 6's table absorbed the new terms instead, which is
-      one glossary rather than two.
+- [x] Context glossary. Section 6 is the canonical glossary; a second `CONTEXT.md` would create
+      two authorities for the same terms.
 - [x] ADRs for relationship store and content authority. DR-4 amended, DR-1 superseded by DR-7.
 - [x] P0 capabilities converted to tickets. Twenty-six delivered.
-- [ ] **The three approval boundaries: infrastructure, item-level content, deployment.** Still
-      three, and the middle one changed: item-level approval is gone, and its replacement — a
-      reviewed publish-set diff — is not built. Infrastructure and deployment approval survive
-      intact. This is the same gap 5.1 and DR-7 record, and it is the one open item on this
-      list that matters.
+- [x] **The three approval boundaries: infrastructure, publish set, deployment.** Item-level
+      approval was replaced by the committed exact Publish Set Review in 5.1; infrastructure
+      and deployment approval remain separate.
 - [x] No deployment work before an approved domain and hosting target. Nothing here deploys,
       and the origin a user does not configure is loopback.

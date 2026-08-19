@@ -53,8 +53,10 @@ what runs where, and a list of what is known stale and whose it is.
 
 ```bash
 cd your-notes
-npx @thoughtscape/publish build
+npx @thoughtscape/publish build          # unrestricted local preview build
 npx @thoughtscape/publish preview
+npx @thoughtscape/publish review         # write .publish-set.json for inspection
+npx @thoughtscape/publish build --release # require its committed exact set
 ```
 
 **Not yet, though:** `package.json` carries `"private": true`, so the package is on no registry

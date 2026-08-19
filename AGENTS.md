@@ -22,7 +22,9 @@ owner's name a foreign build carried before TK-31 removed them.
   time keeps a note private. What does: `publish: false` in frontmatter (rank 1,
   unconditional), exclusion globs in `publish.config.yaml` (rank 2), and the gates that refuse
   a pattern matching nothing. `scripts/markdown-to-artifact.ts` states the precedence at
-  `discover`.
+  `discover`. A release-qualified artifact comes from `build --release`, which also requires
+  the exact computed slug set in a committed, unchanged `.publish-set.json`; deployment itself
+  remains external and separately approved.
 - **The build's names go to a file git cannot commit; its counts go to the log.** A workflow
   log on a public notes repository is world-readable and retained 90 days, so a withheld
   file's path — or its basename — is a disclosure there. `content-report.json` lives under
@@ -121,6 +123,7 @@ proposing a merge and report the pass count.
 | Residue scan over the output — markers, paths, schemes, source maps, the search index | yes | yes | yes | yes |
 | Configuration parse: unknown key, wrong type, malformed YAML | — | — | — | yes |
 | Exclusion: `publish: false`, globs, zero-match refusal | — | — | — | yes |
+| Release qualification: public origin + committed exact publish set | — | — | — | `build --release` |
 | Test suite | yes | — | yes | — |
 | Rendered-browser gates (Playwright) | when Chromium is installed | — | yes, always | — |
 
@@ -142,12 +145,10 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 - Deployment. Requirements section 21.1 stage 13 makes it a separately approved action; CI
   deliberately cannot deploy and needs no secrets.
 - Post-deploy smoke tests (stage 14), which need a deployed origin.
-- Secret scanning (section 19.1's Gitleaks item), slugs absent from a reviewed publish set, and
-  unexpected routes or assets. Those are the three items of section 19.1 the residue scan does
-  not close; the last two are route-model properties that TK-09's deny-by-default assets gate
-  owns, and **that gate does not exist** — `scripts/scan-residue.ts` names it as not attempted.
-  Both that file and the requirements say "six of nine"; the list is now eight bullets and five
-  are enforced. The arithmetic drifted, the identity of the uncovered three did not.
+- Secret scanning (section 19.1's Gitleaks item) and unexpected routes or assets. The reviewed
+  publish-set item is closed by `review` plus `build --release`; the remaining route/asset
+  property belongs to TK-09's deny-by-default gate, which still does not exist —
+  `scripts/scan-residue.ts` names it as not attempted.
 - `pnpm run build:fixture`, the 32-note corpus that un-skips the multi-entry gates. Not in
   `verify` because it builds the site twice. It *can* now run concurrently with the suite — the
   two interlock over `dist/` and wait for each other (`scripts/dist-lock.ts`), which the
@@ -160,12 +161,16 @@ every gate above is enforced only by running `pnpm run verify` on the host.
   the commit step, not the build.
 - `pnpm run smoke:tarball`, the release gate over the adoption path end to end. It packs the
   current tree, installs the tarball with npm into a synthetic foreign git repository, runs the
-  shipped `init` and `build`, and reads the public artifact plus private report. It is not in
-  `verify` because installing the full production dependency tree needs the npm cache or network.
+  shipped `init`, `review`, and `build --release`, and reads the public artifact plus private
+  report. It is not in `verify` because installing the full production dependency tree needs
+  the npm cache or network.
 
 ### Properties the gates assert
 
 - Generated routes and `content-index.json` are readable.
+- Release mode requires a public origin and a committed ledger exactly equal to the computed
+  public slugs; missing, dirty, added, and removed states fail, and shrink-then-re-include fails
+  as a new addition rather than inheriting stale approval.
 - Removing a note and rebuilding removes its route, content-index entry, feed and sitemap entry,
   and Pagefind record while a retained note remains on all five surfaces.
 - No horizontal overflow, browser console error, or broken internal link.

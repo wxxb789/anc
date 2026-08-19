@@ -45,6 +45,7 @@ import {
   DEFAULTS,
   DEFAULT_TITLE,
   exclusionOptions,
+  isLoopbackOrigin,
   loadConfig,
   parseConfig,
 } from '../scripts/load-config.ts';
@@ -586,6 +587,23 @@ test('an origin with a path, query, or fragment is refused', () => {
 
   for (const origin of ['https://example.com', 'https://example.com/', configured]) {
     assert.equal(parseConfig(`origin: ${JSON.stringify(origin)}\n`).origin, origin, `${origin}: was refused`);
+  }
+});
+
+test('release origin classification rejects loopback and unspecified hosts', () => {
+  for (const origin of [
+    'http://localhost/',
+    'https://preview.localhost/',
+    'http://127.3.2.1/',
+    'http://0.0.0.0/',
+    'http://[::]/',
+    'http://[::1]/',
+    'http://[::ffff:127.0.0.1]/',
+  ]) {
+    assert.equal(isLoopbackOrigin(origin), true, `${origin}: was treated as a public release origin`);
+  }
+  for (const origin of ['https://notes.example.org/', 'http://10.0.0.1/', 'https://[2001:db8::1]/']) {
+    assert.equal(isLoopbackOrigin(origin), false, `${origin}: was treated as loopback`);
   }
 });
 

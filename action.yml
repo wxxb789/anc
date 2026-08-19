@@ -82,7 +82,7 @@ inputs:
     required: false
     default: dist
 
-# Three inputs the plan's §5.1 names are deliberately absent, because each would
+# Two inputs the plan's §5.1 names are deliberately absent, because each would
 # be a second way to say something this tool already has one way to say:
 #
 # - `config`, a path to the configuration file. `scripts/load-config.ts` has one
@@ -92,10 +92,11 @@ inputs:
 #   reintroduce exactly that, in YAML, where the loader's refusal cannot reach.
 # - `generator-version`. The generator is this checkout, so its version is the
 #   ref the user wrote in `uses:`. A second pin can disagree with the first.
-# - `fail-on-new`, which gates a published-slug addition against a committed
-#   publish manifest. **No manifest exists anywhere in this tree.** An input
-#   whose behaviour is unimplemented is worse than an absent one: a user reading
-#   the table would believe the acknowledgement step is protecting them.
+#
+# There is no `fail-on-new` switch. The build below always uses release mode,
+# which requires the exact current slug set in a committed `.publish-set.json`;
+# additions and removals both fail until the user runs `review` and commits the
+# visible diff. A safety boundary the workflow can disable is not a boundary.
 
 runs:
   using: composite
@@ -291,4 +292,4 @@ runs:
         PUBLISH_OUT_DIR: ${{ inputs.out-dir }}
       run: |
         entry="$(node -p 'const m=require(process.env.GITHUB_ACTION_PATH+"/package.json"); Object.values(m.bin)[0]')"
-        node "$GITHUB_ACTION_PATH/$entry" build --content "$PUBLISH_CONTENT_DIR" --out "$PUBLISH_OUT_DIR"
+        node "$GITHUB_ACTION_PATH/$entry" build --content "$PUBLISH_CONTENT_DIR" --out "$PUBLISH_OUT_DIR" --release

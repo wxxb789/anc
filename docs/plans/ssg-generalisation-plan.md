@@ -1,13 +1,13 @@
 # General-Purpose SSG — Plan
 
-**Status:** all 12 tickets delivered; the Action, `init`, shipped preview, and tarball adoption
-smoke are implemented. All three fatal findings closed.
+**Status:** all 12 tickets delivered; the Action, `init`, shipped preview, tarball adoption smoke,
+and reviewed release boundary are implemented. All three fatal findings closed.
 **Document type:** Architecture decision + revised backlog
 **Derived from:** three research agents, three drafted sections, and two adversarial reviews
 that returned 25 substantiated findings
-**Describes:** `main` through `8464046`, measured **710 passed / 29 skipped / 35 files**, zero red
+**Describes:** the delivered general-purpose architecture through client rendering and reviewed release qualification
 **Supersedes:** the single-owner premise in [`public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md),
-which TK-35 revised in place on 2026-08-15 — §7 below is that revision's source and is now
+which was revised in place through 2026-08-19 — §7 below is that revision's source and is now
 **executed**, so where the two disagree the requirements document is current
 **Note:** §2 through §5 are the design as first drafted. Delivery overtook parts of them, and
 every such part now carries a **DISPROVED** or **AMENDED** marker naming the ticket and the
@@ -34,7 +34,7 @@ The five largest, so a reader is not surprised mid-section:
 | --- | --- | --- | --- |
 | §4.1 | `publish.config.ts`, a TypeScript module | `publish.config.yaml` | TK-30 — a `.ts` config prints the user's absolute path to stderr uninterceptably, and an executed config makes the unknown-key check advisory against a getter |
 | §2.3 | `fs.globSync` for discovery | `readdir` walk, `matchesGlob` for patterns | TK-26 — `globSync('readme.md')` returns the *pattern* as though it were a path on win32 and `[]` on Linux |
-| §3.3 G1 | `published.txt` as the publish ledger | nothing | S6/M1/M2 in §8, and no successor exists — the open half of the safety argument |
+| §3.3 G1 | `published.txt` as the publish ledger | `.publish-set.json` + `review` + `build --release` | The drafted superset ledger was killed by S6/M1/M2; the shipped successor requires committed exact equality, including removals |
 | §2.6 | article hrefs equal `outgoing` | equal it *excluding the page's own slug* | TK-28 — a same-page heading link renders an anchor and correctly contributes no edge |
 | §2.5 | the report is not printed | still true, and the *reason* was understated | TK-29 — the search index carries what no file spells |
 
@@ -63,13 +63,12 @@ search index. The owner accepted that trade. The replacement is not a weaker ver
 same guarantee; it is a different one, moved from read time to the publication event, and it
 only works if the gates that enforce it can be watched failing.
 
-**AMENDED — the replacement is partly built, and the missing part is the largest one.** The
-zero-match refusal shipped, the report shipped, the disclosure split shipped and is gated. The
-*publication event* itself — a computed publish set compared against something a human
-approved — has no implementation, because `published.txt` was killed (§8) and nothing replaced
-it. So today the trade is: structural read-time privacy exchanged for a build that refuses a
-typo and writes a report the user may not read. Requirements 5.1 and DR-7 record it as the open
-half rather than as done.
+**AMENDED — the publication-event replacement is built.** The zero-match refusal, report, and
+disclosure split ship. `review` writes the exact public slugs to `.publish-set.json`; release
+mode requires the file to be committed, unchanged, and exactly equal to the freshly computed
+set. Unlike drafted `published.txt`, removals also block until the ledger shrinks, so a later
+re-inclusion is a new unreviewed addition. Ordinary builds remain available for local preview;
+the Action always selects release mode.
 
 **This plan was not implementable as drafted, and all three reasons are now gone.** Two
 adversarial reviews returned 25 substantiated findings, three of them fatal: the `npx`
@@ -739,12 +738,12 @@ Every row is a build failure, not an intention. The last column is the seeded de
 must turn the gate red; a gate whose mutation has never been run is a gate this repository
 has shipped green four times already.
 
-> **Delivery status, added by TK-35. Five of seven shipped; one cannot be built as written and
-> one is vacuous by construction.**
+> **Delivery status. Six of seven shipped; G6 remains vacuous by construction because the
+> product emits no note assets.**
 >
 > | Gate | State |
 > | --- | --- |
-> | G1 unacknowledged publication | **not built.** `published.txt` was killed (§8) and nothing replaced it. The open half of §3.1 |
+> | G1 unacknowledged publication | **shipped.** `.publish-set.json` records exact public slugs; `build --release` requires a committed clean equality match and the Action cannot disable it. Missing, malformed, dirty, added, removed, and stale re-inclusion states are gated |
 > | G2 pattern matched nothing | shipped, TK-26. Counts live in the report, not in an artifact key (§3.1 row 1) |
 > | G3 report reached the output | shipped, TK-25/TK-29, both halves, over inflated gzip members |
 > | G4 link into excluded content | shipped, TK-27/TK-28 — with the equality corrected (§2.6) |
@@ -761,6 +760,14 @@ has shipped green four times already.
 | **G5** | **Residue.** `checkPrivacy` splits. The universal rules — absolute local path, home-directory path, `javascript:`/`vbscript:`/`file:`/non-image `data:`, source-map reference (`scripts/scan-residue.ts:80-89`) — stay hardcoded and non-configurable. `msw/` (`src/lib/schema.ts:206`, `scripts/scan-residue.ts:81`) becomes a user-configured marker list defaulting to empty, because `msw` is a widely used HTTP-mocking library and one owner's path prefix is another user's false build failure. `[[` (`src/lib/schema.ts:207`) **moves out of the artifact gate entirely** and stays only over `dist/`: under five link forms and real ambiguity an unresolvable wikilink is a normal authoring outcome, so the producer degrades it to plain text and records it in the ambiguity report, and a residual `[[` in output now means the degradation failed — a producer defect, not a user's | any universal marker appears in `dist/`; or a configured user marker appears; or a file shipped that the scan could not classify | The existing fail-closed-on-unknown-extension rule (`scripts/scan-residue.ts:257-263`) and the two non-vacuity guards (`:282-286`) are already the right design — preserve both. Add per-rule non-vacuity: seed each universal rule individually against a synthetic `dist/` and assert each fires alone. An aggregate "9 rules, 0 findings" cannot tell nine working rules from one working rule and eight broken ones. **The documented defect is fixed**: `scanResidue` used to report "I couldn't look" as a *finding*, so a caller counting findings could not distinguish it from residue. It throws a `residue-scan-vacuous` `BuildFailure` instead — which turned out cheaper than the `{findings, blockers}` split proposed here, and needed no caller changes (verified: every caller passes a directory it created) |
 | **G6** | **Asset reachability.** An asset reaches `dist/` only because a published note references it. There is no `**` copy pass and there must never be one | any file in `dist/` traces to none of: a published entry's referenced asset, `public/`, or a build-tool output (`_astro/`, `pagefind/`) | Quartz's own docs concede *"all non-markdown files will be emitted and available publically"*, so a `draft: true` note publishes every image it embedded — and undocumented defect (b) is worse: discovery globs `**/*.*` while the asset emitter globs `**`, so an extensionless file (`secrets`, `TODO`) is copied verbatim while being invisible to every filter. Three mutations, all required together: an unreferenced image beside a published note must be **absent**; an image referenced only by an excluded note must be **absent**; an image referenced by a published note must be **present**. Without the third the gate passes on a build that copied nothing. Fourth: an extensionless file must be absent, tested by name |
 | **G7** | **Deletion round trip.** Removing a Markdown file removes the page, the feed entry, the sitemap entry, and the search record | after removing a fixture note and rebuilding, its route exists in `dist/`, or its title appears in `sitemap.xml`, `feed.xml`, or returns a Pagefind result | The Digital Garden plugin's trap is that removing the inclusion marker leaves the page live — unpublishing is two steps. Ours must be one, and structurally so. Mutation: build the fixture corpus, remove one note, rebuild, assert all four absences **and** assert a retained note still returns a Pagefind result for its own title. Without the second, "zero results" proves the index is broken, not that deletion worked. This also forces `tests/search.test.ts:42` — `PRIMARY_QUERY = 'the'`, whose own comment already says a gate measuring a term the corpus lacks is "green for the wrong reason" — to become a term drawn from the corpus under test and asserted present in it before the query runs. On a Chinese-only user repo the current constant is exactly the failure its comment describes |
+
+> **AMENDED on G1.** The drafted `published.txt` row is preserved as the design that was
+> rejected. Its "removal must pass" rule is exactly what left stale authorization behind. The
+> shipped successor is `.publish-set.json`: `review` rewrites the exact sorted set, and release
+> mode requires that file committed, unchanged, and equal. Additions and removals both fail;
+> after the required shrink, re-inclusion is a new addition. Missing, malformed, untracked,
+> staged, unstaged, and stale states have independent controls in
+> `tests/publish-set-review.test.ts` and the real CLI path in `tests/publish-set-cli.test.ts`.
 
 ## 3.4 Gates that go vacuous and are not worth keeping
 
@@ -1342,8 +1349,9 @@ producer is split into four tickets that can each be implemented *and* reviewed 
 | TK-34 | Scale evidence at 1,000 and 10,000 notes | TK-28 | P1 | F | delivered `d547ab0` |
 | TK-35 | Requirements-document revisions | all above | P1 | F | this pass |
 
-**TK-32 is closed.** Deployment remains separately approved and the publish-set review in
-§3 remains the open safety half; neither is blocked on the Action or `init` anymore.
+**TK-32 and the publish-set safety half are closed.** Deployment remains a separately
+approved external action, and the remaining roadmap items are the explicitly recorded product
+gaps rather than a missing publication boundary.
 
 ### 6.2 Parallelism, keyed on file ownership
 

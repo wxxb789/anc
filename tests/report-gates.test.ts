@@ -573,6 +573,7 @@ test('a fragment-named file outside the search index fails closed', () => {
  */
 test('the report’s counts partition every discovered file, whatever dropped it', () => {
   scratch('tk29-partition-', (directory) => {
+    writeFileSync(join(directory, '.git'), 'not a gitdir\n', 'utf8');
     const state = join(directory, 'state');
     mkdirSync(state, { recursive: true });
     const notes = join(directory, 'notes');
@@ -652,6 +653,7 @@ test('the report’s counts partition every discovered file, whatever dropped it
  */
 test('with no repository, the report lands outside the invocation directory', () => {
   scratch('tk29-nogit-', (directory) => {
+    writeFileSync(join(directory, '.git'), 'not a gitdir\n', 'utf8');
     const state = join(directory, 'state');
     mkdirSync(state, { recursive: true });
     const notes = join(directory, 'notes');
