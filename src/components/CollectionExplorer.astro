@@ -127,11 +127,10 @@ const t = translate(lang);
                 the twelve are a window. A screen reader hears "Uncollected,
                 376", walks twelve items, and reaches the end of the list.
 
-                The expansion link matters most on the group that has no
-                collection index — and that is not an edge case, it is the shape
-                every corpus this tool builds has, since
-                `scripts/markdown-to-artifact.ts` derives no `collection`. The
-                home page lists every published note, so that is where it goes;
+                The expansion link matters on the uncollected group, which
+                still contains every root-level note because only a first folder
+                produces a collection. The home page lists every published note,
+                so that is where it goes;
                 a group with its own index already links it above and does not
                 need a second route to the same idea. */}
             {group.total > group.notes.length && (

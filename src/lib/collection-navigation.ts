@@ -1,7 +1,7 @@
 /**
  * The collection navigation an explorer rail renders.
  *
- * Two levels, both of which the artifact actually carries: a curated collection,
+ * Two levels, both of which the artifact actually carries: a flat collection,
  * and the notes inside it. Every published note belongs to exactly one group — a
  * note with no `collection` lands in a final group rather than being dropped,
  * because a navigation tree that silently omits part of the corpus is a map with
@@ -23,7 +23,7 @@
  * **What a deeper hierarchy would change, and what it would not.** `collection`
  * is validated as a *flat* slug (`src/lib/schema.ts`) and `routes.ts` has no
  * notion of nesting, so a collection inside a collection has no data behind it
- * and is not invented here. When the exporter grows that field, the change is
+ * and is not invented here. If the contract grows a nested field, the change is
  * this one function splitting a key into segments and emitting a group per
  * ancestor — the group shape, the component, and the stylesheet are unchanged,
  * because a nested group is the same disclosure with a different label and a
@@ -128,8 +128,8 @@ export interface ExplorerGroup {
  * exactly on a measured limit is one that a longer title or a shorter viewport
  * puts back over it — and **a second group costs another 50 px of summary**, so
  * a four-collection site has 408 px rather than 558 for its open group's rows.
- * That case is real and is not what the bisection measured, since the corpus the
- * CLI produces has exactly one group; the margin is what covers it.
+ * That case is real and is not what the bisection measured, which used one
+ * synthetic group; the margin covers the multiple groups first-folder derivation can create.
  *
  * Twelve is also what {@link LOCAL_NODE_LIMIT} is bounded at, which keeps two
  * bounded views in this project at one number rather than two arbitrary ones.
@@ -154,9 +154,9 @@ export interface ExplorerGroup {
  * drew, the same shown-of-total sentence `NoteGraph.astro` gives its own bound.
  * A collection group links its index, which lists every member; the uncollected
  * group has no index to link and so links the home page, which lists the whole
- * corpus. That branch is the important one rather than the fallback: the CLI
- * derives no `collection` (`scripts/markdown-to-artifact.ts`), so every corpus
- * this tool actually builds is one uncollected group.
+ * corpus. That branch still matters for root notes: the CLI derives a flat
+ * collection only from a note's first folder, so root-level notes remain in the
+ * uncollected group.
  *
  * A 32-note fixture corpus's groups are 11, 10, 7, and 4, so every one of them
  * draws whole and a small site's rail is byte-for-byte what it was.

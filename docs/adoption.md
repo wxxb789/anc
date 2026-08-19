@@ -152,6 +152,24 @@ dropped rather than whether it is walked — and it adds one, because the config
 then discovered too. Nothing is published either way. `discovered` counts what the walk
 classified, not what it considered publishing.
 
+## Tags and collections
+
+Tags come from a YAML list in note frontmatter. A scalar is refused rather than guessed:
+
+```yaml
+---
+tags:
+  - Security
+  - field notes
+---
+```
+
+Each tag gets a `/tags/<key>/` page and a link on the note. The first folder under the content
+directory becomes the flat collection: `Projects/deep/note.md` belongs to `projects`; a root
+note is uncollected. Deeper folders remain part of the note slug, not nested collections. The
+collection field is currently ASCII; a first folder with no ASCII letters or digits is not
+transliterated and leaves the note uncollected, while the note itself still publishes.
+
 ## Links
 
 Five spellings, all resolved by one pass, following Obsidian's own order:
@@ -288,10 +306,6 @@ that rule is not negotiable.
   a renamed note is a new address and the old one 404s.
 - Transclude `![[note]]`. It becomes an ordinary link, and the report records the demotion as
   `embed-not-transcluded`.
-- Group notes into collections. `collection` is a field the site renders and the producer does
-  not yet derive, so `/collections/` is empty whatever your folders look like. Folders reach
-  the site only through the slug: `projects/sub/deep.md` publishes at
-  `/notes/projects-sub-deep/`.
 - Read dates from git. `created` and `updated` are unset, so `/recent/` falls back to slug
   order, the feed stamps its undated sentinel, and the sitemap omits `<lastmod>`.
 - Run Dataview, Tasks, arbitrary HTML, or any script from a note.

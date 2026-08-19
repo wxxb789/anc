@@ -59,12 +59,11 @@
  *
  * ## What this file still does not do, and who owns each
  *
- * No backlink derivation — TK-28. No git commit dates, no `tags`, no
- * `collection`, no `aliases` — every one is a derived field that needs a
- * decision of its own, and this ticket's scope is discovery, exclusion, the
- * frontmatter publish flag, and the link traversal below. `title:` is read
- * because the frontmatter had to be parsed and stripped regardless, and a note
- * whose title lived only in frontmatter would otherwise lose it.
+ * The link pass below derives backlinks. Git commit dates and `aliases` remain
+ * underived. `tags` now comes from a YAML list in frontmatter, and the first
+ * folder becomes the flat `collection`; both reuse fields and routes the site
+ * already owns. `title:` is read because the frontmatter had to be parsed and
+ * stripped regardless, and a note whose title lived only there would lose it.
  *
  * ## Link resolution runs after the whole walk, and that ordering is forced
  *
@@ -146,6 +145,38 @@ function slugFor(relativePath: string): string | undefined {
     .filter((segment) => segment !== '')
     .join('-');
   return slug === '' ? undefined : slug;
+}
+
+/**
+ * First folder as the flat collection key the existing artifact contract accepts.
+ *
+ * The collection field is still an ASCII `SLUG`, unlike Unicode tag route keys.
+ * A folder that yields no such key leaves the note uncollected rather than
+ * rejecting a repository that already publishes; widening that field is a
+ * schema decision, not transliteration for this producer to invent.
+ */
+function collectionFor(relativePath: string): string | undefined {
+  const separator = relativePath.indexOf('/');
+  if (separator === -1) return undefined;
+  const collection = slugSegment(relativePath.slice(0, separator));
+  return collection === '' ? undefined : collection;
+}
+
+/** Read a YAML tag list without silently coercing strings or empty members. */
+function tagsFor(data: Record<string, unknown> | undefined, path: string): string[] | undefined {
+  const value = data?.['tags'];
+  if (value === undefined) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.some((tag) => typeof tag !== 'string' || tag.trim() === '' || tag !== tag.trim())
+  ) {
+    throw new BuildFailure(
+      'invalid-tags-frontmatter',
+      'frontmatter tags must be a YAML list of non-empty text',
+      `${path}: tags must be written as a YAML list whose members are non-empty strings`,
+    );
+  }
+  return value.length === 0 ? undefined : [...value] as string[];
 }
 
 /**
@@ -831,8 +862,12 @@ export async function discover(
     claimed.set(slug, path);
 
     const title = typeof parsed.data?.['title'] === 'string' ? parsed.data['title'].trim() : '';
+    const tags = tagsFor(parsed.data, path);
+    const collection = collectionFor(path);
     entries.push({
       slug,
+      ...(tags === undefined ? {} : { tags }),
+      ...(collection === undefined ? {} : { collection }),
       // Derived from the body as authored, and derived **again** from the
       // rewritten body by {@link resolveCorpusLinks}. Not merely deferred:
       // deriving them only here was measured wrong in the loudest possible way —
@@ -1105,6 +1140,8 @@ export interface Discovery {
  */
 export interface ContentEntryInput {
   slug: string;
+  tags?: string[];
+  collection?: string;
   title: string;
   excerpt: string;
   markdown: string;

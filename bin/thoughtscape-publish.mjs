@@ -474,7 +474,20 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     process.env['CONTENT_ARTIFACT'] = artifact;
 
     const { validateBuildInputs } = await import('../scripts/validate-content.ts');
-    const validated = validateBuildInputs(artifact);
+    let validated;
+    try {
+      // `validate-content.ts` remains the sole owner of schema, tag, collection,
+      // and redirect checks. This boundary only adapts its user-derived detail
+      // to the public-stream/private-report split.
+      validated = validateBuildInputs(artifact);
+    } catch (error) {
+      if (isDisclosureChecked(error)) throw error;
+      throw new BuildFailure(
+        'invalid-generated-content',
+        'generated content cannot pass schema and route validation',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
 
     const { build: astroBuild } = await import('astro');
     await astroBuild({ outDir: staging, logLevel: 'error' });

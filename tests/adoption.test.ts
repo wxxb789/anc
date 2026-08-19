@@ -877,7 +877,7 @@ test('action.yml is in no tarball this package produces', () => {
 /* --------------------------------------------------------------- scale -- */
 
 /**
- * The rail's per-page cost does not grow with the corpus.
+ * The rail's per-page cost is bounded per collection rather than per corpus note.
  *
  * **The defect this closes was quadratic and it landed on the user's bill.** The
  * explorer renders on every page and listed every published note, so a site paid
@@ -888,10 +888,9 @@ test('action.yml is in no tarball this package produces', () => {
  *
  * **Built rather than modelled, and built by the shipped binary.** The rail is
  * markup, so the claim is about output — `docs/gate-reading.md` case 5. It is
- * also the CLI's own corpus shape that matters: `markdown-to-artifact.ts`
- * derives no `collection`, so every note a user publishes lands in the single
+ * also the CLI's own corpus shape that matters. Root-level notes form the
  * uncollected group, and a bound applied only to collection facets would leave
- * every real user unbounded while every fixture stayed green.
+ * that ordinary corpus unbounded while every collection fixture stayed green.
  *
  * **Two sizes, because one measures a constant and two measure growth.** A fix
  * that improved the constant and kept the slope would pass any single-size
@@ -913,7 +912,7 @@ test('action.yml is in no tarball this package produces', () => {
  * exactly this — `astro check` reports the chained form as `ts(6385)`.
  */
 describe('rail scale', { concurrent: false }, () => {
-test('the explorer does not grow with the corpus', () => {
+test('the explorer bounds every collection independently of corpus size', () => {
   /** The rail's own bytes and links on one built page. */
   const railOf = (html: string): { bytes: number; links: number; counts: number[] } | undefined => {
     const start = html.indexOf('<nav class="explorer"');
@@ -962,10 +961,8 @@ test('the explorer does not grow with the corpus', () => {
       // The home page is the *only* surface listing every note once the rail is
       // windowed, so it is the last link of the reachability argument — and it
       // was the ungated one. `tests/built-routes.test.ts` asserts the note grid
-      // covers the corpus, but behind `requireMultiEntry`, whose condition
-      // includes more than one collection facet; a CLI corpus has zero, so that
-      // gate skips on exactly the shape this tool produces. Counted here, on a
-      // build that already exists.
+      // covers the corpus, but behind `requireMultiEntry`. Counted here too, on
+      // the build this scale gate already paid for.
       const home = readFileSync(join(root, 'dist', 'index.html'), 'utf8');
       const cards = (home.match(/<article class="note-card">/g) ?? []).length;
       return { ...rail, pages: slugs.length, cards };
@@ -981,52 +978,40 @@ test('the explorer does not grow with the corpus', () => {
     `the two builds produced ${small.pages} and ${large.pages} note pages — they are not different corpora`,
   );
 
-  // The property: the rail a reader downloads is the same size on a corpus
-  // more than six times larger. Asserted on links first, because that is the
-  // quantity that was O(n) and it names the defect; bytes follow from it and are
-  // checked with a margin for the titles' own lengths.
-  assert.equal(
-    large.links,
-    small.links,
-    `the rail carries ${small.links} note links at ${small.pages} pages and ${large.links} at ` +
-      `${large.pages} — its size still grows with the corpus`,
-  );
+  // Each group contributes at most one window. The number of first-folder
+  // collections may grow, but adding notes to an existing group cannot make its
+  // rail slice grow past the declared bound.
+  for (const [name, built] of [
+    ['small', small],
+    ['large', large],
+  ] as const) {
+    const expectedLinks = built.counts.reduce((sum, count) => sum + Math.min(count, GROUP_WINDOW), 0);
+    assert.equal(
+      built.links,
+      expectedLinks,
+      `${name} rail draws ${built.links} note links for groups ${JSON.stringify(built.counts)}; ` +
+        `the per-group bound predicts ${expectedLinks}`,
+    );
+    assert.equal(
+      built.counts.reduce((sum, count) => sum + count, 0),
+      built.pages,
+      `${name} rail group counts do not partition the ${built.pages} published notes`,
+    );
+  }
   assert.ok(
     large.bytes < small.bytes * 1.5,
     `the rail is ${small.bytes} B on the small corpus and ${large.bytes} B on the large one — ` +
-      'a bound on the link count that leaves bytes growing is not a bound',
+      'bounded groups still leave bytes growing with notes',
+  );
+  assert.ok(
+    large.counts.some((count) => count > GROUP_WINDOW),
+    'no large-corpus group exceeds the window, so the bound was not exercised',
   );
 
-  // And the bound is the one the model declares, so a change to `GROUP_WINDOW`
-  // moves this gate with it rather than leaving a literal behind.
-  assert.equal(small.links, GROUP_WINDOW, `the rail draws ${small.links} notes, not the declared window`);
-
-  // The count beside the group label is the *collection's* size, not the
-  // window's. **This can only be gated here.** The fixture corpus's largest
-  // group holds 11 notes against a bound of 12, so no corpus in this repository
-  // renders a group where the two numbers differ — `docs/gate-reading.md` case 3,
-  // and the reason this assertion sits in a gate that builds its own corpus
-  // rather than beside the other rail gates in `tests/built-routes.test.ts`.
-  // A count wired to the drawn slice would print 12 on a 376-note group and tell
-  // the reader their site is a thirtieth of its real size.
-  assert.deepEqual(
-    large.counts,
-    [large.pages],
-    `the rail's group count reads ${JSON.stringify(large.counts)} on a corpus of ${large.pages} notes — ` +
-      'the count is the size of the window rather than the size of the collection',
-  );
-
-  // **Nothing became unreachable.** The window is only defensible because the
-  // home page still lists every published note, and on a corpus this tool
-  // actually produces that is the last link of the argument: the rail draws 12,
-  // the uncollected group has no collection index to expand into, so the home
-  // page is where "see the rest" goes.
-  //
-  // It was also the ungated link. `tests/built-routes.test.ts` asserts the note
-  // grid covers the corpus, but behind `requireMultiEntry`, which requires more
-  // than one collection facet — and a CLI corpus has none, so that gate skips on
-  // precisely this shape. Checked at both sizes, because a grid that silently
-  // paginated past some threshold would satisfy the small one alone.
+  // **Nothing became unreachable.** Collection windows expand through their
+  // collection indexes; the uncollected window expands through the home page,
+  // which still lists every published note. Checked at both sizes because a grid
+  // that silently paginated past some threshold would satisfy the small one alone.
   for (const [size, built] of [
     [small.pages, small.cards],
     [large.pages, large.cards],

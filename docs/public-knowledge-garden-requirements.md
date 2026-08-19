@@ -224,9 +224,9 @@ over built output must inflate gzip members or it is asserting about a surface i
 | Projection | The sanitized, deterministic public representation produced from the Publish Set. |
 | Public Document | One published page with public metadata, sanitized Markdown/HTML, and a stable public identifier. |
 | Public ID | An immutable opaque identifier for a public document. It does not encode a source path. |
-| Slug | The public route key, derived from the repository-relative path with each segment slugified and joined by `-`. Frontmatter may override it. |
+| Slug | The public route key, derived from the repository-relative path with each segment slugified and joined by `-`. The planned frontmatter override remains unbuilt. |
 | Public Link | A link whose source and target are both in the Publish Set. |
-| Withheld Link | A link whose target is a real file the user excluded. It renders as the author's own link text, with no anchor and no target, and is reported. Distinct from an unresolved link, which pointed at nothing at all — different events with different fixes. |
+| Withheld Link | A link whose target is a real file the user excluded. It keeps the author's full label/path, links to `/private/`, withholds the target body, and is reported. Distinct from an unresolved link, which pointed at nothing at all — different events with different fixes. |
 | Edge | A typed, directed relationship between two public nodes. |
 | Backlink | An incoming `links-to` edge for a public document. |
 | Exclusion Report | `content-report.json`: every discovered file with the rule that decided it, plus every link finding with its source, line, text, outcome, and candidates. Written under the git directory; never an artifact key; never in `dist/`. |
@@ -307,10 +307,10 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | Public wikilinks | Resolve **five link forms** in one traversal against the whole repository, then test publication separately. Ambiguity is typed and reported, never silently resolved | `src/lib/link-resolution.ts`, `scripts/resolve-links.ts` |
 | Backlinks | Render incoming links in static HTML | Build-time HTML. Per-edge context excerpts are **not** delivered; see 13.1 |
 | Full-text search | Keyboard-accessible search with CJK support, excerpts, and tag filtering | Pagefind static index; vanilla dialog |
-| Explorer | Browse published collections and nested routes | `src/components/CollectionExplorer.astro`. **Empty in practice**: `collection` is a field the site renders and the producer does not derive |
+| Explorer | Browse published collections and nested routes | `src/components/CollectionExplorer.astro`; the producer maps the first folder to one flat collection |
 | Breadcrumbs | Stable hierarchy independent of source paths | Static HTML |
 | Table of contents | Heading navigation with active-section enhancement | Static HTML. **No script**: `TableOfContents.astro` states there is none, so the active-section enhancement is unbuilt |
-| Tags | Tag listing pages and per-page tag links | Static routes. **Unreachable from a real build**: the producer derives no `tags` |
+| Tags | Tag listing pages and per-page tag links | Static routes derived from YAML frontmatter tag lists |
 | Folder/collection listings | Published collections | Static routes; see the Explorer row |
 | Hover previews | Safe title, summary, metadata, and bounded excerpt | Static preview payload + `src/scripts/link-preview.ts` |
 | Local graph | One-hop incoming/outgoing neighborhood | **Static SVG plus an equivalent table.** Not the SQLite WASM island section 12 describes; that path was never built and is deferred |
@@ -325,13 +325,11 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | 404 and redirects | Static 404 plus versioned redirect map | 404 yes. `REDIRECT_RULES` is `[]` and cannot grow from a corpus |
 | Responsive layout | Mobile-first, no horizontal overflow | Static CSS, gated at 320 px |
 
-**Six rows above are the honest state of the general-purpose path.** Four are producer gaps
-rather than site gaps — `collection`, `tags`, `aliases`, and git commit dates are all fields
-`src/lib/schema.ts` accepts and the site renders, which `scripts/markdown-to-artifact.ts` does
-not derive, so the pages exist and are empty. Two are enhancements this document has been
-claiming for longer than that: the table of contents has no active-section script and code
-blocks have no copy button, and each file says so in a comment at the place the feature would
-be. Nothing in this document assigns any of the six.
+**The producer-specific gaps above are now `aliases`, git commit dates, and the planned
+frontmatter slug override.** Tags and first-folder collections flow through the shipped
+producer. The delivery column separately
+marks every other partial capability, including redirects, graph storage, active-section TOC,
+and code-copy affordances.
 
 ### 8.2 P1 — post-launch enhancements
 
@@ -362,8 +360,8 @@ deletion.
   discard the pinning.
 - General SPA routing: evaluate only after navigation metrics show a need.
 - ~~Full vault explorer: only public, curated collections are exposed.~~ **Deleted.** The
-  deferral reason was the allowlist. The explorer shows the published tree, and what limits it
-  now is that the producer derives no `collection` field — a gap, not a policy.
+  explorer now groups published notes by the first folder. Deeper folders stay in note slugs
+  rather than creating a second collection hierarchy.
 
 ## 9. Information architecture
 
@@ -388,13 +386,14 @@ No dedicated `/search/` route; the dialog is available from every page.
 **`/about/` and `/privacy/` are shipped pages of the tool's own prose, and that is a known
 wrong shape.** They should be Markdown notes seeded into the user's repository, so that a
 privacy page can describe *the user's own configuration* — which is the only thing that makes
-one truthful under default-publish. They remain shipped because deleting them before an `init`
-command exists would leave a build with no privacy statement at all. TK-32 owns it.
+one truthful under default-publish. `init` now exists and deliberately does not seed competing
+notes; whether these generic pages stay or become user-owned content remains unresolved.
 
 Slugs derive from the repository-relative path, each segment slugified and joined with `-`, so
 `projects/sub/deep.md` publishes at `/notes/projects-sub-deep/`. A path that slugifies to
-nothing, or to a value outside the `SLUG` vocabulary, fails and names the file and the fix.
-Two files claiming one slug is reported with both paths and the loser is dropped.
+nothing is dropped and reported; a reserved site slug fails with every conflicting source path
+in private detail. Two files claiming one slug are reported with both paths and the loser is
+dropped.
 
 ### 9.2 Page anatomy
 
@@ -915,8 +914,8 @@ unowned P1 in a requirements document reads as a commitment.
   the parser's built-in handler has no corpus access and can only emit a link it cannot
   verify — which is Quartz's 14.6% dangling-edge defect adopted deliberately. Resolution stays
   producer-side, ahead of the renderer, and the outcome it rejects on is *unresolvable*, not
-  *non-public*: a link to a withheld note is a normal authoring event that degrades to text,
-  and a link to nothing is the same;
+  *non-public*: a link to a withheld note is a normal authoring event that routes to `/private/`,
+  while a link to nothing degrades to text;
 - unsupported Obsidian plugin syntax.
 
 Rejected dynamic constructs either fail the build when ambiguity is dangerous or render as
@@ -1081,8 +1080,8 @@ or SharedArrayBuffer-dependent feature needs cross-origin isolation.
 
 1. **Discover, apply exclusion rules, and fail on any user pattern matching nothing.** Write
    the report.
-2. Resolve every link form in one traversal; degrade withheld and unresolved links to text and
-   record each; warn on ambiguity with every candidate named.
+2. Resolve every link form in one traversal; route withheld targets to `/private/`, degrade
+   unresolved links to text, and record each; warn on ambiguity with every candidate named.
 3. Validate the content artifact against the schema.
 4. Run link, slug, and redirect checks.
 5. ~~Build graph SQLite and fallback adjacency data.~~ Not built; the graph is markup.
@@ -1131,7 +1130,7 @@ separate external approval.
   check that its target was one named repository, and a general tool runs against any
   repository;
 - ambiguous slug, and ambiguous link resolution with every candidate named;
-- withheld-link downgrade, including the nested `[![img](x.png)](note.md)` form, which is a
+- withheld-link routing, including the nested `[![img](x.png)](note.md)` form, which is a
   separate case: the two spellings of one image disagreed in a shipped draft, and the
   standalone form degraded correctly while the nested form published the withheld folder name;
 - unsafe URL schemes across Markdown/reference/raw HTML forms;
@@ -1227,8 +1226,7 @@ are not. See 5.5.
 - Sanitized content contract.
 - Stable routes, metadata, RSS, sitemap.
 - Pagefind search.
-- Static backlinks, breadcrumbs, TOC, previews. Tags and collections have routes and no data;
-  see 8.1.
+- Static backlinks, breadcrumbs, TOC, previews, frontmatter tags, and first-folder collections.
 - Accessibility and privacy gates. Performance gates are measured and not enforced; see 18.
 
 ### Phase 1b — the general-purpose turn — **the current phase**
@@ -1243,7 +1241,8 @@ Not in the original plan, and it displaced Phase 2 entirely:
 - packaging as an installable command, and local preview.
 
 The GitHub Action, `init`, and reviewed release boundary are delivered; this repository has no
-remote, so the workflow has not run. Remaining: the producer's underived fields from 8.1.
+remote, so the workflow has not run. Remaining producer fields: aliases and git dates; the
+planned frontmatter slug override also remains unbuilt.
 
 ### Phase 2 — interactive graph via SQLite WASM — **not started**
 
@@ -1417,8 +1416,8 @@ the original recommendation became the product. DR-4.
 ### Q2 — Information architecture — **answered: folders are the hierarchy**
 
 The question is closed and the option "curated collections independent of folder structure" is
-gone with the curation. Folders reach the site through the slug today; a `collection` field
-derived from the first path segment is designed and unbuilt (8.1).
+gone with the curation. The first folder now becomes one flat collection; deeper folders remain
+in the note slug rather than creating another hierarchy.
 
 ### Q3 — Publishing cadence — **answered: every push, gated**
 

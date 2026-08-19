@@ -153,11 +153,9 @@ test('the window is centred on the reader rather than the collection start', () 
 });
 
 test('a group is bounded whether or not it has a collection route', () => {
-  // The uncollected group takes the same window, and it is the group a corpus
-  // with no `collection` field puts *everything* in — which is the shipped
-  // binary's own shape, since `markdown-to-artifact.ts` derives no collection.
-  // A bound applied only to collection facets would leave that corpus unbounded,
-  // which is every user of the CLI.
+  // The uncollected group takes the same window. Root-level notes still have no
+  // collection in a shipped build, so a bound applied only to collection facets
+  // would leave an ordinary corpus unbounded.
   const corpus = collectionOf(GROUP_WINDOW * 3, undefined);
   // Indexed off the bound rather than a literal, so this fixture cannot come to
   // address a note outside a corpus sized in terms of it.
@@ -223,9 +221,8 @@ test('the number of groups is still the number of collections', () => {
 test('every group past the bound is windowed, on a corpus with several', () => {
   // The shape neither built corpus has and the rendered gate does not measure:
   // more than one group, each past the bound. The fixture corpus's groups are
-  // 11, 10, 7, and 4 — all under it — and the corpus the CLI produces has
-  // exactly one group, so "several windowed groups at once" is exercised
-  // nowhere else. It is also the case the rail's own row budget is tightest in,
+  // 11, 10, 7, and 4 — all under it — so "several windowed groups at once"
+  // is exercised nowhere else. It is also the case the rail's own row budget is tightest in,
   // since every group spends another summary's height on the reader's screen.
   const corpus = [
     ...collectionOf(GROUP_WINDOW * 2, 'alpha'),
@@ -316,8 +313,8 @@ test('a corpus where every note has a collection has no uncollected group', () =
 });
 
 test('a corpus with no collection at all is one uncollected group', () => {
-  // The published artifact's shape, scaled up: `collection` is one of the nine
-  // optional fields the exporter has never produced.
+  // The shipped root-note shape, scaled up: without a first folder every note
+  // correctly remains uncollected.
   const groups = navigationFor([note('a', 'A'), note('b', 'B')], '/');
   assert.deepEqual(labels(groups), [UNCOLLECTED]);
   assert.deepEqual(slugs(groups[0]!), ['a', 'b']);

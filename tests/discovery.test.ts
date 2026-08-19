@@ -309,6 +309,52 @@ test('a note opening with a thematic break is not frontmatter, however it parses
   });
 });
 
+test('frontmatter tags and the first folder become artifact facets', async () => {
+  await scratch('producer-facets-', async (root) => {
+    put(
+      root,
+      'Projects/deep/note.md',
+      '---\ntags:\n  - Security\n  - field notes\n---\n\n# Note\n',
+    );
+    put(root, 'root.md', '---\ntags: []\n---\n\n# Root\n');
+
+    const found = await discover(root);
+    const nested = found.entries.find((entry) => entry.slug === 'projects-deep-note');
+    const rootEntry = found.entries.find((entry) => entry.slug === 'root');
+    assert.deepEqual(nested?.tags, ['Security', 'field notes']);
+    assert.equal(nested?.collection, 'projects');
+    assert.equal(rootEntry?.tags, undefined);
+    assert.equal(rootEntry?.collection, undefined);
+  });
+});
+
+test('a non-ASCII first folder stays publishable and uncollected', async () => {
+  await scratch('producer-cjk-collection-', async (root) => {
+    put(root, '研究/note.md', '# Note\n');
+    const found = await discover(root);
+    assert.deepEqual(found.entries.map((entry) => entry.slug), ['note']);
+    assert.equal(found.entries[0]?.collection, undefined);
+  });
+});
+
+test('a scalar or empty frontmatter tag fails without naming the file publicly', async () => {
+  for (const tags of ['Security', '[Security, ""]', '[" Security " ]']) {
+    await scratch('producer-tags-', async (root) => {
+      put(root, 'private-project.md', `---\ntags: ${tags}\n---\n\n# Note\n`);
+      let failure: BuildFailure | undefined;
+      try {
+        await discover(root);
+      } catch (error) {
+        assert.ok(error instanceof BuildFailure);
+        failure = error;
+      }
+      assert.equal(failure?.code, 'invalid-tags-frontmatter');
+      assert.equal(failure?.message, 'frontmatter tags must be a YAML list of non-empty text');
+      assert.ok(failure?.detail.includes('private-project.md'));
+    });
+  }
+});
+
 test('the root README is re-includable, as the plan says it is', async () => {
   // Plan §2.2: root `README.md` is "excluded by default, re-includable with
   // `!README.md`". Measured before this was fixed: the default was an

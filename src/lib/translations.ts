@@ -188,11 +188,10 @@ export interface Translation {
   /**
    * The expansion action on a group with no collection index to link.
    *
-   * The uncollected group has no route of its own, and it is the group the CLI
-   * puts *every* note in — `markdown-to-artifact.ts` derives no `collection` —
-   * so without this the one corpus shape every user of this tool actually
-   * publishes would be the one shape whose window has no way out. It points at
-   * the home page, which lists every published note.
+   * The uncollected group has no route of its own. Root-level notes still land
+   * there because the producer derives collections only from a first folder, so
+   * a bounded group needs a way out. It points at the home page, which lists
+   * every published note.
    */
   explorerExpand: string;
   explorerExpandLabel: string;

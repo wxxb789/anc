@@ -201,13 +201,11 @@ default, and the message should say how to raise it. One constant, one message.
 > mechanism — configuration with a message — rather than against a value, so that a scale
 > ticket raising the constant does not make the document wrong.
 >
-> **AMENDED on the derived-field table above: four of its rows are not implemented.** `created`
-> and `updated` (git commit dates), `tags`, `collection`, and `aliases` are all still
-> underived — `scripts/markdown-to-artifact.ts` states the scope decision at its header. The
-> consequence is exactly the five degraded surfaces the `created`/`updated` row predicts, and
-> two more the table did not: `/tags/` and `/collections/` are routes with no data. The `slug`,
-> `title`, and `markdown` rows shipped as drafted, frontmatter-`slug:` excepted — it was offered
-> to TK-26, then TK-27, then TK-30, and taken by none of them.
+> **AMENDED on the derived-field table above:** `tags` now comes from a YAML frontmatter list
+> and the first folder now supplies the flat `collection`, making both route families reachable.
+> Git dates and `aliases` remain underived. The `slug`, `title`, and `markdown` rows shipped as
+> drafted, frontmatter-`slug:` excepted — it was offered to TK-26, then TK-27, then TK-30, and
+> taken by none of them.
 
 ### 2.3 Exclusion
 
@@ -1588,6 +1586,9 @@ documentation revisions in §7. Each carries the acceptance criteria stated ther
 >    `collection`, `aliases`, and git dates are underived — the pages exist and are empty. This
 >    section's framing throughout is "a requirement met by a different mechanism", and these are
 >    requirements met by no mechanism.
+>
+> **Subsequently amended:** tags and first-folder collections are now derived; aliases and git
+> dates remain.
 >
 > Two further corrections to this section's own claims: the requirements document was **not**
 > "still marked Draft for owner review while eighteen tickets shipped" in any misleading sense —

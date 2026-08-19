@@ -14,9 +14,9 @@ document a stranger needs.
 - Resolves five link forms in one pass, following Obsidian's own resolution order. A link into
   a note you withheld keeps its full label and path, points to `/private/`, and is reported; the
   target body remains unpublished. An ambiguous link warns with every candidate named.
-- Renders backlinks, an outgoing-links list, a graph, breadcrumbs, and a table of contents as
-  build-time HTML — no fetch, no database. Tag and collection routes exist and are empty: the
-  producer does not derive those fields yet.
+- Renders backlinks, outgoing links, a graph, breadcrumbs, tags, collections, and a table of
+  contents as build-time HTML — no fetch, no database. YAML frontmatter supplies tags; the
+  first folder supplies the flat collection.
 - Pagefind for search, bilingual chrome resolved per document, client-rendered math and Mermaid
   with source fallbacks, RSS, sitemap, and a strict CSP.
 - Writes the names of everything it dropped to a file under `.git/` that cannot be committed,
