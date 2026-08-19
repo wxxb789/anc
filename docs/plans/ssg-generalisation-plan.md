@@ -932,6 +932,10 @@ supplies one, and the metadata gate becomes *`og:image` is present exactly when
 `brand.socialCard` is configured*, which is a stronger assertion than the unconditional one
 it replaces.
 
+> **Subsequently amended:** version 1 has no asset-publication contract, so `brand.socialCard`
+> is not a deferred config key. Optional image metadata remains a reserved seam for a future
+> version that owns path containment, media validation, inventory, and privacy review.
+
 ### 4.3 How a wrong or missing key fails
 
 Ordering is the whole design. The validator runs **before any file discovery**, so a config

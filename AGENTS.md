@@ -223,13 +223,10 @@ means anything — and so does the explanation.
 
 ## Known-stale, and whose
 
-Recorded rather than fixed, because each belongs to a ticket that has not run. An agent
-meeting one of these has met a known gap, not a discovery.
-
-| What | State | Owner |
-| --- | --- | --- |
-| `og:image` | never emitted; `SOCIAL_CARD_PATH` is `undefined` and no config key sets it | unassigned |
-| `dist/` as a shared output path | **Fixed.** `scripts/dist-lock.ts` interlocks the three commands that write or read it — the suite (vitest `globalSetup`), `pnpm run build`, and `build:fixture` — so they wait for each other instead of emptying a directory another is reading. The row this replaces blamed `.astro/`, which was wrong for three tickets: measured, `getOutDirWithinCwd` returns an `outDir` under cwd unchanged, the binary stages under `PACKAGE_ROOT` after chdir'ing there, and 24 concurrent binary builds against a live suite were all clean. What collided was `emptyDir(config.outDir)` (`astro/dist/core/build/static-build.js:64`) over the one `dist/`. See `.tmp/staging-collision-report.md` | closed |
+No locally actionable known-stale entry remains. SQLite/WASM graph storage is an explicitly
+deferred architecture phase, not a production-readiness defect. Registry publication, a git
+remote, deployment, and post-deploy smoke tests remain external approval boundaries rather
+than code gaps. Version 1 intentionally has no non-Markdown asset pipeline or corpus redirects.
 
 ## Documentation
 

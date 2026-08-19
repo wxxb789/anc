@@ -88,7 +88,7 @@ export const CONFIG_TEMPLATE = `# ${CONFIG_FILENAME} — every key is optional, 
 # Everything in this repository publishes unless you exclude it. There is no
 # opt-in; the work is deciding what to withhold.
 
-# The site's name. Reaches the browser tab, the feed, and the social card.
+# The site's name. Reaches the browser tab, page metadata, and the feed.
 # title: My Notes
 
 # The public address the site will be served from, with no path.

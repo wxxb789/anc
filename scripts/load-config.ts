@@ -182,7 +182,7 @@ const KNOWN_KEYS = ['title', 'origin', 'exclude'] as const;
  */
 export interface LoadedConfig {
   /**
-   * The site's own name. Reaches `<title>`, the feed, and the social card.
+   * The site's own name. Reaches `<title>`, page metadata, and the feed.
    *
    * Defaults to {@link DEFAULT_TITLE}. TK-31 wires it to `src/lib/site.ts`'s
    * `SITE_NAME`; this module only resolves it.

@@ -110,9 +110,9 @@
  * from *this* file is the `PUBLISH_CONFIG_DIR` assignment in `buildInto`, which
  * documents at its own site why it is an environment variable.
  *
- * One piece is deliberately unfinished: there is no `og:image`, because a
- * default social card is an image belonging to this package appearing on a
- * stranger's site. A user supplying their own is a later ticket.
+ * Version 1 deliberately omits `og:image`: a package-owned default brands every
+ * user's site, while a user-owned image requires a non-Markdown asset pipeline
+ * and threat model that this Markdown-only release does not claim.
  */
 
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

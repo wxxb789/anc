@@ -321,14 +321,14 @@ from a scratch repository during the TK-35 revision rather than read off the tic
 | Mermaid | Render safely; lazy-load only on pages that contain diagrams | Build-time markup by default |
 | RSS/Atom | Public notes feed with canonical URLs | Build-time |
 | Sitemap and robots | Canonical sitemap, explicit indexing policy | Build-time |
-| Social cards | Deterministic Open Graph metadata and optional generated images | Metadata yes; **no `og:image`**. `SOCIAL_CARD_PATH` is `undefined`, no config key sets it, and all three card tags are emitted together or not at all — a shipped default card would put the tool author's brand on every user's site |
-| 404 and redirects | Static 404 plus versioned redirect map | 404 yes. `REDIRECT_RULES` is `[]` and cannot grow from a corpus |
+| Social cards | Deterministic Open Graph metadata and optional generated images | **Metadata delivered; image deliberately omitted in v1.** A default would brand every user's site, and user-owned images require an asset pipeline outside this Markdown-only contract |
+| 404 and redirects | Static 404 plus versioned redirect map | **404 delivered; corpus redirects rejected by design.** Renames create new addresses, aliases are not link targets, and the old URL returns the translated 404 |
 | Responsive layout | Mobile-first, no horizontal overflow | Static CSS, gated at 320 px |
 
 **Every version-1 producer field now has an owning source.** Slug, language, description, tags,
 aliases, first-folder collections, and git dates flow through the shipped producer. Aliases are
 display/search/preview metadata, deliberately not link targets. The delivery column separately
-marks every other partial capability, including redirects and deferred graph storage.
+marks the remaining architectural deferment: SQLite/WASM graph storage.
 
 ### 8.2 P1 — post-launch enhancements
 

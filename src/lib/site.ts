@@ -146,13 +146,11 @@ export const SITEMAP_PATH = '/sitemap.xml';
  * emits no `og:image`, no `og:image:alt`, and no `twitter:card`. See
  * `src/components/SiteMetadata.astro` for why the third goes with the other two.
  *
- * **Typed as `string | undefined` against a value that is always `undefined`
- * today**, which would ordinarily be speculative generality. It is not, for a
- * reason worth stating: this is the seam a user's own configured card arrives
- * on, plan §4.2's `brand.socialCard`, and the alternative to naming it is
- * deleting every card-shaped line and rediscovering the conditional later. The
- * config key deliberately does **not** exist yet — an unread key is worse than
- * an absent one — so the follow-up is to read it here and nothing else.
+ * The optional type keeps the metadata branch honest and gated, but version 1
+ * intentionally provides no input for it. Accepting a user-owned image would
+ * widen the product from Markdown into an asset publication pipeline, including
+ * path containment, media validation, output inventory, and privacy review. That
+ * is a future versioned design, not unfinished configuration in this release.
  */
 export const SOCIAL_CARD_PATH: string | undefined = undefined;
 
