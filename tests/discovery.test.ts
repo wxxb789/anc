@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
+import { exclusionOptions, loadConfig } from '../scripts/load-config.ts';
 import { discover, resolveCorpusLinks } from '../scripts/markdown-to-artifact.ts';
 import { FIELD_LIMITS } from '../src/lib/schema.ts';
 import { BuildFailure } from '../scripts/write-report.ts';
@@ -95,6 +96,37 @@ const CORPUS: readonly (readonly [string, string])[] = [
 function materialise(root: string): void {
   for (const [path, body] of CORPUS) put(root, path, body);
 }
+
+test('the repository example remains a valid two-note publication', async () => {
+  const root = join(ROOT, 'example');
+  const found = await discover(root, exclusionOptions(loadConfig(root)));
+  const findings = await resolveCorpusLinks(found);
+
+  assert.deepEqual(found.entries.map((entry) => entry.slug).sort(), ['feature-showcase', 'start-here']);
+  assert.deepEqual(found.counts, { discovered: 6, published: 2, dropped: 4 });
+  assert.deepEqual(
+    [...found.dropped].sort((a, b) => (a.path < b.path ? -1 : 1)),
+    [
+      { path: 'README.md', reason: 'repository-readme' },
+      { path: 'drafts/glob-excluded.md', reason: 'excluded-by-pattern' },
+      { path: 'publish.config.yaml', reason: 'not-markdown' },
+      { path: 'withheld/frontmatter-note.md', reason: 'excluded-by-frontmatter' },
+    ],
+  );
+
+  const bySlug = new Map(found.entries.map((entry) => [entry.slug, entry]));
+  assert.deepEqual(bySlug.get('start-here')?.outgoing, ['feature-showcase']);
+  assert.deepEqual(bySlug.get('start-here')?.backlinks, ['feature-showcase']);
+  assert.deepEqual(bySlug.get('feature-showcase')?.outgoing, ['start-here']);
+  assert.deepEqual(bySlug.get('feature-showcase')?.backlinks, ['start-here']);
+  assert.equal(findings.filter((finding) => finding.outcome === 'unpublished').length, 2);
+
+  const published = found.entries.map((entry) => entry.markdown).join('\n');
+  assert.match(published, /\[withheld\/frontmatter-note\]\(\/private\/\)/);
+  assert.match(published, /\[drafts\/glob-excluded\]\(\/private\/\)/);
+  assert.ok(!published.includes('frontmatter-withheld-body-sentinel-7421'));
+  assert.ok(!published.includes('glob-excluded-body-sentinel-9137'));
+});
 
 test('a repository never written for this tool is discovered whole', async () => {
   await scratch('tk26-real-', async (root) => {

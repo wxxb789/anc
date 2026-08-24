@@ -43,6 +43,8 @@ pnpm install
 pnpm run verify          # lint, check, build, inventory, secret/residue scans, tests
 pnpm run build           # the build chain alone
 pnpm run build:fixture   # rebuild against the 32-note corpus
+pnpm run build:example   # build example/ into .tmp/example-dist
+pnpm run preview:example # serve the example build locally
 pnpm run pack:tarball    # compile TypeScript and pack the installable tarball
 pnpm run smoke:tarball   # install that tarball in a foreign repo and build/read it
 ```
@@ -56,6 +58,10 @@ declared in `package.json` does not resolve — which is a boundary rather than 
 
 Read [`AGENTS.md`](AGENTS.md) before changing anything. It carries the verification contract,
 what runs where, and a list of what is known stale and whose it is.
+
+The synthetic corpus under [`example/`](example/) is the smallest useful feature tour. It
+contains public notes, both exclusion mechanisms, links and backlinks, rich Markdown, math,
+and Mermaid without adding personal content to the repository.
 
 ## Running the tool on your own notes
 
