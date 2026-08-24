@@ -112,7 +112,7 @@ export function checkDerivedRoutes(artifact: ContentArtifact, version: string): 
  * Every gate this script runs, as one call, so a caller that is not the shell
  * enforces exactly what the shell does.
  *
- * `bin/thoughtscape-publish.mjs` runs the same chain in-process, and the failure
+ * `bin/anc.mjs` runs the same chain in-process, and the failure
  * mode of letting it restate the steps is that the packaged build validates less
  * than this repository's own — a gate enforced on us and not on the people we
  * ship to. Calling one function means there is no second list to drift.

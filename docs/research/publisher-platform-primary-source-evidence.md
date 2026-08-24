@@ -3,7 +3,7 @@
 **Question.** What capabilities and constraints are documented for a Quartz-v5-like public knowledge publisher built with Astro and Svelte, rendered static-first, with relationships/backlinks supplied either by Cloudflare D1 or by a CDN-delivered SQLite database queried in the browser through SQLite WASM?
 
 **Access date:** 2026-08-06  
-**Evidence policy:** “Documented facts” below are claims made by official documentation or first-party source repositories. “Design recommendations” are deductions for this publisher and are not claims made by those projects. No private Thoughtscape content was inspected or included.
+**Evidence policy:** “Documented facts” below are claims made by official documentation or first-party source repositories. “Design recommendations” are deductions for this publisher and are not claims made by those projects. No private Anc content was inspected or included.
 
 ## Executive finding
 

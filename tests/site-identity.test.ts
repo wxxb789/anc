@@ -12,7 +12,7 @@
  * So the gates here are built from measurement rather than from reading, which
  * is how TK-24 found the social card: it built a package, looked at what came
  * out, and found a leak the manifest did not describe. Every assertion below
- * runs `bin/thoughtscape-publish.mjs` over a corpus that has nothing to do with
+ * runs `bin/anc.mjs` over a corpus that has nothing to do with
  * this repository and reads what it produced.
  *
  * ## Both halves, always
@@ -64,11 +64,50 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
  * on passing against a token nothing uses. The manifest is the one place a
  * package's identity is unambiguous.
  *
- * The scope is `@thoughtscape/publish`, so the token is the scope's own name.
+ * The name is unscoped, so the token is the whole manifest name.
  */
 const OWN_NAME = (
   JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string }
 ).name.replace(/^@/, '').split('/')[0]!;
+
+/**
+ * The name as a **delimited token**, which is what this file searches for.
+ *
+ * **This is not the substring search it used to be, and the difference is the
+ * whole reason the gate is still satisfiable.** A three-letter wordmark is a
+ * substring of ordinary English and of ordinary minified JavaScript. Measured
+ * over this repository's own `dist/` at the rename: the raw substring occurs in
+ * **67 of 143 files** — every Mermaid chunk, the Pagefind runtime, and any page
+ * whose prose says "balance" or "advanced" — while the same name delimited by
+ * anything other than `[a-z0-9_]` occurs in **0 of 143**. A substring gate over
+ * this name would not be a strict gate, it would be a permanently red one, and
+ * a red that means "the word cancel exists" teaches a reader to ignore it.
+ *
+ * What the change costs, stated rather than discovered later: a leak that buries
+ * the name inside a longer identifier — `ancsite`, `ancMathPlaceholder` — is no
+ * longer caught. That is not hypothetical: the math and diagram substitution
+ * tokens in `src/lib/markdown.ts` carried exactly that shape and were unbranded
+ * in the same change (`renderedMathPlaceholder`), for the reason
+ * `src/lib/rendered-marker.ts` records about the marker attribute. **A new
+ * identifier that embeds this name is therefore outside this gate**; do not add
+ * one. A hyphen counts as a delimiter, so `anc-build-`, `data-anc-`, and
+ * `/anc/` all still fail.
+ *
+ * What it risks: a future dependency whose minifier emits `anc` as an
+ * identifier would turn this red without anything having leaked. That is a false
+ * alarm to diagnose by reading the named file, not a reason to widen the
+ * delimiters — the alternative is a gate that cannot fail at all.
+ *
+ * Case-insensitive by the flag rather than by lowercasing the haystack, because
+ * the caller now hands the text over unchanged.
+ */
+const OWN_NAME_TOKEN = new RegExp(
+  `(?:^|[^a-z0-9_])${OWN_NAME.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)}(?:[^a-z0-9_]|$)`,
+  'i',
+);
+
+/** Whether one decoded body carries this project's name as its own word. */
+const carriesOwnName = (text: string): boolean => OWN_NAME_TOKEN.test(text);
 
 /**
  * The host an unconfigured build falls back to, read out of `astro.config.mjs`.
@@ -134,7 +173,7 @@ function build(directory: string, notes: string): string {
   const out = `${notes}-out`;
   const probe = spawnSync(
     process.execPath,
-    [join(ROOT, 'bin/thoughtscape-publish.mjs'), 'build', '--content', notes, '--out', out],
+    [join(ROOT, 'bin/anc.mjs'), 'build', '--content', notes, '--out', out],
     { cwd: directory, encoding: 'utf8' },
   );
   assert.equal(probe.status, 0, `the build failed:\n${probe.stdout}\n${probe.stderr}`);
@@ -162,8 +201,8 @@ function build(directory: string, notes: string): string {
  * sees rather than the bytes an author wrote, so a name split by markup is
  * present in one and absent from the other. See the comment at `carries`.
  *
- * **Mutations watched fail:** restoring `SITE_NAME = 'thoughtscape'` turned this
- * red with 11 files; restoring the `thoughtscape:` storage prefix turned it red
+ * **Mutations watched fail:** restoring `SITE_NAME = 'anc'` turned this
+ * red with 11 files; restoring the `anc:` storage prefix turned it red
  * with the two bundles alone, which is the case a page-only scan misses; and
  * removing the search-index inflate turned it red on the split-name control
  * alone, which is the case *every* file-reading scan misses.
@@ -197,10 +236,10 @@ test('a build of a foreign corpus with no configuration carries no occurrence of
     // gate asks is about what a reader receives.
     const carries = (file: string): boolean => {
       const bytes = readFileSync(file);
-      if (bytes.toString('latin1').toLowerCase().includes(OWN_NAME)) return true;
+      if (carriesOwnName(bytes.toString('latin1'))) return true;
       if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return false;
       try {
-        return gunzipSync(bytes).toString('latin1').toLowerCase().includes(OWN_NAME);
+        return carriesOwnName(gunzipSync(bytes).toString('latin1'));
       } catch {
         // Not every gzip member inflates — `wasm.*.pagefind` is one — and a
         // member that cannot be read is not evidence of absence. It is also not
@@ -279,7 +318,7 @@ test('a build of a foreign corpus with no configuration carries no occurrence of
     // just the plain one again under another name.
     assert.deepEqual(
       filesUnder(splitOut)
-        .filter((file) => readFileSync(file, 'latin1').toLowerCase().includes(OWN_NAME))
+        .filter((file) => carriesOwnName(readFileSync(file, 'latin1')))
         .map((file) => file.slice(splitOut.length + 1).replaceAll('\\', '/')),
       [],
       'a raw read of the split corpus found the name, so this fixture is not exercising the ' +
@@ -315,7 +354,7 @@ test('a build of a foreign corpus with no configuration carries no occurrence of
  *
  * **Mutations watched fail:** deleting
  * `process.env[CONFIG_DIRECTORY_VARIABLE] = contentDirectory` from
- * `bin/thoughtscape-publish.mjs` turned this red on **every** row, title and
+ * `bin/anc.mjs` turned this red on **every** row, title and
  * origin alike, with the placeholder half naming the leaked host; dropping
  * `process.env['PUBLISH_SITE_TITLE']` from `astro.config.mjs` turned it red on
  * the title rows alone; changing `site:` to ignore `config.origin` turned it red
@@ -360,7 +399,7 @@ test('a configured title and origin reach the title, feed, sitemap, and robots.t
     // build that emits the configured value somewhere while still carrying the
     // package's own placeholder elsewhere — which is precisely what a partially
     // wired config produces. The measured failure had `<title>Notes</title>`
-    // beside `https://thoughtscape.invalid`, and a presence-only gate for a
+    // beside `https://anc.invalid`, and a presence-only gate for a
     // *different* surface would have passed on it.
     //
     // Both defaults, because they arrive through different mechanisms and can
@@ -375,12 +414,21 @@ test('a configured title and origin reach the title, feed, sitemap, and robots.t
     // name from an ordinary English word is measuring the word. The `<title>`
     // and feed-title rows above already pin that surface positively, which is
     // where a leaked default title would actually show.
-    const defaults = [OWN_NAME, DEFAULT_HOST];
+    // The name is matched as a delimited token and the host as a plain
+    // substring, for the reason `OWN_NAME_TOKEN` records: the host is
+    // distinctive and the three-letter name is not.
+    const defaults: readonly { value: string; carried: (text: string) => boolean }[] = [
+      { value: OWN_NAME, carried: carriesOwnName },
+      { value: DEFAULT_HOST, carried: (text) => text.includes(DEFAULT_HOST) },
+    ];
     const residue = filesUnder(out).flatMap((file) => {
       const text = readFileSync(file, 'latin1');
       return defaults
-        .filter((value) => text.includes(value))
-        .map((value) => `${file.slice(out.length + 1).replaceAll('\\', '/')} carries ${JSON.stringify(value)}`);
+        .filter((expected) => expected.carried(text))
+        .map(
+          (expected) =>
+            `${file.slice(out.length + 1).replaceAll('\\', '/')} carries ${JSON.stringify(expected.value)}`,
+        );
     });
     assert.deepEqual(
       residue,
@@ -439,7 +487,7 @@ test('an unconfigured build still names itself, rather than shipping an empty ti
  * **This is the leak TK-24 found by looking rather than by reading, and it was
  * the one a text search could never find.** `public/og-card.png` sat in the
  * tarball's `files`, every packaged build served it as `og:image`, and it showed
- * the wordmark `thoughtscape` over "A reviewed public projection from a private
+ * the wordmark `anc` over "A reviewed public projection from a private
  * knowledge garden". No grep over `dist/` sees that — the name is *pixels* — so
  * the headline gate above would have passed on it for ever.
  *

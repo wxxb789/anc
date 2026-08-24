@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The `thoughtscape-publish` command: build a site from the directory the user
+ * The `anc` command: build a site from the directory the user
  * ran it in.
  *
  * This is TK-24's whole deliverable. Everything downstream — discovery,
@@ -96,9 +96,9 @@
  * temporary and marked as such at its own definition.
  *
  * **It gives the site the user's identity, and did not until TK-31.** A site
- * built here used to carry *this repository's*: `https://thoughtscape.invalid`
- * as its origin in every canonical link, feed id, sitemap `<loc>`, and
- * `robots.txt`; `thoughtscape` as its name; this owner's social card; and an
+ * built here used to carry *this repository's*: this project's own name under
+ * `.invalid` as its origin in every canonical link, feed id, sitemap `<loc>`,
+ * and `robots.txt`; that same name as its site name; this owner's social card; and an
  * `/about/` page describing publication from "an explicit approval list", which
  * is not how a build from a directory of Markdown works. All of it was measured
  * in a real packaged build rather than inferred, and the failure was silent —
@@ -125,13 +125,13 @@ import { failureFor, isDisclosureChecked, openReport, BuildFailure } from '../sc
 /** This package's own root — the directory holding `astro.config.mjs`. */
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
-const USAGE = `thoughtscape-publish — build a static site from a directory of Markdown
+const USAGE = `anc — build a static site from a directory of Markdown
 
 Usage
-  thoughtscape-publish init [options]
-  thoughtscape-publish review [options]
-  thoughtscape-publish build [options]
-  thoughtscape-publish preview [options]
+  anc init [options]
+  anc review [options]
+  anc build [options]
+  anc preview [options]
 
 Options for init and review
   --content <dir>  directory holding the Markdown (default: the working directory)
@@ -373,7 +373,7 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
   // is one `git add -A` from being committed. `.gitignore` names the prefix for
   // that case.
   await pruneStaleBuildWorkspaces(PACKAGE_ROOT);
-  const workspace = await mkdtemp(join(PACKAGE_ROOT, '.thoughtscape-build-'));
+  const workspace = await mkdtemp(join(PACKAGE_ROOT, '.anc-build-'));
 
   // The `try` opens on the line after the directory exists, and deliberately
   // *before* the artifact is written. `writeArtifact` reads every note and runs

@@ -17,8 +17,8 @@
 /**
  * The attribute a renderer's output carries.
  *
- * **Unbranded, deliberately.** A first version was `data-thoughtscape-rendered`
- * and `tests/site-identity.test.ts` went red on it: every stranger's note
+ * **Unbranded, deliberately.** A first version spelled this project's name into
+ * the attribute and `tests/site-identity.test.ts` went red on it: every stranger's note
  * containing an expression or a diagram shipped this project's name into their
  * own `dist/`, which is the headline TK-31 criterion. The attribute has to be
  * unforgeable, not branded — and unforgeability comes from *where* it is

@@ -390,7 +390,7 @@ test('the pre-paint script and the toggle module agree on the storage keys', () 
   const toggles = readFileSync(new URL('preferences.ts', scripts), 'utf8');
 
   // Any `word:word` storage key, not one spelled prefix. The earlier version
-  // matched `thoughtscape:` literally, which made it agree-or-vacuous: TK-31
+  // matched `anc:` literally, which made it agree-or-vacuous: TK-31
   // renamed the prefix to `publish:` in both files and this test went on
   // passing while matching **zero keys in each**, comparing two empty sets. A
   // gate that reports success when it can no longer see its own subject is

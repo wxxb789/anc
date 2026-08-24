@@ -88,7 +88,7 @@ const t = translate(lang);
     consumer to look for an author and a publication date that do not exist. */}
 <meta property="og:type" content={note === undefined ? 'website' : 'article'} />
 <meta property="og:site_name" content={SITE_NAME} />
-{/* Without the ` · thoughtscape` suffix the `<title>` carries: a card renders
+{/* Without the ` · anc` suffix the `<title>` carries: a card renders
     this line directly above `og:site_name`, so keeping it prints the site's
     name twice on every card. */}
 <meta property="og:title" content={socialTitle(title)} />

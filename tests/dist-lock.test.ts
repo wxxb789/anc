@@ -9,7 +9,7 @@
  * requested `outDir` unchanged whenever it starts with `process.cwd()`, and the
  * binary stages inside `PACKAGE_ROOT` *after* chdir'ing there — executed:
  *
- *     getOutDirWithinCwd(<cwd>/.thoughtscape-build-abc/dist) -> unchanged
+ *     getOutDirWithinCwd(<cwd>/.anc-build-abc/dist) -> unchanged
  *     getOutDirWithinCwd(C:/elsewhere/dist)                  -> <cwd>/.astro/
  *
  * so the fallback never fires for the binary, and its per-run `mkdtemp`
@@ -280,7 +280,7 @@ test('two concurrent binary builds each produce their own site', async () => {
     return root;
   });
 
-  const binary = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
+  const binary = join(ROOT, 'bin', 'anc.mjs');
   const runs = await Promise.all(
     roots.map(
       (root) =>

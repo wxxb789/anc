@@ -61,7 +61,7 @@ function clientRuntimePlugin(runtime, mode) {
   // but the mechanism that keeps an unselected runtime out of `dist/` is one.
   const target = new RegExp(String.raw`[\\/]src[\\/]scripts[\\/]${runtime}\.(?:ts|js)$`);
   return {
-    name: `thoughtscape:${runtime}-mode`,
+    name: `anc:${runtime}-mode`,
     // Ahead of Vite's own resolver, so the redirect happens before the module
     // is loaded and its imports crawled.
     enforce: 'pre',
@@ -83,7 +83,7 @@ function clientRuntimePlugin(runtime, mode) {
  * and that additionally *works*: a preview build's canonical links, feed, and
  * sitemap all point at a local origin a browser can actually follow.
  *
- * The value it replaced was `https://thoughtscape.invalid`, which was safe and
+ * The value it replaced was this project's own name under `.invalid`, which was safe and
  * was still one owner's name on every stranger's site. That is the whole of
  * plan decision D2. `.invalid` was never wrong about *safety* — TK-24's gate
  * was right that a reserved name cannot misdirect a crawler — it was wrong
@@ -119,7 +119,7 @@ const DEFAULT_ORIGIN = 'http://publish.localhost/';
  * `configForBuild` resolves the directory from `PUBLISH_CONFIG_DIR`, falling
  * back to the working directory. A packaged build has already changed its
  * working directory to the installed package by the time this runs, which is
- * why the variable exists at all; `bin/thoughtscape-publish.mjs` documents the
+ * why the variable exists at all; `bin/anc.mjs` documents the
  * same boundary for `CONTENT_ARTIFACT`. For a build of *this* repository the
  * fallback is the repository root — so a `publish.config.yaml` committed here
  * would reconfigure this repository's own build, which is the honest
@@ -131,7 +131,7 @@ const DEFAULT_ORIGIN = 'http://publish.localhost/';
  * error cannot be masked by a build that otherwise succeeded.
  *
  * **Caught rather than thrown, because this module scope has no boundary above
- * it that knows how to print one.** `bin/thoughtscape-publish.mjs` prints a
+ * it that knows how to print one.** `bin/anc.mjs` prints a
  * `BuildFailure`'s own message and nothing else; a `astro build` or `astro dev`
  * run directly has only Astro's config loader, which was measured printing the
  * composed message *plus* a stack trace carrying four absolute host paths —
@@ -168,7 +168,7 @@ const config = loadUserConfig();
  * variable is the same seam `CONTENT_ARTIFACT` already uses across the same
  * boundary, and that module documents the mechanism at length.
  *
- * Set here rather than in `bin/thoughtscape-publish.mjs` because this is the
+ * Set here rather than in `bin/anc.mjs` because this is the
  * one scope that runs for *every* way a build starts — the packaged binary,
  * `astro build` in a checkout, and `astro dev` — and each of them needs the
  * title. `config.title` always holds a value: `loadConfig` applies its own

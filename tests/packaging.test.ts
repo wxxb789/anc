@@ -1,7 +1,7 @@
 /**
  * The gate over the package boundary.
  *
- * TK-24's premise is that `npx @thoughtscape/publish build` runs in a stranger's
+ * TK-24's premise is that `npx anc build` runs in a stranger's
  * repository. npm installs a package's `dependencies` and **none of its
  * `devDependencies`**, so a module the build reaches at runtime that imports a
  * devDependency is not a lint violation — it is a build that dies at import,
@@ -69,7 +69,7 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
  * here.
  */
 const ENTRY_POINTS: readonly string[] = [
-  'bin/thoughtscape-publish.mjs',
+  'bin/anc.mjs',
   'astro.config.mjs',
   'src/scripts/diagram-disabled.ts',
 ];
@@ -347,7 +347,7 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
   // `AGENTS.md` makes this a documented property rather than a preference: CI
   // "runs `pnpm run verify` rather than restating its steps, so the two cannot
   // drift", and `tests/verify.test.ts` fails if a gate is ever spelled out in
-  // YAML instead. `bin/thoughtscape-publish.mjs` is a third place the chain
+  // YAML instead. `bin/anc.mjs` is a third place the chain
   // could be written down, and it is the one that runs in other people's
   // repositories — so a step present in `build` and absent there is a gate this
   // project enforces on itself and not on the users it ships to.
@@ -381,7 +381,7 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
   const chain =
     wrapper === undefined ? expanded : `${expanded} ${readFileSync(join(ROOT, 'scripts', `${wrapper}.ts`), 'utf8')}`;
 
-  const cli = readFileSync(join(ROOT, MANIFEST.bin['thoughtscape-publish']!), 'utf8');
+  const cli = readFileSync(join(ROOT, MANIFEST.bin['anc']!), 'utf8');
   // The wrapper itself is not a build step — it is the thing that runs them —
   // so the binary is not expected to import it.
   const missing = [...scriptsIn(chain)].filter(
@@ -401,7 +401,7 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
 });
 
 test('the manifest declares what npm needs to install and run this package', () => {
-  assert.equal(MANIFEST.name, '@thoughtscape/publish', 'the package name is not the one the plan publishes');
+  assert.equal(MANIFEST.name, 'anc', 'the package name is not the one the plan publishes');
   assert.notEqual(MANIFEST.version, '0.0.1', 'the version is still the placeholder');
   assert.match(MANIFEST.version, /^\d+\.\d+\.\d+/, 'the version is not a release version');
 
@@ -415,8 +415,8 @@ test('the manifest declares what npm needs to install and run this package', () 
     'the public manifest still names the retired private exporter',
   );
 
-  const binary = MANIFEST.bin['thoughtscape-publish'];
-  assert.ok(binary, 'package.json declares no `thoughtscape-publish` binary, so `npx` has nothing to run');
+  const binary = MANIFEST.bin['anc'];
+  assert.ok(binary, 'package.json declares no `anc` binary, so `npx` has nothing to run');
   assert.ok(existsSync(join(ROOT, binary)), `bin points at ${binary}, which does not exist`);
   assert.match(
     readFileSync(join(ROOT, binary), 'utf8'),
@@ -468,7 +468,7 @@ test('the tarball carries what the build reads and none of this owner\'s content
   }
 
   // Nothing here may be published by accident. The plan's §5 adoption path is
-  // `npx @thoughtscape/publish@<pinned>`, but no ticket has authorized a
+  // `npx anc@<pinned>`, but no ticket has authorized a
   // publication, and `AGENTS.md` makes publication "an external side effect
   // requiring explicit approval". `private` is the flag that makes `npm publish`
   // refuse; `npm pack` still works, which is what the acceptance test needs.
@@ -547,7 +547,7 @@ test('a bare pack is refused, and the refusal names the script that works', () =
 });
 
 test('Astro still redirects prerender staging for an outDir outside cwd', async () => {
-  // The mechanism `bin/thoughtscape-publish.mjs` builds its root decision on,
+  // The mechanism `bin/anc.mjs` builds its root decision on,
   // reproduced as a check so an Astro upgrade that changes it is a red test
   // rather than a mysterious EXDEV in a user's build.
   //
@@ -580,7 +580,7 @@ test('Astro still redirects prerender staging for an outDir outside cwd', async 
 
   // Honoured: the shape the CLI actually uses — a staging directory inside the
   // package, which is cwd for the duration of the build.
-  const inside = join(process.cwd(), '.thoughtscape-build-probe', 'dist');
+  const inside = join(process.cwd(), '.anc-build-probe', 'dist');
   assert.equal(
     resolved(inside),
     `${inside}${sep}`,
@@ -604,7 +604,7 @@ test('Astro still redirects prerender staging for an outDir outside cwd', async 
       fallback,
       `Astro no longer redirects an outDir at ${what}. If it now stages prerender output in ` +
         '`outDir` itself, the cross-device rename that forces staging in ' +
-        '`bin/thoughtscape-publish.mjs` may be gone — re-measure a cross-drive build before ' +
+        '`bin/anc.mjs` may be gone — re-measure a cross-drive build before ' +
         'trusting that file\'s root-decision comment, and delete both together if it has lapsed.',
     );
   }
@@ -630,7 +630,7 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
   //   shipping maps from the package is the same defect one layer up.
   // - `.d.ts` — dead weight. Nothing consumes this package as a library, which
   //   is why `exports` deliberately exposes only `./package.json`.
-  const staging = mkdtempSync(join(tmpdir(), 'thoughtscape-pack-'));
+  const staging = mkdtempSync(join(tmpdir(), 'anc-pack-'));
   try {
     const { compiled } = compilePackage(staging);
     assert.ok(compiled > 0, 'nothing was compiled, so the absences below hold vacuously');

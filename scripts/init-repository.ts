@@ -1,5 +1,5 @@
 /**
- * `thoughtscape-publish init`: prepare a notes repository for its first build.
+ * `anc init`: prepare a notes repository for its first build.
  *
  * Two writes, and the argument for the ticket is that both are things a user
  * cannot discover by running the tool. A build tells you what it published; it
@@ -146,7 +146,7 @@ export interface InitResult {
  * applied and is not — installed by the command whose job is to prevent it.
  *
  * The rejected token is never echoed, for the reason
- * `bin/thoughtscape-publish.mjs` gives at length: a printed argv token must be
+ * `bin/anc.mjs` gives at length: a printed argv token must be
  * byte-equal to a spelling this tool's own table declares, and an unrecognised
  * token is by definition not one.
  */

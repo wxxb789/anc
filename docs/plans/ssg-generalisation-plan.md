@@ -127,7 +127,7 @@ doing that.
 > of TK-24's bridge rather than starting fresh), `src/lib/link-resolution.ts` (as planned),
 > `scripts/resolve-links.ts` (the traversal, which the table did not anticipate as a separate
 > file), and `scripts/write-report.ts`. There is no `note-discovery.ts` and no
-> `sync-content.ts`; the CLI entry is `bin/thoughtscape-publish.mjs`, which TK-24 had already
+> `sync-content.ts`; the CLI entry is `bin/anc.mjs`, which TK-24 had already
 > built. `src/lib/schema.ts` lost one rule, not two — see §2.7.
 
 One new direct dependency, `yaml` — already resolvable in the tree as a transitive
@@ -434,7 +434,7 @@ that nothing in `src/` can import cannot leak into a page by accident.
 
 **The destination is the git directory, and this paragraph originally said otherwise.** It
 first specified the report "beside whatever path `CONTENT_ARTIFACT` names", and then a
-draft of TK-25 specified a self-ignoring `<cwd>/.thoughtscape/`. Both are wrong, and the
+draft of TK-25 specified a self-ignoring `<cwd>/.anc/`. Both are wrong, and the
 second is wrong in a way that reads safe: a worktree directory carrying a `.gitignore` whose
 body is `*` is **deleted entirely by `git clean -xfd`** — the command a user runs after a
 failed build, which is exactly when the report is the only diagnostic they have. Measured, as
@@ -843,7 +843,7 @@ Three properties, each bought by a specific choice:
 
 | Property | Mechanism | Grounding |
 | --- | --- | --- |
-| A wrong key is a red squiggle while typing | `import type { PublishConfig } from '@thoughtscape/publish'` + `satisfies` | research line 300: *"types for authoring, Zod for the build, and the two are derived from the same shape"* |
+| A wrong key is a red squiggle while typing | `import type { PublishConfig } from 'anc'` + `satisfies` | research line 300: *"types for authoring, Zod for the build, and the two are derived from the same shape"* |
 | A wrong key fails the build even with no editor, no TypeScript, no `node_modules` | the same strict validator that already rejects unknown artifact fields (`src/lib/schema.ts:390`, `:528`) | research line 370: *"if we ship a schema, the build must run it"* |
 | The file works in a repository with no `package.json` and no `tsconfig.json` | Node 24 type stripping erases a type-only import of an unresolvable specifier | measured on Node v24.18.1 (`.nvmrc`): `import type { X } from 'package-that-does-not-exist'` in a temp directory with no `package.json` loads and returns its default export |
 
@@ -853,7 +853,7 @@ Three properties, each bought by a specific choice:
 > nothing installed for its config to be valid.
 
 That last row is the reason this beats TOML or YAML for a file that lives in *someone
-else's notes repository*. The user gets autocomplete if `@thoughtscape/publish` is
+else's notes repository*. The user gets autocomplete if `anc` is
 installed, and identical runtime behaviour if it is not; nothing has to be installed for the
 config to be valid.
 
@@ -891,7 +891,7 @@ plus 3 test files encoding the old copy, and ~40 individual string edits inside
 
 | Literal | Written today | Becomes | Default |
 | --- | --- | --- | --- |
-| Origin | `astro.config.mjs:73` `site: 'https://thoughtscape.invalid'` | `origin` | `http://publish.localhost/` — see 5.5 |
+| Origin | `astro.config.mjs:73` `site: 'https://anc.invalid'` | `origin` | `http://publish.localhost/` — see 5.5 |
 | Site name | `src/lib/site.ts:37` `SITE_NAME` | `title` | **none; deploy fails without it** |
 | Site name, second copy | `src/lib/translations.ts:362`, `:537` (`siteDescription`) | key becomes `(siteName) => …`, like `feedTitle` at `:363` | derived from `title` |
 | Subtitle | `translations.ts` `siteSubtitle` | `subtitle` | empty; omitted from markup when empty |
@@ -918,7 +918,7 @@ them out of the config surface. A user who wants different chrome is asking for 
 overrides, which is a separate feature nobody has requested.
 
 **The storage namespace stays hardcoded.** `localStorage` is partitioned by origin, so
-`thoughtscape:theme` on two different sites is already two different keys. Making it
+`anc:theme` on two different sites is already two different keys. Making it
 configurable buys isolation the platform already provides, and costs the invariant
 `tests/design-tokens.test.ts:388-399` exists to hold — that `preferences.ts` and
 `theme-init.js` agree on the literal. Deliberate exclusion, not an oversight.
@@ -1066,7 +1066,7 @@ privacy page truthful under default-publish.
 | `tests/metadata.test.ts:831-875` | regex-reads `site:` from `astro.config.mjs`, walks `src/ scripts/ tests/ public/`, fails if the host appears anywhere else | reads the resolved origin from the loaded config; the walk is unchanged and now also covers the config default |
 | `tests/translations.test.ts:473-525` | walks `src/`, fails on any module holding a chrome literal; exempts `about.astro`, `privacy.astro` by name | exemption deleted; the config is user data outside `src/`, so it never becomes a second home for chrome |
 | `tests/built-routes.test.ts:382-397`, `tests/route-model.test.ts:283-305` | assert the old copy and the fixed `/about/` `/privacy/` routes | assert the nav set the config declares |
-| **new** — identity scan | — | build the fixture corpus with a sentinel `title` and `origin`; assert both appear in `dist/` head, feed, and sitemap, and that `thoughtscape` and `thoughtscape.invalid` appear **nowhere** in `dist/` |
+| **new** — identity scan | — | build the fixture corpus with a sentinel `title` and `origin`; assert both appear in `dist/` head, feed, and sitemap, and that `anc` and `anc.invalid` appear **nowhere** in `dist/` |
 
 The new gate asserts on content, not on cardinality: it does not count how many literals
 moved, it proves that a configured value reaches the output and that the old one does not.
@@ -1078,7 +1078,7 @@ And it must run on the fixture build, because a one-corpus assumption is the fai
 ## 5. The GitHub Action and adoption path
 
 > **AMENDED — TK-32 delivered this section.** The composite Action, `init`, and shipped
-> `thoughtscape-publish preview` command exist; `docs/adoption.md` documents the measured path.
+> `anc preview` command exist; `docs/adoption.md` documents the measured path.
 > The release-only `pnpm run smoke:tarball` now installs the packed product in a synthetic
 > foreign repository and exercises the same public init/build path end to end.
 
@@ -1112,7 +1112,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: thoughtscape/publish-action@v1
+      - uses: anc/publish-action@v1
       - uses: actions/deploy-pages@v4
         id: deploy
 ```
@@ -1143,7 +1143,7 @@ rather than incidental:
    documentation does not prevent.
 2. Set up Node from `.nvmrc` if the notes repo has one, otherwise the version the generator
    declares in `engines`.
-3. `npx @thoughtscape/publish@<pinned> build` — install and run in one step, no lockfile in
+3. `npx anc@<pinned> build` — install and run in one step, no lockfile in
    the notes repo, no `node_modules` committed.
 4. Config parse. Unknown key, wrong type, unresolvable origin: fail here, before discovery.
 5. Discovery and exclusion. Any pattern matching zero files fails the run.
@@ -1174,7 +1174,7 @@ requires the Obsidian app to be open to publish. And *nobody* uses `actions/chec
 | --- | --- | --- |
 | Notes | `$GITHUB_WORKSPACE` | `actions/checkout` in the user's own workflow |
 | Config | `$GITHUB_WORKSPACE/publish.config.ts` | committed by the user |
-| Generator | npm cache | `npx @thoughtscape/publish@<pinned>` |
+| Generator | npm cache | `npx anc@<pinned>` |
 | Output | `$GITHUB_WORKSPACE/dist` | the build |
 
 The generator is a published npm package consumed as a dependency, so a "multi-repo build"
@@ -1195,7 +1195,7 @@ Two layers, and the second is the one the survey says is easy to miss.
 
 | Layer | Pinned as | Who moves it |
 | --- | --- | --- |
-| Action | `thoughtscape/publish-action@v1`, a floating major tag | the user, by editing one line |
+| Action | `anc/publish-action@v1`, a floating major tag | the user, by editing one line |
 | Generator | an **exact** version inside the action, `@1.4.2`, never a range | a publish-action release |
 
 The floating major is `withastro/action`'s model and `actions/jekyll-build-pages`'s
@@ -1389,7 +1389,7 @@ allowed only where the fence is a directory boundary rather than an argument.
 
 #### TK-24 — Make the package installable and runnable from another directory
 
-**Problem.** The adoption path is `npx @thoughtscape/publish@<pinned> build` in a stranger's
+**Problem.** The adoption path is `npx anc@<pinned> build` in a stranger's
 notes repository. Measured against `package.json`, that cannot run: `temml`, `mermaid`,
 `happy-dom`, and `pagefind` are all devDependencies, and npm installs no devDependencies of
 an installed package. `src/lib/math.ts:26` imports `temml` at module scope,
@@ -1479,7 +1479,7 @@ published.
 
 Three things the ticket learned that the text above got wrong:
 
-- **The destination.** Both the draft's `<cwd>/.thoughtscape/` and §2.5's "beside the
+- **The destination.** Both the draft's `<cwd>/.anc/` and §2.5's "beside the
   artifact" are destroyed or committable. The report lives at
   `<git-dir>/publish-report/content-report.json` — measured: `git clean -xfd` deletes a
   self-ignoring worktree directory whole, and nothing under `<git-dir>` can be staged.
@@ -1646,7 +1646,7 @@ constraint.
 | §9.1 (238) | "A public slug is selected or derived **inside the projection process**" | Slug derives from the repo-relative path; uniqueness is validated and a collision is a **build failure naming every colliding file** — Quartz's `slugCollisions.ts` reporting shape with `console.warn` changed to a throw | rewrite |
 | §9.3 (258-264) | "Removed content is represented by either a redirect or an intentional tombstone policy" | Owner decision 3: renames are delete-and-recreate, old URLs may 404. `status: 'tombstone'` stays a *separate* published-but-withdrawn state affecting only feed and sitemap (`src/lib/site.ts:262-281`) and must not be conflated with exclusion | rewrite |
 | §10.2 (296) | Forbidden: "raw frontmatter not explicitly allowlisted" | Keep the rule, change its authority: the producer ships only fields on a published-field allowlist. Frontmatter is now also the *exclusion* channel, and that must be stated where the rule is | rewrite |
-| §10.3 (298-313) | Twelve numbered exporter steps built on a manifest: "1. parse a versioned manifest… 10. write only after **target-project identity validation**" | Rewrite as discovery + exclusion + reporting. Items 2, 3, 4, 5, 6, 8, 9, 12 survive retargeted. Item 1 becomes "discover, apply exclusion rules, count every pattern's matches". Item 7 becomes G6 (assets reachable from published notes only). **Item 10 deletes** — target-project identity is `export.py`'s hardcoded `thoughtscape-publish` check. **Item 11 is promoted**, not changed: it already requires the privacy/audit summary §3 specifies | rewrite; one deletion, one promotion |
+| §10.3 (298-313) | Twelve numbered exporter steps built on a manifest: "1. parse a versioned manifest… 10. write only after **target-project identity validation**" | Rewrite as discovery + exclusion + reporting. Items 2, 3, 4, 5, 6, 8, 9, 12 survive retargeted. Item 1 becomes "discover, apply exclusion rules, count every pattern's matches". Item 7 becomes G6 (assets reachable from published notes only). **Item 10 deletes** — target-project identity is `export.py`'s hardcoded `anc` check. **Item 11 is promoted**, not changed: it already requires the privacy/audit summary §3 specifies | rewrite; one deletion, one promotion |
 | §11.1 (320-321) | Layer model: "Private repository / Publication manifest + approved Garden documents" | Notes repository → Action → producer → artifact → site | rewrite |
 | §14 (598) | Previews "do not fetch private/non-public targets" | Survives verbatim; the meaning shifts from "not in the manifest" to "not in the published set". Add: the preview payload stays a bounded projection, never a page scrape | keep + one clause |
 | §15.2 (627) | Rejected: "non-public wikilinks" | Rewrite the *reason*, keep the *flag*. `wikilinks: false` (`src/lib/markdown.ts:194`) stays: satteri's built-in handler has no corpus access, so it can only emit a link it cannot verify — Quartz's 14.6% dangling-edge defect, adopted deliberately. Resolution stays producer-side, ahead of the renderer, and rejects on *unresolvable*, not on *non-public* | rewrite |

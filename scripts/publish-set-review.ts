@@ -27,7 +27,7 @@ function canonicalSlugs(slugs: readonly string[]): string[] {
     if (!SLUG.test(slug)) {
       throw new BuildFailure(
         'publish-set-review-invalid',
-        'publish-set review is invalid; run thoughtscape-publish review again',
+        'publish-set review is invalid; run anc review again',
         'computed publish set contains an invalid slug: ' + JSON.stringify(slug),
       );
     }
@@ -38,7 +38,7 @@ function canonicalSlugs(slugs: readonly string[]): string[] {
 function invalidReview(detail: string): never {
   throw new BuildFailure(
     'publish-set-review-invalid',
-    'release blocked: .publish-set.json is invalid; run thoughtscape-publish review again',
+    'release blocked: .publish-set.json is invalid; run anc review again',
     detail,
   );
 }
@@ -173,7 +173,7 @@ export function assertPublishSetReviewed(directory: string, slugs: readonly stri
   } catch (error) {
     throw new BuildFailure(
       'publish-set-review-missing',
-      'release blocked: no reviewed publish set; run thoughtscape-publish review and commit it',
+      'release blocked: no reviewed publish set; run anc review and commit it',
       'could not read ' + PUBLISH_SET_REVIEW_FILE + ': ' + String(error),
     );
   }
@@ -187,7 +187,7 @@ export function assertPublishSetReviewed(directory: string, slugs: readonly stri
     throw new BuildFailure(
       'publish-set-review-changed',
       'release blocked: publish set changed (' + added.length + ' added, ' + removed.length +
-        ' removed); run thoughtscape-publish review, inspect the diff, and commit it',
+        ' removed); run anc review, inspect the diff, and commit it',
       JSON.stringify({ added, removed }),
     );
   }

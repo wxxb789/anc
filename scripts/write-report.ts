@@ -40,7 +40,7 @@
  *
  * ## Resolved before the chdir, and not with `--path-format=absolute`
  *
- * `bin/thoughtscape-publish.mjs` changes the working directory to the package
+ * `bin/anc.mjs` changes the working directory to the package
  * root partway through a build, so the destination is computed from the
  * invocation cwd beside the other two directories and never after. Measured,
  * `git rev-parse --git-path` returns a **cwd-relative** path in the ordinary
@@ -210,7 +210,7 @@ export interface ContentReport {
  * An error whose message was composed under the disclosure rule, so the caller
  * may print it.
  *
- * The boundary in `bin/thoughtscape-publish.mjs` prints `error.message` for
+ * The boundary in `bin/anc.mjs` prints `error.message` for
  * every throw in the process, which is how a `readdir` `ENOTDIR` — a string
  * nobody here composed, with an absolute path already inside it — would reach a
  * world-readable workflow log. Only errors this module vouches for are printed;

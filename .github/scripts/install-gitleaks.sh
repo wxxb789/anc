@@ -26,7 +26,7 @@ case "$(uname -m)" in
     ;;
 esac
 
-destination="${RUNNER_TEMP:?RUNNER_TEMP is required}/thoughtscape-gitleaks-${version}"
+destination="${RUNNER_TEMP:?RUNNER_TEMP is required}/anc-gitleaks-${version}"
 mkdir -p "$destination"
 if [[ ! -x "$destination/gitleaks" ]] ||
    [[ "$("$destination/gitleaks" version 2>/dev/null || true)" != "$version" ]]; then

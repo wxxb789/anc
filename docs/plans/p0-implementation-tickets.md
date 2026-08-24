@@ -23,7 +23,7 @@ defaults. This backlog adopts them:
 
 ## Repository boundaries that constrain every ticket
 
-- The exporter (`../thoughtscape/ob-flow/.harness/publish/export.py`) lives in the
+- The exporter (`../anc/ob-flow/.harness/publish/export.py`) lives in the
   private vault and is **not** writable from this repository. Tickets consume the
   generated artifact contract and validate it; they never reimplement or edit the
   exporter.

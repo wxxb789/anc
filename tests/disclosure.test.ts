@@ -43,7 +43,7 @@ import { SEEDED_ENTRIES, SEEDED_HEADER, ensureIgnored } from '../scripts/seed-gi
 import { openReport } from '../scripts/write-report.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
+const BINARY = join(ROOT, 'bin', 'anc.mjs');
 
 /**
  * Run the packaged binary the way a user does, and return what a log would
@@ -621,7 +621,7 @@ test('exactly one report exists anywhere under the invocation directory', () => 
     const reports = walk(root).filter((file) => file.endsWith(`${sep}content-report.json`));
     assert.equal(reports.length, 1, 'the count assertion above is what this depends on');
     assert.ok(
-      !reports[0]!.includes('.thoughtscape-build-'),
+      !reports[0]!.includes('.anc-build-'),
       'the report was written into the per-run staging workspace, which the build deletes',
     );
     assert.ok(

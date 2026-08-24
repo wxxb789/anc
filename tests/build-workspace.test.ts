@@ -14,7 +14,7 @@ import {
 } from '../scripts/build-workspace.ts';
 
 const BINARY_SOURCE = readFileSync(
-  fileURLToPath(new URL('../bin/thoughtscape-publish.mjs', import.meta.url)),
+  fileURLToPath(new URL('../bin/anc.mjs', import.meta.url)),
   'utf8',
 );
 
@@ -30,7 +30,7 @@ function workspace(root: string, name: string, modified: number): string {
 
 test('the binary prunes before creating and reports deferred final cleanup', () => {
   const prune = BINARY_SOURCE.indexOf('await pruneStaleBuildWorkspaces(PACKAGE_ROOT)');
-  const create = BINARY_SOURCE.indexOf("mkdtemp(join(PACKAGE_ROOT, '.thoughtscape-build-'))");
+  const create = BINARY_SOURCE.indexOf("mkdtemp(join(PACKAGE_ROOT, '.anc-build-'))");
   assert.ok(prune >= 0 && prune < create, 'the binary does not prune stale siblings before creating one');
   assert.match(BINARY_SOURCE, /await removeBuildWorkspace\(workspace\)/);
   assert.match(BINARY_SOURCE, /staging cleanup deferred: 1 directory/);
@@ -40,15 +40,15 @@ test('stale workspace pruning removes only old tool-owned directories', async ()
   const root = mkdtempSync(join(tmpdir(), 'build-workspace-prune-'));
   try {
     const now = Date.UTC(2026, 7, 20);
-    const stale = '.thoughtscape-build-aB3dE6';
-    const fresh = '.thoughtscape-build-FR3sh1';
-    const unfamiliar = '.thoughtscape-build-too-long';
+    const stale = '.anc-build-aB3dE6';
+    const fresh = '.anc-build-FR3sh1';
+    const unfamiliar = '.anc-build-too-long';
     workspace(root, stale, now - STALE_BUILD_WORKSPACE_AGE_MS - 1);
     workspace(root, fresh, now - STALE_BUILD_WORKSPACE_AGE_MS + 1);
     workspace(root, unfamiliar, now - STALE_BUILD_WORKSPACE_AGE_MS - 1);
-    writeFileSync(join(root, '.thoughtscape-build-zY9xW8'), 'not a directory\n', 'utf8');
+    writeFileSync(join(root, '.anc-build-zY9xW8'), 'not a directory\n', 'utf8');
     const target = workspace(root, 'link-target', now - STALE_BUILD_WORKSPACE_AGE_MS - 1);
-    const link = join(root, '.thoughtscape-build-L1nK99');
+    const link = join(root, '.anc-build-L1nK99');
     symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
 
     assert.ok(readdirSync(root).length >= 4, 'the pre-state has no workspaces to prune');
@@ -58,7 +58,7 @@ test('stale workspace pruning removes only old tool-owned directories', async ()
     assert.ok(!names.includes(stale));
     assert.ok(names.includes(fresh));
     assert.ok(names.includes(unfamiliar));
-    assert.ok(names.includes('.thoughtscape-build-zY9xW8'));
+    assert.ok(names.includes('.anc-build-zY9xW8'));
     assert.ok(existsSync(link), 'a matching workspace symlink was removed');
     assert.ok(existsSync(join(target, 'content.json')), 'workspace symlink pruning traversed its target');
   } finally {
@@ -69,7 +69,7 @@ test('stale workspace pruning removes only old tool-owned directories', async ()
 test('workspace cleanup reports failure without throwing or deleting the diagnostic', async () => {
   const root = mkdtempSync(join(tmpdir(), 'build-workspace-remove-'));
   try {
-    const directory = workspace(root, '.thoughtscape-build-a1B2c3', Date.now());
+    const directory = workspace(root, '.anc-build-a1B2c3', Date.now());
     const cleaned = await removeBuildWorkspace(directory, async () => {
       throw new Error('simulated lock');
     });
@@ -77,7 +77,7 @@ test('workspace cleanup reports failure without throwing or deleting the diagnos
     assert.ok(readdirSync(directory).includes('content.json'));
 
     assert.equal(await removeBuildWorkspace(directory), true);
-    assert.ok(!readdirSync(root).includes('.thoughtscape-build-a1B2c3'));
+    assert.ok(!readdirSync(root).includes('.anc-build-a1B2c3'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

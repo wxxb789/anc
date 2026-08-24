@@ -339,7 +339,7 @@ wave-4 tickets TK-09, TK-18, and TK-10 — remains current.
 Decided 2026-08-11, and it reshapes what remains. The target is that **another user adds
 one GitHub Action to their own notes repository** and gets a published knowledge garden.
 Today the architecture is hardcoded to one owner: `export.py` refuses to write anywhere but
-a directory named `thoughtscape-publish`, the vault path is a fixed relative path, and the
+a directory named `anc`, the vault path is a fixed relative path, and the
 site origin, title, navigation, and about and privacy copy are literals in the tree.
 
 Two consequences, both already folded into the backlog:
@@ -357,7 +357,7 @@ architecture records around single-owner assumptions would mean redoing all thre
 
 ### Blocking before any deployment
 
-`astro.config.mjs:16` sets the canonical origin to `https://thoughtscape.invalid` — an
+`astro.config.mjs:16` sets the canonical origin to `https://anc.invalid` — an
 RFC 2606 reserved name chosen so it cannot resolve to a real site by accident. A test walks
 `src/`, `scripts/`, `tests/`, and `public/` and fails if any second file writes the host, so
 assigning a real domain stays a one-line change. **Deploying before that change would
@@ -907,7 +907,7 @@ This repository does not implement the producer. It specifies what it consumes.
 **Requirements:** the owner's decision of 2026-08-11; sections 21.1, 21.2
 
 **Problem.** The project is hardcoded to one owner. `export.py` refuses to write anywhere
-but a directory named `thoughtscape-publish` and checks `package.json`'s name to prove it;
+but a directory named `anc` and checks `package.json`'s name to prove it;
 the vault path is a fixed relative path; the site origin, title, navigation labels, and the
 about and privacy copy are literals in the tree. Another user cannot clone this and publish
 their own garden.

@@ -12,7 +12,7 @@ import { test } from 'vitest';
 import { routeKey, tagRoute } from '../src/lib/routes.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
+const BINARY = join(ROOT, 'bin', 'anc.mjs');
 
 function filesUnder(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {

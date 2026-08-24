@@ -565,7 +565,7 @@ const GZIP_MAGIC: readonly [number, number] = [0x1f, 0x8b];
 /**
  * `node:sqlite` is loaded through `createRequire` rather than imported.
  *
- * This module is imported by five test files and by `bin/thoughtscape-publish.mjs`
+ * This module is imported by five test files and by `bin/anc.mjs`
  * on every build, and all but one of those runs scan a `dist/` holding no
  * database at all. A static import would load the SQLite binding into every one
  * of them to serve a branch they never reach.

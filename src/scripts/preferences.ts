@@ -25,7 +25,7 @@ import { THEME_DATASET, THEME_NAMES, type ThemeName } from '../lib/translations.
  *
  * **The prefix names the thing stored, not the tool that stored it**, which is
  * plan decision D2 applied to the one identifier a reader's own browser keeps.
- * It was `thoughtscape:` — this project's name, written into the local storage
+ * It was this project's own name and a colon, written into the local storage
  * of every visitor to every site built with this tool, visible in any
  * devtools pane. Nothing needed it: `localStorage` is partitioned by origin, so
  * two sites' keys are already distinct whatever they are called, and the prefix

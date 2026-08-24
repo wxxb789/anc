@@ -521,7 +521,7 @@ test('a page rendering both constructs reports both and neither leaks a placehol
   const rendered = await renderMarkdown('$$\na+b\n$$\n\n```mermaid\ngraph TD\n  A --> B\n```\n');
   assert.equal(rendered.hasMath, true);
   assert.equal(rendered.hasMermaid, true);
-  assert.doesNotMatch(rendered.html, /thoughtscape\w*Placeholder/, 'a substitution marker reached the page');
+  assert.doesNotMatch(rendered.html, /rendered\w*Placeholder/, 'a substitution marker reached the page');
 });
 
 test('a note body cannot forge a rendering placeholder', async () => {
@@ -536,19 +536,19 @@ test('a note body cannot forge a rendering placeholder', async () => {
   // sanitizer by different routes: prose is a text node, a fence is escaped
   // source, raw HTML is an opaque node, and an attribute value is neither.
   const forgeries = [
-    'thoughtscapeMathPlaceholder0End\n\n$$\na\n$$\n',
-    'thoughtscapeDiagramPlaceholder0End\n\n```mermaid\ngraph TD\n  A --> B\n```\n',
-    '```js\nthoughtscapeMathPlaceholder0End\n```\n\n$$\na\n$$\n',
-    '`thoughtscapeMathPlaceholder0End`\n\n$$\na\n$$\n',
-    '<div>thoughtscapeMathPlaceholder0End</div>\n\n$$\na\n$$\n',
-    '<a href="/x/" title="thoughtscapeMathPlaceholder0End">y</a>\n\n$$\na\n$$\n',
-    '![thoughtscapeMathPlaceholder0End](https://example.com/a.png)\n\n$$\na\n$$\n',
+    'renderedMathPlaceholder0End\n\n$$\na\n$$\n',
+    'renderedDiagramPlaceholder0End\n\n```mermaid\ngraph TD\n  A --> B\n```\n',
+    '```js\nrenderedMathPlaceholder0End\n```\n\n$$\na\n$$\n',
+    '`renderedMathPlaceholder0End`\n\n$$\na\n$$\n',
+    '<div>renderedMathPlaceholder0End</div>\n\n$$\na\n$$\n',
+    '<a href="/x/" title="renderedMathPlaceholder0End">y</a>\n\n$$\na\n$$\n',
+    '![renderedMathPlaceholder0End](https://example.com/a.png)\n\n$$\na\n$$\n',
     // A marker this render never minted: a different index, and the diagram
     // form on a page that has only math. Neither collides with a real token, so
     // without the residue check they would ship as visible gibberish.
-    'thoughtscapeMathPlaceholder0End\n',
-    'thoughtscapeMathPlaceholder99End\n\n$$\na\n$$\n',
-    'thoughtscapeDiagramPlaceholder0End\n\n$$\na\n$$\n',
+    'renderedMathPlaceholder0End\n',
+    'renderedMathPlaceholder99End\n\n$$\na\n$$\n',
+    'renderedDiagramPlaceholder0End\n\n$$\na\n$$\n',
   ];
   for (const markdown of forgeries) {
     await assert.rejects(
@@ -1118,7 +1118,7 @@ test('the rendered marker cannot be written by a note body', async () => {
   // not receive somebody else's render, it stops the build. Positional and
   // exhausting, which is what `substituteRendered` documents.
   await assert.rejects(
-    () => renderMarkdown('Prose thoughtscapeMathPlaceholder0End more.\n', { pageTitle: 'x' }),
+    () => renderMarkdown('Prose renderedMathPlaceholder0End more.\n', { pageTitle: 'x' }),
     /placeholder survived substitution/,
     'a body writing a substitution token did not stop the build',
   );

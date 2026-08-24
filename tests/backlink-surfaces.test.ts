@@ -65,7 +65,7 @@ import { WITHHELD_ROUTE, noteRoute } from '../src/lib/routes.ts';
 import { translate } from '../src/lib/translations.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
+const BINARY = join(ROOT, 'bin', 'anc.mjs');
 
 /**
  * A full CLI build is 15-20 s on this host — the astro build dominates, and

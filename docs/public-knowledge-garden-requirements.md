@@ -159,7 +159,7 @@ replacement is at the publication event — the exclusion rules, the refusal to 
 that matched nothing, and the report a user can read before they deploy.
 
 The replacement remains weaker at authoring time and is now fail-closed at the publication
-event. `thoughtscape-publish review` writes the exact sorted public slugs to
+event. `anc review` writes the exact sorted public slugs to
 `.publish-set.json`; `build --release` requires that file to be tracked, committed, unchanged,
 and exactly equal to the set just computed. Additions and removals both block. Requiring a
 removal corrects the flaw that killed the drafted `published.txt`: after the ledger shrinks, a
@@ -554,7 +554,7 @@ The project remains `output: "static"`, and the build runs against this package'
 the user's directory contributing content and an output location. That shape is forced rather
 than chosen: cwd must be inside the package for prerender chunks to resolve their imports, and
 Astro stages prerender output under cwd and *renames* it to `outDir`, which cannot cross a
-device. `bin/thoughtscape-publish.mjs` documents the measurement.
+device. `bin/anc.mjs` documents the measurement.
 
 ### 11.3 Client script responsibilities
 

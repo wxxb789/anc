@@ -6,11 +6,11 @@
  * Not `.astro/`, which is what this was blamed on for three tickets. Measured
  * against `astro/dist/core/build/common.js:76-82`: `getOutDirWithinCwd` returns
  * the requested `outDir` unchanged whenever it starts with `process.cwd()`, and
- * `bin/thoughtscape-publish.mjs` stages inside `PACKAGE_ROOT` *after* chdir'ing
+ * `bin/anc.mjs` stages inside `PACKAGE_ROOT` *after* chdir'ing
  * there — so the fallback never fires for the binary, and its per-run `mkdtemp`
  * workspace really is per-run. Executed directly:
  *
- *     getOutDirWithinCwd(<cwd>/.thoughtscape-build-abc/dist) -> unchanged
+ *     getOutDirWithinCwd(<cwd>/.anc-build-abc/dist) -> unchanged
  *     getOutDirWithinCwd(C:/elsewhere/dist)                  -> <cwd>/.astro/
  *
  * And 24 concurrent binary builds, run against a live suite, all exited 0 with

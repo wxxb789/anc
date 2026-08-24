@@ -18,20 +18,20 @@ Node 22.18 or newer — `package.json` `engines` pins it, and the shipped code i
 JavaScript, so nothing needs a TypeScript toolchain.
 
 **And, today, a checkout of this repository.** `package.json` carries `"private": true`, so
-`@thoughtscape/publish` is on no registry and `npx @thoughtscape/publish` resolves for nobody.
+`anc` is on no registry and `npx anc` resolves for nobody.
 Until it is published, the two ways to run it are:
 
 ```bash
 # from a checkout, against your notes elsewhere
-node /path/to/thoughtscape-publish/bin/thoughtscape-publish.mjs build --content ~/notes --out ~/notes/dist
+node /path/to/anc/bin/anc.mjs build --content ~/notes --out ~/notes/dist
 
 # or install the tarball the repository builds
-cd /path/to/thoughtscape-publish && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/thoughtscape-publish/thoughtscape-publish-*.tgz
-npx thoughtscape-publish build
+cd /path/to/anc && pnpm run pack:tarball
+cd ~/notes && npm install /path/to/anc/anc-*.tgz
+npx anc build
 ```
 
-Everything below is written as `npx @thoughtscape/publish`, which is the intended shape and
+Everything below is written as `npx anc`, which is the intended shape and
 the one the commands become on the day the package is published. Substitute one of the above
 until then.
 
@@ -39,8 +39,8 @@ until then.
 
 ```bash
 cd your-notes
-npx @thoughtscape/publish build
-npx @thoughtscape/publish preview
+npx anc build
+npx anc preview
 ```
 
 Two commands. The first writes `dist/`; the second serves it at
@@ -132,7 +132,7 @@ deliberate rather than pending — the alternative shape, copying every non-Mark
 how comparable tools publish the images belonging to notes their users excluded. The final
 output inventory fails if any note asset or unexpected route reaches the site anyway.
 
-Run `thoughtscape-publish init` before your first `git add -A`. It seeds `.gitignore` with
+Run `anc init` before your first `git add -A`. It seeds `.gitignore` with
 `node_modules/` and your build's output directory — which follows `--content`, so a build into
 `notes/dist/` is ignored as `/notes/dist/` rather than as a root-anchored `/dist/` that would
 miss it. It is safe to run twice: measured, three runs outside a git repository once produced
@@ -233,12 +233,12 @@ An ordinary `build` is for local preview and needs no approval file. Before prod
 artifact for deployment, record and commit the exact public note set:
 
 ```bash
-npx @thoughtscape/publish review
+npx anc review
 git add --intent-to-add .publish-set.json
 git diff -- .publish-set.json
 git add .publish-set.json
 git commit -m "review publish set"
-npx @thoughtscape/publish build --release
+npx anc build --release
 ```
 
 The review file contains sorted public slugs only — no source paths and no withheld names.

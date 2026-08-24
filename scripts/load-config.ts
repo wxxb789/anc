@@ -378,7 +378,7 @@ const MAX_REPORTED_ISSUES = 50;
  * correcting three mistakes one build at a time is three builds.
  *
  * A {@link BuildFailure} rather than a new class, so the message is printable:
- * `bin/thoughtscape-publish.mjs` prints only errors composed under the
+ * `bin/anc.mjs` prints only errors composed under the
  * disclosure rule, and everything else becomes `build failed`. The private half
  * carries what the public half may not — and the private half is **not**
  * truncated, because the file it goes to is where a user reads the rest.
@@ -982,7 +982,7 @@ export function loadConfig(directory?: string): LoadedConfig {
  * the anonymous literal.
  *
  * **Nothing in the shipped binary calls this yet, and a reader must not assume
- * otherwise.** `bin/thoughtscape-publish.mjs` calls `discover(contentDirectory)`
+ * otherwise.** `bin/anc.mjs` calls `discover(contentDirectory)`
  * with no options, so measured end to end today, a repository whose
  * `publish.config.yaml` excludes `drafts/**` builds and **publishes the drafts**
  * — the only file dropped is the config itself, as `not-markdown`. The same run
@@ -998,7 +998,7 @@ export function exclusionOptions(config: LoadedConfig): ExclusionOptions {
 /**
  * The environment variable naming the directory holding the user's config.
  *
- * The seam, and the reason it is one. `bin/thoughtscape-publish.mjs` changes the
+ * The seam, and the reason it is one. `bin/anc.mjs` changes the
  * working directory to this package's root before Astro is started, so by the
  * time `astro.config.mjs` is evaluated the user's own directory is no longer
  * reachable from `process.cwd()`. `CONTENT_ARTIFACT` already crosses that

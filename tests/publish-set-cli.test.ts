@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-const CLI = fileURLToPath(new URL('../bin/thoughtscape-publish.mjs', import.meta.url));
+const CLI = fileURLToPath(new URL('../bin/anc.mjs', import.meta.url));
 
 function run(root: string, args: string[]): { status: number | null; stdout: string; stderr: string } {
   const result = spawnSync(process.execPath, [CLI, ...args], { cwd: root, encoding: 'utf8', timeout: 120_000 });
@@ -117,6 +117,6 @@ test('review refuses build-only flags by their safe literal without echoing valu
 test('help exposes review and release without changing ordinary build options', () => {
   const result = run(process.cwd(), ['--help']);
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /thoughtscape-publish review \[options\]/);
+  assert.match(result.stdout, /\banc review \[options\]/);
   assert.match(result.stdout, /--release\s+require a non-loopback origin/);
 });

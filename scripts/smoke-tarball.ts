@@ -30,7 +30,7 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
   name: string;
   version: string;
 };
-const TARBALL = join(ROOT, 'thoughtscape-publish-' + MANIFEST.version + '.tgz');
+const TARBALL = join(ROOT, 'anc-' + MANIFEST.version + '.tgz');
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -125,7 +125,7 @@ function main(): void {
     run('git', ['config', 'user.email', 'release-smoke@example.invalid'], scratch);
     runNpm(['install', TARBALL, '--no-audit', '--no-fund'], scratch);
 
-    const binary = join(scratch, 'node_modules', ...MANIFEST.name.split('/'), 'bin', 'thoughtscape-publish.mjs');
+    const binary = join(scratch, 'node_modules', ...MANIFEST.name.split('/'), 'bin', 'anc.mjs');
     assert(existsSync(binary), 'npm did not install the shipped binary');
     const initOutput = run(process.execPath, [binary, 'init'], scratch);
     assert(initOutput.includes('publish.config.yaml: written'), 'init did not create its configuration template');

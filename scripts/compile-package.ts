@@ -364,7 +364,7 @@ export function compilePackage(destination: string): { compiled: number; rewritt
 
   let rewritten = 0;
   // One pass over every staged file that can carry a specifier and was not
-  // compiled — the `.astro` components, `bin/thoughtscape-publish.mjs`, and
+  // compiled — the `.astro` components, `bin/anc.mjs`, and
   // `astro.config.mjs`. All three reference `.ts` paths that no longer exist in
   // the tarball: the CLI loads each build step with `await
   // import('../scripts/x.ts')`, and the config both imports
@@ -394,7 +394,7 @@ export function compilePackage(destination: string): { compiled: number; rewritt
   // Left in place they are six dangling references in the one file every
   // consumer reads, and `npm run build` in an installed package would fail on a
   // missing file rather than on a missing feature. The binary does not use them:
-  // it imports each step directly (`bin/thoughtscape-publish.mjs`), which is why
+  // it imports each step directly (`bin/anc.mjs`), which is why
   // `tests/packaging.test.ts` compares the two chains by module rather than by
   // command text.
   const manifestPath = join(destination, 'package.json');

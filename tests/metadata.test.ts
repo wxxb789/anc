@@ -742,7 +742,7 @@ test('a note page types itself as an article and states the dates the artifact c
 test('every page offers the feed, and the card image was actually built', () => {
   for (const { route, html } of PAGES) {
     // The feed's title is chrome, so since TK-16 it is in the page's own
-    // language — a Chinese note offers "thoughtscape — 全部笔记". The href and
+    // language — a Chinese note offers "anc — 全部笔记". The href and
     // the type are what make the link a feed and are the same everywhere; the
     // title is resolved from the document rather than restated in English, or
     // this gate would fail on every Chinese page for a reason that has nothing

@@ -181,7 +181,7 @@ test('a repository with no configuration file loads the documented defaults', as
  * `package.json` — measured). So the two must agree, exactly as `theme-init.js`
  * and `preferences.ts` must, and neither may be this project's name.
  *
- * **Mutations watched fail:** setting `DEFAULT_TITLE = 'thoughtscape'` turned
+ * **Mutations watched fail:** setting `DEFAULT_TITLE = 'anc'` turned
  * the identity half red; changing `site.ts`'s `DEFAULT_SITE_TITLE` to `'Notebook'`
  * turned the agreement half red naming both values.
  */
@@ -200,13 +200,14 @@ test('the default title belongs to nobody, and the two modules holding one agree
   // The identity half, with the forbidden token read from `package.json` rather
   // than spelled here.
   //
-  // **The first version spelled it `/thoughtscape/i` under a comment claiming it
-  // "stays true if the package is ever renamed", and the comment was wrong about
-  // its own code.** The *value* was read from the module; the token was a
-  // literal — so a rename would leave this matching nothing and passing for ever,
-  // which is exactly the vacuity the comment claimed immunity from. Deriving the
-  // token means the gate follows the package's identity instead of a memory of
-  // it.
+  // **The first version spelled the name of the day as a regex literal, under a
+  // comment claiming it "stays true if the package is ever renamed", and the
+  // comment was wrong about its own code.** The *value* was read from the module;
+  // the token was a literal — so a rename would leave this matching nothing and
+  // passing for ever, which is exactly the vacuity the comment claimed immunity
+  // from. Deriving the token means the gate follows the package's identity
+  // instead of a memory of it. The package has since been renamed, which is how
+  // a literal would have been caught — or, had it stayed, not been.
   const own = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string })
     .name.replace(/^@/, '')
     .split('/')[0]!;
@@ -1175,12 +1176,12 @@ test('a configured pattern matching nothing fails, naming the configuration file
  * `dist/`, not merely from `dist/notes/`: the leak went through the Pagefind
  * index and the content index as well as the page.
  *
- * Run through `bin/thoughtscape-publish.mjs` in a child process, because the
+ * Run through `bin/anc.mjs` in a child process, because the
  * property is about the command a user types. An in-process call would test the
  * functions this file already tests.
  *
  * **Mutation watched fail:** replacing `exclusionOptions(config)` with no second
- * argument at `bin/thoughtscape-publish.mjs`'s `discover` call turned this red —
+ * argument at `bin/anc.mjs`'s `discover` call turned this red —
  * `2 published`, and the token in 5 files under `dist/`.
  */
 test('a configured exclusion withholds the file from dist/, end to end', async () => {
@@ -1195,7 +1196,7 @@ test('a configured exclusion withholds the file from dist/, end to end', async (
 
     const probe = spawnSync(
       process.execPath,
-      [join(ROOT, 'bin/thoughtscape-publish.mjs'), 'build', '--content', notes, '--out', out],
+      [join(ROOT, 'bin/anc.mjs'), 'build', '--content', notes, '--out', out],
       { cwd: directory, encoding: 'utf8' },
     );
     assert.equal(probe.status, 0, `the build failed:\n${probe.stdout}\n${probe.stderr}`);
@@ -1346,7 +1347,7 @@ test('a configured origin reaches astro.config.mjs, and an absent one does not',
 /**
  * A malformed config fails a raw `astro build` legibly, with no host path.
  *
- * `bin/thoughtscape-publish.mjs` has a boundary that knows how to print a
+ * `bin/anc.mjs` has a boundary that knows how to print a
  * `BuildFailure`; a direct `astro build` — and `astro dev`, which evaluates the
  * same module scope — has only Astro's config loader. Measured before
  * `astro.config.mjs` caught the throw, that loader printed the composed message

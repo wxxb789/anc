@@ -1,5 +1,5 @@
 {
-  "name": "@thoughtscape/publish",
+  "name": "anc",
   "type": "module",
   "version": "0.1.0",
   "description": "Build a static, privacy-preserving site from a directory of Markdown",
@@ -9,7 +9,7 @@
     "node": ">=22.18.0"
   },
   "bin": {
-    "thoughtscape-publish": "bin/thoughtscape-publish.mjs"
+    "anc": "bin/anc.mjs"
   },
   "exports": {
     "./package.json": "./package.json"

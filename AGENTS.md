@@ -1,4 +1,4 @@
-# thoughtscape-publish Agent Contract
+# anc Agent Contract
 
 > `AGENTS.md` is canonical. `CLAUDE.md` is a symlink to this file.
 
@@ -126,7 +126,7 @@ on the first failure. Run it before proposing a merge and report the pass count.
 | Test suite | yes | — | yes | — |
 | Rendered-browser gates (Playwright) | when Chromium is installed | — | yes, always | — |
 
-The last column replaces what used to say "Cloudflare Pages". `bin/thoughtscape-publish.mjs`
+The last column replaces what used to say "Cloudflare Pages". `bin/anc.mjs`
 runs the same generated-output chain `package.json`'s `build` names, link for link. Secret
 scanning is the deliberate exception: repository `verify` and packaged `build --release` run
 it, while an ordinary preview does not require an external binary. Both relationships are
@@ -195,7 +195,18 @@ every gate above is enforced only by running `pnpm run verify` on the host.
   a publication — so it is gated over every file in the output with gzip members inflated.
 - A site built by a stranger carries no occurrence of this project's name, asserted over every
   file as bytes and after inflating gzip members, with a positive control that plants the name
-  *split by markup* so the gate cannot silently degrade into a raw substring search.
+  *split by markup* so the gate cannot degrade into a search for something narrower. The name
+  is read from `package.json` and matched as a **delimited token, not a raw substring** —
+  a three-letter name is a substring of ordinary English and of ordinary minified JavaScript.
+  Measured at the rename over this repository's own `dist/`: the raw substring occurs in
+  **67 of 143 files**, the delimited token in **0 of 143**. A hyphen counts as a delimiter, so
+  `anc-build-`, `data-anc-`, and `/anc/` still fail. Two consequences worth knowing before
+  touching it. **A name buried inside a longer identifier is no longer caught** — which is why
+  the math and diagram substitution tokens in `src/lib/markdown.ts` were unbranded to
+  `renderedMathPlaceholder` in the same change, and why a new identifier spelling this name
+  must not be introduced. And a future dependency whose minifier emits `anc` as an identifier
+  will read as a leak until the named file is inspected. `tests/site-identity.test.ts` carries
+  both measurements.
 - Nothing the CLI writes to stdout or stderr changes when the corpus is renamed. The counts go
   to the stream and the names go to `content-report.json`.
 

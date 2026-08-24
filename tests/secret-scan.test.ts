@@ -14,7 +14,7 @@ const DIST = join(ROOT, 'dist');
 const INSTALLER = readFileSync(join(ROOT, '.github', 'scripts', 'install-gitleaks.sh'), 'utf8');
 const ACTION = readFileSync(join(ROOT, 'action.yml'), 'utf8');
 const WORKFLOW = readFileSync(join(ROOT, '.github', 'workflows', 'verify.yml'), 'utf8');
-const BINARY = readFileSync(join(ROOT, 'bin', 'thoughtscape-publish.mjs'), 'utf8');
+const BINARY = readFileSync(join(ROOT, 'bin', 'anc.mjs'), 'utf8');
 const BUILD_SITE = readFileSync(join(ROOT, 'scripts', 'build-site.ts'), 'utf8');
 const SCRIPTS = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
   scripts: Record<string, string>;

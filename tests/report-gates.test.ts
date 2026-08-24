@@ -12,7 +12,7 @@
  *
  * ## Why a built site rather than a hand-written one
  *
- * Every gate below runs `bin/thoughtscape-publish.mjs` over a synthetic corpus
+ * Every gate below runs `bin/anc.mjs` over a synthetic corpus
  * and reads what landed on disk. `tests/verify.test.ts` already scans
  * hand-written scratch directories shaped like `dist/`, and that shape is the
  * right one for asking whether a *rule* fires. It is the wrong one for asking
@@ -35,7 +35,7 @@ import { scanResidue } from '../scripts/scan-residue.ts';
 import { STATE_REPORT_MAX_AGE_MS } from '../scripts/write-report.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
+const BINARY = join(ROOT, 'bin', 'anc.mjs');
 
 /** A scratch directory removed when the callback returns, however it returns. */
 function scratch<T>(prefix: string, body: (directory: string) => T): T {

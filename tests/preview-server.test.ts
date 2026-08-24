@@ -40,7 +40,7 @@ import {
 } from '../scripts/preview-site.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin/thoughtscape-publish.mjs');
+const BINARY = join(ROOT, 'bin/anc.mjs');
 const DIST = join(ROOT, 'dist');
 
 /** Servers to stop however the test that started them ended. */
@@ -69,7 +69,7 @@ afterEach(async () => {
 
 /** A temporary directory removed after the test, whatever it did. */
 function temporary(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'thoughtscape-preview-'));
+  const directory = mkdtempSync(join(tmpdir(), 'anc-preview-'));
   scratch.push(directory);
   return directory;
 }
@@ -398,7 +398,7 @@ test('preview distinguishes a missing directory from an unbuilt one', () => {
  * Neither refusal puts a path on the stream.
  *
  * `--dist` may name a withheld directory — `clients/acme/2026-renewal` is the
- * spelling `bin/thoughtscape-publish.mjs` records as measured — and this message
+ * spelling `bin/anc.mjs` records as measured — and this message
  * reaches a workflow log. The path belongs on `detail`, which nothing prints.
  */
 test('a preview refusal names no path on the surface a log inherits', () => {
@@ -461,7 +461,7 @@ test('preview parses its options and refuses the rest', () => {
 /**
  * A rejected preview flag is never echoed.
  *
- * The same rule `bin/thoughtscape-publish.mjs` applies to `build`, and it is
+ * The same rule `bin/anc.mjs` applies to `build`, and it is
  * here because a second parser is a second place to forget it: a withheld note's
  * stem wearing two dashes is still a disclosure.
  */
@@ -621,7 +621,7 @@ test('stopping the preview releases the port in this process', async () => {
 test('the binary has a preview command and its help says so', () => {
   const help = spawnSync(process.execPath, [BINARY, '--help'], { encoding: 'utf8' });
   assert.equal(help.status, 0, `--help failed:\n${help.stderr}`);
-  assert.match(help.stdout, /thoughtscape-publish preview/, 'the usage text does not name the preview command');
+  assert.match(help.stdout, /\banc preview \[options\]/, 'the usage text does not name the preview command');
   assert.match(help.stdout, /--dist/, 'the usage text does not name --dist');
   assert.match(help.stdout, /--port/, 'the usage text does not name --port');
 

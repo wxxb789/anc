@@ -155,7 +155,7 @@ worse, because a sentence gets copied.
 
 **Measured — the staging-collision report, and the claim was written by this project about
 itself.** The test suite was intermittently red, always on a gate that spawned the binary. The
-explanation recorded was that `bin/thoughtscape-publish.mjs` chdirs to `PACKAGE_ROOT`, so
+explanation recorded was that `bin/anc.mjs` chdirs to `PACKAGE_ROOT`, so
 Astro's `getOutDirWithinCwd` discards the per-run `outDir` and stages every concurrent build at
 a shared `<cwd>/.astro/`. It named a real function, quoted its real source, and reasoned
 correctly — from a premise about which branch that function takes that nobody had executed.
@@ -163,7 +163,7 @@ correctly — from a premise about which branch that function takes that nobody 
 Executing it takes one call:
 
 ```
-getOutDirWithinCwd(<cwd>/.thoughtscape-build-abc/dist) -> unchanged
+getOutDirWithinCwd(<cwd>/.anc-build-abc/dist) -> unchanged
 getOutDirWithinCwd(<cwd>/dist)                         -> unchanged
 getOutDirWithinCwd(C:/elsewhere/dist)                  -> <cwd>/.astro/
 ```

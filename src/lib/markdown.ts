@@ -316,9 +316,9 @@ const INTERNAL_HREF = /^\/([a-z0-9]+(?:-+[a-z0-9]+)*)\/(#[^\s]*)?$/;
  *    receiving somebody else's diagram — and cannot inject markup either way,
  *    since the replacement text is chosen by index from this render's own list.
  */
-const DIAGRAM_TOKEN_PREFIX = 'thoughtscapeDiagramPlaceholder';
+const DIAGRAM_TOKEN_PREFIX = 'renderedDiagramPlaceholder';
 const DIAGRAM_TOKEN_SUFFIX = 'End';
-const MATH_TOKEN_PREFIX = 'thoughtscapeMathPlaceholder';
+const MATH_TOKEN_PREFIX = 'renderedMathPlaceholder';
 const MATH_TOKEN_SUFFIX = 'End';
 
 interface DiagramRequest {
@@ -548,7 +548,7 @@ function headingPlugin(
   const slugger = new Slugger();
   let isFirstHeading = true;
   return {
-    name: 'thoughtscape-headings',
+    name: 'anc-headings',
     // Raw HTML is visited in document order alongside elements, so an id
     // written before a heading is reserved before that heading is slugged.
     // `slug()` registers the value whether or not it was already taken, which
@@ -617,7 +617,7 @@ function headingPlugin(
  */
 function calloutPlugin(): HastPluginDefinition {
   return {
-    name: 'thoughtscape-callouts',
+    name: 'anc-callouts',
     element: {
       filter: ['blockquote'],
       visit(node) {
@@ -688,7 +688,7 @@ function codePlugin(
   caption: Translation['diagramCaption'],
 ): HastPluginDefinition {
   return {
-    name: 'thoughtscape-code',
+    name: 'anc-code',
     element: [
       {
         filter: ['pre'],
@@ -893,7 +893,7 @@ const DIAGRAM_KIND_NAMES: Readonly<Record<string, string>> = {
  */
 function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefinition {
   return {
-    name: 'thoughtscape-math',
+    name: 'anc-math',
     element: {
       filter: ['code'],
       visit(node, ctx) {
@@ -1093,7 +1093,7 @@ function taskItemContent(node: { children?: readonly unknown[] }): {
 
 function taskListPlugin(): HastPluginDefinition {
   return {
-    name: 'thoughtscape-task-lists',
+    name: 'anc-task-lists',
     element: {
       filter: ['li'],
       visit(node, ctx) {
@@ -1117,7 +1117,7 @@ function taskListPlugin(): HastPluginDefinition {
  */
 function tablePlugin(): HastPluginDefinition {
   return {
-    name: 'thoughtscape-tables',
+    name: 'anc-tables',
     element: {
       filter: ['th', 'td'],
       visit(node, ctx) {
@@ -1495,8 +1495,8 @@ function sanitize(
  * receive somebody else's render. Measured — all three shapes refuse:
  *
  * ```
- * Prose thoughtscapeMathPlaceholder0End more.       -> a rendering placeholder survived substitution
- * thoughtscapeMathPlaceholder0End and $$x^2$$ here. -> appeared 2 times, expected exactly once
+ * Prose renderedMathPlaceholder0End more.       -> a rendering placeholder survived substitution
+ * renderedMathPlaceholder0End and $$x^2$$ here. -> appeared 2 times, expected exactly once
  * ```
  *
  * So this attribute needs no allowlist entry, and deliberately has none: it is
@@ -1511,7 +1511,7 @@ function sanitize(
  *
  * ## Two things measured the hard way
  *
- * **The name is `data-rendered`, not `data-thoughtscape-rendered`.** A first
+ * **The name is `data-rendered`, not this project's name in an attribute.** A first
  * version carried this project's name, and `tests/site-identity.test.ts` went
  * red on it: every stranger's note containing an expression or a diagram shipped
  * the string into their own `dist/`, which is the headline TK-31 criterion. The

@@ -16,7 +16,7 @@ import { gunzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-const CLI = fileURLToPath(new URL('../bin/thoughtscape-publish.mjs', import.meta.url));
+const CLI = fileURLToPath(new URL('../bin/anc.mjs', import.meta.url));
 
 function filesUnder(root: string): string[] {
   const files: string[] = [];

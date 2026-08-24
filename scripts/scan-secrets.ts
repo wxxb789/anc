@@ -195,7 +195,7 @@ export function scanSecrets(root: string, options: SecretScanOptions = {}): numb
     );
   }
 
-  const temporary = mkdtempSync(join(tmpdir(), 'thoughtscape-secret-scan-'));
+  const temporary = mkdtempSync(join(tmpdir(), 'anc-secret-scan-'));
   const scanRoot = join(temporary, 'artifact');
   const report = join(temporary, 'report.json');
   const ignore = join(temporary, 'empty.gitleaksignore');

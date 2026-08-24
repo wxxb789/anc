@@ -1,5 +1,5 @@
 /**
- * `thoughtscape-publish preview` — serve a built site on loopback.
+ * `anc preview` — serve a built site on loopback.
  *
  * A user who has run `build` has a directory of HTML and no way to look at it.
  * Opening `dist/index.html` with `file://` does not work: every page links
@@ -17,7 +17,7 @@
  * | Install | `node_modules/.bin/` | `astro preview` |
  * | --- | --- | --- |
  * | `npm install <tarball>` | `astro` present, hoisted | works |
- * | `pnpm add <tarball>` | `thoughtscape-publish`, `esbuild`, `vite`, `yaml` | **`node_modules/astro` does not exist** |
+ * | `pnpm add <tarball>` | `anc`, `esbuild`, `vite`, `yaml` | **`node_modules/astro` does not exist** |
  * | `npx <tarball> build` | nothing installed locally | nothing to run |
  *
  * So "run `astro preview`" is advice that holds for one of three install paths,
@@ -28,7 +28,7 @@
  * ## Astro's `preview()` rather than a hand-written `node:http`
  *
  * `import('astro')` already resolves from the installed package — measured from
- * inside `node_modules/@thoughtscape/publish` under the pnpm layout, where the
+ * inside `node_modules/anc` under the pnpm layout, where the
  * *binary* is absent but the *module* resolves fine, because it is this
  * package's own dependency. It is an existing dependency doing a job it already
  * does, which beats forty lines of MIME table and traversal guard that would
@@ -95,7 +95,7 @@
  * page, or any other static site's output, and every one of those would satisfy
  * a guard written against it while being no build of ours. `content-index.json`
  * is this tool's own projection of the corpus, written into the output by
- * `bin/thoughtscape-publish.mjs` on every run and by `scripts/build-fixture.ts`,
+ * `bin/anc.mjs` on every run and by `scripts/build-fixture.ts`,
  * and nothing else produces a file by that name. The guard is only as good as
  * the marker's exclusivity.
  *
@@ -127,7 +127,7 @@ import { BuildFailure } from './write-report.ts';
  * The file every build writes into its output, and the marker a served directory
  * must carry.
  *
- * `bin/thoughtscape-publish.mjs` writes it from `projectIndex(validated)` on
+ * `bin/anc.mjs` writes it from `projectIndex(validated)` on
  * every run, and `scripts/build-fixture.ts` does the same. Spelled out here
  * rather than imported because the two writers spell it out too — it is a
  * filename in an artifact, not a shared constant with a home.
@@ -165,7 +165,7 @@ export function resolveArtifactDirectory(directory: string, from: string): strin
   if (!existsSync(resolve(resolved, ARTIFACT_MARKER))) {
     // The path is not in the message. A user who typed `--dist clients/acme` is
     // looking at the command they typed, and the stream this reaches is one a
-    // workflow log inherits — the same rule `bin/thoughtscape-publish.mjs`
+    // workflow log inherits — the same rule `bin/anc.mjs`
     // applies to every argv token it declines to echo.
     throw new BuildFailure(
       'preview-directory-not-an-artifact',
@@ -199,7 +199,7 @@ export async function startPreview(
   port: number,
   packageRoot: string,
 ): Promise<{ port: number; stop: () => Promise<void> }> {
-  // Dynamically imported, matching how `bin/thoughtscape-publish.mjs` loads
+  // Dynamically imported, matching how `bin/anc.mjs` loads
   // every build step: a `preview` run must not pay for Astro's module graph
   // being resolved when the user typed `build`, and vice versa.
   //
@@ -222,7 +222,7 @@ export async function startPreview(
 
   const server = await preview({
     // `root` is where `astro.config.mjs` lives — this package, never the user's
-    // directory, for the reason `bin/thoughtscape-publish.mjs` documents at
+    // directory, for the reason `bin/anc.mjs` documents at
     // length for `build`. It contributes only the config; nothing under it is
     // served, which is measured rather than assumed.
     root: packageRoot,
@@ -236,7 +236,7 @@ export async function startPreview(
     // **Both loggers, because they are two loggers.** `logLevel` reaches
     // Astro's; the preview server is a Vite server and Vite logs through its
     // own, which `httpServerStart` uses for the port-in-use line. Measured with
-    // only the Astro one set: `thoughtscape-publish preview --port 47411` on a
+    // only the Astro one set: `anc preview --port 47411` on a
     // held port printed `Port 47411 is in use, trying another one...` to stdout
     // ahead of this module's line — and that number is an argv token, which is
     // the class `parsePreviewArguments` refuses to echo forty lines below, on
@@ -254,7 +254,7 @@ export async function startPreview(
  * Deliberately its own parser rather than an extension of `build`'s: the two
  * share no flags, and a combined table would accept `--content` for a preview
  * and `--dist` for a build. Unknown flags are refused for the reason
- * `parseArguments` gives in `bin/thoughtscape-publish.mjs` — a mistyped flag
+ * `parseArguments` gives in `bin/anc.mjs` — a mistyped flag
  * that is silently ignored produces a plausible result the user did not ask for
  * — and, as there, the rejected token is never echoed.
  */

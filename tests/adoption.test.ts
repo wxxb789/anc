@@ -20,9 +20,9 @@
  *   line it can emit is checked against the closed set of things it may say.
  *
  * **The binary is the subject wherever a claim is about behaviour.** Reading
- * `initialise()` proves nothing about `thoughtscape-publish init`, which is the
+ * `initialise()` proves nothing about `anc init`, which is the
  * exact distance that hid the three defects above. Every behavioural gate here
- * spawns `bin/thoughtscape-publish.mjs`.
+ * spawns `bin/anc.mjs`.
  */
 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -42,7 +42,7 @@ import { compilePackage } from '../scripts/compile-package.ts';
 import { GROUP_WINDOW } from '../src/lib/collection-navigation.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'thoughtscape-publish.mjs');
+const BINARY = join(ROOT, 'bin', 'anc.mjs');
 const ACTION_PATH = join(ROOT, 'action.yml');
 const ACTION = readFileSync(ACTION_PATH, 'utf8');
 
@@ -445,7 +445,9 @@ test('init is named by the usage text', () => {
   // user learns it does. `--help` is where a stranger looks.
   const help = cli(ROOT, '--help');
   assert.equal(help.status, 0);
-  assert.match(help.output, /thoughtscape-publish init/, 'the usage text does not name the init command');
+  // `\b` because the command name is three letters: an unanchored `anc` also
+  // matches "balance init", which is the dilution the identity gate documents.
+  assert.match(help.output, /\banc init \[options\]/, 'the usage text does not name the init command');
 });
 
 test('init refuses an unrecognised option without echoing it', () => {

@@ -1,4 +1,6 @@
-# thoughtscape-publish
+# anc
+
+Short for *Active Noise Cancelling*. The package and the command it installs are both `anc`.
 
 Build a static site from a git repository of Markdown. Every note publishes unless you
 exclude it.
@@ -59,15 +61,15 @@ what runs where, and a list of what is known stale and whose it is.
 
 ```bash
 cd your-notes
-npx @thoughtscape/publish build          # unrestricted local preview build
-npx @thoughtscape/publish preview
-npx @thoughtscape/publish review         # write .publish-set.json for inspection
-npx @thoughtscape/publish build --release # exact set + pinned Gitleaks on PATH
+npx anc build          # unrestricted local preview build
+npx anc preview
+npx anc review         # write .publish-set.json for inspection
+npx anc build --release # exact set + pinned Gitleaks on PATH
 ```
 
 **Not yet, though:** `package.json` carries `"private": true`, so the package is on no registry
 and that specifier resolves for nobody. Until it is published, run
-`bin/thoughtscape-publish.mjs` from a checkout or install the tarball `pnpm run pack:tarball`
+`bin/anc.mjs` from a checkout or install the tarball `pnpm run pack:tarball`
 builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with configuration, exclusion,
 links, and hosting.
 

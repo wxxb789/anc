@@ -2,7 +2,7 @@
  * The `.gitignore` lines a notes repository needs, and the algorithm that seeds
  * them without overwriting what the user already wrote.
  *
- * **The caller is `thoughtscape-publish init`**, which TK-32 built; this module
+ * **The caller is `anc init`**, which TK-32 built; this module
  * shipped before it with none, and the part worth having early was the part that
  * can be wrong. Appending to a stranger's `.gitignore` has four distinct correct
  * behaviours and three measured ways to corrupt a working file, and none of that
@@ -30,14 +30,14 @@
  * module a caller. `tests/packaging.test.ts` forbids any module the build's
  * import graph reaches from naming the report, on the reasoning that a module
  * which names it is one layer from a module that prints it — and the gate fired
- * on this comment the moment `bin/thoughtscape-publish.mjs` began importing this
+ * on this comment the moment `bin/anc.mjs` began importing this
  * file. That is the gate working: the exemption is `write-report.ts` alone, and
  * an allowlist that grows every time a new module mentions the name in prose is
  * not an allowlist.
  *
  * The build's staging workspace gets no line either: it is created inside the
  * *package* root, which in a stranger's repository is under `node_modules/`,
- * already covered. This repository needs its own `.thoughtscape-build-` rule
+ * already covered. This repository needs its own `.anc-build-` rule
  * only because this repository *is* the package.
  *
  * ## Root-anchored with a leading `/`, and that is not style
@@ -77,7 +77,7 @@ export const SEEDED_ENTRIES = ['/dist/', 'node_modules/'] as const;
 /**
  * The comment written above an appended block. For the human; nothing parses it.
  *
- * The spec's §3.1 spells this `# added by thoughtscape-publish init`, and that
+ * The spec's §3.1 spells this `# added by anc init`, and that
  * spelling is deliberately not used. It writes this project's name into a file
  * in a stranger's repository, which is the single-owner residue the same
  * document's §1.1 removes from the report's own path two sections earlier —

@@ -4,7 +4,7 @@ import { readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const STALE_BUILD_WORKSPACE_AGE_MS = 24 * 60 * 60 * 1000;
-const WORKSPACE_NAME = /^\.thoughtscape-build-[A-Za-z0-9]{6}$/;
+const WORKSPACE_NAME = /^\.anc-build-[A-Za-z0-9]{6}$/;
 
 /** Remove one completed workspace without replacing the build result on failure. */
 export async function removeBuildWorkspace(
