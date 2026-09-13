@@ -1,7 +1,12 @@
 # Publishing a repository of Markdown
 
 You have a directory of notes under git. This turns it into a static site: every page
-rendered ahead of time, full-text search, backlinks, a graph, no server and no database.
+rendered ahead of time, full-text search, backlinks, a graph, and no application server.
+
+This guide describes the current commands. The
+[long-term core design](core-design/README.md) includes a downloadable SQLite/WASM
+relationship and preview index; that capability is not yet implemented. Reading
+and navigation will continue to work without JavaScript.
 
 **Everything publishes unless you exclude it.** That is the one thing to know before you
 start. There is no allowlist and no `publish: true` to opt in with — a file that is in the

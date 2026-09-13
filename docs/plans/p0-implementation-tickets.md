@@ -1,6 +1,12 @@
 # P0 Implementation Tickets
 
-**Status:** Active backlog
+> **Historical backlog, superseded 2026-09-13:**
+> [Core design](../core-design/README.md) governs 0.1.0. Do not execute these tickets
+> as current instructions: the private exporter boundary, stored relation arrays,
+> public JSON preview index, and SQLite/WASM deferral have been replaced. Numbered
+> tickets are preserved for historical references.
+
+**Status:** Historical backlog
 **Derived from:** [`docs/public-knowledge-garden-requirements.md`](../public-knowledge-garden-requirements.md) sections 8.1, 9, 10, 13.1, 15, 16, 17, 18, 19, 20, 22, 25
 **Scope:** Phase 1 (static reader foundation). Phase 2–4 are out of scope; see TK-10.
 **Execution model:** One ticket per implementation agent, strictly sequential.
@@ -12,7 +18,7 @@ defaults. This backlog adopts them:
 
 | Question | Adopted answer |
 | --- | --- |
-| Q1 relationship store | Static relationship lists at launch; SQLite WASM graph deferred to Phase 2 |
+| Q1 relationship store | **Superseded:** SQLite/WASM is required for 0.1.0; static relationship HTML remains |
 | Q2 information architecture | Curated collections independent of private folder structure, degrading to a flat note namespace while the artifact carries no collection field |
 | Q3 publishing cadence | Owner-triggered reviewed releases |
 | Q4 URL and deletion policy | Stable public identity, mutable slugs with permanent redirects, tombstone for withdrawal |

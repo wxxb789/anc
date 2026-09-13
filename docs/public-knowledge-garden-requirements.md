@@ -1,7 +1,14 @@
 # Public Knowledge Garden — Product Requirements and Architecture
 
+> **Architecture superseded, 2026-09-13:**
+> [Core design](core-design/README.md) is the accepted 0.1.0 authority. SQLite/WASM
+> is required for that release. The old graph schema, graph manifest, JSON fallback,
+> serialized relation arrays, and SQLite deferral below are historical, not current
+> instructions. Section numbers remain stable for source-comment references.
+> Existing unrelated product and publication constraints continue to apply.
+
 **Status:** Revised against the delivered code, 2026-08-19
-**Document type:** Product requirements + architecture decision baseline
+**Document type:** Historical requirements and implementation record; core design supersedes architecture
 **Target project:** A general-purpose static publisher for a repository of Markdown
 **Last updated:** 2026-08-19; first drafted 2026-08-06
 **Implementation status:** The general-purpose plan, reviewed release boundary, exact output
@@ -604,6 +611,14 @@ SQLite FTS is not a requirement and has no owner.
 
 ## 12. Relationship-store architecture
 
+> **Superseded in full for 0.1.0:** use the
+> [SQLite contract](core-design/sqlite-contract.md) and
+> [build/runtime contract](core-design/build-and-runtime.md). The older examples
+> retained in this section must not be implemented. In particular, stable integer
+> identity across builds, typed edges, `build_meta`, manifests, and JSON adjacency
+> are not the accepted model. Backlinks are SQLite queries at build time rendered
+> as static HTML, and SQLite remains available for browser queries on demand.
+
 **Status of this whole section: Phase 2, unbuilt, and its sizing premise is void.**
 
 Every budget in 12.3 and 12.4 was calculated against a hand-curated corpus of a few hundred
@@ -696,7 +711,8 @@ CREATE INDEX edges_source_type ON edges(source_id, edge_type);
 CREATE INDEX tags_tag ON tags(tag);
 ```
 
-The schema is illustrative but its semantics are normative: immutable node identity, typed edges, public-only context, deterministic ordering, foreign-key integrity, and indexed incoming/outgoing queries.
+This historical schema and its earlier normative semantics are superseded by
+`core-design/sqlite-contract.md`; do not copy them into an implementation.
 
 ### 12.3 Static SQLite artifact — deferred design
 
@@ -1064,6 +1080,10 @@ or SharedArrayBuffer-dependent feature needs cross-origin isolation.
 
 ## 20. Caching and versioning
 
+> The 0.1.0 [snapshot contract](core-design/build-and-runtime.md) supersedes the
+> old per-artifact `schema_version` / `content_version` requirement below. SQLite
+> uses its header version and a full digest filename; there is no graph manifest.
+
 - HTML: short cache or revalidation suitable for rapid content withdrawal.
 - Hashed JS/CSS/WASM assets: `public, max-age=31536000, immutable`.
 - Search assets: content-addressed or build-versioned.
@@ -1239,10 +1259,15 @@ Not in the original plan, and it displaced Phase 2 entirely:
 - a report that lives where nothing can publish it;
 - packaging as an installable command, and local preview.
 
-The GitHub Action, `init`, and reviewed release boundary are delivered; this repository has no
-remote, so the workflow has not run. No version-1 producer field remains underived.
+The GitHub Action, `init`, and reviewed release boundary are delivered. The repository
+now has a GitHub remote; inspect workflow runs for execution status. The SQLite target
+has separate implementation gaps recorded in `core-design/`.
 
-### Phase 2 — interactive graph via SQLite WASM — **not started**
+### Phase 2 — interactive graph via SQLite WASM — **historical phase designation**
+
+**Superseded:** this work is required for 0.1.0, not deferred beyond it. The list
+below is a historical outline; the current schema, runtime and gates live in
+[core design](core-design/README.md).
 
 - Versioned graph schema and static database artifact.
 - Dedicated Worker wrapper.
@@ -1321,6 +1346,10 @@ installed and five interactive surfaces ship as vanilla script; see 11.3.
 **Decision:** Pagefind is the search system. A relationship store is not a search engine.
 
 ### DR-4 — Relationship storage — **amended**
+
+**2026-09-13 replacement:** SQLite/WASM is required for 0.1.0. Follow
+[core design](core-design/README.md); the original recommendation and earlier
+amendment below are retained only as history.
 
 **Original recommendation:** a content-addressed static SQLite artifact loaded on demand into
 SQLite WASM in a dedicated Worker, with static HTML/JSON fallback.

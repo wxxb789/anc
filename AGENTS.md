@@ -2,16 +2,72 @@
 
 > `AGENTS.md` is canonical. `CLAUDE.md` is a symlink to this file.
 
+## Core design authority
+
+Read [`docs/core-design/README.md`](docs/core-design/README.md) before changing
+architecture, content semantics, build artifacts, or browser data access. That
+directory is the accepted **long-term architecture**, superseding conflicting historical
+requirements, plans, and ticket comments. This file owns contributor workflow;
+the core-design documents own architecture. Do not duplicate their schema here.
+
+- **SQLite/WASM is required for 0.1.0**, not a deferred optional phase. Static
+  reading and accessible relationship HTML remain mandatory.
+- Follow the [SQLite contract](docs/core-design/sqlite-contract.md): one public
+  relational/preview DB, queried at build time and lazily in a browser Worker.
+  No public `content-index.json`, `graph-manifest.json`, or adjacency JSON in the
+  target; no page body, stored backlinks, speculative edge kinds, or SQLite FTS.
+- Preserve [content semantics](docs/core-design/content-semantics.md), especially
+  publication exclusions, withheld-link behavior, slug identity, tag collisions,
+  aliases as metadata, and the exclusion of self-links from graph edges.
+- Keep Markdown canonical, the compiler IR private, static HTML as page delivery,
+  and Pagefind as full-text search. Do not conflate an IR field used by rendering
+  with a requirement to publish that field in SQLite.
+- Follow [build/runtime binding](docs/core-design/build-and-runtime.md): one
+  finalized DB per output, exact hashed URL, real digest verification, read-only
+  Worker, no ordinary-reading fetch, and static fallback on failure.
+- Every new structure or exception needs a named consumer and an ablation result.
+  Read [verification and evolution](docs/core-design/verification-and-evolution.md)
+  for invariant evidence and the change process. Update the owning design section,
+  affected consumers, and meaningful invariant tests together; never silently
+  reintroduce an older plan's design because an old test expects it.
+
+Before implementation, identify the governing sections and relevant invariants.
+Before finishing, review the diff against those invariants and report evidence,
+remaining gaps, and any design changes. Raise genuinely unresolved product choices;
+do not repeatedly ask permission for work already authorized by the task.
+
+**No backward compatibility:** ANC is not yet 0.1.0-ready or 1.0.0-ready. Choose
+the clean design and replace affected producers, consumers, tests, and docs together.
+Do not preserve unreleased schemas, APIs, artifacts, runtime minimums, or internals
+through adapters, dual writes, migration code, or old-format support. Schema checks
+detect mismatches; they are not a multi-version support promise. A documentation
+change does not claim that the new implementation is delivered.
+
+## Goal-driven development
+
+- Long-term architecture belongs in `docs/core-design/`; finishable development
+  outcomes belong in [`docs/goals/`](docs/goals/README.md).
+- Name active goals `NNNN-short-name.md`, starting with `0001`, using the next
+  unused number across both `docs/goals/` and `docs/goals/archive/`.
+- Goals state the desired end state, verifiable completion evidence, material
+  bounds and status. Reference core design rather than embedding another schema
+  or architecture that can drift. Do not split goals by implementation layers alone.
+- Once a goal is completed with recorded commit/PR and verification evidence,
+  move it to `docs/goals/archive/` under the same filename and update its links.
+  Never reuse its number or archive an unfinished goal as completed.
+- New goal-driven development documents do not go into `docs/plans/`. Existing
+  plans are historical references. Current implementation gaps and first-release
+  acceptance belong in the active goals, not in the long-term architecture.
+
 ## Goal
 
 Build a static, privacy-preserving site from a git repository of Markdown, for a user who is
 not this repository's owner. Every file publishes unless the user excludes it.
 
 **This repository is the tool, not anyone's site.** It ships no personal content, no personal
-identity, and no default that names it. A sentence in any file here that only makes sense if
-the reader is this repository's owner is a defect — see [`docs/adoption.md`](docs/adoption.md)
-for what a stranger actually does, and `.tmp/tk-31-report.md` for the 126 occurrences of one
-owner's name a foreign build carried before TK-31 removed them.
+identity, and no default that names its author. A product-facing sentence that only
+makes sense to this repository's owner is a defect — see
+[`docs/adoption.md`](docs/adoption.md) for what another user actually does.
 
 ## Boundaries
 
@@ -39,10 +95,12 @@ owner's name a foreign build carried before TK-31 removed them.
   **This reverses the rule of 2026-08-14 and it has a cost the owner accepted on 2026-08-17
   after hearing it.** The superseded rule reduced a withheld target to its last segment, so
   `[[clients/acme/2026-renewal]]` published as the text `2026-renewal` and the directory
-  never left the host. Under the rule that now holds, the full path of every withheld note a
-  published note links enters `dist/` — and under the planned SQLite conversion it enters a
-  database every visitor downloads, where one `SELECT` lists every path the author excluded.
-  That is the intended consequence and not a defect to mitigate. The reasoning the old rule
+  never left the host. Under the rule that now holds, the author's full withheld-link
+  label can enter the published article and its derived public text. This does not
+  create a node or edge for the withheld target: the SQLite projection contains only
+  published nodes and public metadata, and is downloaded lazily. It is not an inventory
+  of excluded paths. The retained authored label is the accepted disclosure; the target's
+  own metadata and body remain withheld. The reasoning the old rule
   rested on is in `.tmp/tk-27-report.md` §7.1 and in the superseded-gate notes in
   `tests/link-traversal.test.ts` and `tests/backlink-surfaces.test.ts`; what it bought was
   that a reader could not learn the shape of the author's private tree, and that is what was
@@ -59,9 +117,9 @@ owner's name a foreign build carried before TK-31 removed them.
   is still a disclosure *on a stream* — that is what the bullet above holds, and
   `tests/disclosure.test.ts` still enforces it. It is no longer withheld from the rendered
   body. Both directions are deliberate.
-- `src/data/content.json` and `public/content-index.json` are this repository's own build
-  inputs. `src/data/content.json` holds one synthetic entry, `reading-a-build-log`; `ff0db9d`
-  replaced the real personal note plan D2 named, so that gap is closed.
+- `src/data/content.json` and `public/content-index.json` are the current synthetic
+  fixture inputs; never hand-edit them to bypass a gate. The target removes the public
+  index and preserves private IR only where the build boundary needs it.
 - Publication and deployment are external side effects requiring explicit approval. A
   successful local build is not deployment authorization.
 - Keep runtime static. D1, R2, Functions, analytics, comments, or other stateful services
@@ -137,8 +195,8 @@ CI (`.github/workflows/verify.yml`) runs `pnpm run verify` rather than restating
 the two cannot drift; `tests/verify.test.ts` fails if a gate is ever spelled out in the
 workflow instead.
 
-**The repository has no git remote, so the workflow does not run yet.** Until one exists,
-every gate above is enforced only by running `pnpm run verify` on the host.
+The repository is hosted on GitHub. The workflow declares push and pull-request
+verification; inspect the actual run rather than assuming that its presence proves CI passed.
 
 ### Still manual
 
@@ -172,8 +230,10 @@ every gate above is enforced only by running `pnpm run verify` on the host.
 - Release mode requires a public origin and a committed ledger exactly equal to the computed
   public slugs; missing, dirty, added, and removed states fail, and shrink-then-re-include fails
   as a new addition rather than inheriting stale approval.
-- Removing a note and rebuilding removes its route, content-index entry, feed and sitemap entry,
-  and Pagefind record while a retained note remains on all five surfaces.
+- Removing a note and rebuilding removes its route, public index entry, feed/sitemap
+  entry, and Pagefind record while retaining other notes. During the SQLite migration,
+  the public-index gate must check the DB row and incident relations instead of the
+  legacy content-index entry, including any no-longer-used aliases and tags.
 - No horizontal overflow, browser console error, or broken internal link.
 - Search opens and indexes published pages.
 - Backlinks carry only the linked note's title and route, checked against an allowlist of both
@@ -234,17 +294,23 @@ means anything — and so does the explanation.
 
 ## Known-stale, and whose
 
-No locally actionable known-stale entry remains. SQLite/WASM graph storage is an explicitly
-deferred architecture phase, not a production-readiness defect. Registry publication, a git
-remote, deployment, and post-deploy smoke tests remain external approval boundaries rather
-than code gaps. Version 1 intentionally has no non-Markdown asset pipeline or corpus redirects.
+The accepted SQLite/WASM core design is not yet implemented in the reviewed baseline.
+It is required for 0.1.0; see [`docs/goals/`](docs/goals/README.md) for the bounded
+development outcome and its completion evidence. Neither 0.1.0 nor 1.0.0 is ready.
+Registry publication, deployment, and post-deploy smoke tests are separate external
+actions. Version 0.1 intentionally adds no non-Markdown asset pipeline or corpus redirects.
 
 ## Documentation
 
+- [`docs/core-design/README.md`](docs/core-design/README.md) — authoritative long-term
+  design, superseding conflicting historical requirements and plans.
+- [`docs/goals/README.md`](docs/goals/README.md) — active numbered goals and the
+  completed-goal archive lifecycle.
 - [`docs/adoption.md`](docs/adoption.md) — what a stranger with a notes repository does.
 - [`docs/gate-reading.md`](docs/gate-reading.md) — the seven ways an instrument lies about itself.
 - [`docs/public-knowledge-garden-requirements.md`](docs/public-knowledge-garden-requirements.md)
-  — the requirements every section reference in a source comment points at.
+  — historical requirements retained for stable source-comment section references;
+  conflicting architecture is superseded by `docs/core-design/`.
 - [`docs/plans/ssg-generalisation-plan.md`](docs/plans/ssg-generalisation-plan.md) — the
   general-purpose turn, its tickets, and what its own drafting got wrong.
 

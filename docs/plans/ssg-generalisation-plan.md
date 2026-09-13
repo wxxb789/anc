@@ -1,5 +1,10 @@
 # General-Purpose SSG — Plan
 
+> **Historical delivery record:** the accepted 2026-09-13
+> [core design](../core-design/README.md) supersedes conflicting architecture here,
+> including the long-lived relation arrays, public preview JSON and SQLite deferral.
+> Unmarked historical prose below is not a competing current design authority.
+
 **Status:** all 12 tickets delivered; the Action, `init`, shipped preview, tarball adoption smoke,
 reviewed release boundary, exact output inventory, and pinned secret scan are implemented. All
 three fatal findings closed.
@@ -28,7 +33,8 @@ The convention, applied throughout by TK-35:
 - **DISPROVED** — measured false. The claim is struck and the measurement that killed it is
   beside it.
 - **AMENDED** — true as far as it went, and delivery chose differently or found more.
-- Unmarked — still current, whether built or not.
+- Unmarked — recorded as current at this plan's revision; the later core design
+  now takes precedence for architecture.
 
 The five largest, so a reader is not surprised mid-section:
 

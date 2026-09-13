@@ -29,12 +29,21 @@ document a stranger needs.
 
 ## Architecture
 
+Long-term architecture is documented in
+[`docs/core-design/`](docs/core-design/README.md); bounded development outcomes and
+completion evidence live in [`docs/goals/`](docs/goals/README.md). ANC is not yet
+0.1.0-ready or 1.0.0-ready and makes no backward-compatibility commitment.
+SQLite/WASM is required for the first release: one public relational/preview DB,
+with static HTML and Pagefind retaining their roles. The current implementation
+below still uses the old JSON preview index; see the active goal for the target.
+
 - Astro `output: "static"`; the build output is `dist/`.
 - Content is produced by `scripts/markdown-to-artifact.ts` and `scripts/resolve-links.ts`, then
   validated against `src/lib/schema.ts` before anything renders.
 - About 4.7 KB gzip of vanilla script for the base interactive surfaces. Pages containing math
   or diagrams lazy-load the accepted client renderers (~116 KB or ~232 KB gzip respectively).
-- No D1, R2, Functions, or network access at build time or runtime.
+- No D1, R2, Functions, or build-time data service. Browser search and previews
+  request same-origin static assets; there is no runtime application server.
 
 ## Working on the tool
 
