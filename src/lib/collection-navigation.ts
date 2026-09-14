@@ -93,73 +93,14 @@ export interface ExplorerGroup {
 }
 
 /**
- * How many notes one group may draw.
+ * Maximum notes drawn per group. Listing the entire corpus on every page made
+ * rail markup quadratic: a 300-note build spent 23,126 B of a 32,566 B page on
+ * the rail. Collection indexes and the home page still expose full membership.
  *
- * The bound exists because the rail was **quadratic in the corpus**: it renders
- * on every page and listed every published note, so a site paid n entries × n
- * pages in bytes its host serves and its reader downloads. Measured through the
- * shipped binary: at 100 notes the rail was 7,817 B of a 17,245 B page, and at
- * 300 it was 23,126 B of 32,566 B — 71% of the page a reader asked for spent on
- * a list of the pages they did not. Projected at 77 B/entry, 10,000 notes is
- * 732 KB per page across 10,000 pages.
- *
- * **Twelve is the rail's own row budget, measured rather than chosen, with the
- * headroom a wrapped title needs.** The rail on desktop is
- * `max-height: calc(100vh - 7rem)` with `overflow-y: auto`
- * (`src/styles/global.css`), so there is a real number of rows it can show
- * before the reader has to scroll the rail itself. At 1280×720 — the narrowest
- * viewport at which the rail is a column at all, since the two-column layout
- * switches on at 64rem — the rail's box is 608 px, and a group's summary takes
- * 50 of it.
- *
- * A row is **not one height**. Measured over 384 rendered rows in Chromium at
- * the rail's 240 px: 330 were 34 px and 54 were 59 px, because a title longer
- * than the rail wraps to two lines. So the budget is 16 rows if every title is
- * short and 9 if every one wraps, and no single number is "the" row count.
- *
- * Sixteen was the first bound tried and the rendered gate refused it, on a note
- * whose neighbours happened to wrap. Bisected afterwards **with that gate as the
- * instrument** — 300 notes, seed 7, 1280×720, 40 pages strided across the
- * corpus: 13 is the largest window where every sampled page keeps the marker
- * inside the box, and 14 loses one.
- *
- * Twelve rather than thirteen because thirteen is the cliff edge itself, found
- * on one synthetic corpus at one viewport with one group. A bound sitting
- * exactly on a measured limit is one that a longer title or a shorter viewport
- * puts back over it — and **a second group costs another 50 px of summary**, so
- * a four-collection site has 408 px rather than 558 for its open group's rows.
- * That case is real and is not what the bisection measured, which used one
- * synthetic group; the margin covers the multiple groups first-folder derivation can create.
- *
- * Twelve is also what {@link LOCAL_NODE_LIMIT} is bounded at, which keeps two
- * bounded views in this project at one number rather than two arbitrary ones.
- *
- * **This value is constrained by exactly one gate** — "the rail shows the reader
- * their own position without scrolling", in `tests/adoption.test.ts`. Every
- * other gate over the window asserts its *shape* and is written in terms of this
- * constant, so all of them stay green at any value: measured, with the window at
- * 40 the whole of `tests/collection-navigation.test.ts` passes. That is
- * deliberate — a shape should not depend on a number — but it means the rendered
- * gate is the only thing standing behind the twelve.
- *
- * **What made this a correctness fix and not only a bytes fix.** The rail's
- * whole contextual claim is `aria-current="page"`, and past its own row budget
- * that marker renders *below the fold of the rail's scroll container*. Measured
- * over 40 note pages at 1280×720 before this bound: at 100 notes 31 of 40
- * pages put the marker outside the visible box, and at 300 notes 40 of 40 did.
- * A reader on a 300-note site was shown a wall of titles that never included
- * the one they were on. Windowing puts it back on every page by construction.
- *
- * **Nothing is hidden by it.** A bounded group states how many of its notes it
- * drew, the same shown-of-total sentence `NoteGraph.astro` gives its own bound.
- * A collection group links its index, which lists every member; the uncollected
- * group has no index to link and so links the home page, which lists the whole
- * corpus. That branch still matters for root notes: the CLI derives a flat
- * collection only from a note's first folder, so root-level notes remain in the
- * uncollected group.
- *
- * A 32-note fixture corpus's groups are 11, 10, 7, and 4, so every one of them
- * draws whole and a small site's rail is byte-for-byte what it was.
+ * Twelve bounds markup, but does not by itself guarantee marker visibility:
+ * titles wrap and preceding collection summaries consume height. Keep the reader
+ * near the window's centre, including at the collection's end, and verify the
+ * actual layout with the 1280×720 browser gate in `tests/adoption.test.ts`.
  */
 export const GROUP_WINDOW = 12;
 
@@ -170,9 +111,9 @@ export const GROUP_WINDOW = 12;
  * Centred rather than truncated from the front, and that is the property the
  * bound exists for: a group's first {@link GROUP_WINDOW} notes are an
  * alphabetical slice that on most pages does not contain the reader, which would
- * strand `aria-current="page"` exactly the way an unbounded rail does. Clamped
- * at both ends so a reader near the start or the end of a collection still gets
- * a full window rather than a half one.
+ * strand `aria-current="page"` exactly the way an unbounded rail does. At the
+ * collection's end the window may be shorter: backfilling earlier notes pushes
+ * the current marker down, where wrapped titles can hide it below the rail.
  *
  * A group not holding the reader has no centre to take, so it draws its first
  * {@link GROUP_WINDOW}. Every group but one is in that case on any page, and
@@ -185,10 +126,9 @@ function windowAround(notes: readonly ExplorerNote[]): ExplorerNote[] {
   if (notes.length <= GROUP_WINDOW) return [...notes];
   const at = notes.findIndex((note) => note.isCurrent);
   if (at < 0) return notes.slice(0, GROUP_WINDOW);
-  // Half the window either side, clamped into range. `Math.min` before
-  // `Math.max` so a reader near the end is pulled back to a full window rather
-  // than given a short one.
-  const start = Math.max(0, Math.min(at - Math.floor(GROUP_WINDOW / 2), notes.length - GROUP_WINDOW));
+  // Do not backfill at the tail: the current row must not drift down just to
+  // fill a window whose limit is a maximum, not a required number of siblings.
+  const start = Math.max(0, at - Math.floor(GROUP_WINDOW / 2));
   return notes.slice(start, start + GROUP_WINDOW);
 }
 

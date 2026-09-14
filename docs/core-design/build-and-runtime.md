@@ -116,11 +116,11 @@ The application exposes named operations, not an SQL console:
 
 | Operation | Input | Result |
 | --- | --- | --- |
-| `preview` | `slug` | Bounded title, excerpt, ordered aliases, or no match |
-| `backlinks` / `outgoing` | `slug`, optional cursor and page size | Note summaries and continuation |
-| `byTag` | Canonical `tagKey`, cursor and page size | Tag identity, note summaries and continuation, or unknown tag |
-| `localGraph` | Center `slug` | Bounded neighbors, induced directed edges, omitted count |
-| `globalGraph` | Optional canonical `tagKey` | Ranked bounded nodes, induced directed edges, omitted count |
+| `preview` | `slug` | Bounded title, excerpt, author-ordered aliases and effective note language, or no match |
+| `backlinks` / `outgoing` | `slug`, optional cursor and page size | Note summaries including effective language, and continuation |
+| `byTag` | Canonical `tagKey`, cursor and page size | Tag identity, note summaries including effective language, and continuation, or unknown tag |
+| `localGraph` | Center `slug` | Bounded neighbors with effective language, induced directed edges, omitted count |
+| `globalGraph` | Optional canonical `tagKey` | Ranked bounded nodes with effective language, induced directed edges, omitted count |
 
 Selecting another graph node invokes `localGraph` again and enables successive
 exploration. In a tag-filtered global graph, select matching nodes, rank within

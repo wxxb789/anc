@@ -14,7 +14,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep, win32 } from 'node:path';
 import { BuildFailure } from './write-report.ts';
 
 export const VENDOR_PROVENANCE_VERSION = 2;
@@ -42,8 +42,16 @@ function slash(path: string): string {
 }
 
 function canonical(path: string): string {
+  // A Windows absolute module ID stays absolute when inspected on POSIX; the
+  // host's resolve() would otherwise prefix cwd to e.g. Q:/repo/module.js.
+  const windowsPath = /^[a-z]:[\\/]/i.test(path) || path.startsWith('\\\\');
+  if (windowsPath && process.platform !== 'win32') {
+    return slash(win32.normalize(path)).toLowerCase();
+  }
   const absolute = resolve(path);
-  return slash(existsSync(absolute) ? realpathSync(absolute) : absolute).toLowerCase();
+  const real = slash(existsSync(absolute) ? realpathSync(absolute) : absolute);
+  // Distinct case-sensitive POSIX directories must not receive the same grant.
+  return process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
 /** Package owners measured in the selected Mermaid and Temml client bundles. */

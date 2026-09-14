@@ -42,6 +42,7 @@ unfiltered graph. Use independently listed expected sets/order for those cases.
 | Global/filter meaning | Degree ranks distinct candidate neighbors before truncation. Reciprocal directions do not double-count a neighbor. Filtering excludes outside endpoints and ranks within the filtered graph, including isolated matching notes. |
 | Reader interaction | Actual controls load on intent, re-center across a cycle without unbounded accumulation, filter/reset, and reach complete incoming/outgoing lists beyond the drawn limit. Paginated list queries enumerate without gaps or duplicates. |
 | Honest display | Omitted counts use the correct scope. Drawn degree/table adjacency matches the picture, accessible names explain the represented scope, and keyboard navigation exposes real note links. Unknown center, isolated center and empty filter do not masquerade as runtime failure. |
+| Mixed-language expansion | Newly queried graph nodes and relationship titles retain effective note language. Expanding from an English page to a Chinese note, and from a Chinese page to an undeclared/default-language note, applies the same `lang` semantics as static rendering. |
 | Failure and sharing | With WASM blocked or the Worker terminated during exploration, article/static graph/table/lists remain usable. Retry recovers; stale replies cannot overwrite the new center/filter. Graph, tags and previews share the same Worker/snapshot. |
 
 Controls must detect omission of a neighbor-to-neighbor edge, reversal of one

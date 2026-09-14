@@ -20,6 +20,7 @@ checks and unavailable full-suite prerequisites honestly.
 | Public projection | Rows equal the approved published metadata, normalized tags, aliases and links | Add a withheld/orphan row, change a preview field, or remove a real relation; fail |
 | SQL consumers | Static lists and Worker results agree with authored cross-note links | Invert an edge or omit a neighbor-to-neighbor edge; fail |
 | Tags/aliases | Case/NFC equivalence, collisions, duplicate membership and shared aliases behave as specified | A `C++`/`C#` collision fails; a same-note duplicate membership cannot inflate counts |
+| Metadata accessibility/order | Effective language reaches every rendered note summary; alias order matches authored YAML and static HTML | Mixed-language expansion, default-language fallback, and non-alphabetical aliases catch missing language or lexical reordering |
 | DB integrity | Correct application ID/version, integrity `ok`, empty FK check | Wrong ID/version, altered bytes, malformed schema and truncated file fail |
 | Determinism | Two fresh builds under one pinned toolchain yield equal DB hashes; shuffled discovery yields the same rows | Change public metadata and confirm expected projection/hash changes |
 | Removal | Rebuild removes the note, incident edges, unused aliases/tags, route, feed/sitemap and Pagefind records | Re-include a removed note without new ledger review; release fails |
@@ -73,9 +74,9 @@ not remove FK checks from production to demonstrate their validation value.
 
 | Structure | Why it survives |
 | --- | --- |
-| `nodes` | Slug lookup, labels and bounded previews |
+| `nodes` | Slug lookup, labels and bounded previews, with effective language for mixed-language accessibility |
 | `edges` and reverse index | Directed graph and efficient backlinks |
-| `aliases` | Required preview/search metadata without global uniqueness |
+| `aliases` | Required preview/search metadata without global uniqueness; ordinals preserve authored order |
 | `tags` and `node_tags` | Canonical tag identity and query-by-tag |
 | Static HTML | Reading/navigation and accessible relationship fallback |
 | Pagefind | Specialized full-text retrieval; no equivalent relational consumer |

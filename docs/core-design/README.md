@@ -74,6 +74,8 @@ for historical formats. Any future compatibility commitment needs its own decisi
 | Graph “degree” has one obvious meaning | Selection counts distinct neighbors in the candidate graph; labels count neighbors in the drawn graph; reciprocal links count once in each |
 | A paginated query can return any continuation row | Continue after the last returned slug; using the lookahead row skips a real result |
 | Existing SQLite scanning covers release secrets | Both residue and secret policies need reconstructed row text, with separate positive controls and no writable recovery path |
+| Language is only needed for static rendering | Effective note language also belongs in SQLite and Worker note results so dynamically rendered metadata gets the correct `lang` |
+| Aliases can be restored by sorting text | Store a per-note ordinal and query it; accepted author order is not necessarily alphabetical |
 
 The 2026-09-14 review preserves the five-table architecture and splits its broad
 development goal into independently verifiable outcomes in the goal index. It

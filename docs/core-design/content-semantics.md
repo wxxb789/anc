@@ -46,6 +46,11 @@ deletion from a crawler, cache, or a visitor's previous download.
 - Keep field bounds and sanitization from the content contract. `excerpt` is plain
   text and may be empty; it is derived through the existing post-resolution summary
   path, not by copying raw Markdown into a browser payload.
+- Store the effective note language in SQLite using the same bounded BCP 47
+  validation and `entry.language ?? NAV_LANGUAGE` fallback as static rendering.
+  Every browser result carrying note text includes that language. Apply the shared
+  `partLanguage` semantics against the current page to title, excerpt, aliases and
+  graph/list note labels; UI chrome keeps the surrounding page’s language.
 
 ## Edges
 
@@ -72,9 +77,13 @@ Do not parse rendered chrome to reconstruct the graph.
 
 Aliases remain bounded display, preview, and Pagefind search metadata. They are
 not alternate resolver targets, routes, globally unique names, or graph nodes.
-The same alias may belong to different notes. Deduplicate a note's exact aliases;
-query their display order explicitly and preserve the current deterministic order.
-No alias-search B-tree is needed while Pagefind owns that search.
+The same alias may belong to different notes. Preserve accepted YAML order in a
+zero-based ordinal per note; it need not be alphabetical. The static page and
+preview display the same sequence. If normalization deduplicates exact aliases,
+keep the first occurrence and assign contiguous ordinals afterwards; this does not
+relax the producer’s rejection of malformed duplicate frontmatter. No alias-search
+B-tree is needed while Pagefind owns that search. The per-note uniqueness index in
+the SQLite contract enforces distinct labels, not global alias search.
 
 ## Tags
 

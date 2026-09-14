@@ -55,6 +55,23 @@ test('only nonempty chunks inside exact resolved runtime roots are vendored', ()
   assert.equal(isVendoredChunk(['\0vite/preload-helper.js'], roots), false);
   assert.equal(isVendoredChunk(['D:/external/node_modules/mermaid/index.js'], roots), false);
   assert.equal(isVendoredChunk(['C:/site/node_modules/@scope/publish/src/lib/site.js'], roots), false);
+  assert.equal(isVendoredChunk(['Q:\\repo\\publish\\node_modules\\mermaid\\dist\\mermaid.mjs'], roots), true);
+  assert.equal(isVendoredChunk(['Q:/repo/publish/node_modules/mermaid/../first-party.js'], roots), false);
+  assert.equal(isVendoredChunk(['Q:/repo/publish/node_modules/mermaid-copy/index.js'], roots), false);
+});
+
+test.skipIf(process.platform === 'win32')('POSIX path case cannot grant an unrelated package', (context) => {
+  scratch((directory) => {
+    const trusted = join(directory, 'runtime');
+    const unrelated = join(directory, 'Runtime');
+    mkdirSync(trusted);
+    if (existsSync(unrelated)) return context.skip('requires a case-sensitive filesystem');
+    mkdirSync(unrelated);
+    writeFileSync(join(trusted, 'index.js'), 'vendor');
+    writeFileSync(join(unrelated, 'index.js'), 'first-party');
+    assert.equal(isVendoredChunk([join(trusted, 'index.js')], [trusted]), true);
+    assert.equal(isVendoredChunk([join(unrelated, 'index.js')], [trusted]), false);
+  });
 });
 
 test('the installed runtime closure resolves the package instances the bundle loads', () => {

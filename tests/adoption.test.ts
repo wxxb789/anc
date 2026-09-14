@@ -1050,7 +1050,7 @@ test('the explorer bounds every collection independently of corpus size', () => 
  * would pass a window this one refuses.
  *
  * **This is the only instrument that constrains `GROUP_WINDOW`'s value.** Every
- * other gate over the window asserts its *shape* — centred, clamped, `total`
+ * other gate over the window asserts its *shape* — centred, bounded, `total`
  * distinct from the drawn slice — and is deliberately written in terms of the
  * constant, so all of them stay green at any value. Measured: with the window at
  * 40, `tests/collection-navigation.test.ts` is 20 of 20 green and only this test
@@ -1114,13 +1114,18 @@ test('the rail shows the reader their own position without scrolling', async (co
 
     const browser = await chromium.launch();
     try {
-      const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
-      const slugs = readdirSync(join(directory, 'dist', 'notes'));
+      const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, javaScriptEnabled: false });
+      const slugs = readdirSync(join(directory, 'dist', 'notes')).sort();
       // A sample rather than all 285: each navigation is a real page load, and
       // 40 spread across the corpus is enough to have caught the defect at every
       // size it was measured at — it was 40 of 40 failing before the bound.
       const step = Math.max(1, Math.floor(slugs.length / 40));
-      const sampled = slugs.filter((_, index) => index % step === 0).slice(0, 40);
+      const tailRegression = 'notes-reference-marsh-cloud-129';
+      assert.ok(slugs.includes(tailRegression), 'the wrapped-title tail regression is absent');
+      const sampled = [...new Set([
+        ...slugs.filter((_, index) => index % step === 0).slice(0, 40),
+        tailRegression,
+      ])];
 
       const hidden: string[] = [];
       let checked = 0;

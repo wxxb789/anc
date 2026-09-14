@@ -52,8 +52,8 @@ Do not serialize those batches into a new public JSON file or corpus-sized JS ob
 | Capability | Owner | Reason |
 | --- | --- | --- |
 | Publication selection and link resolution | Producer | Requires source and exclusion context unavailable to the browser |
-| Article body, headings, footnotes, page language | IR and Astro | One content rendering path |
-| Preview title, excerpt, aliases | SQLite | Shared public lookup model |
+| Article body, headings, footnotes, page language | IR and Astro | One content rendering path; effective language is also projected for browser labels |
+| Preview title, excerpt, author-ordered aliases and effective note language | SQLite | Shared lookup model including mixed-language accessibility |
 | Outgoing, backlinks, local/global graph | SQLite queries | One edge set and one relationship meaning |
 | Tag identity and membership | Producer normalization, then SQLite | Tag routes and tag queries must agree |
 | Full-text and alias search | Pagefind over generated HTML | A specialized search index, not relational duplication |

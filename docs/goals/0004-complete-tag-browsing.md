@@ -45,6 +45,7 @@ corpus, independent of the production normalizer/query result.
 | Exhaustive pagination | The actual UI reaches all pages. Concatenated Worker results contain each expected slug exactly once in cursor order, with correct metadata and null continuation at exhaustion. A page boundary neither skips its lookahead row nor repeats the previous one. |
 | Subject changes | Switching tags resets continuation. A late result for the old tag cannot replace the new selection. Invalid page sizes/cursors fail with bounded errors; an unknown tag is distinct from a known tag with no further results. |
 | Static parity and failure | Static tag links/routes enumerate the same set. JS disabled or failed DB initialization preserves navigation to every matching note. Keyboard selection and result navigation work. |
+| Language of results | Browser note titles carry the target note's effective language, applying the same `partLanguage` behavior as static tag lists, including notes with no declared language. |
 | Privacy and cost | Withheld-only tags are absent; removed last-use tags disappear on a fresh rebuild. Previews and tag browsing share one runtime/download, with no independent corpus cache or public membership JSON. |
 
 Run native query tests, production normalizer/collision tests, and real generated-

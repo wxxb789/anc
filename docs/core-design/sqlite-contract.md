@@ -16,10 +16,11 @@ PRAGMA user_version = 1;
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE nodes (
-    id      INTEGER PRIMARY KEY,
-    slug    TEXT NOT NULL UNIQUE,
-    title   TEXT NOT NULL,
-    excerpt TEXT NOT NULL
+    id       INTEGER PRIMARY KEY,
+    slug     TEXT NOT NULL UNIQUE,
+    title    TEXT NOT NULL,
+    excerpt  TEXT NOT NULL,
+    language TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE edges (
@@ -33,8 +34,10 @@ CREATE INDEX edges_by_target ON edges(target_id, source_id);
 
 CREATE TABLE aliases (
     node_id INTEGER NOT NULL REFERENCES nodes(id),
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
     alias   TEXT NOT NULL,
-    PRIMARY KEY (node_id, alias)
+    PRIMARY KEY (node_id, ordinal),
+    UNIQUE (node_id, alias)
 ) WITHOUT ROWID, STRICT;
 
 CREATE TABLE tags (
@@ -51,10 +54,17 @@ CREATE TABLE node_tags (
 ```
 
 Five tables and one explicitly declared secondary index. `UNIQUE(slug)` and
-`UNIQUE(key)` also create indexes; “one explicit index” does not mean one B-tree.
+`UNIQUE(key)` also create indexes, as does `UNIQUE(node_id, alias)`; “one explicit
+index” does not mean one B-tree. The alias PK supplies authored display order;
+the alias uniqueness constraint prevents duplicate labels for the same note.
 Entity `INTEGER PRIMARY KEY` values alias rowid. Composite relation keys use
 `WITHOUT ROWID`. `STRICT` does not validate slug syntax, label normalization, or
 publication eligibility; the producer and semantic gates still own those checks.
+`nodes.language` is the bounded effective note language: the validated source
+language, or the same navigation-language fallback used to render that note’s HTML.
+It is required by mixed-language browser accessibility, not a speculative filter.
+Alias ordinals are contiguous from zero in accepted author order; validate this
+projection invariant rather than deriving order from SQLite text collation.
 [SQLite rowid guidance](https://sqlite.org/withoutrowid.html) and
 [STRICT tables](https://sqlite.org/stricttables.html) support these storage choices.
 
@@ -93,29 +103,30 @@ limits after its documented ranking/order, not before sorting an arbitrary slice
 ### Preview
 
 ```sql
-SELECT id, slug, title, excerpt
+SELECT id, slug, title, excerpt, language
 FROM nodes
 WHERE slug = :slug;
 
 SELECT alias
 FROM aliases
-WHERE node_id = :node_id;
+WHERE node_id = :node_id
+ORDER BY ordinal;
 ```
 
-Sort aliases with the shared display comparator. Unknown slugs return no preview.
+Return aliases in their stored author order. Unknown slugs return no preview.
 Treat strings as text in the DOM. A heading preview may display the bounded URL
 fragment; no heading text or section-content lookup is implied.
 
 ### Outgoing and backlinks
 
 ```sql
-SELECT n.slug, n.title
+SELECT n.slug, n.title, n.language
 FROM edges AS e
 JOIN nodes AS n ON n.id = e.target_id
 WHERE e.source_id = :node_id
 ORDER BY n.slug;
 
-SELECT n.slug, n.title
+SELECT n.slug, n.title, n.language
 FROM edges AS e
 JOIN nodes AS n ON n.id = e.source_id
 WHERE e.target_id = :node_id
@@ -130,7 +141,7 @@ ceiling of 500 backlinks. UI drawing limits must not reject or truncate DB facts
 ### Query by tag
 
 ```sql
-SELECT n.slug, n.title
+SELECT n.slug, n.title, n.language
 FROM tags AS t
 JOIN node_tags AS nt ON nt.tag_id = t.id
 JOIN nodes AS n ON n.id = nt.node_id
@@ -162,7 +173,7 @@ WITH neighbors(id) AS (
     UNION
     SELECT source_id FROM edges WHERE target_id = :node_id
 )
-SELECT n.id, n.slug, n.title
+SELECT n.id, n.slug, n.title, n.language
 FROM neighbors AS x
 JOIN nodes AS n ON n.id = x.id
 ORDER BY n.slug;
