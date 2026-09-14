@@ -71,6 +71,14 @@ for historical formats. Any future compatibility commitment needs its own decisi
 | Every build-time tag query needs another index | Batch node/tag reads at build time; add a reverse index only for demonstrated work that needs it |
 | One public structured artifact means literally one data file | SQLite owns relational/preview facts; Pagefind, feeds, sitemap, and host metadata retain their distinct protocol roles |
 | The design is now proven fast enough | Cold preview and large-corpus memory remain release measurements, not established results |
+| Graph “degree” has one obvious meaning | Selection counts distinct neighbors in the candidate graph; labels count neighbors in the drawn graph; reciprocal links count once in each |
+| A paginated query can return any continuation row | Continue after the last returned slug; using the lookahead row skips a real result |
+| Existing SQLite scanning covers release secrets | Both residue and secret policies need reconstructed row text, with separate positive controls and no writable recovery path |
+
+The 2026-09-14 review preserves the five-table architecture and splits its broad
+development goal into independently verifiable outcomes in the goal index. It
+clarifies graph selection, pagination, read-only validation, and scan coverage;
+it does not add a new storage layer, public artifact, or compatibility mechanism.
 
 No unresolved product choice blocks this architecture. Performance and the actual
 browser/package behavior require evidence; specific completion conditions are in

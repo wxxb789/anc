@@ -52,6 +52,13 @@ change does not claim that the new implementation is delivered.
 - Goals state the desired end state, verifiable completion evidence, material
   bounds and status. Reference core design rather than embedding another schema
   or architecture that can drift. Do not split goals by implementation layers alone.
+- Use one independently assessable outcome per goal. State the observable pass
+  condition, the actual artifact/command or browser observation used to assess it,
+  and a failure control where relevant. A list of implementation tasks or an empty
+  test run is not completion evidence. Record only material outcome prerequisites.
+- A split goal is `superseded`, remains outside the completed archive, and links
+  all successors. Do not keep the old umbrella goal active beside its replacements.
+  The goal index owns coverage and release conjunction; it is not another executable goal.
 - Once a goal is completed with recorded commit/PR and verification evidence,
   move it to `docs/goals/archive/` under the same filename and update its links.
   Never reuse its number or archive an unfinished goal as completed.

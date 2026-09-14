@@ -100,12 +100,15 @@ Worker memory through `sqlite3_deserialize` with `SQLITE_DESERIALIZE_READONLY` a
 correct buffer ownership/lifetime. The pinned WASM package must expose this path;
 prove it on the real packaged artifact. Set `PRAGMA query_only = ON` as an
 additional guard, then verify the application ID and the reader's exact schema version.
+Validate the exact schema once per imported snapshot before accepting named queries;
+matching header constants alone do not establish that the query contract is present.
 
 Do not assume that opening `:memory:` with an `r` flag makes imported bytes
 read-only. The SQLite API documents that memory database open-mode flags behave
 differently. The published DB must be in rollback-journal format: a WAL database
 cannot simply be deserialized as a standalone snapshot.
-[SQLite deserialization](https://sqlite.org/c3ref/deserialize.html) and
+[SQLite deserialization](https://sqlite.org/c3ref/deserialize.html), its
+[ownership flags](https://sqlite.org/c3ref/c_deserialize_freeonclose.html), and
 [WASM DB constructor](https://sqlite.org/wasm/doc/trunk/api-oo1.md)
 define those constraints.
 
@@ -138,6 +141,11 @@ allow reinitialization on subsequent intent. LIMIT bounds output, not CPU or
 memory; named policies must bound download, execution, and rendering separately.
 Choose and record numeric policies from measured workloads, not an invented
 corpus-size assumption; the active goal names its benchmark corpus and gate.
+Functional goals may establish finite provisional limits with their actual
+correctness fixtures. The performance goal must validate and settle those limits
+on its stated workloads before release; this does not require performance acceptance
+before a functional implementation can be tested. Do not remove limits while waiting
+for that evidence or mistake provisional values for proven product capacity.
 
 ## Failure, accessibility, and security
 

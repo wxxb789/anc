@@ -1,38 +1,133 @@
 # Development goals
 
-This directory contains finishable outcomes and their completion evidence.
-[Core design](../core-design/README.md) contains the long-term architecture.
-Goals reference that design; they do not maintain a second architecture.
+These are separately addressable goal payloads for ANC's accepted SQLite/WASM
+initiative. [Core design](../core-design/README.md) owns long-term architecture;
+this directory owns finishable outcomes and completion evidence. No goal here
+executes a runtime command merely by existing.
 
-ANC is not yet 0.1.0-ready or 1.0.0-ready. Existing code and generated data have
-no backward-compatibility entitlement. A goal must not add old-format support,
-transition adapters, or dual outputs solely to preserve the unreleased implementation.
+## Review and scope
 
-## Naming and lifecycle
+The 2026-09-14 review keeps the accepted five-table SQLite read model, private
+compiler IR, static HTML, and Pagefind. Every component has a current consumer;
+no new public index, body store, graph manifest, compatibility layer, or framework
+is justified. The broad 0001 had several independently assessable outcomes, so it
+is superseded by seven goals rather than left active as another umbrella.
 
-- Active goals: `docs/goals/NNNN-short-name.md`, starting at `0001`, with unique
-  increasing four-digit numbers. Check both active and archive directories before
-  assigning the next number. Do not renumber or reuse a completed goal's number.
-- Each goal states one independently meaningful desired outcome, evidence of
-  completion, material bounds, and current status. Size or implementation layers
-  alone do not justify splitting one completion judgment into several goals.
-- Status starts as `ready`, changes to `in progress` when execution begins, and
-  becomes `completed` only with recorded evidence and any required maintainer
-  acceptance. Do not mark a goal completed because its design document exists.
-- Move a completed goal to `docs/goals/archive/` with the same filename. Record
-  completion date, implementation commit/PR, verification results, and relevant
-  limitations before moving it; update links that pointed to its active location
-  and relative links inside the moved file.
-- An abandoned or superseded goal is not a completed goal. Record its decision and
-  link its successor explicitly; do not put it in the completed-goal archive.
-- Historical `docs/plans/` files remain reference material. Do not create new
-  development goals there or treat old ticket completion claims as current evidence.
+The review clarified four areas in the owning design documents: graph selection
+and distinct-neighbor degree, cursor continuation without skipped rows, exact
+schema validation after read-only import, and row-aware coverage for both residue
+and secret scanning. The current residue scanner contains writable/FTS handling;
+the current secret projection copies raw/gzip-decoded files without reconstructing
+SQLite values. Those are implementation observations at the reviewed baseline,
+not designs to preserve or evidence that the new release checks already work.
+
+The reviewed implementation is `7579cc16a4320f7410b71e784587a01fdf14333d`; design
+baseline PR #1 starts at `e30ca971f21b5b7ed3373c3c65f7de8526aec5ec`. It still uses
+serialized outgoing/backlinks and a public content index, without browser SQLite.
+These observations should be refreshed when implementation begins. The previous
+full-suite result was 736 passed, 10 failed and 57 skipped; it is historical
+baseline evidence, not a current passing gate or an authorized permanent waiver.
+
+This goal set covers the accepted query-model initiative and its first-release
+acceptance. It is not a rewrite of every historical requirement or a promise that
+unrelated product requirements are complete. SQLite/WASM remains required for
+0.1.0. Neither 0.1.0 nor 1.0.0 readiness is claimed here.
 
 ## Active goals
 
-| Goal | Status | Completion judgment |
-| --- | --- | --- |
-| [0001 — Unified public query model](0001-unified-public-query-model.md) | Ready | The real built and packaged product uses SQLite/WASM for the accepted query capabilities, with static reading and verified performance/failure behavior |
+`Ready` means the completion contract is specified, not that prerequisites are
+already delivered. The prerequisite column states material outcome dependencies,
+not a mandatory execution schedule. Numbers are stable identifiers.
 
-No goal is completed yet under this numbering scheme. Completing 0001 establishes
-its bounded data capability, not blanket readiness of the entire product.
+| Goal | Single completion judgment | Material prerequisites |
+| --- | --- | --- |
+| [0002 — Consistent static relationships](0002-consistent-static-relationships.md) | The actual no-JS site and one reproducible SQLite snapshot agree on published relationships | None of the new goals |
+| [0003 — Reliable lazy previews](0003-reliable-lazy-previews.md) | Intentional previews work and recover correctly through the shared read-only runtime | 0002 |
+| [0004 — Complete tag browsing](0004-complete-tag-browsing.md) | A reader can enumerate all matching notes through the canonical tag query | 0002; shared runtime from 0003 |
+| [0005 — Interactive graph exploration](0005-interactive-graph-exploration.md) | A reader explores correct bounded local/global/filtered graphs with complete accessible relations | 0002; shared runtime from 0003; tag query from 0004 |
+| [0006 — Safe release output](0006-safe-release-output.md) | Publication gates reject incomplete, inconsistent or disallowed output without damaging the previous build | 0002; actual 0003 assets for Worker/WASM inventory checks |
+| [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md) | The shipped package and Action work in a foreign notes repository | 0002–0006 |
+| [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md) | Measured packaged behavior meets the mobile target and accepted cold-preview/resource policies | 0007, including its functional prerequisites |
+
+All seven are `ready`; none is completed. Schema creation, query-module code,
+Worker setup and individual test files are means within these outcomes, not
+separate goals. Functional completion and measured mobile acceptance remain
+separate judgments, with no circular dependency on final performance budgets.
+
+## Coverage and evidence ownership
+
+This table checks that splitting 0001 loses nothing. Cross-goal comparisons are
+integration evidence; they do not create competing schema or test implementations.
+
+| Original commitment / core invariant | Owning goal |
+| --- | --- |
+| Published node/link/tag/alias semantics; exact schema; deterministic fresh snapshots | 0002 |
+| Static backlinks/outgoing/tag routes, related suggestions, induced graph fallback | 0002 |
+| Private IR boundary; removal of serialized relation authorities and public JSON indexes | 0002; final output rejection in 0006 |
+| Exact DB URL/digest binding | Build output in 0002; browser validation in 0003; host/package validation in 0007 |
+| Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003; cross-consumer evidence in 0004/0005 |
+| Canonical runtime tag lookup and exhaustive pagination | 0004 |
+| Local/global/tag-filtered graph, ranking, re-centering, complete relation enumeration | 0005 |
+| Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 |
+| CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006; foreign installation/transport in 0007 |
+| Snapshot caching, stale-page fallback, no substitution of a newer DB | 0007 |
+| 100/1,000/10,000-note measurements, physical mobile p95, cold preview, memory and finite policies | 0008 |
+| No backward compatibility; no body/FTS/manifest; evidence-based ablation | Every goal, governed by core design |
+
+## Reading completion evidence
+
+Each file contains the desired state, material bounds, actual evaluation methods,
+observable pass conditions and a completion record. There are no new invented
+latency budgets or claims that a document itself implements a feature.
+
+For each completion record:
+
+- Record implementation commit/PR, exact commands, actual test counts, fixture
+  identity and relevant artifact/observation links. New tests must use the existing
+  verification entry point where applicable. Future test names are not fabricated
+  in these goal files; record the real runnable command when the check exists.
+- Evaluate the actual produced output and user flow. Native SQL success cannot
+  stand in for browser WASM success. A test over hand-authored HTML cannot stand
+  in for the generated site. A skipped or empty test run is unresolved evidence.
+- Use an independent authored oracle for semantic checks. A failure control must
+  reach the property it claims to exercise. See [gate reading](../gate-reading.md).
+- Report all relevant failures. A regression within this goal blocks completion.
+  A genuinely independent baseline failure or unfinished successor must be named
+  and cannot be reported as passed or silently hidden by weakening a gate.
+- Completion is not release authorization. Keep applicable gates active throughout
+  the replacement; there is no promise that a partially completed goal set is a
+  releasable product, and no compatibility outputs to disguise missing successors.
+
+For this initiative to qualify for the first release, all seven outcomes must hold
+on one integrated candidate. Require `pnpm run verify`, `pnpm run build:fixture`,
+and `pnpm run smoke:tarball`, real browser/Action evidence, and 0008's accepted
+measurements. Record the candidate commit and tarball/DB identities. Evidence from
+ancestor commits remains usable only for behavior unchanged in the candidate;
+rerun checks affected by later changes. Skipped required checks and the historical
+10 failures cannot be carried forward as a passing release result.
+
+This conjunction belongs here as an acceptance rule, not in another goal whose
+only outcome is to mark the other goals completed. Registry publication, site
+hosting and post-deployment checks remain separately scoped external actions.
+
+## Naming and lifecycle
+
+- Active goal filenames are unique increasing `NNNN-short-name.md` numbers. Check
+  active and archive directories before choosing the next number; never reuse one.
+- A goal starts `ready`, becomes `in progress` when executed, and becomes
+  `completed` only when its own evidence and stated acceptance authority are satisfied.
+- Move a completed goal, with date/commit/PR/results and material limitations, to
+  `docs/goals/archive/` under the same filename. Update incoming links and relative
+  links inside it. Do not move an unfinished goal into the completed archive.
+- A superseded or abandoned goal records its decision and successors outside that
+  archive. Keep it out of the active table and do not retain duplicate obligations.
+- Goals reference core design. Changing architecture requires updating its owning
+  document and the affected validation, not silently changing a goal's wording.
+- Do not create new goal-driven development documents in historical `docs/plans/`.
+
+## Superseded goals
+
+[0001 — Unified public query model](0001-unified-public-query-model.md) was split
+on 2026-09-14 into 0002–0008 without declaring completion. Its number is retained.
+
+No numbered goal has been completed or moved into the [archive](archive/README.md).

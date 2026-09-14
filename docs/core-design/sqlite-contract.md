@@ -138,9 +138,15 @@ WHERE t.key = :tag_key
 ORDER BY n.slug;
 ```
 
-For a browser page, add `n.slug > :after_slug` and a bound `LIMIT :page_size_plus_one`.
-Return at most the requested page size, a continuation slug when the extra row
-exists, and distinguish an unknown tag from an empty page. Cap the page size in the
+For a browser page, omit the cursor predicate on the first page; otherwise add
+`n.slug > :after_slug`, with a bound `LIMIT :page_size_plus_one`. This same rule
+applies to outgoing/backlink enumeration. Return at most the requested page size.
+If an extra row exists, `nextCursor` is the **last returned** slug, not the extra
+row's slug; otherwise it is null. A cursor is an exclusive lower bound within this
+operation and snapshot, not a requirement that the named row still be a member.
+Reset it when the subject, tag, or snapshot changes. An existing subject with an
+exhausted page returns an empty list and null cursor; an unknown subject/tag is a
+distinct no-match result. Cap and validate the positive integer page size in the
 Worker. Never treat `LIMIT` as a bound on all work performed by a complex query.
 
 Do not add `node_tags(node_id, tag_id)` merely because a build renders tags. Batch

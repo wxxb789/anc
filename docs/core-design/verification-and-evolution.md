@@ -28,7 +28,7 @@ checks and unavailable full-suite prerequisites honestly.
 | Real browser | Named operations run under actual CSP, with the packaged Worker/WASM | Block WASM, fail fetch, alter digest, timeout Worker; static reading/links survive |
 | Lazy loading | Network trace shows zero SQLite requests before explicit intent | Initial article load or scrolling must not request DB/Worker/WASM |
 | Lifecycle | Concurrent consumers share one init; later intent retries after failure | Reject the first download, then succeed; late preview replies cannot open the wrong panel |
-| Read-only | Actual imported browser DB supports the named read queries | An attempted write fails in the real WASM connection; no raw-SQL UI message exists |
+| Read-only | Actual imported browser DB supports the named read queries | A write fails even with `query_only` disabled in an isolated test of the imported DB; no raw-SQL UI message exists |
 | Packaging | Tarball carries required JS/WASM and runs in a foreign notes repo | Test the chosen pinned runtime without borrowing undeclared dependencies |
 
 Do not scan SQLite as if a UTF-8 decode of the file were equivalent to reading its
@@ -37,6 +37,21 @@ text columns using the same normalization and secret policies as other public
 surfaces; check the schema so unexpected storage cannot evade that scan. Keep
 private diagnostics out of public logs. A scan that skips an unknown binary format
 is not a passing gate.
+
+The residue scanner and pinned secret scanner must both inspect reconstructed
+SQLite text values; a row-aware residue scan does not make a raw-file-only secret
+scan sufficient. Keep raw-byte coverage as well, including unexpected residual
+bytes. Temporary text projections for secret scanning stay private and are removed;
+neither values nor private source names may enter public diagnostics.
+
+The accepted output has one exact rollback-journal SQLite format. Reject WAL,
+unexpected schemas, virtual/FTS tables, extra DBs, and unreadable binaries. Scanning
+must not reopen a failed DB as writable or create sidecars. Historical generic
+database/FTS recovery code has no current public-format consumer; remove it when
+replacing the scanner contract, while retaining meaningful negative controls.
+Prefer one narrow read-only row enumerator shared by the two policy scanners,
+not a general database inspection framework. Positive controls must reach each
+scanner's row path; a prior schema or digest failure alone proves neither scan.
 
 Use `EXPLAIN QUERY PLAN` on representative data to confirm outgoing uses the edge
 PK, backlinks uses `edges_by_target`, and tag membership uses its leading tag key.

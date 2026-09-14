@@ -112,3 +112,23 @@ edges may be drawn as one mutual link; that is presentation, not stored `edge_ty
 Compute ranking and degree from query results when requested. Distinguish degree
 in the full corpus, degree in a filtered graph, and degree in the drawn subset.
 Labels and accessible names must state the scope they actually describe.
+
+The selection contract is explicit:
+
+- Local: deduplicate incoming/outgoing neighbors, sort by the shared JavaScript
+  title-then-slug comparator, then take up to 12 neighbors **plus** the center.
+  An isolated center has no neighbors; an unknown center is a different result.
+- Global: rank by the number of distinct adjacent notes in the candidate graph,
+  descending, then the same title/slug comparator; take up to 60 nodes. Reciprocal
+  directed edges contribute one neighbor, not two. With a tag filter, the candidate
+  graph contains only matching notes and edges between them; rank before truncation.
+- After selection, include every directed edge between selected nodes. Displayed
+  degree counts distinct adjacent drawn notes; a reciprocal pair drawn once counts
+  once. It is not in-degree plus out-degree or the rank used to select nodes.
+- Local omitted counts exclude the center; global omitted counts use the candidate
+  graph, including isolated matching notes. Limits never truncate complete static
+  relationship/tag lists or paginated browser enumeration.
+
+Static relationship and tag lists use title/slug presentation order. Browser
+enumeration uses the slug cursor order in the SQLite contract; comparing these
+surfaces means equality of membership and metadata, not necessarily row order.
