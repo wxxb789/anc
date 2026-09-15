@@ -106,7 +106,11 @@ test('a bounded group draws a window containing the note being read', () => {
   const corpus = collectionOf(GROUP_WINDOW * 6, 'c');
   for (const entry of corpus) {
     const group = navigationFor(corpus, `/notes/${entry.slug}/`)[0]!;
-    assert.equal(group.notes.length, GROUP_WINDOW, `${entry.slug}: window is not the bound`);
+    assert.ok(group.notes.length <= GROUP_WINDOW, `${entry.slug}: window exceeds the bound`);
+    assert.ok(
+      group.notes.findIndex((member) => member.isCurrent) <= Math.floor(GROUP_WINDOW / 2),
+      `${entry.slug}: earlier siblings push the reader past the window's centre`,
+    );
     assert.ok(
       group.notes.some((member) => member.isCurrent && member.slug === entry.slug),
       `${entry.slug}: the window does not contain the note being read`,
@@ -114,16 +118,15 @@ test('a bounded group draws a window containing the note being read', () => {
   }
 });
 
-test('a reader at either end of a collection still gets a full window', () => {
-  // Clamping, which a naive `slice(at - half, at + half)` gets wrong at both
-  // ends: the first note would yield a half window and the last an empty tail.
-  // A short rail at the edges of a collection is the visible symptom.
+test('the tail does not push the reader down by backfilling earlier siblings', () => {
+  // A full tail window pushed the current note into the last row; wrapped
+  // titles then hid that row below the rail. Keep only the preceding half.
   const corpus = collectionOf(GROUP_WINDOW * 3, 'c');
   const first = navigationFor(corpus, `/notes/${corpus[0]!.slug}/`)[0]!;
   const last = navigationFor(corpus, `/notes/${corpus.at(-1)!.slug}/`)[0]!;
 
   assert.equal(first.notes.length, GROUP_WINDOW, 'the first note gets a short window');
-  assert.equal(last.notes.length, GROUP_WINDOW, 'the last note gets a short window');
+  assert.equal(last.notes.length, Math.floor(GROUP_WINDOW / 2) + 1, 'the tail was backfilled');
   // And the windows are the collection's actual ends rather than a clamp that
   // slid off: the first window starts at the first note, the last ends at the last.
   assert.equal(first.notes[0]!.slug, corpus[0]!.slug);

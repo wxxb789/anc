@@ -9,10 +9,8 @@
 # below, which is the way the two would most plausibly come apart. It is not the
 # only way — a gate added as a `- uses:` action step is invisible to that check.
 #
-# This repository has no git remote today, so nothing here runs yet. It is
-# committed anyway: the alternative is remembering to write it at the moment a
-# remote appears, and relying on someone remembering is the failure this file
-# exists to prevent.
+# GitHub runs this workflow for main pushes and pull requests. Keep its result
+# tied to the actual candidate commit rather than treating local checks as CI.
 #
 # It deploys nothing. Requirements section 21.1 stage 13 makes deployment a
 # separately approved action, so this builds and tests and stops. It needs no

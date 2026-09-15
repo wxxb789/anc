@@ -1,5 +1,11 @@
 # Quartz v5 Parity and Superset Plan
 
+> **Historical analysis, architecture superseded 2026-09-13:**
+> [Core design](../core-design/README.md) governs 0.1.0. Comparisons and measurements
+> below belong to their recorded commits, not current claims about ANC or Quartz.
+> TK-21 and D6 no longer authorize a graph manifest, JSON fallback, or optional
+> post-0.1 SQLite phase. Do not copy their old schema or version examples.
+
 **Status:** Active planning baseline
 **Document type:** Competitive analysis + revised backlog
 **Derived from:** a read of Quartz v5 at commit `74b3fc9` (`Q:/repos/quartz`), an audit of this repository, and three adversarial review passes over the resulting proposals
@@ -755,6 +761,14 @@ the clearest content for the "more feature rich" goal.
 
 #### TK-21 — Interactive graph via SQLite WASM
 
+> **Superseded implementation specification:** use
+> [SQLite](../core-design/sqlite-contract.md),
+> [build/runtime](../core-design/build-and-runtime.md), and
+> [verification](../core-design/verification-and-evolution.md). SQLite queries now
+> also supply static relationship HTML at build time. This does not impose a
+> browser database dependency on ordinary reading. The old instructions below,
+> including manifest/JSON output and 2/5 MB thresholds, are historical only.
+
 **Requirements:** sections 12.1, 12.2, 12.3, 12.4, 13.2, 13.3, 17, 19.3, 20; owner decisions
 on graph architecture
 
@@ -1222,6 +1236,10 @@ without it means shipping against the requirements document.
 amend §9.1 rather than quietly omit the route.
 
 ### D6 — Settled: the relationship store
+
+> **Replaced by the 2026-09-13 [core design](../core-design/README.md).**
+> Browser enhancement remains lazy, but shipping SQLite/WASM is mandatory in 0.1.0.
+> Static backlinks query SQLite at build time. No second public JSON relation model.
 
 Recorded here because it closes requirements §12.5, DR-4, and DR-5, and because the wrong
 version of it keeps resurfacing.

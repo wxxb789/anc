@@ -244,7 +244,7 @@ test('the marker the scan caught is one no page carries', () => {
     assert.equal(
       findings.length,
       1,
-      `expected the fragment alone to carry the marker, got:\n${findings.join('\n')}`,
+      `expected the fragment alone to carry the marker, got:\n${run.output}`,
     );
     assert.match(
       findings[0]!,
