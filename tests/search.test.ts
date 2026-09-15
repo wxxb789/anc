@@ -77,13 +77,13 @@ function searchableTerms(text: string): string[] {
  * the SQLite snapshot, rendered note, and inflated Pagefind text independently
  * prove the term exists before the browser asks Pagefind to find it.
  */
-const SEARCH_PROJECTION = { entries: snapshotNotes(DIST) };
+const SEARCH_PROJECTION = snapshotNotes(DIST);
 const INDEXED_FRAGMENTS = indexedFragments();
 const INDEXED_FRAGMENT_TEXT = INDEXED_FRAGMENTS.map((fragment) => fragment.content).join('\n');
 
 function queryForLanguage(language?: string): string {
-  assert.ok(SEARCH_PROJECTION.entries.length > 0, 'the built corpus has no entry from which to derive a search query');
-  for (const entry of SEARCH_PROJECTION.entries) {
+  assert.ok(SEARCH_PROJECTION.length > 0, 'the built corpus has no entry from which to derive a search query');
+  for (const entry of SEARCH_PROJECTION) {
     const page = readFileSync(join(DIST, 'notes', entry.slug, 'index.html'), 'utf8');
     const pageLanguage = /<html lang="([^"]+)"/.exec(page)?.[1]?.toLowerCase();
     if (language !== undefined && pageLanguage !== language.toLowerCase()) continue;
@@ -573,11 +573,11 @@ test('a query returns a result under the shipped CSP, with a clean console', asy
   }
 }, 120_000);
 
-test.runIf(SEARCH_PROJECTION.entries.length > 1)(
+test.runIf(SEARCH_PROJECTION.length > 1)(
   'an alias that appears nowhere else finds its note',
   async (context) => {
     const alias = '别名笔记';
-    const expected = SEARCH_PROJECTION.entries.find((entry) => entry.aliases?.includes(alias));
+    const expected = SEARCH_PROJECTION.find((entry) => entry.aliases?.includes(alias));
     assert.equal(expected?.slug, 'alias-heavy', 'the fixture no longer carries the alias this gate measures');
     assert.ok(
       INDEXED_FRAGMENTS.some((fragment) => {

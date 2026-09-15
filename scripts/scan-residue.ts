@@ -60,7 +60,7 @@ import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { MARKED_ATTRIBUTE, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
 import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
-import { databaseText } from './snapshot-rows.ts';
+import { databaseText, isGzip, isSqlite } from './snapshot-rows.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 
@@ -557,110 +557,6 @@ const FRAGMENT_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']
 const RAW_BYTES_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
 
 /**
- * The first sixteen bytes of every SQLite file, and the reason the database
- * branch keys on them rather than on an extension.
- *
- * An extension is a naming convention: `.sqlite3`, `.db`, `.sqlite`, or no
- * extension at all are the same format, and a build step choosing a fifth
- * spelling would fall through to the unclassified branch — correct, but it
- * fails the build on a file this scan is now able to read. The header is what
- * the format actually guarantees, so the classifier asks the bytes.
- *
- * This does not weaken the fail-closed property. A file whose first bytes are
- * not this magic is classified exactly as it was before; a file whose bytes
- * *are* this magic and which SQLite then refuses to open is reported, not
- * skipped.
- */
-const SQLITE_MAGIC = 'SQLite format 3\0';
-
-/** The first two bytes of a gzip member. */
-const GZIP_MAGIC: readonly [number, number] = [0x1f, 0x8b];
-
-/**
- * `node:sqlite` is loaded through `createRequire` rather than imported.
- *
- * This module is imported by five test files and by `bin/anc.mjs`
- * on every build, and all but one of those runs scan a `dist/` holding no
- * database at all. A static import would load the SQLite binding into every one
- * of them to serve a branch they never reach.
- *
- * It is a Node builtin, so it needs no entry in `package.json` — which
- * `tests/packaging.test.ts`'s undeclared-import gate checks, and which is why a
- * third-party SQLite package would have been a worse answer even before the
- * runtime cost.
- */
-
-/**
- * Every text value a database carries, as rows rather than as bytes.
- *
- * ## Why rows, and why bytes are still read alongside them
- *
- * A byte scan of a SQLite file is not a scan of its contents, for a reason that
- * is this project's own recurring defect in a new carrier. A row larger than a
- * page is stored as a chain of overflow pages, each linked by a **4-byte
- * pointer written into the middle of the payload** — so a marker straddling a
- * page boundary exists in the file as two fragments with four bytes of pointer
- * between them, and matches nothing. Measured here: sweeping
- * `/home/someone/private` through a fixed-length body across 12,000 rows at
- * `page_size=4096`, **60 rows carried the marker where the file's bytes did
- * not**, while all 12,000 were returned by a single `SELECT … LIKE`. At byte
- * 81,694,700 a page ends `/home/someone/privat`, four pointer bytes follow, then
- * `e`. That is TK-29's `ms**w/s**ecret` again — a marker the reader receives
- * whole and no raw read can see — arriving through B-tree structure instead of
- * markup.
- *
- * So reading rows is what makes the scan see the database at all. The bytes are
- * read **as well**, and the reason is the opposite direction of the same
- * question: a deleted row's payload stays in the file until a `VACUUM`
- * reclaims it, and a `SELECT` cannot see it. Measured: a row inserted and then
- * deleted left `WITHHELD /home/someone/private msw/secret` in the file with
- * `freelist_count` at 0, invisible to every query and present in every byte a
- * reader downloads. Under an artifact the reader receives whole, that is a
- * withheld note shipping.
- *
- * Neither read subsumes the other, and the cost of running both is measured at
- * zero: over a database built from this repository's own `docs/`, **no rule
- * matched in the bytes that did not also match in the rows** — the byte pass
- * contributes no false positive of its own, only the free-page case.
- *
- * ## What "every text value" means
- *
- * Every user table in `sqlite_schema`, every column, every row. Not a named set
- * of columns: a scan that knows the schema is a scan that goes blind the first
- * time a column is added, and the whole point of the fail-closed classifier is
- * that novelty is not silently skipped.
- *
- * **A BLOB is read as text too**, and an earlier version of this function
- * skipped one on the argument that a BLOB is bytes already read by the byte
- * pass. That argument is false for exactly the reason this function exists: the
- * byte pass cannot see across an overflow-page boundary, and a BLOB body
- * overflows identically to a TEXT one. Measured — the same boundary fixture with
- * the column typed `BLOB` carried the marker in three rows, satisfied no rule
- * over the file's bytes, and produced zero findings. Values that are numbers or
- * null are ignored, because neither can carry a marker.
- *
- * @returns The text of every row as separate values, and the tables that could
- *   not be read as text. **Separate, never joined**: concatenating two rows
- *   manufactures a marker that neither carries, which is the same false positive
- *   {@link normalizedForms} refuses a whitespace-stripped form to avoid. It also
- *   keeps the scan's peak memory to one copy of the corpus — measured, joining
- *   them exhausted a 4 GB heap on a 168 MB database. `corpusRows` counts only
- *   rows of tables that yielded text, which is what makes it a coverage measure
- *   rather than a count of SQLite's own bookkeeping. A caller must treat a
- *   non-empty `unreadable` as a finding: see the database branch of
- *   {@link scanResidue}.
- */
-/** What one database yielded. See {@link databaseText}. */
-
-/**
- * @param bytes The database, as bytes — the inflated payload where it was
- *   compressed.
- * @param path The file those bytes came from, when they came from one. An
- *   inflated gzip member has no path and passes `undefined`, which reads through
- *   a private temporary copy instead.
- */
-
-/**
  * The forms of a Markdown body a *reader* resolves a marker out of.
  *
  * A database stores Markdown source, and the reader receives what a renderer
@@ -958,9 +854,8 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // ship behind a layer this scan structurally could not open. Keying on the
     // gzip magic covers the member that exists today and the one a future step
     // adds, which is the corollary about enumerations in `docs/gate-reading.md`.
-    const isGzip = bytes.length >= 2 && bytes[0] === GZIP_MAGIC[0] && bytes[1] === GZIP_MAGIC[1];
     let inflated: Uint8Array | undefined;
-    if (isGzip) {
+    if (isGzip(bytes)) {
       try {
         inflated = gunzipSync(bytes);
       } catch {
@@ -976,10 +871,7 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // A database is recognised by its header, so `.sqlite3`, `.db` and a file
     // with no extension at all are one case — and so a gzipped one is the same
     // case, since the test runs on the inflated payload.
-    const isDatabase =
-      !isFragment &&
-      payload.length >= SQLITE_MAGIC.length &&
-      Buffer.from(payload.subarray(0, SQLITE_MAGIC.length)).toString('latin1') === SQLITE_MAGIC;
+    const isDatabase = !isFragment && isSqlite(payload);
 
     if (!isFragment && !isDatabase) {
       // A gzip member that is not a database is classified on the name it ships

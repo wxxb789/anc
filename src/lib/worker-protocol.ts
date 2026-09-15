@@ -23,9 +23,6 @@ import {
   type TagPage,
 } from './snapshot-queries.ts';
 
-/** Bumped whenever the message shapes below change incompatibly. */
-export const WORKER_PROTOCOL_VERSION = 1;
-
 /**
  * Finite provisional bounds. Goal 0003 establishes these on the correctness
  * fixtures; goal 0008 must validate or replace them on the benchmark workloads.
@@ -42,8 +39,6 @@ export const WORKER_LIMITS = {
   maxSnapshotBytes: 64 * 1024 * 1024,
   /** Decoded WASM bytes read before instantiation. */
   maxWasmBytes: 8 * 1024 * 1024,
-  defaultPageSize: 50,
-  maxPageSize: 200,
 } as const;
 
 export type SnapshotOperation =
@@ -104,9 +99,6 @@ export type SnapshotReply =
   | { id: number; ok: true; result: SnapshotResult }
   | { id: number; ok: false; code: SnapshotErrorCode };
 
-/** The clauses every operation must satisfy before any SQL runs. */
-const PAGE_OPERATIONS: ReadonlySet<string> = new Set(['backlinks', 'outgoing', 'byTag']);
-
 /**
  * Whether an untrusted value is a request the Worker may run.
  *
@@ -133,7 +125,6 @@ export function isSnapshotMessage(value: unknown): value is SnapshotMessage {
   } else if (!isLookupSlug(message['slug'])) {
     return false;
   }
-  if (!PAGE_OPERATIONS.has(type)) return false;
 
   const cursor = message['cursor'];
   if (cursor !== undefined && cursor !== null && !isLookupSlug(cursor)) return false;

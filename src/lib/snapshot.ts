@@ -75,9 +75,6 @@ CREATE TABLE node_tags (
 ) WITHOUT ROWID, STRICT;
 `.trim();
 
-/** The five user tables, in the order the schema declares them. */
-export const SNAPSHOT_TABLES: readonly string[] = ['nodes', 'edges', 'aliases', 'tags', 'node_tags'];
-
 /**
  * The expected shape of each table: column name and, for a primary-key member,
  * its 1-based position in the key (SQLite's own `PRAGMA table_info` `pk` value);
@@ -121,14 +118,18 @@ export const SNAPSHOT_TABLE_COLUMNS: Readonly<Record<string, readonly SnapshotCo
 };
 
 /** The one explicitly created secondary index, outside the `UNIQUE` constraints. */
+/** The five user tables, in the order the schema declares them. */
+export const SNAPSHOT_TABLES: readonly string[] = Object.keys(SNAPSHOT_TABLE_COLUMNS);
+
 export const SNAPSHOT_EXPLICIT_INDEX = 'edges_by_target';
 
-const DIGEST = /^[0-9a-f]{64}$/;
-
-/** A full lowercase-hex SHA-256, as it appears in the bound filename. */
-export function isSnapshotDigest(value: string): boolean {
-  return DIGEST.test(value);
+/** A full lowercase-hex SHA-256, as it appears in a digest-named artifact. */
+export function isHexDigest(value: string): boolean {
+  return /^[0-9a-f]{64}$/.test(value);
 }
+
+/** The snapshot's own digest predicate; kept as the named public spelling. */
+export const isSnapshotDigest: (value: string) => boolean = isHexDigest;
 
 /**
  * The published path of a snapshot named by its full digest.

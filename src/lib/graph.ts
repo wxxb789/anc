@@ -4,13 +4,13 @@
  * This module is the IR adapter over the shared contract: it turns a note's
  * `outgoing`/`backlinks` into the directed edge set, asks `graph-selection.ts`
  * for the bounded local/global selection, and asks `graph-layout.ts` for the
- * coordinates. The Worker's `snapshot-operations.ts` uses the same two modules,
- * so the static SVG/table and the browser explorer cannot disagree about which
- * notes are drawn.
+ * coordinates. The Worker selects through the same `graph-selection.ts` and the
+ * explorer lays out through the same `graph-layout.ts`, so the static SVG/table
+ * and the browser graph cannot disagree about which notes are drawn.
  */
 
 import type { ContentEntry } from './schema.ts';
-import { selectGlobal, selectLocal, type EdgeDirection, type SelectionEdge } from './graph-selection.ts';
+import { selectGlobal, selectLocal, type SelectionEdge } from './graph-selection.ts';
 import {
   layoutGlobal,
   layoutLocal,
@@ -26,12 +26,7 @@ export type GraphNode = LayoutGraphNode<ContentEntry>;
 /** One drawn relationship. */
 export type GraphEdge = LayoutGraphEdge;
 
-export {
-  GLOBAL_NODE_LIMIT,
-  LOCAL_NODE_LIMIT,
-  byTitleThenSlug,
-  type EdgeDirection,
-} from './graph-selection.ts';
+export { GLOBAL_NODE_LIMIT, LOCAL_NODE_LIMIT, type EdgeDirection } from './graph-selection.ts';
 export {
   NODE_RADIUS,
   SUBJECT_RADIUS,
@@ -58,21 +53,6 @@ function edgesAmong(nodes: readonly ContentEntry[]): SelectionEdge[] {
   return edges;
 }
 
-/**
- * How `other` relates to `subject`, from the subject's own edge lists.
- *
- * Read from the subject's two arrays rather than the other note's, because they
- * are the arrays the page is about; the snapshot is built from the same pairs.
- */
-export function edgeDirection(subject: ContentEntry, other: string): EdgeDirection | undefined {
-  const isOutgoing = subject.outgoing.includes(other);
-  const isIncoming = subject.backlinks.includes(other);
-  if (isOutgoing && isIncoming) return 'mutual';
-  if (isOutgoing) return 'outgoing';
-  if (isIncoming) return 'incoming';
-  return undefined;
-}
-
 /** The one-hop neighbourhood of one note: the union of incoming and outgoing. */
 export function localGraph(
   entry: ContentEntry,
@@ -88,15 +68,5 @@ export function localGraph(
 /** The site-wide graph, ranked by distinct adjacent notes in the corpus. */
 export function globalGraph(entries: readonly ContentEntry[], limit?: number): Graph {
   const corpus = [...entries];
-  return layoutGlobal(selectGlobal(corpus, edgesAmong(corpus), limit));
-}
-
-/** The site-wide graph restricted to a set of member slugs. */
-export function globalGraphForTag(
-  entries: readonly ContentEntry[],
-  members: ReadonlySet<string>,
-  limit?: number,
-): Graph {
-  const corpus = entries.filter((entry) => members.has(entry.slug));
   return layoutGlobal(selectGlobal(corpus, edgesAmong(corpus), limit));
 }

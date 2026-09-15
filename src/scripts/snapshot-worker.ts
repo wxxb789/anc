@@ -134,8 +134,13 @@ async function load(): Promise<SnapshotDb> {
   const wasmBinding = __ANC_WASM_BINDING__;
   if (snapshotBinding === null || wasmBinding === null) fault('not-ready');
 
-  const databaseBytes = await fetchBounded(snapshotBinding.url, WORKER_LIMITS.maxSnapshotBytes);
-  if ((await sha256(databaseBytes)) !== snapshotBinding.digest) fault('integrity');
+  // Neither download depends on the other, and both are on the cold path.
+  const [databaseBytes, wasmBytes] = await Promise.all([
+    fetchBounded(snapshotBinding.url, WORKER_LIMITS.maxSnapshotBytes),
+    fetchBounded(wasmBinding.url, WORKER_LIMITS.maxWasmBytes),
+  ]);
+  const [databaseDigest, wasmDigest] = await Promise.all([sha256(databaseBytes), sha256(wasmBytes)]);
+  if (databaseDigest !== snapshotBinding.digest) fault('integrity');
   if (databaseBytes.length < 100) fault('header');
   for (const [index, byte] of SQLITE_MAGIC.entries()) {
     if (databaseBytes[index] !== byte) fault('header');
@@ -143,9 +148,7 @@ async function load(): Promise<SnapshotDb> {
   // Bytes 18/19 are the file-format write/read versions: 1 is rollback journal,
   // 2 is WAL, which cannot be deserialized as a standalone snapshot.
   if (databaseBytes[18] !== 1 || databaseBytes[19] !== 1) fault('format');
-
-  const wasmBytes = await fetchBounded(wasmBinding.url, WORKER_LIMITS.maxWasmBytes);
-  if ((await sha256(wasmBytes)) !== wasmBinding.digest) fault('integrity');
+  if (wasmDigest !== wasmBinding.digest) fault('integrity');
 
   let sqlite3: Awaited<ReturnType<typeof initSqlite>>;
   try {

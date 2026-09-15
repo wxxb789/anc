@@ -12,13 +12,13 @@
  * point, so two builds of one corpus are byte-equal.
  */
 
-import type { EdgeDirection, SelectionEdge } from './graph-selection.ts';
+import { byTitleThenSlug, type EdgeDirection, type SelectionEdge } from './graph-selection.ts';
 
 /** How an edge runs relative to the note the reader is on. */
 export type { EdgeDirection } from './graph-selection.ts';
 
 /** One note, drawn. */
-export interface GraphNode<T = unknown> {
+export interface GraphNode<T extends { slug: string } = { slug: string }> {
   entry: T;
   x: number;
   y: number;
@@ -43,7 +43,7 @@ export interface GraphEdge {
 }
 
 /** A laid-out graph, ready to render. */
-export interface Graph<T = unknown> {
+export interface Graph<T extends { slug: string } = { slug: string }> {
   nodes: GraphNode<T>[];
   edges: GraphEdge[];
   viewBox: string;
@@ -95,7 +95,7 @@ function ringCapacity(index: number): number {
   return Math.max(1, Math.floor((2 * Math.PI * index * RING_STEP) / NODE_GAP));
 }
 
-function radiusOf(node: GraphNode<unknown>): number {
+function radiusOf(node: { isSubject: boolean }): number {
   return node.isSubject ? SUBJECT_RADIUS : NODE_RADIUS;
 }
 
@@ -117,12 +117,12 @@ function edgeDirection(
  * Every directed edge with both ends drawn, each unordered pair drawn once.
  * A reciprocal pair becomes one line with two arrowheads.
  */
-function drawEdges<T>(
+function drawEdges<T extends { slug: string }>(
   nodes: readonly GraphNode<T>[],
   edges: readonly SelectionEdge[],
   subject?: string,
 ): GraphEdge[] {
-  const drawn = new Map(nodes.map((node) => [(node.entry as { slug: string }).slug, node]));
+  const drawn = new Map(nodes.map((node) => [node.entry.slug, node]));
   const pairs = new Map<string, { from: string; to: string; isMutual: boolean }>();
   for (const edge of edges) {
     if (!drawn.has(edge.from) || !drawn.has(edge.to)) continue;
@@ -140,8 +140,8 @@ function drawEdges<T>(
       const dx = to.x - from.x;
       const dy = to.y - from.y;
       const length = Math.hypot(dx, dy) || 1;
-      const startTrim = radiusOf(from as GraphNode<unknown>) + (pair.isMutual ? MARKER_LENGTH : 0);
-      const endTrim = radiusOf(to as GraphNode<unknown>) + MARKER_LENGTH;
+      const startTrim = radiusOf(from) + (pair.isMutual ? MARKER_LENGTH : 0);
+      const endTrim = radiusOf(to) + MARKER_LENGTH;
       const scale = Math.min(startTrim, Math.max(0, (length - endTrim) / 2));
       const other =
         subject === undefined
@@ -163,7 +163,7 @@ function drawEdges<T>(
 }
 
 /** Wrap placed nodes and their edges in a box that contains every label. */
-function frame<T>(
+function frame<T extends { slug: string }>(
   nodes: GraphNode<T>[],
   omitted: number,
   edges: readonly SelectionEdge[],
@@ -182,14 +182,14 @@ function frame<T>(
 }
 
 /** Count each node's drawn edges, once reciprocal pairs are merged. */
-function withDegrees<T>(graph: Graph<T>): Graph<T> {
+function withDegrees<T extends { slug: string }>(graph: Graph<T>): Graph<T> {
   const degrees = new Map<string, number>();
   for (const edge of graph.edges) {
     degrees.set(edge.from, (degrees.get(edge.from) ?? 0) + 1);
     degrees.set(edge.to, (degrees.get(edge.to) ?? 0) + 1);
   }
   for (const node of graph.nodes) {
-    node.degree = degrees.get((node.entry as { slug: string }).slug) ?? 0;
+    node.degree = degrees.get(node.entry.slug) ?? 0;
   }
   return graph;
 }
@@ -250,28 +250,26 @@ export function layoutGlobal<T extends { slug: string; title: string }>(selectio
 }
 
 /** The two numbers the bound sentence states: drawn notes, and the total. */
-export function boundCounts<T>(graph: Graph<T>): { shown: number; total: number } {
+export function boundCounts<T extends { slug: string }>(graph: Graph<T>): { shown: number; total: number } {
   const shown = graph.nodes.length - graph.nodes.filter((node) => node.isSubject).length;
   return { shown, total: shown + graph.omitted };
 }
 
 /** Whether there is a graph worth drawing at all. */
-export function hasDrawableGraph<T>(graph: Graph<T>): boolean {
+export function hasDrawableGraph<T extends { slug: string }>(graph: Graph<T>): boolean {
   return graph.edges.length > 0;
 }
 
 /** The notes each drawn node is joined to, within the figure. */
 export function drawnNeighbours<T extends { slug: string; title: string }>(graph: Graph<T>): Map<string, T[]> {
-  const bySlug = new Map(graph.nodes.map((node) => [(node.entry as { slug: string }).slug, node.entry]));
+  const bySlug = new Map(graph.nodes.map((node) => [node.entry.slug, node.entry]));
   const joined = new Map<string, T[]>(
-    graph.nodes.map((node) => [(node.entry as { slug: string }).slug, [] as T[]]),
+    graph.nodes.map((node) => [node.entry.slug, [] as T[]]),
   );
   for (const edge of graph.edges) {
     joined.get(edge.from)?.push(bySlug.get(edge.to)!);
     joined.get(edge.to)?.push(bySlug.get(edge.from)!);
   }
-  for (const list of joined.values()) {
-    list.sort((a, b) => (a.title !== b.title ? (a.title < b.title ? -1 : 1) : a.slug < b.slug ? -1 : 1));
-  }
+  for (const list of joined.values()) list.sort(byTitleThenSlug);
   return joined;
 }

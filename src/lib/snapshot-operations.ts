@@ -9,9 +9,8 @@
  */
 
 import {
-  DEFAULT_PAGE_SIZE,
-  MAX_PAGE_SIZE,
   SNAPSHOT_QUERIES,
+  normalizePageSize,
   pageOf,
   type GraphSelection,
   type LocalGraphSelection,
@@ -27,21 +26,13 @@ export interface SnapshotDb {
   select(sql: string, params?: readonly unknown[]): Record<string, unknown>[];
 }
 
-/** The presentation bounds, re-exported from the shared selection contract. */
-export { GLOBAL_NODE_LIMIT, LOCAL_NODE_LIMIT } from './graph-selection.ts';
-
 function summary(row: Record<string, unknown>): NoteSummary {
-  return { slug: String(row['slug']), title: String(row['title']), language: String(row['language']) };
+  return selectionSummary(selectionNode(row));
 }
 
 function slugOf(db: SnapshotDb, slug: string): number | undefined {
   const row = db.select(SNAPSHOT_QUERIES.nodeBySlug, [slug])[0];
   return row === undefined ? undefined : Number(row['id']);
-}
-
-function clampPageSize(value: number | undefined): number {
-  if (value === undefined || !Number.isInteger(value) || value <= 0) return DEFAULT_PAGE_SIZE;
-  return Math.min(value, MAX_PAGE_SIZE);
 }
 
 /** Preview one published note, or `null` for an unknown or withheld slug. */
@@ -70,7 +61,7 @@ export function edgePage(
 ): { known: boolean; page: NotePage } {
   const id = slugOf(db, slug);
   if (id === undefined) return { known: false, page: { notes: [], nextCursor: null } };
-  const size = clampPageSize(pageSize);
+  const size = normalizePageSize(pageSize);
   const first = direction === 'outgoing' ? SNAPSHOT_QUERIES.outgoingFirst : SNAPSHOT_QUERIES.backlinksFirst;
   const after = direction === 'outgoing' ? SNAPSHOT_QUERIES.outgoingAfter : SNAPSHOT_QUERIES.backlinksAfter;
   const rows =
@@ -90,7 +81,7 @@ export function tagPage(
 ): TagPage {
   const tag = db.select(SNAPSHOT_QUERIES.tagByKey, [tagKey])[0];
   if (tag === undefined) return { known: false };
-  const size = clampPageSize(pageSize);
+  const size = normalizePageSize(pageSize);
   const rows =
     cursor === undefined || cursor === null
       ? db.select(SNAPSHOT_QUERIES.byTagFirst, [tagKey, size + 1])
@@ -179,12 +170,17 @@ export function globalGraph(db: SnapshotDb, tagKey?: string | null): GraphSelect
       (db.select(SNAPSHOT_QUERIES.tagNodeIds, [tagKey]) as unknown as { id: number }[]).map((row) => Number(row.id)),
     );
     candidates = all.filter((node) => members.has(node.id));
+    // Degree is the number of **distinct** adjacent notes inside the matching
+    // subgraph, matching `selectGlobal`: counting edge endpoints would make a
+    // reciprocal pair count twice and could change the selected set.
     const present = new Set(candidates.map((node) => node.id));
+    const seen = new Map<number, Set<number>>(candidates.map((node) => [node.id, new Set<number>()]));
     for (const row of db.select(SNAPSHOT_QUERIES.allEdges) as unknown as { source_id: number; target_id: number }[]) {
       if (!present.has(row.source_id) || !present.has(row.target_id) || row.source_id === row.target_id) continue;
-      degree.set(row.source_id, (degree.get(row.source_id) ?? 0) + 1);
-      degree.set(row.target_id, (degree.get(row.target_id) ?? 0) + 1);
+      seen.get(row.source_id)!.add(row.target_id);
+      seen.get(row.target_id)!.add(row.source_id);
     }
+    for (const [id, neighbours] of seen) degree.set(id, neighbours.size);
   } else {
     for (const row of db.select(SNAPSHOT_QUERIES.nodeDegrees) as unknown as { id: number; degree: number }[]) {
       degree.set(Number(row.id), Number(row.degree));

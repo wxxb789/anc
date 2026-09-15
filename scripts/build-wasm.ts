@@ -18,13 +18,10 @@ import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WASM_DIRECTORY, wasmRoute, type WasmBinding } from '../src/lib/wasm-asset.ts';
+import { WASM_DIRECTORY, WASM_MODULE_NAME, wasmModuleUrl, wasmMemberName, wasmRoute, type WasmBinding } from '../src/lib/wasm-asset.ts';
 import { snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
 
 const require = createRequire(import.meta.url);
-
-/** The package's browser ESM entry, copied under a stable public name. */
-export const WASM_MODULE_NAME = 'sqlite-wasm.js';
 
 /** Members copied verbatim beside the entry, keeping the package's own names. */
 const STABLE_MEMBERS = ['sqlite3-worker1.mjs', 'sqlite3-opfs-async-proxy.js'] as const;
@@ -57,11 +54,11 @@ export function buildWasm(workspace: string = snapshotWorkspace()): StagedWasm {
   mkdirSync(staging, { recursive: true });
   copyFileSync(join(dist, 'index.mjs'), resolve(staging, WASM_MODULE_NAME));
   for (const member of STABLE_MEMBERS) copyFileSync(join(dist, member), resolve(staging, member));
-  const wasmName = `sqlite3.${digest}.wasm`;
+  const wasmName = wasmMemberName(digest);
   copyFileSync(join(dist, 'sqlite3.wasm'), resolve(staging, wasmName));
 
   const binding = {
-    moduleUrl: `/${WASM_DIRECTORY}/${WASM_MODULE_NAME}`,
+    moduleUrl: wasmModuleUrl(),
     url: wasmRoute(digest),
     digest,
     members: [`${WASM_DIRECTORY}/${WASM_MODULE_NAME}`, ...STABLE_MEMBERS.map((m) => `${WASM_DIRECTORY}/${m}`), `${WASM_DIRECTORY}/${wasmName}`],

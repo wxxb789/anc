@@ -53,10 +53,16 @@ interface NodeRow {
  */
 export function loadSnapshotEdges(workspace?: string): SnapshotEdges | undefined {
   const directory = snapshotWorkspace(workspace);
-  const bindingPath = resolve(directory, 'binding.json');
-  if (!existsSync(bindingPath)) return undefined;
+  if (!existsSync(resolve(directory, 'binding.json'))) return undefined;
 
-  const database = new DatabaseSync(resolve(directory, 'snapshot.sqlite'), { readOnly: true });
+  let database: DatabaseSync;
+  try {
+    database = new DatabaseSync(resolve(directory, 'snapshot.sqlite'), { readOnly: true });
+  } catch {
+    // A binding without readable bytes is a build that did not finish staging;
+    // the documented fallback (the producer's own edges) is the honest answer.
+    return undefined;
+  }
   try {
     const rows = database.prepare(SNAPSHOT_QUERIES.allEdges).all() as unknown as EdgeRow[];
     const nodes = database.prepare(SNAPSHOT_QUERIES.allNodes).all() as unknown as NodeRow[];
@@ -94,12 +100,11 @@ export function loadSnapshotEdges(workspace?: string): SnapshotEdges | undefined
 export function hydrateEntriesWithSnapshot<T extends { slug: string; outgoing: string[]; backlinks: string[] }>(
   entries: readonly T[],
   edges: SnapshotEdges,
-): readonly T[] {
+): void {
   for (const entry of entries) {
     entry.outgoing = [...(edges.outgoing.get(entry.slug) ?? [])];
     entry.backlinks = [...(edges.backlinks.get(entry.slug) ?? [])];
   }
-  return entries;
 }
 
 /** The binding a build wrote, or `undefined` when this process has no snapshot. */

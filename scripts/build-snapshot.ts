@@ -13,7 +13,7 @@ import { resolve } from 'node:path';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
 import type { ContentEntry } from '../src/lib/schema.ts';
 import { ARTIFACT_PATH, loadArtifact } from '../src/lib/artifact-source.ts';
-import { DEFAULT_SNAPSHOT_WORKSPACE, snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
+import { snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
 import { writeSnapshot, type WrittenSnapshot } from './write-snapshot.ts';
 
 export interface BuiltSnapshot extends WrittenSnapshot {
@@ -43,12 +43,8 @@ export function buildSnapshotFromEntries(
   writeFileSync(
     resolve(workspace, 'binding.json'),
     `${JSON.stringify(
-      {
-        url: written.url,
-        digest: written.digest,
-        applicationId: written.applicationId,
-        userVersion: written.userVersion,
-      },
+      // The header constants live in code; the binding names the bytes.
+      { url: written.url, digest: written.digest },
       null,
       2,
     )}\n`,
@@ -74,6 +70,7 @@ export function buildSnapshot(
   return buildSnapshotFromEntries(loadArtifact(artifactPath).entries, workspace);
 }
 
+/** Read the finalized file back, so the reported counts are the published rows. */
 function loadSnapshotCounts(path: string): { nodes: number; edges: number; tags: number } {
   const database = new DatabaseSync(path, { readOnly: true });
   try {
@@ -102,4 +99,3 @@ function main(): number {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) process.exit(main());
 
-export { DEFAULT_SNAPSHOT_WORKSPACE };

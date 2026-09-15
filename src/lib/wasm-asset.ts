@@ -8,30 +8,28 @@
  * spelling of every name.
  */
 
+import { isHexDigest } from './snapshot.ts';
+
 /** Directory segment the SQLite runtime lives under. `wasm` is a reserved slug. */
 export const WASM_DIRECTORY = 'wasm';
 
 /** The package's browser entry, copied under a stable public name. */
 export const WASM_MODULE_NAME = 'sqlite-wasm.js';
 
-const DIGEST = /^[0-9a-f]{64}$/;
+/** Same-origin URL of the browser entry the Worker imports at runtime. */
+export function wasmModuleUrl(): string {
+  return `/${WASM_DIRECTORY}/${WASM_MODULE_NAME}`;
+}
 
-/** Matches the digest-named WASM member, capturing the digest. */
-export const WASM_FILE_PATTERN = /^sqlite3\.([0-9a-f]{64})\.wasm$/;
-
-export function isWasmDigest(value: string): boolean {
-  return DIGEST.test(value);
+/** The digest-named WASM member name, without a directory. */
+export function wasmMemberName(digest: string): string {
+  if (!isHexDigest(digest)) throw new Error(`wasm digest is not 64 lowercase hex: ${digest}`);
+  return `sqlite3.${digest}.wasm`;
 }
 
 /** Same-origin URL of the WASM named by its full digest. */
 export function wasmRoute(digest: string): string {
-  if (!isWasmDigest(digest)) throw new Error(`wasm digest is not 64 lowercase hex: ${digest}`);
-  return `/${WASM_DIRECTORY}/sqlite3.${digest}.wasm`;
-}
-
-/** Output-relative file name, without a leading slash. */
-export function wasmFileName(digest: string): string {
-  return wasmRoute(digest).slice(1);
+  return `/${WASM_DIRECTORY}/${wasmMemberName(digest)}`;
 }
 
 /** The runtime binding a build writes and the Worker verifies. */
@@ -53,8 +51,8 @@ export function readWasmBinding(value: unknown): WasmBinding | undefined {
   const url = record['url'];
   const digest = record['digest'];
   const members = record['members'];
-  if (moduleUrl !== `/${WASM_DIRECTORY}/${WASM_MODULE_NAME}`) return undefined;
-  if (typeof url !== 'string' || typeof digest !== 'string' || !isWasmDigest(digest)) return undefined;
+  if (moduleUrl !== wasmModuleUrl()) return undefined;
+  if (typeof url !== 'string' || typeof digest !== 'string' || !isHexDigest(digest)) return undefined;
   if (url !== wasmRoute(digest)) return undefined;
   if (!Array.isArray(members) || members.some((member) => typeof member !== 'string')) return undefined;
   return { moduleUrl, url, digest, members: [...members] };

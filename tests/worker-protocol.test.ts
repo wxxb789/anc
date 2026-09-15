@@ -9,9 +9,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE } from '../src/lib/snapshot-queries.ts';
 import {
   SNAPSHOT_OPERATIONS,
-  WORKER_LIMITS,
   isResultOf,
   isSnapshotMessage,
   requestPageSize,
@@ -67,10 +67,10 @@ test('no accepted message shape names SQL, a URL, or a path', () => {
 });
 
 test('page size is clamped to the accepted range', () => {
-  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a' }), WORKER_LIMITS.defaultPageSize);
+  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a' }), DEFAULT_PAGE_SIZE);
   assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 10 }), 10);
-  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 10_000 }), WORKER_LIMITS.maxPageSize);
-  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 0 }), WORKER_LIMITS.defaultPageSize);
+  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 10_000 }), MAX_PAGE_SIZE);
+  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 0 }), DEFAULT_PAGE_SIZE);
 });
 
 test('a reply is narrowed to the result type the caller asked for', () => {

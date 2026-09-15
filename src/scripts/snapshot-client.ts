@@ -69,11 +69,14 @@ function ensureWorker(): Worker {
     clearTimeout(entry.timer);
     if (reply.ok) {
       initialized = true;
-      // Observability seam for the benchmark harness: the operation and its
-      // measured dispatch-to-validated-result time. No corpus data is carried.
-      document.dispatchEvent(
-        new CustomEvent('snapshot-result', { detail: { type: reply.result.type, ms: elapsed } }),
-      );
+      // Observability seam for the benchmark harness, armed explicitly by the
+      // measurer: the operation and its dispatch-to-validated-result time. No
+      // corpus data is carried, and an ordinary reader dispatches nothing.
+      if ((window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
+        document.dispatchEvent(
+          new CustomEvent('snapshot-result', { detail: { type: reply.result.type, ms: elapsed } }),
+        );
+      }
       entry.resolve(reply.result);
     } else {
       entry.reject(new SnapshotClientError(reply.code));
@@ -93,7 +96,9 @@ function ensureWorker(): Worker {
  *   when too many requests are already pending, and on a deadline.
  */
 export function request(message: SnapshotMessage): Promise<SnapshotResult> {
-  if (!initialized && pending.size >= WORKER_LIMITS.maxPendingRequests) {
+  // The bound applies at every stage: a ready Worker must not accumulate an
+  // unbounded queue of closures and timers just because initialization finished.
+  if (pending.size >= WORKER_LIMITS.maxPendingRequests) {
     return Promise.reject(new SnapshotClientError('busy'));
   }
   const instance = ensureWorker();
@@ -111,25 +116,15 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
 }
 
 /** Mint the next request id. */
-export function nextRequestId(): number {
+function nextRequestId(): number {
   return nextId++;
 }
 
 type ResultOf<K extends SnapshotResult['type']> = Extract<SnapshotResult, { type: K }>;
 
-/** Preview one slug. */
+/** Preview one published note. */
 export function requestPreview(slug: string): Promise<ResultOf<'preview'>> {
   return request({ id: nextRequestId(), type: 'preview', slug }) as Promise<ResultOf<'preview'>>;
-}
-
-/** One page of a note's outgoing links or backlinks. */
-export function requestEdges(
-  direction: 'outgoing' | 'backlinks',
-  slug: string,
-  cursor?: string | null,
-  pageSize?: number,
-): Promise<ResultOf<'outgoing'>> {
-  return request({ id: nextRequestId(), type: direction, slug, cursor, pageSize }) as Promise<ResultOf<'outgoing'>>;
 }
 
 /** One page of a tag's members. */
@@ -149,30 +144,4 @@ export function requestLocalGraph(slug: string): Promise<ResultOf<'localGraph'>>
 /** The global graph, optionally filtered to one tag. */
 export function requestGlobalGraph(tagKey?: string | null): Promise<ResultOf<'globalGraph'>> {
   return request({ id: nextRequestId(), type: 'globalGraph', tagKey }) as Promise<ResultOf<'globalGraph'>>;
-}
-
-/** Abandon one request; its eventual reply is discarded. */
-export function cancel(id: number): void {
-  const entry = pending.get(id);
-  if (entry === undefined) return;
-  pending.delete(id);
-  clearTimeout(entry.timer);
-  entry.reject(new SnapshotClientError('cancelled'));
-}
-
-/** Whether any SQLite asset has been requested yet. */
-export function isInitialized(): boolean {
-  return initialized;
-}
-
-/** Tear down the Worker and reject everything pending. */
-export function dispose(): void {
-  reset('terminated');
-}
-
-/** Test seam: run a function with the module's state reset after. */
-export function resetForTests(): void {
-  reset('terminated');
-  nextId = 1;
-  initialized = false;
 }

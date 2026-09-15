@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import { validateArtifact, type ContentArtifact } from '../src/lib/schema.ts';
+import { validateArtifact, type ContentArtifact, type ContentEntry } from '../src/lib/schema.ts';
 import {
   byTitleThenSlug,
   selectGlobal,
@@ -150,4 +150,51 @@ test('the local bound counts neighbours, never the center', () => {
 test('the comparator is a total order with the slug as the tiebreak', () => {
   const ordered = [node('b', 'Same'), node('a', 'Same'), node('c', 'Different')].sort(byTitleThenSlug);
   assert.deepEqual(ordered.map((n) => n.slug), ['c', 'a', 'b']);
+});
+
+test('tag-filtered ranking counts a reciprocal pair once in both paths', () => {
+  const entry = (slug: string, title: string, outgoing: string[]): ContentEntry => ({
+    slug,
+    title,
+    excerpt: '',
+    markdown: `# ${title}`,
+    tags: ['t'],
+    outgoing: [...outgoing].sort(),
+    backlinks: [],
+  });
+  const entries: ContentEntry[] = [
+    entry('x', 'X', ['z']),
+    entry('y', 'Y', ['v', 'w']),
+    entry('z', 'Z', ['x']),
+    entry('v', 'V', []),
+    entry('w', 'W', []),
+  ];
+  for (const candidate of entries) {
+    candidate.backlinks = entries.filter((other) => other.outgoing.includes(candidate.slug)).map((other) => other.slug).sort();
+  }
+  const directory = mkdtempSync(join(tmpdir(), 'anc-graph-tag-'));
+  const path = join(directory, 'site.sqlite');
+  try {
+    writeSnapshot({ version: 1, entries }, path);
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const db: SnapshotDb = {
+        select: (sql, params) => database.prepare(sql).all(...((params ?? []) as never[])) as Record<string, unknown>[],
+      };
+      const worker = workerGlobal(db, 't');
+      const shared = selectGlobal(
+        entries,
+        entries.flatMap((candidate) => candidate.outgoing.map((target: string) => ({ from: candidate.slug, to: target }))),
+      );
+      assert.deepEqual(worker.nodes.map((node) => node.slug), shared.nodes.map((node) => node.slug));
+      assert.deepEqual(worker.omitted, shared.omitted);
+      // y has two distinct neighbours and must rank first; x and z are one
+      // neighbour each despite a reciprocal pair between them.
+      assert.deepEqual(worker.nodes.map((node) => node.slug), ['y', 'v', 'w', 'x', 'z']);
+    } finally {
+      database.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

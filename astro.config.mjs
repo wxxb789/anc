@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import { readFileSync } from 'node:fs';
+import { wasmModuleUrl } from './src/lib/wasm-asset.ts';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAGRAM_MODE } from './src/lib/diagram-mode.ts';
@@ -10,6 +11,9 @@ import { vendorProvenancePlugin } from './scripts/vendor-provenance.ts';
 
 /** The private snapshot workspace this build staged into. */
 const SNAPSHOT_WORKSPACE = resolve(process.cwd(), process.env['SNAPSHOT_WORKSPACE'] ?? '.astro/snapshot');
+
+/** Read once: the binding and its module URL come from the same file. */
+const STAGED_WASM = readStaged('wasm.json');
 
 /**
  * Read one staged binding from the private snapshot workspace.
@@ -221,8 +225,8 @@ export default defineConfig({
   vite: {
     define: {
       __ANC_SNAPSHOT_BINDING__: JSON.stringify(readStaged('binding.json')),
-      __ANC_WASM_BINDING__: JSON.stringify(readStaged('wasm.json')),
-      __ANC_WASM_MODULE_URL__: JSON.stringify(readStaged('wasm.json')?.['moduleUrl'] ?? '/wasm/sqlite-wasm.js'),
+      __ANC_WASM_BINDING__: JSON.stringify(STAGED_WASM),
+      __ANC_WASM_MODULE_URL__: JSON.stringify(STAGED_WASM?.['moduleUrl'] ?? wasmModuleUrl()),
     },
     plugins: [
       clientRuntimePlugin('diagram', DIAGRAM_MODE),

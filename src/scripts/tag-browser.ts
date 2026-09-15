@@ -14,18 +14,10 @@
 
 import { noteRoute } from '../lib/route-path.ts';
 import { classifyTagPage, TAG_PAGE_SIZE, type TagBrowseState } from '../lib/tag-browser-model.ts';
+import { TAG_BROWSE_DATASET } from '../lib/translations.ts';
 import { requestByTag } from './snapshot-client.ts';
 
 export {};
-
-/** Dataset keys, matching `datasetAttribute('tagBrowse…')` in the Astro markup. */
-const STATUS = {
-  loading: 'tagBrowseLoading',
-  empty: 'tagBrowseEmpty',
-  exhausted: 'tagBrowseExhausted',
-  unknown: 'tagBrowseUnknown',
-  failed: 'tagBrowseFailed',
-} as const;
 
 const root = document.querySelector<HTMLElement>('#tag-browser');
 if (root) install(root);
@@ -41,7 +33,8 @@ function install(root: HTMLElement): void {
   const status = root.querySelector<HTMLElement>('#tag-browser-status')!;
   const current = root.querySelector<HTMLElement>('#tag-browser-current')!;
 
-  const string = (key: (typeof STATUS)[keyof typeof STATUS]): string => root.dataset[key] ?? '';
+  const string = (key: (typeof TAG_BROWSE_DATASET)[keyof typeof TAG_BROWSE_DATASET]): string =>
+    root.dataset[key] ?? '';
 
   let generation = 0;
   let tagKey = mode === 'fixed' ? (root.dataset['tagKey'] ?? '') : '';
@@ -63,7 +56,7 @@ function install(root: HTMLElement): void {
       reset();
       return;
     }
-    status.textContent = string(STATUS.loading);
+    status.textContent = string(TAG_BROWSE_DATASET.loading);
     let page;
     try {
       page = (await requestByTag(tagKey, after, pageSize)).page;
@@ -72,7 +65,7 @@ function install(root: HTMLElement): void {
       // The static list is never removed before page 1 renders, so a failure
       // leaves the complete no-JS list on screen.
       if (staticList !== null) staticList.hidden = false;
-      status.textContent = string(STATUS.failed);
+      status.textContent = string(TAG_BROWSE_DATASET.failed);
       return;
     }
     if (forGeneration !== generation) return; // a stale tag's reply cannot replace this one
@@ -80,12 +73,12 @@ function install(root: HTMLElement): void {
     const state: TagBrowseState = classifyTagPage(page);
     if (state.kind === 'unknown') {
       if (more !== null) more.hidden = true;
-      status.textContent = string(STATUS.unknown);
+      status.textContent = string(TAG_BROWSE_DATASET.unknown);
       return;
     }
     if (state.kind === 'empty') {
       if (more !== null) more.hidden = true;
-      status.textContent = string(STATUS.empty);
+      status.textContent = string(TAG_BROWSE_DATASET.empty);
       return;
     }
 
@@ -106,7 +99,7 @@ function install(root: HTMLElement): void {
     cursor = state.nextCursor;
     if (cursor === null) {
       if (more !== null) more.hidden = true;
-      status.textContent = string(STATUS.exhausted);
+      status.textContent = string(TAG_BROWSE_DATASET.exhausted);
     } else {
       if (more !== null) more.hidden = false;
       status.textContent = '';

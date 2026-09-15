@@ -13,6 +13,7 @@ import {
   lstatSync,
   readFileSync,
   readdirSync,
+  statSync,
 } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +32,8 @@ import { snapshotFileName } from '../src/lib/snapshot.ts';
 import { readBuildBinding } from '../src/lib/snapshot-reader.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
-import { assertSnapshotContract } from './write-snapshot.ts';
+import { assertSnapshotRows } from '../src/lib/snapshot-contract.ts';
+import { isGzip } from './snapshot-rows.ts';
 import { readStagedWasm } from './copy-wasm.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
@@ -94,7 +96,7 @@ function expectedHtml(artifact: ContentArtifact): Set<string> {
 }
 
 function inflateIfGzip(bytes: Buffer): Buffer {
-  return bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
+  return isGzip(bytes) ? gunzipSync(bytes) : bytes;
 }
 
 /**
@@ -143,7 +145,9 @@ function snapshotOutput(root: string, workspace?: string): Set<string> {
     );
   }
   try {
-    assertSnapshotContract(database);
+    assertSnapshotRows(
+      (sql) => database.prepare(sql).all() as Record<string, unknown>[],
+    );
   } catch (error) {
     throw new BuildFailure(
       'output-inventory-snapshot-schema',
@@ -167,13 +171,14 @@ function wasmOutput(root: string, workspace?: string): Set<string> {
   const binding = readStagedWasm(workspace);
   if (binding === undefined) return new Set();
   for (const member of binding.members) {
-    let bytes: Buffer;
-    try {
-      bytes = readFileSync(join(root, ...member.split('/')));
-    } catch {
-      throw new BuildFailure('output-inventory-wasm-missing', 'output inventory is missing a bound wasm member', member);
-    }
+    const path = join(root, ...member.split('/'));
     if (member.endsWith('.wasm')) {
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(path);
+      } catch {
+        throw new BuildFailure('output-inventory-wasm-missing', 'output inventory is missing a bound wasm member', member);
+      }
       const digest = createHash('sha256').update(bytes).digest('hex');
       if (digest !== binding.digest) {
         throw new BuildFailure(
@@ -182,6 +187,8 @@ function wasmOutput(root: string, workspace?: string): Set<string> {
           member + ': expected ' + binding.digest + ', got ' + digest,
         );
       }
+    } else if (!statSync(path).isFile()) {
+      throw new BuildFailure('output-inventory-wasm-missing', 'output inventory is missing a bound wasm member', member);
     }
   }
   return new Set(binding.members);

@@ -165,13 +165,6 @@ export const SNAPSHOT_QUERIES = {
     FROM edges
     ORDER BY source_id, target_id`.trim(),
 
-  allEdgesBySlug: `
-    SELECT s.slug AS source, t.slug AS target
-    FROM edges AS e
-    JOIN nodes AS s ON s.id = e.source_id
-    JOIN nodes AS t ON t.id = e.target_id
-    ORDER BY source, target`.trim(),
-
   /** Distinct adjacent notes per node, as one aggregate over the edge set. */
   nodeDegrees: `
     SELECT node_id AS id, COUNT(DISTINCT neighbour) AS degree FROM (
@@ -189,22 +182,6 @@ export const SNAPSHOT_QUERIES = {
     WHERE t.key = ?
     ORDER BY n.slug`.trim(),
 
-  allTags: `
-    SELECT id, key, label
-    FROM tags
-    ORDER BY key`.trim(),
-
-  tagMemberSlugs: `
-    SELECT n.slug
-    FROM node_tags AS nt
-    JOIN nodes AS n ON n.id = nt.node_id
-    WHERE nt.tag_id = ?
-    ORDER BY n.slug`.trim(),
-
-  schemaTables: `
-    SELECT name FROM sqlite_schema
-    WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-    ORDER BY name`.trim(),
 } as const;
 
 /**

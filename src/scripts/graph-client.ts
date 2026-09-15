@@ -10,8 +10,17 @@
  * small.
  */
 
-import { layoutGlobal, layoutLocal, boundCounts, truncateLabel, SUBJECT_RADIUS, NODE_RADIUS, type Graph } from '../lib/graph-layout.ts';
-import { byTitleThenSlug, type SelectionNode } from '../lib/graph-selection.ts';
+import {
+  layoutGlobal,
+  layoutLocal,
+  boundCounts,
+  drawnNeighbours,
+  truncateLabel,
+  SUBJECT_RADIUS,
+  NODE_RADIUS,
+  type Graph,
+} from '../lib/graph-layout.ts';
+import type { SelectionNode } from '../lib/graph-selection.ts';
 import { noteSlugFromPath, noteRoute } from '../lib/route-path.ts';
 import { requestGlobalGraph, requestLocalGraph } from './snapshot-client.ts';
 
@@ -144,7 +153,7 @@ function install(region: HTMLElement, controls: HTMLElement): void {
         const anchor = document.createElementNS(namespace, 'a');
         anchor.setAttribute('class', node.isSubject ? 'graph-node graph-node-subject' : 'graph-node');
         anchor.setAttribute('href', noteRoute(node.entry.slug));
-        anchor.setAttribute('aria-label', labelFor(node.entry.title, node.direction, node.degree, node.isSubject));
+        anchor.setAttribute('aria-label', labelFor(node));
         if (node.entry.language && node.entry.language.toLowerCase() !== language.toLowerCase()) {
           anchor.setAttribute('lang', node.entry.language);
         }
@@ -167,30 +176,21 @@ function install(region: HTMLElement, controls: HTMLElement): void {
     );
   }
 
-  function labelFor(title: string, direction: string | undefined, degree: number, isSubject: boolean): string {
-    const relation = isSubject
-      ? template('graphRelationSubject')
-      : direction === 'outgoing'
-        ? template('graphRelationOutgoing')
-        : direction === 'incoming'
-          ? template('graphRelationIncoming')
-          : direction === 'mutual'
-            ? template('graphRelationMutual')
-            : template('graphRelationLinked');
-    return fill(template(degree === 1 ? 'graphNodeLabelOne' : 'graphNodeLabel'), { title, relation, degree: String(degree) });
+  function labelFor(node: {
+    entry: SelectionNode;
+    isSubject: boolean;
+    direction?: string;
+    degree: number;
+  }): string {
+    return fill(template(node.degree === 1 ? 'graphNodeLabelOne' : 'graphNodeLabel'), {
+      title: node.entry.title,
+      relation: labelForRelation(node),
+      degree: String(node.degree),
+    });
   }
 
   function drawTable(target: HTMLElement, graph: Graph<SelectionNode>): void {
-    const joined = new Map<string, { slug: string; title: string; language?: string }[]>(
-      graph.nodes.map((node) => [node.entry.slug, []]),
-    );
-    for (const edge of graph.edges) {
-      const from = graph.nodes.find((node) => node.entry.slug === edge.from)!.entry;
-      const to = graph.nodes.find((node) => node.entry.slug === edge.to)!.entry;
-      joined.get(edge.from)!.push(to);
-      joined.get(edge.to)!.push(from);
-    }
-    for (const list of joined.values()) list.sort(byTitleThenSlug);
+    const joined = drawnNeighbours(graph);
 
     target.replaceChildren(
       ...graph.nodes.map((node) => {

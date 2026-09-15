@@ -16,8 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { cpus, totalmem } from 'node:os';
-import { tmpdir } from 'node:os';
+import { cpus, tmpdir, totalmem } from 'node:os';
 import { extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
@@ -133,10 +132,13 @@ function generateCorpus(root: string, size: number, topology: 'sparse' | 'hub'):
       'utf8',
     );
   }
-  // A hub-heavy corpus keeps the local measurement on the busiest center.
-  const center = topology === 'hub' ? slugFor(0) : slugFor(0);
+  // Hub notes sort first, so note 0 is the busiest center in that topology;
+  // the sparse ring starts there too, so either topology has a neighbor.
+  const center = slugFor(0);
   return { directory: root, slug: center, notes: size, edges, tags: 3 };
 }
+
+const HOVER_DELAY_MS = 120;
 
 interface Sample {
   size: number;
@@ -148,13 +150,14 @@ interface Sample {
   dbGzipBytes: number;
   wasmBytes: number;
   jsHeapUsedBytes: number | null;
+  hoverDelayMs: number;
   coldPreviewMs: number | null;
   warmPreviewMs: number | null;
   localGraphMs: number[];
   ordinaryReadingSqliteRequests: number;
 }
 
-async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub', options: Options): Promise<Sample> {
+async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub', options: Options, buildSeconds: number): Promise<Sample> {
   const { chromium } = await import('playwright');
   const server = await startServer(join(corpus.directory, 'dist'));
   const port = (server.address() as { port: number }).port;
@@ -170,6 +173,7 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
   });
   const localMs: number[] = [];
   await page.addInitScript(() => {
+    (window as unknown as { __snapshotMeasurement?: boolean }).__snapshotMeasurement = true;
     (window as unknown as { __ancLocalGraphMs: number[] }).__ancLocalGraphMs = [];
     document.addEventListener('snapshot-result', (event) => {
       const detail = (event as CustomEvent<{ type: string; ms: number }>).detail;
@@ -192,7 +196,9 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
     const started = Date.now();
     await hoverLink.hover();
     await page.locator('#link-preview').waitFor({ state: 'visible', timeout: 30_000 });
-    coldPreviewMs = Date.now() - started;
+    // Intent to a correct panel, with the client's own hover delay removed so
+    // the number describes the runtime rather than the gesture's timer.
+    coldPreviewMs = Math.max(0, Date.now() - started - HOVER_DELAY_MS);
 
     // Warm preview: a later intent after the Worker is ready.
     await page.mouse.move(0, 0);
@@ -201,7 +207,7 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
     const warmStarted = Date.now();
     await hoverLink.hover();
     await page.locator('#link-preview').waitFor({ state: 'visible', timeout: 10_000 });
-    warmPreviewMs = Date.now() - warmStarted;
+    warmPreviewMs = Math.max(0, Date.now() - warmStarted - HOVER_DELAY_MS);
 
     // Warm local-neighbourhood: repeated operations on the ready snapshot.
     const activate = page.locator('[data-graph-activate]');
@@ -247,11 +253,12 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
       topology,
       notes: corpus.notes,
       edges: corpus.edges,
-      buildSeconds: 0,
+      buildSeconds,
       dbDecodedBytes: dbBytes.length,
       dbGzipBytes: gzipSync(dbBytes).length,
       wasmBytes,
       jsHeapUsedBytes,
+      hoverDelayMs: HOVER_DELAY_MS,
       coldPreviewMs,
       warmPreviewMs,
       localGraphMs: localMs,
@@ -285,8 +292,7 @@ async function main(): Promise<number> {
           timeout: 20 * 60_000,
         });
         if (build.status !== 0) throw new Error(`build failed for ${size}/${topology}: ${build.stdout}${build.stderr}`);
-        const sample = await measure(corpus, size, topology, options);
-        sample.buildSeconds = Number(((Date.now() - buildStarted) / 1000).toFixed(2));
+        const sample = await measure(corpus, size, topology, options, Number(((Date.now() - buildStarted) / 1000).toFixed(2)));
         samples.push(sample);
         const locals = sample.localGraphMs;
         process.stdout.write(
@@ -315,8 +321,9 @@ async function main(): Promise<number> {
   const directory = gitReportDirectory();
   mkdirSync(directory, { recursive: true });
   const file = join(directory, `benchmark-snapshot-${Date.now()}.json`);
-  writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  const digest = createHash('sha256').update(JSON.stringify(report)).digest('hex').slice(0, 12);
+  const body = `${JSON.stringify(report, null, 2)}\n`;
+  writeFileSync(file, body, 'utf8');
+  const digest = createHash('sha256').update(body).digest('hex').slice(0, 12);
   // Counts only on the stream; the report path and names stay private.
   console.log(`benchmark: ${samples.length} workloads, report sha256=${digest}`);
   return 0;

@@ -58,6 +58,7 @@ export interface DatabaseRead {
   unreadable: string[];
 }
 
+/** Loaded lazily so a scan of a dist/ with no database never pays for the binding. */
 const loadSqlite = (): typeof import('node:sqlite') => {
   suppressSqliteWarning();
   return createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
@@ -110,6 +111,9 @@ function readOpenDatabase(database: {
   const virtualNames = tables
     .filter(({ sql }) => /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(sql ?? ''))
     .map(({ name }) => name);
+  // The orphan pass needs the corpus text only when there is an index to orphan
+  // against; without FTS5 the collection and its join are dead weight.
+  const hasFts5 = tables.some(({ sql }) => /\bfts5\b/i.test(sql ?? ''));
 
   for (const { name, sql } of tables) {
     const isVirtual = /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(sql ?? '');
@@ -133,7 +137,7 @@ function readOpenDatabase(database: {
         if (typeof value === 'string' && value.length > 0) {
           textValues += 1;
           values.push(value);
-          if (!isShadow) rowText.push(value);
+          if (!isShadow && hasFts5) rowText.push(value);
         } else if (value instanceof Uint8Array && value.length > 0) {
           // A BLOB is read as text: the byte pass cannot see across an
           // overflow-page boundary, and a BLOB body overflows identically to a
@@ -150,7 +154,7 @@ function readOpenDatabase(database: {
             }
           }
           values.push(blob.toString('utf8'));
-          if (!isShadow) rowText.push(blob.toString('utf8'));
+          if (!isShadow && hasFts5) rowText.push(blob.toString('utf8'));
         }
       }
     }
@@ -200,9 +204,11 @@ function readOpenDatabase(database: {
 
   // A term is only an orphan if *no* table accounts for it, checked against the
   // row text rather than against `values` (which carries the terms themselves).
-  const corpus = rowText.join('\n').toLowerCase();
-  for (const { name, terms } of orphanCandidates) {
-    if (terms.some((term) => !corpus.includes(term.toLowerCase()))) unreadable.push(name);
+  if (hasFts5) {
+    const corpus = rowText.join('\n').toLowerCase();
+    for (const { name, terms } of orphanCandidates) {
+      if (terms.some((term) => !corpus.includes(term.toLowerCase()))) unreadable.push(name);
+    }
   }
 
   return { values, corpusRows, unreadable };
