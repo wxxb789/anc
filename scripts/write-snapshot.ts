@@ -23,27 +23,19 @@ import { tagFacets } from '../src/lib/routes.ts';
 import { NAV_LANGUAGE } from '../src/lib/translations.ts';
 import {
   SNAPSHOT_APPLICATION_ID,
-  SNAPSHOT_EXPLICIT_INDEX,
   SNAPSHOT_PAGE_SIZE,
   SNAPSHOT_SCHEMA_SQL,
-  SNAPSHOT_TABLE_COLUMNS,
-  SNAPSHOT_TABLES,
   SNAPSHOT_USER_VERSION,
   snapshotRoute,
   type SnapshotBinding,
 } from '../src/lib/snapshot.ts';
+import { assertSnapshotRows } from '../src/lib/snapshot-contract.ts';
 
 export interface WrittenSnapshot extends SnapshotBinding {
   /** Private filesystem path the bytes were written to. */
   path: string;
   /** Uncompressed size in bytes. */
   size: number;
-}
-
-/** A row read from `PRAGMA table_info`. */
-interface TableInfoRow {
-  name: string;
-  pk: number;
 }
 
 /** Compare slugs in the canonical order IDs are assigned in. */
@@ -54,61 +46,12 @@ function bySlug(a: string, b: string): number {
 /**
  * Fail unless the file carries exactly the accepted schema.
  *
- * Called after finalization, before the file is hashed or copied. A matching
- * header alone is not proof: this checks the five tables, every column and
- * primary-key position, the explicit reverse index, and the absence of views or
- * triggers, so storage the query contract does not name cannot slip through.
+ * The contract itself lives in `src/lib/snapshot-contract.ts`, so the native and
+ * browser drivers validate the same rules; this adapts it to a `node:sqlite`
+ * handle. Called after finalization, before the file is hashed or copied.
  */
 export function assertSnapshotContract(database: DatabaseSync): void {
-  const applicationId = database.prepare('PRAGMA application_id').get() as
-    | { application_id: number }
-    | undefined;
-  if (applicationId?.application_id !== SNAPSHOT_APPLICATION_ID) {
-    throw new Error(
-      `snapshot application_id is ${applicationId?.application_id}, expected ${SNAPSHOT_APPLICATION_ID}`,
-    );
-  }
-  const userVersion = database.prepare('PRAGMA user_version').get() as
-    | { user_version: number }
-    | undefined;
-  if (userVersion?.user_version !== SNAPSHOT_USER_VERSION) {
-    throw new Error(
-      `snapshot user_version is ${userVersion?.user_version}, expected ${SNAPSHOT_USER_VERSION}`,
-    );
-  }
-
-  const objects = database
-    .prepare("SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name")
-    .all() as { type: string; name: string }[];
-  const tables = objects.filter((row) => row.type === 'table').map((row) => row.name).sort();
-  const unexpected = [...tables].sort().join(',') !== [...SNAPSHOT_TABLES].sort().join(',');
-  if (unexpected) {
-    throw new Error(`snapshot tables are [${tables.join(', ')}], expected [${SNAPSHOT_TABLES.join(', ')}]`);
-  }
-  const otherObjects = objects.filter((row) => row.type !== 'table' && row.type !== 'index');
-  if (otherObjects.length > 0) {
-    throw new Error(
-      `snapshot carries unexpected schema objects: ${otherObjects.map((row) => `${row.type} ${row.name}`).join(', ')}`,
-    );
-  }
-
-  for (const [table, columns] of Object.entries(SNAPSHOT_TABLE_COLUMNS)) {
-    const actual = database.prepare(`PRAGMA table_info(${table})`).all() as unknown as TableInfoRow[];
-    const shape = actual.map((row) => `${row.name}:${row.pk}`);
-    const expected = columns.map((column) => `${column.name}:${column.pk}`);
-    if (shape.length !== expected.length || shape.some((value, index) => value !== expected[index])) {
-      throw new Error(
-        `snapshot table ${table} has columns [${shape.join(', ')}], expected [${expected.join(', ')}]`,
-      );
-    }
-  }
-
-  const indexes = database
-    .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name")
-    .all() as { name: string }[];
-  if (!indexes.some((row) => row.name === SNAPSHOT_EXPLICIT_INDEX)) {
-    throw new Error(`snapshot is missing the ${SNAPSHOT_EXPLICIT_INDEX} index`);
-  }
+  assertSnapshotRows((sql) => database.prepare(sql).all() as Record<string, unknown>[]);
 }
 
 /**

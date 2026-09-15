@@ -32,6 +32,7 @@ import { readBuildBinding } from '../src/lib/snapshot-reader.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
 import { assertSnapshotContract } from './write-snapshot.ts';
+import { readStagedWasm } from './copy-wasm.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
@@ -155,6 +156,37 @@ function snapshotOutput(root: string, workspace?: string): Set<string> {
   return new Set([file]);
 }
 
+/**
+ * The bound SQLite WASM member, validated against its own filename.
+ *
+ * An empty set when this build staged no WASM (synthetic inventories without a
+ * browser runtime). When a binding exists, exactly the digest-named member must
+ * be present; a second `sqlite3*.wasm` is unexpected.
+ */
+function wasmOutput(root: string, workspace?: string): Set<string> {
+  const binding = readStagedWasm(workspace);
+  if (binding === undefined) return new Set();
+  for (const member of binding.members) {
+    let bytes: Buffer;
+    try {
+      bytes = readFileSync(join(root, ...member.split('/')));
+    } catch {
+      throw new BuildFailure('output-inventory-wasm-missing', 'output inventory is missing a bound wasm member', member);
+    }
+    if (member.endsWith('.wasm')) {
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      if (digest !== binding.digest) {
+        throw new BuildFailure(
+          'output-inventory-wasm-digest',
+          'output inventory wasm digest does not match its bound URL',
+          member + ': expected ' + binding.digest + ', got ' + digest,
+        );
+      }
+    }
+  }
+  return new Set(binding.members);
+}
+
 function pagefindFiles(root: string, actual: readonly string[]): Set<string> {
   // These are Pagefind's fixed runtime distribution. Content-addressed members
   // are added only from pagefind-entry.json and the gzip metadata it names.
@@ -269,6 +301,7 @@ export function assertOutputInventory(root: string, artifact: ContentArtifact, w
     ...GENERATED_FILES,
     ...PAGEFIND_RUNTIME,
     ...snapshotOutput(root, workspace),
+    ...wasmOutput(root, workspace),
   ]);
   const pagefind = pagefindFiles(root, actual);
   const unexpected: string[] = [];
@@ -280,7 +313,7 @@ export function assertOutputInventory(root: string, artifact: ContentArtifact, w
       unexpected.push(file);
       continue;
     }
-    if (exact.has(file) || pagefind.has(file) || /^_astro\/[A-Za-z0-9._-]+\.[A-Za-z0-9_-]{8,}\.(?:css|js)$/.test(file)) continue;
+    if (exact.has(file) || pagefind.has(file) || /^_astro\/[A-Za-z0-9._-]*[.-][A-Za-z0-9_-]{8,}\.(?:css|js)$/.test(file)) continue;
     unexpected.push(file);
   }
 

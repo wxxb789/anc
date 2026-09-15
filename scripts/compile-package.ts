@@ -46,8 +46,8 @@
  *
  * ## What `tsc` cannot do, and this file does
  *
- * `tsc` only rewrites specifiers in files it compiles, and two kinds of file
- * reference `.ts` paths without being TypeScript:
+ * `tsc` only rewrites specifiers in files it compiles, and three kinds of file
+ * reference `.ts` paths without being rewritten by it:
  *
  * - **The 19 `.astro` files.** Astro components are not TypeScript modules and
  *   `tsc` does not emit them, but their frontmatter and `<script>` bodies import
@@ -59,6 +59,10 @@
  *   `src/scripts/diagram-disabled.ts` inside `new URL(...)`. A path built out of
  *   a string is invisible to any compiler, which is the same reason
  *   `tests/packaging.test.ts` has to be told about that module by hand.
+ * - **A compiled `.js` that names a module in a string**, such as
+ *   `snapshot-client.js`'s `new URL('./snapshot-worker.ts', import.meta.url)`.
+ *   `rewriteRelativeImportExtensions` rewrites import specifiers only, so the
+ *   worker URL would otherwise point at a `.ts` file the tarball does not carry.
  *
  * The rewrite is deliberately narrow: a relative specifier, in quotes, ending
  * `.ts`, whose target exists as a `.ts` file on disk. It is applied to the
@@ -373,14 +377,20 @@ export function compilePackage(destination: string): { compiled: number; rewritt
   // a component or script added later is covered with nothing to remember.
   const carriers = filesUnder(
     destination,
-    (path) => path.endsWith('.astro') || path.endsWith('.mjs'),
+    (path) => path.endsWith('.astro') || path.endsWith('.mjs') || path.endsWith('.js'),
   );
 
   for (const file of carriers) {
     const before = readFileSync(file, 'utf8');
     // Resolved against the *original* tree, because the "is this one of ours"
     // check has to see the `.ts` files, which the staged copy no longer has.
-    const origin = join(ROOT, relative(destination, file));
+    // A compiled `.js` is checked against its `.ts` origin, because that is where
+    // a string-built worker URL (`new URL('./snapshot-worker.ts', import.meta.url)`)
+    // has to resolve; `tsc` rewrites import specifiers but not string literals.
+    const staged = relative(destination, file);
+    const origin = staged.endsWith('.js')
+      ? join(ROOT, `${staged.slice(0, -'.js'.length)}.ts`)
+      : join(ROOT, staged);
     const after = rewriteSpecifiers(before, origin);
     if (after === before) continue;
     writeFileSync(file, after, 'utf8');

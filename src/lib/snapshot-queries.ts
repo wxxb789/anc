@@ -203,14 +203,37 @@ export function pageOf<T extends { slug: string }>(rows: readonly T[], pageSize:
   return { items, nextCursor };
 }
 
-/** Whether a slug is a plausible lookup key before a query is attempted. */
+/** A canonical note slug: lowercase, hyphen-separated, no traversal or dot. */
+const LOOKUP_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Whether a slug is a plausible lookup key before a query is attempted.
+ *
+ * Uses the note-slug grammar rather than only a length bound: SQL binds the
+ * value as a parameter, so a traversal string cannot escape, but a request that
+ * is not a slug is a caller defect that should fail as `bad-argument` rather
+ * than silently return "no match".
+ */
 export function isLookupSlug(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 128;
+  return typeof value === 'string' && value.length > 0 && value.length <= 128 && LOOKUP_SLUG.test(value);
 }
 
-/** Whether a canonical tag key is plausible before a query is attempted. */
+/** Route-key characters a canonical tag key may carry; no separators or controls. */
+const LOOKUP_TAG_INVALID = /[/\p{Cc}\p{Cf}]/u;
+
+/**
+ * Whether a canonical tag key is plausible before a query is attempted.
+ *
+ * Wider than a slug because a tag key may be any script (including CJK and
+ * combining marks) and may contain `_`; it must still be one path segment.
+ */
 export function isLookupTagKey(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 128;
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    !LOOKUP_TAG_INVALID.test(value)
+  );
 }
 
 /**

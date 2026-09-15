@@ -555,7 +555,7 @@ test('the residue scan fails on each marker it exists to catch', () => {
     // the property that keeps the scan honest as the build grows: a future step
     // emitting a new format cannot quietly opt out of being read.
     rmSync(join(scratch, 'index.html'));
-    writeFileSync(join(scratch, 'artifact.wasm'), 'msw/secret', 'utf8');
+    writeFileSync(join(scratch, 'artifact.bin'), 'msw/secret', 'utf8');
     const unclassified = scanResidue(scratch).findings;
     assert.ok(
       unclassified.some((finding) => finding.includes('unscanned')),
@@ -563,7 +563,7 @@ test('the residue scan fails on each marker it exists to catch', () => {
     );
 
     // And an empty artifact must fail rather than report a clean scan.
-    rmSync(join(scratch, 'artifact.wasm'));
+    rmSync(join(scratch, 'artifact.bin'));
     assert.ok(
       scanResidue(scratch).findings.some((finding) => finding.includes('proved nothing')),
       'an empty dist/ passed the scan',

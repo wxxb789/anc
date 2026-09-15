@@ -388,6 +388,7 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
   '.jpg',
   '.jpeg',
   '.png',
+  '.wasm',
   '.webp',
   '.woff',
   '.woff2',
@@ -472,6 +473,18 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
  * page from the scan entirely. Anchoring costs nothing and removes the case.
  */
 const THIRD_PARTY = 'pagefind';
+
+/**
+ * The pinned SQLite runtime, also third-party and also anchored at the root.
+ *
+ * Its Emscripten glue legitimately contains `[[` and `file://` strings, which the
+ * residue rules would otherwise read as ANC content. It is copied verbatim from
+ * the pinned package (see `scripts/build-wasm.ts`), never authored here, and its
+ * WASM binary is a compiled artifact; `tests/built-output.test.ts` and the
+ * output inventory still bind its exact members. A note slugged `wasm` builds
+ * under `/notes/wasm/`, so anchoring keeps that page scanned.
+ */
+const WASM_RUNTIME = 'wasm';
 
 /** The one member of that bundle whose text is this site's own content. */
 const FRAGMENT_EXTENSION = '.pf_fragment';
@@ -1158,6 +1171,9 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // through to the unclassified branch and fails the scan by name, which is
     // property 1 of this file's header.
     const inBundle = where.split(sep)[0] === THIRD_PARTY;
+    // The SQLite runtime is the other declared third-party root; see
+    // {@link WASM_RUNTIME}. Every member is bound by the output inventory.
+    if (posixWhere.split('/')[0] === WASM_RUNTIME) continue;
     const isFragment = inBundle && extension === FRAGMENT_EXTENSION;
     if (inBundle && !isFragment) continue;
     // Exact membership in build-minted provenance, never a basename or path

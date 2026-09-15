@@ -501,11 +501,15 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     process.env['SNAPSHOT_WORKSPACE'] = snapshotDirectory;
     const { buildSnapshot } = await import('../scripts/build-snapshot.ts');
     buildSnapshot(artifact, snapshotDirectory);
+    const { buildWasm } = await import('../scripts/build-wasm.ts');
+    buildWasm(snapshotDirectory);
 
     await astroBuild({ outDir: staging, logLevel: 'error' });
 
     const { copySnapshotToOutput } = await import('../scripts/copy-snapshot.ts');
     copySnapshotToOutput(staging, snapshotDirectory);
+    const { copyWasmToOutput } = await import('../scripts/copy-wasm.ts');
+    copyWasmToOutput(staging, snapshotDirectory);
 
     const { emitRedirects } = await import('../scripts/emit-redirects.ts');
     emitRedirects(staging);

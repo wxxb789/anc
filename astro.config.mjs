@@ -1,10 +1,37 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAGRAM_MODE } from './src/lib/diagram-mode.ts';
 import { MATH_MODE } from './src/lib/math-mode.ts';
 import { configForBuild } from './scripts/load-config.ts';
 import { vendorProvenancePlugin } from './scripts/vendor-provenance.ts';
+
+/** The private snapshot workspace this build staged into. */
+const SNAPSHOT_WORKSPACE = resolve(process.cwd(), process.env['SNAPSHOT_WORKSPACE'] ?? '.astro/snapshot');
+
+/**
+ * Read one staged binding from the private snapshot workspace.
+ *
+ * The design calls for a private generated binding rather than a public manifest
+ * (`docs/core-design/build-and-runtime.md`). `vite.define` substitutes the
+ * digest-named same-origin URLs into the hashed client/worker bundles at build
+ * time: it carries no local path and no corpus data, and a build with no staging
+ * (dev, unit tests) substitutes `null`, so the Worker fails closed and fetches
+ * nothing. A virtual module was tried first and rejected: Vite's worker
+ * environment did not run the plugin's resolver for it.
+ *
+ * @param {string} name
+ * @returns {Record<string, any> | null}
+ */
+function readStaged(name) {
+  try {
+    return JSON.parse(readFileSync(resolve(SNAPSHOT_WORKSPACE, name), 'utf8'));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Keep a client runtime out of the build unless client mode wants it.
@@ -192,6 +219,11 @@ export default defineConfig({
   output: 'static',
   trailingSlash: 'always',
   vite: {
+    define: {
+      __ANC_SNAPSHOT_BINDING__: JSON.stringify(readStaged('binding.json')),
+      __ANC_WASM_BINDING__: JSON.stringify(readStaged('wasm.json')),
+      __ANC_WASM_MODULE_URL__: JSON.stringify(readStaged('wasm.json')?.['moduleUrl'] ?? '/wasm/sqlite-wasm.js'),
+    },
     plugins: [
       clientRuntimePlugin('diagram', DIAGRAM_MODE),
       clientRuntimePlugin('math', MATH_MODE),

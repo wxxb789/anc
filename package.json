@@ -52,6 +52,7 @@
   },
   "dependencies": {
     "@astrojs/prism": "^4.0.2",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "astro": "^7.1.6",
     "github-slugger": "^2.0.0",
     "happy-dom": "20.11.2",

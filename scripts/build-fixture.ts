@@ -36,8 +36,10 @@ const FIXTURE_ARTIFACT = 'tests/fixtures/valid-corpus.json';
 const STEPS: readonly (readonly [string, ...string[]])[] = [
   ['node', 'scripts/validate-content.ts'],
   ['node', 'scripts/build-snapshot.ts'],
+  ['node', 'scripts/build-wasm.ts'],
   ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/copy-snapshot.ts'],
+  ['node', 'scripts/copy-wasm.ts'],
   ['node', 'scripts/emit-redirects.ts'],
   // `scripts/run-pagefind.ts` rather than `pnpm exec pagefind --site dist`,
   // which is what this line used to be. The two are not the same command: the

@@ -45,8 +45,10 @@ type Step = readonly [string, ...string[]];
 const STEPS: readonly Step[] = [
   ['node', 'scripts/validate-content.ts'],
   ['node', 'scripts/build-snapshot.ts'],
+  ['node', 'scripts/build-wasm.ts'],
   ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/copy-snapshot.ts'],
+  ['node', 'scripts/copy-wasm.ts'],
   ['node', 'scripts/emit-redirects.ts'],
   ['node', 'scripts/run-pagefind.ts'],
   ['node', 'scripts/verify-output-inventory.ts'],
