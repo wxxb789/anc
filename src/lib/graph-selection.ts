@@ -91,6 +91,24 @@ export function selectLocal<T extends SelectionNode>(
 }
 
 /**
+ * The global ranking rule: degree in the candidate graph descending, then the
+ * shared title/slug order. Exported so the Worker's SQL-aggregated path and
+ * `selectGlobal`'s edge-walking path share one implementation instead of two
+ * copies that a test has to hold together.
+ */
+export function rankGlobal<T extends SelectionNode>(
+  candidates: readonly T[],
+  degreeOf: (node: T) => number,
+): T[] {
+  return [...candidates].sort((a, b) => {
+    const left = degreeOf(a);
+    const right = degreeOf(b);
+    if (left !== right) return right - left;
+    return byTitleThenSlug(a, b);
+  });
+}
+
+/**
  * Global contract: rank by the number of distinct adjacent notes **in the
  * candidate graph** (descending), then title/slug, then truncate and extract
  * induced edges over the drawn set.
@@ -107,12 +125,7 @@ export function selectGlobal<T extends SelectionNode>(
     neighbours.get(edge.from)!.add(edge.to);
     neighbours.get(edge.to)!.add(edge.from);
   }
-  const ranked = [...candidates].sort((a, b) => {
-    const left = neighbours.get(a.slug)!.size;
-    const right = neighbours.get(b.slug)!.size;
-    if (left !== right) return right - left;
-    return byTitleThenSlug(a, b);
-  });
+  const ranked = rankGlobal(candidates, (node) => neighbours.get(node.slug)!.size);
   const nodes = ranked.slice(0, limit);
   return {
     nodes,

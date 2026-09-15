@@ -172,17 +172,90 @@ test('the tag chooser enumerates every matching note across pages, in cursor ord
     'a default-language result carried a redundant lang',
   );
 
-  // An unknown key is distinct from exhaustion, driven through the real handler.
+  // An unknown key is distinct from exhaustion: the panel must render the
+  // unknown sentence, driven through the real handler.
   await page.evaluate(() => {
     const select = document.querySelector<HTMLSelectElement>('#tag-browser-select')!;
     select.append(new Option('zzq-not-a-tag', 'zzq-not-a-tag'));
     select.value = 'zzq-not-a-tag';
     select.dispatchEvent(new Event('change', { bubbles: true }));
   });
-  await page.waitForTimeout(900);
-  const unknown = await page.locator('#tag-browser-status').textContent();
-  assert.notEqual(unknown, status, 'an unknown tag was reported as exhaustion');
+  // Wait for the state this test names rather than a fixed sleep: `tag-browser.ts`
+  // writes the loading sentence synchronously before awaiting the Worker, so a
+  // "not exhaustion" probe also passes while the reply is still in flight and the
+  // list is empty — the regression this gate exists to catch would stay green.
+  const unknownSentence = await page.locator('#tag-browser').getAttribute('data-tag-browse-unknown');
+  assert.ok(unknownSentence, '#tag-browser does not carry the unknown sentence to render');
+  await page.waitForFunction(
+    (expected) => document.querySelector('#tag-browser-status')?.textContent === expected,
+    unknownSentence,
+    { timeout: 10_000 },
+  );
+  assert.equal(
+    await page.locator('#tag-browser-status').textContent(),
+    unknownSentence,
+    'an unknown tag did not render the unknown sentence',
+  );
   assert.equal((await seenSlugs(page)).length, 0, 'an unknown tag produced results');
+  await page.close();
+}, 120_000);
+
+test('two Load more clicks before the first reply cannot duplicate a page', async () => {
+  const page = await browser.newPage();
+  // Count the `byTag` messages the page actually dispatches. The snapshot is
+  // fetched once and reused, so a delayed `**/data/site.*` route never holds a
+  // continuation open — the Worker message is the boundary that matters.
+  await page.addInitScript(() => {
+    const state = window as unknown as { byTagDispatches: number };
+    state.byTagDispatches = 0;
+    const original = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (
+      this: Worker,
+      message: unknown,
+      ...rest: unknown[]
+    ): void {
+      if ((message as { type?: string }).type === 'byTag') state.byTagDispatches += 1;
+      (original as (this: Worker, ...args: unknown[]) => void).call(this, message, ...rest);
+    };
+  });
+  const dispatches = (): Promise<number> =>
+    page.evaluate(() => (window as unknown as { byTagDispatches: number }).byTagDispatches);
+
+  await page.goto(`${origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
+  await page.click('#tag-browse-start');
+  await page.waitForSelector('#tag-browser-results a');
+  assert.equal(await dispatches(), 1, 'the first page should be one byTag request');
+
+  // Two synchronous clicks, the way a double click arrives: the button disables
+  // itself inside the first handler, so the second click hits a disabled control
+  // and dispatches nothing. Neither reply can be handled until this turn ends,
+  // so the dispatch count is final here rather than racing the Worker.
+  await page.evaluate(() => {
+    const more = document.querySelector<HTMLButtonElement>('#tag-browse-more')!;
+    more.click();
+    more.click();
+  });
+  assert.equal(await dispatches(), 2, 'a second Load more click dispatched the same cursor again');
+
+  // Then wait for the continuation's reply and enumerate the last page, so the
+  // list is read only after every dispatched reply has rendered.
+  await page.waitForFunction(
+    (expected) => document.querySelectorAll('#tag-browser-results a').length === expected,
+    PAGE_SIZE * 2,
+    { timeout: 10_000 },
+  );
+  const exhaustedSentence = await page.locator('#tag-browser').getAttribute('data-tag-browse-exhausted');
+  assert.ok(exhaustedSentence, '#tag-browser does not carry the exhaustion sentence to render');
+  await page.locator('#tag-browse-more').click();
+  await page.waitForFunction(
+    (expected) => document.querySelector('#tag-browser-status')?.textContent === expected,
+    exhaustedSentence,
+    { timeout: 10_000 },
+  );
+
+  const collected = await seenSlugs(page);
+  assert.deepEqual(collected, EXPECTED, 'the browser did not enumerate the tag in cursor order');
+  assert.equal(new Set(collected).size, collected.length, 'a note was enumerated twice');
   await page.close();
 }, 120_000);
 

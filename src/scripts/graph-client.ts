@@ -15,9 +15,11 @@ import {
   layoutLocal,
   boundCounts,
   drawnNeighbours,
+  relationKey,
   truncateLabel,
   SUBJECT_RADIUS,
   NODE_RADIUS,
+  type EdgeDirection,
   type Graph,
 } from '../lib/graph-layout.ts';
 import type { SelectionNode } from '../lib/graph-selection.ts';
@@ -112,6 +114,11 @@ function install(region: HTMLElement, controls: HTMLElement): void {
 
     if (canvas) drawFigure(canvas, graph);
     if (tableBody) drawTable(tableBody, graph);
+    // The heading's count span describes the static figure. A live redraw makes
+    // it a second, stale total for the same picture, so it goes and the status
+    // sentence below is the live home for counts.
+    const figureLabel = region.querySelector<HTMLElement>('[data-graph-figure-label]');
+    if (figureLabel) figureLabel.hidden = true;
     if (status) {
       const counts = boundCounts(graph);
       const templateName = scope === 'local' ? 'graphStatusLocal' : tag ? 'graphStatusFiltered' : 'graphStatusGlobal';
@@ -129,6 +136,18 @@ function install(region: HTMLElement, controls: HTMLElement): void {
     const edgeGroup = svg.querySelector('.graph-edges');
     const nodesGroup = svg.querySelector('.graph-nodes');
     if (!edgeGroup || !nodesGroup) return;
+
+    // The static SVG carries the build-time frame and a count-bearing name, so
+    // a redraw has to move both with the new selection: without the frame the
+    // filtered graph draws inside the old box, and without the name a screen
+    // reader hears the static total beside the live one. The live counts are in
+    // `[data-graph-status]`, which is why the live name is count-free.
+    svg.setAttribute('viewBox', graph.viewBox);
+    svg.setAttribute('width', String(graph.width));
+    svg.setAttribute('height', String(graph.height));
+    const figureName = template('graphFigureName');
+    if (figureName !== '') svg.setAttribute('aria-label', figureName);
+
     const namespace = 'http://www.w3.org/2000/svg';
     const markerId = svg.querySelector('marker')?.id;
     const arrow = markerId === undefined ? undefined : `url(#${markerId})`;
@@ -179,7 +198,7 @@ function install(region: HTMLElement, controls: HTMLElement): void {
   function labelFor(node: {
     entry: SelectionNode;
     isSubject: boolean;
-    direction?: string;
+    direction?: EdgeDirection;
     degree: number;
   }): string {
     return fill(template(node.degree === 1 ? 'graphNodeLabelOne' : 'graphNodeLabel'), {
@@ -242,17 +261,11 @@ function install(region: HTMLElement, controls: HTMLElement): void {
     );
   }
 
-  function labelForRelation(node: { isSubject: boolean; direction?: string }): string {
-    if (node.isSubject) return template('graphRelationSubject');
-    switch (node.direction) {
-      case 'outgoing':
-        return template('graphRelationOutgoing');
-      case 'incoming':
-        return template('graphRelationIncoming');
-      case 'mutual':
-        return template('graphRelationMutual');
-      default:
-        return template('graphRelationLinked');
-    }
+  function labelForRelation(node: { isSubject: boolean; direction?: EdgeDirection }): string {
+    // One classifier decides the state; the attribute name is that same key, as
+    // `data-graph-relation-<key>` in NoteGraph.astro and `dataset` camelize it.
+    // Keys are single words, so the camel spelling is the first letter up.
+    const key = relationKey(node);
+    return template(`graphRelation${key.charAt(0).toUpperCase()}${key.slice(1)}`);
   }
 }

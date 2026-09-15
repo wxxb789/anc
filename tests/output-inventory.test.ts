@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,8 +6,13 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { loadArtifact } from '../src/lib/artifact-source.ts';
+import { readBuildBinding, snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
+import { snapshotFileName } from '../src/lib/snapshot.ts';
+import { copySnapshotToOutput } from '../scripts/copy-snapshot.ts';
+import { readStagedWasm } from '../scripts/copy-wasm.ts';
 import { assertOutputInventory } from '../scripts/verify-output-inventory.ts';
 import { BuildFailure } from '../scripts/write-report.ts';
+import { stageBindings } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const DIST = join(ROOT, 'dist');
@@ -22,6 +27,24 @@ function mismatch(root: string): BuildFailure {
     return error;
   }
   assert.fail('expected output inventory to fail');
+}
+
+/** A BuildFailure from an explicit workspace, whatever code it carries. */
+function workspaceFailure(root: string, workspace: string): BuildFailure {
+  try {
+    assertOutputInventory(root, ARTIFACT, workspace);
+  } catch (error) {
+    assert.ok(error instanceof BuildFailure, 'inventory failure lost its disclosure-checked type');
+    return error;
+  }
+  assert.fail('expected output inventory to fail');
+}
+
+/** Flip one byte away from the file's start, so the digest is what changed. */
+function flipByte(path: string): void {
+  const bytes = readFileSync(path);
+  bytes[Math.floor(bytes.length / 2)] ^= 0xff;
+  writeFileSync(path, bytes);
 }
 
 function copyDist(): string {
@@ -160,5 +183,103 @@ test('a missing route and an altered package asset fail in distinct directions',
   } finally {
     rmSync(missingRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     rmSync(alteredRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+/**
+ * A corrupted or missing bound snapshot or wasm member fails by its own code.
+ *
+ * The inventory's digest claims over the two binding-driven members — the
+ * digest-named snapshot and the digest-named WASM binary — are what the release
+ * artifact's URL is supposed to be proven against, and until this gate the only
+ * mutations the suite planted were to routes, package assets, and Pagefind
+ * members, so deleting either comparison or either missing-member branch left
+ * the suite green.
+ *
+ * **Measured, one mutation at a time:** replacing the snapshot digest
+ * comparison with `false` reds the flipped-snapshot case because the corrupted
+ * file is then accepted outright; renaming the missing-snapshot code reds the
+ * deleted-member case at the code assertion; and the same two edits in
+ * `wasmOutput` red the wasm cases. The fixture is the real build: the bindings
+ * are copied byte for byte out of the staged workspace `bin/anc.mjs` passes to
+ * `assertOutputInventory`, and each mutation changes exactly one member of a
+ * copy of the real `dist/`.
+ */
+test('a corrupted or missing bound snapshot or wasm member fails by its own code', () => {
+  const workspace = stageBindings(mkdtempSync(join(tmpdir(), 'output-inventory-bindings-')));
+  const roots: string[] = [];
+  try {
+    const binding = readBuildBinding(workspace);
+    const wasm = readStagedWasm(workspace);
+    assert.ok(binding, 'the staged workspace has no snapshot binding, so this gate would measure nothing');
+    assert.ok(wasm, 'the staged workspace has no wasm binding, so this gate would measure nothing');
+    const snapshotMember = snapshotFileName(binding.digest);
+    const wasmMember = wasm.members.find((member) => member.endsWith('.wasm'));
+    assert.ok(wasmMember, 'the staged wasm binding names no .wasm member, so this gate would measure nothing');
+
+    // The control: an untouched copy is accepted through the same call with the
+    // same workspace argument, so each refusal below is the mutation.
+    const control = copyDist();
+    roots.push(control);
+    assert.ok(assertOutputInventory(control, ARTIFACT, workspace) > 0, 'the fixture was refused before it was mutated');
+
+    const digestRoot = copyDist();
+    roots.push(digestRoot);
+    flipByte(join(digestRoot, ...snapshotMember.split('/')));
+    assert.equal(workspaceFailure(digestRoot, workspace).code, 'output-inventory-snapshot-digest');
+
+    const missingRoot = copyDist();
+    roots.push(missingRoot);
+    rmSync(join(missingRoot, ...snapshotMember.split('/')));
+    assert.equal(workspaceFailure(missingRoot, workspace).code, 'output-inventory-snapshot-missing');
+
+    const wasmDigestRoot = copyDist();
+    roots.push(wasmDigestRoot);
+    flipByte(join(wasmDigestRoot, ...wasmMember.split('/')));
+    assert.equal(workspaceFailure(wasmDigestRoot, workspace).code, 'output-inventory-wasm-digest');
+
+    const wasmMissingRoot = copyDist();
+    roots.push(wasmMissingRoot);
+    rmSync(join(wasmMissingRoot, ...wasmMember.split('/')));
+    assert.equal(workspaceFailure(wasmMissingRoot, workspace).code, 'output-inventory-wasm-missing');
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+/**
+ * The copy step's digest comparison is what proves the public filename.
+ *
+ * `copySnapshotToOutput` copies the staged database under its bound digest name
+ * and then re-reads the copied bytes against the binding; before this gate only
+ * the inventory's comparison (a different file) was exercised, so deleting this
+ * one left the suite green. **Measured:** mutating the digest comparison to
+ * `false` accepts the flipped staged bytes and the `assert.throws` below is what
+ * fails, so the gate names the comparison it exists for.
+ */
+test('the copy step refuses staged bytes that do not hash to the bound digest', () => {
+  const workspace = stageBindings(mkdtempSync(join(tmpdir(), 'copy-snapshot-')));
+  const outputs: string[] = [];
+  try {
+    copyFileSync(join(snapshotWorkspace(), 'snapshot.sqlite'), join(workspace, 'snapshot.sqlite'));
+    const binding = readBuildBinding(workspace);
+    assert.ok(binding, 'the staged workspace has no snapshot binding, so this gate would measure nothing');
+
+    // The control: the untouched staged pair copies and reports its bound URL.
+    const output = mkdtempSync(join(tmpdir(), 'copy-snapshot-out-'));
+    outputs.push(output);
+    assert.equal(copySnapshotToOutput(output, workspace), binding.url);
+
+    // The mutation: the same staged pair, with the source bytes altered.
+    flipByte(join(workspace, 'snapshot.sqlite'));
+    assert.throws(
+      () => copySnapshotToOutput(output, workspace),
+      /do not match the digest/,
+      'the copy step accepted bytes that do not hash to the bound URL',
+    );
+  } finally {
+    for (const output of outputs) rmSync(output, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });

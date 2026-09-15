@@ -19,7 +19,7 @@ import {
   type NoteSummary,
   type TagPage,
 } from './snapshot-queries.ts';
-import { byTitleThenSlug, inducedEdges, selectLocal, GLOBAL_NODE_LIMIT, type SelectionEdge } from './graph-selection.ts';
+import { rankGlobal, inducedEdges, selectLocal, GLOBAL_NODE_LIMIT, type SelectionEdge } from './graph-selection.ts';
 
 /** Runs one fixed statement with bound parameters and returns its rows. */
 export interface SnapshotDb {
@@ -127,6 +127,11 @@ function selectionSummary(node: { slug: string; title: string; language: string 
   return { slug: node.slug, title: node.title, language: node.language };
 }
 
+/** `nodeDegrees`/`tagNodeDegrees` rows as the rank function's degree lookup. */
+function degreeMap(rows: readonly Record<string, unknown>[]): Map<number, number> {
+  return new Map(rows.map((row) => [Number(row['id']), Number(row['degree'])]));
+}
+
 /**
  * The one-hop neighbourhood of a known center.
  *
@@ -156,43 +161,23 @@ export function localGraph(db: SnapshotDb, slug: string): LocalGraphSelection | 
 /**
  * The ranked global graph, optionally restricted to one tag's members.
  *
- * Unfiltered ranking uses one SQL aggregate over the edge set; the filtered case
- * must count distinct neighbours **within** the matching subgraph, which needs
- * the edge rows. Either way, only the selected nodes' incident edges are read.
+ * Ranking has one authority: `rankGlobal` orders by degree in the candidate
+ * graph, descending, then title/slug. The unfiltered case takes degrees from
+ * one aggregate over the edge set; the filtered case takes the tag's member
+ * rows and their in-tag degrees from tag-scoped statements, so filtering never
+ * pulls the corpus' edge rows into JS. Only after the drawn set is chosen are
+ * the directed edges among it read.
  */
 export function globalGraph(db: SnapshotDb, tagKey?: string | null): GraphSelection {
-  const all = (db.select(SNAPSHOT_QUERIES.allNodes) as unknown as Record<string, unknown>[]).map(selectionNode);
+  const filtered = tagKey !== undefined && tagKey !== null;
+  const candidates = db
+    .select(filtered ? SNAPSHOT_QUERIES.tagNodes : SNAPSHOT_QUERIES.allNodes, filtered ? [tagKey] : [])
+    .map(selectionNode);
+  const degrees = degreeMap(
+    db.select(filtered ? SNAPSHOT_QUERIES.tagNodeDegrees : SNAPSHOT_QUERIES.nodeDegrees, filtered ? [tagKey] : []),
+  );
 
-  let candidates = all;
-  let degree = new Map<number, number>();
-  if (tagKey !== undefined && tagKey !== null) {
-    const members = new Set(
-      (db.select(SNAPSHOT_QUERIES.tagNodeIds, [tagKey]) as unknown as { id: number }[]).map((row) => Number(row.id)),
-    );
-    candidates = all.filter((node) => members.has(node.id));
-    // Degree is the number of **distinct** adjacent notes inside the matching
-    // subgraph, matching `selectGlobal`: counting edge endpoints would make a
-    // reciprocal pair count twice and could change the selected set.
-    const present = new Set(candidates.map((node) => node.id));
-    const seen = new Map<number, Set<number>>(candidates.map((node) => [node.id, new Set<number>()]));
-    for (const row of db.select(SNAPSHOT_QUERIES.allEdges) as unknown as { source_id: number; target_id: number }[]) {
-      if (!present.has(row.source_id) || !present.has(row.target_id) || row.source_id === row.target_id) continue;
-      seen.get(row.source_id)!.add(row.target_id);
-      seen.get(row.target_id)!.add(row.source_id);
-    }
-    for (const [id, neighbours] of seen) degree.set(id, neighbours.size);
-  } else {
-    for (const row of db.select(SNAPSHOT_QUERIES.nodeDegrees) as unknown as { id: number; degree: number }[]) {
-      degree.set(Number(row.id), Number(row.degree));
-    }
-  }
-
-  const ranked = [...candidates].sort((a, b) => {
-    const left = degree.get(a.id) ?? 0;
-    const right = degree.get(b.id) ?? 0;
-    if (left !== right) return right - left;
-    return byTitleThenSlug(a, b);
-  });
+  const ranked = rankGlobal(candidates, (node) => degrees.get(node.id) ?? 0);
   const selected = ranked.slice(0, GLOBAL_NODE_LIMIT);
   const selectedSlugs = new Set(selected.map((node) => node.slug));
   return {

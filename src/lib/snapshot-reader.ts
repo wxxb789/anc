@@ -17,13 +17,20 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DatabaseSync } from './sqlite.ts';
-import { readSnapshotBinding, type SnapshotBinding } from './snapshot.ts';
+import { configuredSnapshotWorkspace, readSnapshotBinding, type SnapshotBinding } from './snapshot.ts';
 import { SNAPSHOT_QUERIES } from './snapshot-queries.ts';
 
-/** Default private workspace, relative to the build's working directory. */
-export const DEFAULT_SNAPSHOT_WORKSPACE = '.astro/snapshot';
-
-export function snapshotWorkspace(workspace: string = process.env['SNAPSHOT_WORKSPACE'] || DEFAULT_SNAPSHOT_WORKSPACE): string {
+/**
+ * The private workspace `SNAPSHOT_WORKSPACE` names, anchored at the working
+ * directory, or the default when it is unset or empty.
+ *
+ * The empty-as-unset choice is `configuredSnapshotWorkspace`'s, shared with
+ * `astro.config.mjs`; resolving the path against `cwd` stays here because this
+ * is the Node-only scope.
+ */
+export function snapshotWorkspace(
+  workspace: string = configuredSnapshotWorkspace(process.env['SNAPSHOT_WORKSPACE']),
+): string {
   return resolve(process.cwd(), workspace);
 }
 

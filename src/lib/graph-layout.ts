@@ -114,6 +114,36 @@ function edgeDirection(
 }
 
 /**
+ * The relationship states a drawn node can carry, as one shared key.
+ *
+ * `NoteGraph.astro` resolves the key to a word and writes its
+ * `data-graph-relation-<key>` attribute; `graph-client.ts` builds the same
+ * attribute name from the key. Keeping the classifier beside `edgeDirection`
+ * — the function that computes a node's direction — means a sixth state or a
+ * rename is one edit here, with `NoteGraph.astro`'s `Record<RelationKey, …>`
+ * failing to type-check until the new state has a word, rather than a switch
+ * in the shipped bundle falling through to a wrong label.
+ */
+export type RelationKey = 'subject' | EdgeDirection | 'linked';
+
+export function relationKey(node: { isSubject: boolean; direction?: EdgeDirection }): RelationKey {
+  if (node.isSubject) return 'subject';
+  switch (node.direction) {
+    case 'outgoing':
+      return 'outgoing';
+    case 'incoming':
+      return 'incoming';
+    case 'mutual':
+      return 'mutual';
+    // `/graph/` has no subject, so its nodes have no direction relative to one.
+    // Spelled as a case rather than a `default` so a sixth direction fails this
+    // function's return type instead of silently reading as `linked`.
+    case undefined:
+      return 'linked';
+  }
+}
+
+/**
  * Every directed edge with both ends drawn, each unordered pair drawn once.
  * A reciprocal pair becomes one line with two arrowheads.
  */

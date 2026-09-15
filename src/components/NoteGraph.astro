@@ -49,6 +49,7 @@ import {
   type Graph,
   type GraphNode,
 } from '../lib/graph.ts';
+import { relationKey, type RelationKey } from '../lib/graph-layout.ts';
 import { noteRoute } from '../lib/routes.ts';
 import { partLanguage, translate } from '../lib/translations.ts';
 
@@ -103,20 +104,25 @@ const t = translate(lang);
 const titleId = `${region}-title`;
 const Heading = `h${level}` as 'h1' | 'h2';
 
+/**
+ * The relationship word each state carries, in this document's language.
+ *
+ * Keyed by the shared `relationKey` classifier, so a sixth state or a rename
+ * fails this record instead of falling through to a wrong word — and the
+ * `data-graph-relation-<key>` attributes the client reads are derived from the
+ * same keys below rather than re-spelled.
+ */
+const relationLabels: Record<RelationKey, string> = {
+  subject: t.graphSubjectRelation,
+  outgoing: t.graphOutgoingRelation,
+  incoming: t.graphIncomingRelation,
+  mutual: t.graphMutualRelation,
+  linked: t.graphLinkedRelation,
+};
+
 /** The relationship word a node's accessible name and the table both use. */
 function relationOf(node: Graph['nodes'][number]): string {
-  if (node.isSubject) return t.graphSubjectRelation;
-  switch (node.direction) {
-    case 'outgoing':
-      return t.graphOutgoingRelation;
-    case 'incoming':
-      return t.graphIncomingRelation;
-    case 'mutual':
-      return t.graphMutualRelation;
-    // `/graph/` has no subject, so its nodes have no direction relative to one.
-    default:
-      return t.graphLinkedRelation;
-  }
+  return relationLabels[relationKey(node)];
 }
 
 /** The class carrying a node's role. Shape and weight, never colour alone. */
@@ -160,11 +166,13 @@ const exploreData = explore
       ['data-graph-empty-filter', t.graphExplorerEmptyFilter],
       ['data-graph-node-label', t.graphExplorerNodeLabel],
       ['data-graph-node-label-one', t.graphExplorerNodeLabelOne],
-      ['data-graph-relation-subject', t.graphSubjectRelation],
-      ['data-graph-relation-outgoing', t.graphOutgoingRelation],
-      ['data-graph-relation-incoming', t.graphIncomingRelation],
-      ['data-graph-relation-mutual', t.graphMutualRelation],
-      ['data-graph-relation-linked', t.graphLinkedRelation],
+      // The live figure's accessible name, count-free on purpose: the count
+      // sentence is the status line's job.
+      ['data-graph-figure-name', t.graphDescription],
+      ...Object.entries(relationLabels).map(([key, label]) => [
+        `data-graph-relation-${key}`,
+        label,
+      ]),
       ['data-graph-no-links', t.graphNoLinks],
     ])
   : undefined;
@@ -173,12 +181,16 @@ const exploreData = explore
 <section class="graph-region" aria-labelledby={titleId} data-graph-region={region}>
   <div class="section-heading">
     <Heading id={titleId}>{heading}</Heading>
-    {isDrawable && <span>{t.graphFigureLabel(drawn, graph.edges.length)}</span>}
+    {isDrawable && (
+      <span data-graph-figure-label>{t.graphFigureLabel(drawn, graph.edges.length)}</span>
+    )}
   </div>
 
-  {/* Progressive enhancement. Hidden until the client runs; every string is a
+  {/* Progressive enhancement, offered only where a figure exists to enhance:
+      on an edge-less corpus an explorer would draw nothing while its live
+      status claimed a graph. Hidden until the client runs; every string is a
       `data-` attribute above, so the script carries no locale table. */}
-  {explore && (
+  {explore && isDrawable && (
     <div class="graph-explorer" hidden data-graph-controls {...exploreData}>
       <button type="button" data-graph-activate>{t.graphExplorerOpen}</button>
       <button type="button" data-graph-reset-control hidden>{t.graphExplorerReset}</button>
@@ -195,7 +207,10 @@ const exploreData = explore
       )}
     </div>
   )}
-  <p class="graph-status" role="status" aria-live="polite" data-graph-status></p>
+  {/* The live status line belongs with the controls and the figure they
+      enhance; with nothing drawable the empty state below is the whole
+      statement, so there is no second sentence for the client to fill. */}
+  {isDrawable && <p class="graph-status" role="status" aria-live="polite" data-graph-status></p>}
 
   {!isDrawable ? (
     <p class="empty-state">{empty}</p>

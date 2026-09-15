@@ -1,0 +1,70 @@
+---
+/**
+ * The enhanced tag browser, shared by `/tags/` and `/tags/<tag>/`.
+ *
+ * Both routes render the region's ids and the five `data-tag-browse-*`
+ * sentences that `src/scripts/tag-browser.ts` queries. When the shape lived on
+ * both pages a one-sided rename was silent: the client's `querySelector`
+ * returned null and the enhancement degraded without an error. The component
+ * owns that shape once; the script and this markup now move together or not at
+ * all.
+ *
+ * `mode` is the one thing that differs. `switch` renders the tag chooser;
+ * `fixed` renders the start button for the page's own tag. The complete static
+ * `FacetIndex`/`NoteList` beside it remains the no-JS route, so this region
+ * stays hidden until the script runs and unhides the static list on failure;
+ * `data-pagefind-ignore` keeps the region out of the Pagefind index.
+ */
+import { TAG_PAGE_SIZE } from '../lib/tag-browser-model.ts';
+import { NAV_LANGUAGE, TAG_BROWSE_DATASET, datasetAttribute, translate } from '../lib/translations.ts';
+
+interface Props {
+  mode: 'switch' | 'fixed';
+  /** The fixed page's tag key, sent to the snapshot exactly as the route spells it. */
+  tagKey?: string;
+  /** The chooser's options; ignored when `mode` is `fixed`. */
+  facets?: readonly { key: string; label: string }[];
+}
+
+const { mode, tagKey, facets = [] } = Astro.props;
+const t = translate(NAV_LANGUAGE);
+// The five status sentences travel as data attributes so no locale table ships
+// to the browser (`tag-browser.ts` reads them from `root.dataset`).
+const browserData = Object.fromEntries([
+  [datasetAttribute(TAG_BROWSE_DATASET.loading), t.tagBrowseLoading],
+  [datasetAttribute(TAG_BROWSE_DATASET.empty), t.tagBrowseEmpty],
+  [datasetAttribute(TAG_BROWSE_DATASET.exhausted), t.tagBrowseExhausted],
+  [datasetAttribute(TAG_BROWSE_DATASET.unknown), t.tagBrowseUnknown],
+  [datasetAttribute(TAG_BROWSE_DATASET.failed), t.tagBrowseFailed],
+]);
+---
+
+<section
+  id="tag-browser"
+  hidden
+  data-pagefind-ignore
+  data-mode={mode}
+  {...mode === 'fixed' ? { 'data-tag-key': tagKey } : {}}
+  data-page-size={String(TAG_PAGE_SIZE)}
+  aria-labelledby="tag-browser-title"
+  {...browserData}
+>
+  <h2 id="tag-browser-title">{t.tagBrowseHeading}</h2>
+  {mode === 'switch' ? (
+    <>
+      <label for="tag-browser-select">{t.tagBrowseSelectLabel}</label>
+      <select id="tag-browser-select">
+        <option value="">{t.tagBrowsePrompt}</option>
+        {facets.map((facet) => (
+          <option value={facet.key}>{facet.label}</option>
+        ))}
+      </select>
+    </>
+  ) : (
+    <button id="tag-browse-start" type="button">{t.tagBrowseStart}</button>
+  )}
+  <p id="tag-browser-current" hidden></p>
+  <p id="tag-browser-status" role="status"></p>
+  <ol id="tag-browser-results"></ol>
+  <button id="tag-browse-more" type="button" hidden>{t.tagBrowseMore}</button>
+</section>

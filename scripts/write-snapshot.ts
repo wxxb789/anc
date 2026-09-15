@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
-import type { ContentArtifact, ContentEntry } from '../src/lib/schema.ts';
+import type { ContentArtifact } from '../src/lib/schema.ts';
 import { tagFacets } from '../src/lib/routes.ts';
 import { NAV_LANGUAGE } from '../src/lib/translations.ts';
 import {
@@ -160,9 +160,4 @@ export function writeSnapshot(artifact: ContentArtifact, destination: string): W
     path: destination,
     size: bytes.length,
   };
-}
-
-/** Type guard used where a caller holds a parsed entry rather than the writer's input. */
-export function hasEdges(entry: ContentEntry): entry is ContentEntry & { outgoing: string[]; backlinks: string[] } {
-  return Array.isArray(entry.outgoing) && Array.isArray(entry.backlinks);
 }

@@ -18,10 +18,12 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { validateArtifact, type ContentArtifact, type ContentEntry } from '../src/lib/schema.ts';
+import { tagFacets } from '../src/lib/routes.ts';
 import {
   byTitleThenSlug,
   selectGlobal,
   selectLocal,
+  GLOBAL_NODE_LIMIT,
   type SelectionEdge,
   type SelectionNode,
 } from '../src/lib/graph-selection.ts';
@@ -188,9 +190,87 @@ test('tag-filtered ranking counts a reciprocal pair once in both paths', () => {
       );
       assert.deepEqual(worker.nodes.map((node) => node.slug), shared.nodes.map((node) => node.slug));
       assert.deepEqual(worker.omitted, shared.omitted);
+      assert.deepEqual(worker.edges, shared.edges);
       // y has two distinct neighbours and must rank first; x and z are one
       // neighbour each despite a reciprocal pair between them.
       assert.deepEqual(worker.nodes.map((node) => node.slug), ['y', 'v', 'w', 'x', 'z']);
+    } finally {
+      database.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('every fixture tag ranks as the shared selection over its subgraph', () => {
+  // The Worker's tag path walks SQL-aggregated degrees and the shared path
+  // walks the authored edge set. Comparing nodes, induced edges, and omitted
+  // counts for every tag on the real fixture is what keeps them one ranking
+  // rule; the synthetic case above covers reciprocity, not coverage.
+  const { db, close } = workerDatabase();
+  try {
+    const facets = tagFacets(artifact.entries);
+    assert.ok(facets.length > 0, 'the fixture corpus carried no tagged notes to compare');
+    for (const facet of facets) {
+      const members = new Set(facet.entries.map((entry) => entry.slug));
+      const edgesWithinTag: SelectionEdge[] = facet.entries.flatMap((entry) =>
+        entry.outgoing
+          .filter((target) => members.has(target))
+          .map((target) => ({ from: entry.slug, to: target })),
+      );
+      const worker = workerGlobal(db, facet.key);
+      const shared = selectGlobal(facet.entries, edgesWithinTag);
+      assert.deepEqual(
+        worker.nodes.map((node) => node.slug),
+        shared.nodes.map((node) => node.slug),
+        `tag ${facet.key} node order differs between the Worker and the shared selection`,
+      );
+      assert.deepEqual(worker.edges, shared.edges, `tag ${facet.key} induced edges differ`);
+      assert.deepEqual(worker.omitted, shared.omitted, `tag ${facet.key} omitted count differs`);
+    }
+  } finally {
+    close();
+  }
+});
+
+test('a tag larger than the global bound truncates identically in both paths', () => {
+  // Every fixture tag is smaller than GLOBAL_NODE_LIMIT, so the corpus gate
+  // above never exercises `omitted` or the slice. This synthetic corpus is the
+  // one that does: 65 members, one edge, top 60 drawn, 5 omitted on both paths.
+  const entries: ContentEntry[] = [];
+  for (let index = 0; index < GLOBAL_NODE_LIMIT + 5; index += 1) {
+    const label = String(index).padStart(2, '0');
+    entries.push({
+      slug: `note-${label}`,
+      title: `Note ${label}`,
+      excerpt: '',
+      markdown: '',
+      tags: ['wide'],
+      outgoing: [],
+      backlinks: [],
+    });
+  }
+  entries[0]!.outgoing = [entries[1]!.slug];
+  entries[1]!.backlinks = [entries[0]!.slug];
+
+  const directory = mkdtempSync(join(tmpdir(), 'anc-graph-wide-'));
+  const path = join(directory, 'site.sqlite');
+  try {
+    writeSnapshot({ version: 1, entries }, path);
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const db: SnapshotDb = {
+        select: (sql, params) => database.prepare(sql).all(...((params ?? []) as never[])) as Record<string, unknown>[],
+      };
+      const worker = workerGlobal(db, 'wide');
+      const shared = selectGlobal(entries, [{ from: entries[0]!.slug, to: entries[1]!.slug }]);
+      assert.equal(worker.nodes.length, GLOBAL_NODE_LIMIT, 'the bound was not applied to the Worker selection');
+      assert.equal(worker.omitted, 5);
+      assert.equal(shared.omitted, 5);
+      assert.deepEqual(worker.nodes.map((node) => node.slug), shared.nodes.map((node) => node.slug));
+      assert.deepEqual(worker.edges, shared.edges);
+      // The one edge's endpoints rank first by degree, before the title order.
+      assert.deepEqual(worker.nodes.slice(0, 2).map((node) => node.slug), ['note-00', 'note-01']);
     } finally {
       database.close();
     }

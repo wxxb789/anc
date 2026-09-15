@@ -7,10 +7,12 @@
  * shipped bytes rather than a reimplementation of them.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { DatabaseSync } from '../../src/lib/sqlite.ts';
-import { SNAPSHOT_FILE_PATTERN } from '../../src/lib/snapshot.ts';
+import { snapshotWorkspace } from '../../src/lib/snapshot-reader.ts';
+import { SNAPSHOT_FILE_PATTERN, snapshotFileName } from '../../src/lib/snapshot.ts';
 
 /** The one snapshot file in a built output. */
 export function snapshotPath(dist: string): string {
@@ -142,4 +144,35 @@ export function installSnapshotMarker(destination: string, source: string): stri
   const name = snapshotPath(source).split('/').at(-1)!;
   copyFileSync(snapshotPath(source), join(targetDirectory, name));
   return join('data', name);
+}
+
+/**
+ * Copy the build-written bindings into a scratch workspace.
+ *
+ * `assertOutputInventory` takes the workspace as a parameter — `bin/anc.mjs`
+ * passes the build's private snapshot directory — so a gate can verify against
+ * a mutated binding without touching the real `.astro/snapshot`. The files are
+ * copied byte for byte rather than re-serialized, so the gate reads what the
+ * producer wrote.
+ */
+export function stageBindings(destination: string, source: string = snapshotWorkspace()): string {
+  mkdirSync(destination, { recursive: true });
+  for (const name of ['binding.json', 'wasm.json']) copyFileSync(join(source, name), join(destination, name));
+  return destination;
+}
+
+/**
+ * Mutate a directory's snapshot marker in place and rename it to the digest of
+ * its new bytes.
+ *
+ * A mutation changes the file's digest, and the preview checks the digest
+ * before `application_id`/`user_version`; renaming is what keeps a format
+ * mutation on the format branch rather than sending it to the digest refusal.
+ */
+export function mutateSnapshotMarker(directory: string, mutate: (path: string) => void): string {
+  const marker = snapshotPath(directory);
+  mutate(marker);
+  const file = snapshotFileName(createHash('sha256').update(readFileSync(marker)).digest('hex'));
+  renameSync(marker, join(directory, ...file.split('/')));
+  return file;
 }

@@ -174,13 +174,47 @@ export const SNAPSHOT_QUERIES = {
     )
     GROUP BY node_id`.trim(),
 
-  tagNodeIds: `
-    SELECT n.id, n.slug
+  /** A tag's member nodes. The tag key is the only parameter. */
+  tagNodes: `
+    SELECT n.id, n.slug, n.title, n.language
     FROM tags AS t
     JOIN node_tags AS nt ON nt.tag_id = t.id
     JOIN nodes AS n ON n.id = nt.node_id
     WHERE t.key = ?
     ORDER BY n.slug`.trim(),
+
+  /**
+   * Distinct adjacent notes per node **within one tag's subgraph**, mirroring
+   * `nodeDegrees` scoped to a tag: both endpoints must be members, and the
+   * `UNION` plus `COUNT(DISTINCT neighbour)` make a reciprocal pair one
+   * neighbour, as `selectGlobal` computes it. Each branch is driven by the
+   * tag's memberships: the first searches out-edges through the edge primary
+   * key, the second searches in-edges through `edges_by_target`, and both probe
+   * the other endpoint's membership by primary key. Cost follows the members'
+   * edges rather than a member-by-member `IN (members)` list, which makes
+   * SQLite probe the member cross-product and degrades with tag size. A member
+   * with no in-tag edge has no row; callers treat a missing id as degree 0,
+   * which is also how `nodeDegrees` covers an isolated node.
+   */
+  tagNodeDegrees: `
+    WITH members(id) AS (
+      SELECT nt.node_id
+      FROM tags AS t
+      JOIN node_tags AS nt ON nt.tag_id = t.id
+      WHERE t.key = ?
+    )
+    SELECT node_id AS id, COUNT(DISTINCT neighbour) AS degree FROM (
+      SELECT e.source_id AS node_id, e.target_id AS neighbour
+      FROM edges AS e
+      JOIN members AS s ON s.id = e.source_id
+      JOIN members AS g ON g.id = e.target_id
+      UNION
+      SELECT e.target_id AS node_id, e.source_id AS neighbour
+      FROM edges AS e
+      JOIN members AS g ON g.id = e.target_id
+      JOIN members AS s ON s.id = e.source_id
+    )
+    GROUP BY node_id`.trim(),
 
 } as const;
 

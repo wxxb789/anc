@@ -56,6 +56,14 @@ function install(root: HTMLElement): void {
       reset();
       return;
     }
+    // One continuation may be in flight at a time. `#tag-browse-more` is the only
+    // way to dispatch one, and a second click before the first reply lands would
+    // send the same cursor again — both replies pass the generation guard below
+    // and append the same page. Disabled synchronously, before the first await,
+    // so a double click cannot get two handlers in; the cursor advances only
+    // when a reply lands, and the `finally` re-enables the button for the next
+    // explicit continuation.
+    if (more !== null) more.disabled = true;
     status.textContent = string(TAG_BROWSE_DATASET.loading);
     let page;
     try {
@@ -67,6 +75,8 @@ function install(root: HTMLElement): void {
       if (staticList !== null) staticList.hidden = false;
       status.textContent = string(TAG_BROWSE_DATASET.failed);
       return;
+    } finally {
+      if (more !== null) more.disabled = false;
     }
     if (forGeneration !== generation) return; // a stale tag's reply cannot replace this one
 

@@ -26,6 +26,36 @@ export const SNAPSHOT_DIRECTORY = 'data';
 export const SNAPSHOT_PAGE_SIZE = 4096;
 
 /**
+ * Default private workspace for the producer's staged bindings, relative to the
+ * working directory that started the build.
+ *
+ * Private means never in `dist/`: `docs/core-design/build-and-runtime.md` owns
+ * why no public manifest exists. The default lives here so `astro.config.mjs`
+ * (which substitutes the binding) and `snapshot-reader.ts` (which reads the
+ * staged edges) cannot resolve different directories.
+ */
+export const DEFAULT_SNAPSHOT_WORKSPACE = '.astro/snapshot';
+
+/**
+ * Apply the `SNAPSHOT_WORKSPACE` setting: the value when one is set, otherwise
+ * the default.
+ *
+ * `||` rather than `??`: an empty value is a caller who meant to pass a path and
+ * passed nothing. With `??` an empty value resolved to the working directory,
+ * so the build staged one directory while `snapshot-reader.ts` looked in
+ * another, `astro.config.mjs` substituted `null` for the binding, and the lazy
+ * runtime silently never started — with no build error. Both sites call this
+ * one function.
+ *
+ * Takes the raw environment value rather than reading the environment here: the
+ * same module loads inside the browser Worker, where no workspace is ever
+ * resolved, so it stays free of Node globals.
+ */
+export function configuredSnapshotWorkspace(environment: string | undefined): string {
+  return environment || DEFAULT_SNAPSHOT_WORKSPACE;
+}
+
+/**
  * The normative schema. Five entity/relation tables and one explicit secondary
  * index; the `UNIQUE` constraints create their own B-trees, which is expected.
  *

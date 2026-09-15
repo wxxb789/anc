@@ -4,7 +4,7 @@
  * Split out of `src/scripts/link-preview.ts` for one reason — the placement
  * arithmetic is the part most likely to be subtly wrong, and a browser test can
  * only prove it for the link positions a corpus happens to contain. Nothing
- * here touches the DOM, so every edge, every flip, and every malformed payload
+ * here touches the DOM, so every edge, every flip, and every malformed fragment
  * is reachable from a unit test at `tests/preview-model.test.ts`.
  *
  * This module is imported into the browser bundle, so it keeps the same
@@ -31,15 +31,6 @@ export function previewTitle(entry: PreviewEntry): string {
     ? text
     : `${text.slice(0, PREVIEW_TITLE_LIMIT - 1)}…`;
 }
-
-/**
- * The preview payload, keyed by slug.
- *
- * A `Map` rather than an object, and that is not a style choice: the keys come
- * from a fetched document, and an object would let a `__proto__` key reach
- * `Object.prototype`. A `Map` has no such key.
- */
-export type PreviewIndex = ReadonlyMap<string, PreviewEntry>;
 
 /** Between the link and the panel, and between the panel and the viewport edge. */
 export const PREVIEW_GAP_PX = 8;
@@ -96,41 +87,6 @@ export interface PreviewSize {
 export interface PreviewPlacement {
   left: number;
   top: number;
-}
-
-/**
- * Read the fetched payload, keeping only entries that carry the public preview
- * fields as strings.
- *
- * Every failure is silent by construction: a payload that is not an object, an
- * `entries` that is not an array, and an entry missing a field all end as a
- * lookup that finds nothing, which the caller already handles as "no preview".
- *
- * The slug is not validated here. The only slugs ever looked up come from
- * `noteSlugFromPath`, which enforces the shape `schema.ts` enforces, so an
- * entry whose slug is malformed is simply never asked for. Checking it twice
- * would put a second copy of the slug grammar in the browser bundle.
- */
-export function readPreviewIndex(payload: unknown): PreviewIndex {
-  const index = new Map<string, PreviewEntry>();
-  if (typeof payload !== 'object' || payload === null) return index;
-  const { entries } = payload as { entries?: unknown };
-  if (!Array.isArray(entries)) return index;
-
-  for (const candidate of entries as unknown[]) {
-    if (typeof candidate !== 'object' || candidate === null) continue;
-    const { slug, title, excerpt, aliases } = candidate as Record<string, unknown>;
-    if (typeof slug !== 'string' || typeof title !== 'string' || typeof excerpt !== 'string') continue;
-    if (aliases !== undefined && (!Array.isArray(aliases) || aliases.some((alias) => typeof alias !== 'string'))) {
-      continue;
-    }
-    index.set(slug, {
-      title,
-      excerpt,
-      ...(aliases === undefined ? {} : { aliases: [...aliases] as string[] }),
-    });
-  }
-  return index;
 }
 
 /**

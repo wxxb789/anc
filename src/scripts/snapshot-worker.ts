@@ -129,6 +129,54 @@ interface SqliteDb {
   close(): void;
 }
 
+/**
+ * Deserialize the snapshot bytes and validate the imported schema.
+ *
+ * Exported for `tests/snapshot-worker-init.test.ts`, which drives it with a
+ * fake `sqlite3` and counts open handles; `load` is the only production caller.
+ *
+ * The `oo1.DB` handle owns a FREEONCLOSE copy of the bytes — up to
+ * `WORKER_LIMITS.maxSnapshotBytes` — and `database()` clears a failed loading
+ * promise so a later intent retries here, so every failure after the handle
+ * exists closes it before rethrowing. Without the close each retry would hold
+ * another handle and another copy; `docs/core-design/build-and-runtime.md`
+ * requires the release on failing initialization.
+ */
+export function importSnapshot(sqlite3: Sqlite3, databaseBytes: Uint8Array): SqliteDb {
+  const database = new sqlite3.oo1.DB();
+  try {
+    const pointer = sqlite3.wasm.allocFromTypedArray(databaseBytes);
+    const result = sqlite3.capi.sqlite3_deserialize(
+      database.pointer,
+      'main',
+      pointer,
+      databaseBytes.byteLength,
+      databaseBytes.byteLength,
+      sqlite3.capi.SQLITE_DESERIALIZE_READONLY | sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE,
+    );
+    // On failure with FREEONCLOSE, SQLite has already freed the buffer, so only
+    // the handle is left for the close below.
+    if (result !== 0) fault('format');
+
+    database.exec('PRAGMA query_only = ON');
+    if (database.selectValue('PRAGMA query_only') !== 1) fault('format');
+    try {
+      assertSnapshotRows((sql) => database.selectObjects(sql));
+    } catch {
+      fault('schema');
+    }
+    return database;
+  } catch (error) {
+    // Best effort: a close error must not replace the failure being diagnosed.
+    try {
+      database.close();
+    } catch {
+      // The original error is the diagnosis.
+    }
+    throw error;
+  }
+}
+
 async function load(): Promise<SnapshotDb> {
   const snapshotBinding = __ANC_SNAPSHOT_BINDING__;
   const wasmBinding = __ANC_WASM_BINDING__;
@@ -157,27 +205,7 @@ async function load(): Promise<SnapshotDb> {
     return fault('wasm');
   }
 
-  const database = new sqlite3.oo1.DB();
-  const pointer = sqlite3.wasm.allocFromTypedArray(databaseBytes);
-  const result = sqlite3.capi.sqlite3_deserialize(
-    database.pointer,
-    'main',
-    pointer,
-    databaseBytes.byteLength,
-    databaseBytes.byteLength,
-    sqlite3.capi.SQLITE_DESERIALIZE_READONLY | sqlite3.capi.SQLITE_DESERIALIZE_FREEONCLOSE,
-  );
-  // On failure with FREEONCLOSE, SQLite has already freed the buffer.
-  if (result !== 0) fault('format');
-
-  database.exec('PRAGMA query_only = ON');
-  if (database.selectValue('PRAGMA query_only') !== 1) fault('format');
-  try {
-    assertSnapshotRows((sql) => database.selectObjects(sql));
-  } catch {
-    fault('schema');
-  }
-
+  const database = importSnapshot(sqlite3, databaseBytes);
   return { select: (sql, params) => database.selectObjects(sql, params ? [...params] : undefined) };
 }
 

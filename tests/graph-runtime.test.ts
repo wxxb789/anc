@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test } from 'vitest';
 import type { Browser, Page } from 'playwright';
+import { translate } from '../src/lib/translations.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'anc.mjs');
@@ -88,6 +89,60 @@ async function drawnSlugs(page: Page): Promise<string[]> {
 
 type SVGAnchorElement = Element;
 
+interface FigureFrame {
+  viewBox: string;
+  minX: number;
+  minY: number;
+  boxWidth: number;
+  boxHeight: number;
+  widthAttribute: number;
+  heightAttribute: number;
+  label: string;
+  circles: { cx: number; cy: number }[];
+}
+
+/** The SVG's own frame and name, as a redraw leaves them. */
+async function figureFrame(page: Page): Promise<FigureFrame> {
+  return page.locator('svg.graph-svg').evaluate((svg: SVGSVGElement) => {
+    const viewBox = svg.getAttribute('viewBox') ?? '';
+    const [minX, minY, boxWidth, boxHeight] = viewBox.split(' ').map(Number);
+    return {
+      viewBox,
+      minX: minX!,
+      minY: minY!,
+      boxWidth: boxWidth!,
+      boxHeight: boxHeight!,
+      widthAttribute: Number(svg.getAttribute('width')),
+      heightAttribute: Number(svg.getAttribute('height')),
+      label: svg.getAttribute('aria-label') ?? '',
+      circles: [...svg.querySelectorAll('circle.graph-dot')].map((circle) => ({
+        cx: Number(circle.getAttribute('cx')),
+        cy: Number(circle.getAttribute('cy')),
+      })),
+    };
+  });
+}
+
+/**
+ * The frame is the one the drawn circles were laid out in.
+ *
+ * A redraw that replaced the groups but left the static `viewBox`/`width` would
+ * draw the new selection inside the old box, so the two halves have to agree:
+ * the attributes have to move with the layout, and every circle has to sit
+ * inside the frame they state.
+ */
+function assertFrameCovers(frame: FigureFrame): void {
+  assert.ok(frame.boxWidth > 0 && frame.boxHeight > 0, `the redrawn frame is empty: ${frame.viewBox}`);
+  assert.equal(frame.widthAttribute, frame.boxWidth, 'the width attribute is not the redrawn frame');
+  assert.equal(frame.heightAttribute, frame.boxHeight, 'the height attribute is not the redrawn frame');
+  for (const { cx, cy } of frame.circles) {
+    assert.ok(
+      cx >= frame.minX && cx <= frame.minX + frame.boxWidth && cy >= frame.minY && cy <= frame.minY + frame.boxHeight,
+      `a drawn node at (${cx}, ${cy}) is outside the frame ${frame.viewBox}`,
+    );
+  }
+}
+
 beforeAll(async () => {
   workspace = mkdtempSync(join(tmpdir(), 'anc-graph-'));
   const notes = join(workspace, 'notes');
@@ -138,6 +193,12 @@ test('a note page explores its bounded neighbourhood, re-centres, and shows the 
     true,
     'the explorer control is not offered',
   );
+  const staticFrame = await figureFrame(page);
+  assert.equal(
+    await page.locator('[data-graph-figure-label]').isVisible(),
+    true,
+    'the static figure label is not shown',
+  );
 
   await page.locator('[data-graph-activate]').click();
   await page.waitForFunction(() => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0);
@@ -154,6 +215,17 @@ test('a note page explores its bounded neighbourhood, re-centres, and shows the 
   assert.ok(edges >= 13, `induced edges were not retained: ${edges}`);
   const label = await page.locator('.graph-nodes a[href="/notes/peer-01/"]').getAttribute('aria-label');
   assert.ok(label && label.includes('peer-01'), 'a drawn node has no accessible name');
+  // The relation word comes from the client's own lookup of the shared key, so
+  // a renamed or dropped state shows up here as a missing word, not a blank.
+  assert.ok(
+    label.includes(translate('en').graphOutgoingRelation),
+    `a drawn node's accessible name does not state its relationship: ${label}`,
+  );
+  const subjectLabel = await page.locator('.graph-nodes a[href="/notes/hub/"]').getAttribute('aria-label');
+  assert.ok(
+    subjectLabel?.includes(translate('en').graphSubjectRelation),
+    `the centre has no subject name: ${subjectLabel}`,
+  );
 
   // Re-centre on a neighbour from the equivalent table, which a reader opens.
   await page.locator('.graph-table').evaluate((details: HTMLDetailsElement) => {
@@ -165,12 +237,36 @@ test('a note page explores its bounded neighbourhood, re-centres, and shows the 
       document.querySelector('.graph-nodes a.graph-node')?.getAttribute('href') === '/notes/peer-02/',
   );
   assert.equal((await drawnSlugs(page))[0], 'peer-02', 're-centering did not move the center');
+
+  // A re-center replaces the figure's contents, so the SVG's own frame and
+  // accessible name have to move with them: peer-02 has fewer neighbours than
+  // hub, so the old frame would draw the new selection small inside it, and the
+  // static count-bearing name would read a second total beside the live status.
+  const recentered = await figureFrame(page);
+  assert.ok(
+    recentered.boxWidth < staticFrame.boxWidth,
+    `the redrawn selection kept the static frame: ${recentered.viewBox}`,
+  );
+  assertFrameCovers(recentered);
+  assert.notEqual(recentered.label, staticFrame.label, 'the figure kept the static selection name');
+  assert.ok(!/\d/.test(recentered.label), `the live figure name still carries counts: ${recentered.label}`);
+  assert.equal(
+    recentered.label,
+    await page.locator('[data-graph-controls]').getAttribute('data-graph-figure-name'),
+    'the live figure name is not the count-free name the page emitted',
+  );
+  assert.equal(
+    await page.locator('[data-graph-figure-label]').isVisible(),
+    false,
+    'the stale static count label is still shown beside the live graph',
+  );
   await page.close();
 }, 120_000);
 
 test('the global graph filters by tag, labels the scope honestly, and resets', async () => {
   const page = await browser.newPage();
   await page.goto(`${origin}/graph/`, { waitUntil: 'load' });
+  const staticFrame = await figureFrame(page);
   await page.locator('[data-graph-activate]').click();
   await page.waitForFunction(() => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0);
 
@@ -180,6 +276,28 @@ test('the global graph filters by tag, labels the scope honestly, and resets', a
   assert.deepEqual(filtered, ['peer-01', 'peer-02', 'peer-03'], 'the tag filter did not restrict the drawn set');
   const status = (await page.locator('[data-graph-status]').textContent()) ?? '';
   assert.ok(status.includes('team'), `the filtered scope was not named honestly: ${status}`);
+
+  // The filter draws three notes where the static figure draws the whole
+  // corpus, so the static frame would shrink them and the static name would
+  // contradict the live count sentence.
+  const filteredFrame = await figureFrame(page);
+  assert.ok(
+    filteredFrame.boxWidth < staticFrame.boxWidth,
+    `the filtered graph kept the static frame: ${filteredFrame.viewBox}`,
+  );
+  assertFrameCovers(filteredFrame);
+  assert.notEqual(filteredFrame.label, staticFrame.label, 'the figure kept the static selection name');
+  assert.ok(!/\d/.test(filteredFrame.label), `the live figure name still carries counts: ${filteredFrame.label}`);
+  assert.equal(
+    filteredFrame.label,
+    await page.locator('[data-graph-controls]').getAttribute('data-graph-figure-name'),
+    'the live figure name is not the count-free name the page emitted',
+  );
+  assert.equal(
+    await page.locator('[data-graph-figure-label]').isVisible(),
+    false,
+    'the stale static count label is still shown beside the live graph',
+  );
 
   // An empty filter is not a runtime failure.
   await page.evaluate(() => {
@@ -195,6 +313,31 @@ test('the global graph filters by tag, labels the scope honestly, and resets', a
   await page.locator('[data-graph-reset-control]').click();
   await page.waitForTimeout(400);
   assert.ok((await drawnSlugs(page)).includes('hub'), 'reset did not restore the unfiltered graph');
+  await page.close();
+}, 120_000);
+
+test('a note with no neighbourhood offers no explorer that would draw nothing', async () => {
+  const page = await browser.newPage();
+  await page.goto(`${origin}/notes/island/`, { waitUntil: 'load' });
+  await page.waitForTimeout(300);
+  assert.equal(
+    await page.locator('.graph-region .empty-state').isVisible(),
+    true,
+    'the empty state is not shown',
+  );
+  // The explorer and its live status sentence are only offered where there is
+  // a figure to enhance; otherwise the client would fill a count sentence for a
+  // graph it has no canvas to draw.
+  assert.equal(
+    await page.locator('.graph-region [data-graph-controls]').count(),
+    0,
+    'the explorer was offered on a figure with nothing to draw',
+  );
+  assert.equal(
+    await page.locator('.graph-region [data-graph-status]').count(),
+    0,
+    'a live status line was offered with nothing to draw',
+  );
   await page.close();
 }, 120_000);
 

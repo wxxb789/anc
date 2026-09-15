@@ -24,7 +24,7 @@ import {
   readSnapshotBinding,
   snapshotRoute,
 } from '../src/lib/snapshot.ts';
-import { pageOf } from '../src/lib/snapshot-queries.ts';
+import { pageOf, SNAPSHOT_QUERIES } from '../src/lib/snapshot-queries.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
 import { assertSnapshotContract, writeSnapshot } from '../scripts/write-snapshot.ts';
 
@@ -211,29 +211,27 @@ test('representative queries use their declared access structures', () => {
   withSnapshot((path) => {
     const database = new DatabaseSync(path, { readOnly: true });
     try {
-      const plan = (sql: string): string =>
-        (database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all() as unknown as { detail: string }[])
+      // Plan the shipped statements themselves, with parameters bound: a copy
+      // of a statement's text here would keep reporting the plan of SQL that no
+      // longer ships, so a regression in SNAPSHOT_QUERIES would pass the gate.
+      const plan = (sql: string, params: readonly unknown[] = []): string =>
+        (database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...(params as never[])) as unknown as { detail: string }[])
           .map((row) => row.detail)
           .join(' | ');
-      const outgoing = plan(
-        'SELECT n.slug FROM edges AS e JOIN nodes AS n ON n.id = e.target_id ' +
-          'WHERE e.source_id = 1 ORDER BY n.slug LIMIT 10',
-      );
+      const tagKey = tagFacets(artifact.entries)[0]?.key ?? 'unused-tag-key';
+
+      const outgoing = plan(SNAPSHOT_QUERIES.outgoingFirst, [1, 10]);
       assert.match(
         outgoing,
         /USING (?:COVERING )?PRIMARY KEY/,
         `outgoing does not use the edge primary key: ${outgoing}`,
       );
       assert.doesNotMatch(outgoing, /SCAN/, `outgoing scans the edge table instead of seeking it: ${outgoing}`);
-      const backlinks = plan(
-        'SELECT n.slug FROM edges AS e JOIN nodes AS n ON n.id = e.source_id ' +
-          'WHERE e.target_id = 1 ORDER BY n.slug LIMIT 10',
-      );
+
+      const backlinks = plan(SNAPSHOT_QUERIES.backlinksFirst, [1, 10]);
       assert.match(backlinks, /edges_by_target/, `backlinks does not use the reverse index: ${backlinks}`);
-      const byTag = plan(
-        'SELECT n.slug FROM tags AS t JOIN node_tags AS nt ON nt.tag_id = t.id ' +
-          "JOIN nodes AS n ON n.id = nt.node_id WHERE t.key = 'a' ORDER BY n.slug LIMIT 10",
-      );
+
+      const byTag = plan(SNAPSHOT_QUERIES.byTagFirst, [tagKey, 10]);
       assert.match(byTag, /tags/, `tag lookup does not reach the tags table: ${byTag}`);
       assert.match(
         byTag,
@@ -241,6 +239,70 @@ test('representative queries use their declared access structures', () => {
         `tag lookup does not seek the membership primary key: ${byTag}`,
       );
       assert.doesNotMatch(byTag, /SCAN/, `tag lookup scans instead of seeking: ${byTag}`);
+
+      const tagNodes = plan(SNAPSHOT_QUERIES.tagNodes, [tagKey]);
+      assert.match(
+        tagNodes,
+        /SEARCH t USING COVERING INDEX sqlite_autoindex_tags_1/,
+        `tag members do not look the tag up by its unique key: ${tagNodes}`,
+      );
+      assert.match(
+        tagNodes,
+        /SEARCH nt USING PRIMARY KEY/,
+        `tag members do not seek the membership primary key: ${tagNodes}`,
+      );
+      assert.doesNotMatch(tagNodes, /SCAN/, `tag members scan instead of seeking: ${tagNodes}`);
+
+      // The tag-filtered ranking must stay proportional to the tag's incident
+      // edges: one seek per member through each edge access path plus a
+      // membership probe on the far endpoint, never a scan of the corpus' edge
+      // set and never a member-by-member cross product.
+      const tagDegrees = plan(SNAPSHOT_QUERIES.tagNodeDegrees, [tagKey]);
+      assert.match(
+        tagDegrees,
+        /SEARCH e USING PRIMARY KEY/,
+        `tag degrees do not read out-edges through the edge primary key: ${tagDegrees}`,
+      );
+      assert.match(
+        tagDegrees,
+        /SEARCH e USING COVERING INDEX edges_by_target/,
+        `tag degrees do not read in-edges through the reverse index: ${tagDegrees}`,
+      );
+      assert.match(
+        tagDegrees,
+        /SEARCH nt USING PRIMARY KEY \(tag_id=\? AND node_id=\?\)/,
+        `tag degrees do not test the far endpoint's membership by primary key: ${tagDegrees}`,
+      );
+      assert.match(tagDegrees, /count\(DISTINCT\)/, `tag degrees do not count distinct neighbours: ${tagDegrees}`);
+      assert.doesNotMatch(
+        tagDegrees,
+        /SCAN (?:e|edges)\b/,
+        `tag degrees scan the whole edge table instead of the tag's edges: ${tagDegrees}`,
+      );
+
+      const allNodes = plan(SNAPSHOT_QUERIES.allNodes);
+      assert.match(
+        allNodes,
+        /SCAN nodes USING (?:COVERING )?INDEX/,
+        `allNodes does not walk the slug index: ${allNodes}`,
+      );
+      assert.doesNotMatch(allNodes, /TEMP B-TREE/, `allNodes sorts instead of walking the slug index: ${allNodes}`);
+
+      const allEdges = plan(SNAPSHOT_QUERIES.allEdges);
+      assert.match(
+        allEdges,
+        /SCAN edges(?: \||$)/,
+        `allEdges does not walk the edge primary key: ${allEdges}`,
+      );
+      assert.doesNotMatch(allEdges, /TEMP B-TREE/, `allEdges sorts instead of reading primary-key order: ${allEdges}`);
+
+      const nodeDegrees = plan(SNAPSHOT_QUERIES.nodeDegrees);
+      assert.match(
+        nodeDegrees,
+        /edges_by_target/,
+        `nodeDegrees does not aggregate through the reverse index: ${nodeDegrees}`,
+      );
+      assert.match(nodeDegrees, /count\(DISTINCT\)/, `nodeDegrees does not count distinct neighbours: ${nodeDegrees}`);
     } finally {
       database.close();
     }

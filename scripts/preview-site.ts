@@ -219,6 +219,16 @@ function resolveSnapshot(directory: string): string {
         `${path}: application_id=${applicationId}, user_version=${userVersion}`,
       );
     }
+  } catch (error) {
+    // `node:sqlite` opens a file whose header is valid and whose pages are not
+    // lazily, so a corrupt snapshot fails here rather than at the constructor.
+    // A `BuildFailure` is the format refusal above and must pass through.
+    if (error instanceof BuildFailure) throw error;
+    throw new BuildFailure(
+      'preview-snapshot-unreadable',
+      'the preview snapshot could not be read.',
+      `${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
   } finally {
     database.close();
   }
