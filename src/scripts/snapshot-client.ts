@@ -21,6 +21,8 @@ type Pending = {
   reject: (error: SnapshotClientError) => void;
   timer: ReturnType<typeof setTimeout>;
   generation: number;
+  /** `performance.now()` when the request was dispatched, for measurement. */
+  started: number;
 };
 
 export class SnapshotClientError extends Error {
@@ -62,10 +64,16 @@ function ensureWorker(): Worker {
     const entry = pending.get(reply.id);
     if (entry === undefined) return;
     if (entry.generation !== generation) return;
+    const elapsed = performance.now() - entry.started;
     pending.delete(reply.id);
     clearTimeout(entry.timer);
     if (reply.ok) {
       initialized = true;
+      // Observability seam for the benchmark harness: the operation and its
+      // measured dispatch-to-validated-result time. No corpus data is carried.
+      document.dispatchEvent(
+        new CustomEvent('snapshot-result', { detail: { type: reply.result.type, ms: elapsed } }),
+      );
       entry.resolve(reply.result);
     } else {
       entry.reject(new SnapshotClientError(reply.code));
@@ -97,7 +105,7 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
       // Worker, so the only bounded stop is terminating it.
       reset('timeout');
     }, deadline);
-    pending.set(id, { resolve, reject, timer, generation });
+    pending.set(id, { resolve, reject, timer, generation, started: performance.now() });
     instance.postMessage(message);
   });
 }

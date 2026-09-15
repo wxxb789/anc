@@ -78,6 +78,20 @@ environment, so no number is invented and the goal stays open. A benchmark
 harness and desktop-throttled numbers can be added, but they are labeled
 simulation and do not satisfy the mobile judgment.
 
+**Measured 2026-09-15** with `pnpm run benchmark:snapshot --sizes
+100,1000,10000 --topologies sparse,hub --samples 30 --throttle 4` (desktop
+Chromium, CDP `Emulation.setCPUThrottlingRate=4`, nearest-rank p95, JS-heap-only
+memory). Warm local-neighbourhood p95, after the 10,000-note local query was
+changed from a whole-corpus edge scan to a query over the selected endpoints:
+100 sparse 12.7 ms / hub 17.4 ms; 1,000 sparse 13.5 ms / hub 17.5 ms; 10,000
+sparse 12.7 ms / hub 20.8 ms. Cold preview ~370-394 ms, warm ~226-253 ms;
+decoded DB 48 KiB/200 KiB/1.6 MiB and gzip 6.5/54/371 KiB. This holds under a
+**simulation** on this host; the physical mid-range mobile device and the
+recorded maintainer acceptance below are still required and are not satisfied by
+these numbers. The pre-optimization run measured 82 ms / 162 ms at 10,000, so the
+ablation of the endpoint-restricted query is the difference between failing and
+holding at the largest workload.
+
 ## Completion record
 
 Not completed. Record reproducible benchmark command/tool, candidate identity, raw

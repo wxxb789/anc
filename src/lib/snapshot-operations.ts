@@ -20,7 +20,7 @@ import {
   type NoteSummary,
   type TagPage,
 } from './snapshot-queries.ts';
-import { selectGlobal, selectLocal } from './graph-selection.ts';
+import { byTitleThenSlug, inducedEdges, selectLocal, GLOBAL_NODE_LIMIT, type SelectionEdge } from './graph-selection.ts';
 
 /** Runs one fixed statement with bound parameters and returns its rows. */
 export interface SnapshotDb {
@@ -109,6 +109,28 @@ function selectionNode(row: Record<string, unknown>): { id: number; slug: string
   };
 }
 
+/**
+ * The directed edges whose two endpoints are all in `ids`.
+ *
+ * Bound placeholders, never interpolated data. This is the contract's "after
+ * choosing the displayed nodes, query all directed edges whose two endpoints
+ * belong to that set": scanning every edge in the corpus made a 10,000-note
+ * local graph O(corpus) per request and missed the warm target.
+ */
+function edgesAmongIds(db: SnapshotDb, ids: readonly number[]): SelectionEdge[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const sql =
+    `SELECT s.slug AS source, t.slug AS target FROM edges AS e ` +
+    `JOIN nodes AS s ON s.id = e.source_id JOIN nodes AS t ON t.id = e.target_id ` +
+    `WHERE e.source_id IN (${placeholders}) AND e.target_id IN (${placeholders}) ` +
+    `ORDER BY source, target`;
+  return (db.select(sql, [...ids, ...ids]) as unknown as { source: string; target: string }[]).map((row) => ({
+    from: row.source,
+    to: row.target,
+  }));
+}
+
 /** The public summary of one selection node. */
 function selectionSummary(node: { slug: string; title: string; language: string }): NoteSummary {
   return { slug: node.slug, title: node.title, language: node.language };
@@ -128,35 +150,58 @@ export function localGraph(db: SnapshotDb, slug: string): LocalGraphSelection | 
   const neighbours = db
     .select(SNAPSHOT_QUERIES.neighbors, [centerNode.id, centerNode.id])
     .map(selectionNode);
-  const edges = (
-    db.select(SNAPSHOT_QUERIES.allEdgesBySlug) as unknown as { source: string; target: string }[]
-  ).map((row) => ({ from: row.source, to: row.target }));
-  const selection = selectLocal(centerNode, neighbours, edges);
+  // Choose the drawn set first, then read only the edges among it.
+  const preliminary = selectLocal(centerNode, neighbours, []);
+  const ids = [centerNode.id, ...preliminary.drawn.map((node) => node.id)];
+  const selected = new Set([centerNode.slug, ...preliminary.drawn.map((node) => node.slug)]);
   return {
     center: selectionSummary(centerNode),
-    nodes: selection.drawn.map(selectionSummary),
-    edges: selection.edges,
-    omitted: selection.omitted,
+    nodes: preliminary.drawn.map(selectionSummary),
+    edges: inducedEdges(selected, edgesAmongIds(db, ids)),
+    omitted: preliminary.omitted,
   };
 }
 
-/** The ranked global graph, optionally restricted to one tag's members. */
+/**
+ * The ranked global graph, optionally restricted to one tag's members.
+ *
+ * Unfiltered ranking uses one SQL aggregate over the edge set; the filtered case
+ * must count distinct neighbours **within** the matching subgraph, which needs
+ * the edge rows. Either way, only the selected nodes' incident edges are read.
+ */
 export function globalGraph(db: SnapshotDb, tagKey?: string | null): GraphSelection {
   const all = (db.select(SNAPSHOT_QUERIES.allNodes) as unknown as Record<string, unknown>[]).map(selectionNode);
-  const edges = (
-    db.select(SNAPSHOT_QUERIES.allEdgesBySlug) as unknown as { source: string; target: string }[]
-  ).map((row) => ({ from: row.source, to: row.target }));
+
   let candidates = all;
+  let degree = new Map<number, number>();
   if (tagKey !== undefined && tagKey !== null) {
     const members = new Set(
       (db.select(SNAPSHOT_QUERIES.tagNodeIds, [tagKey]) as unknown as { id: number }[]).map((row) => Number(row.id)),
     );
     candidates = all.filter((node) => members.has(node.id));
+    const present = new Set(candidates.map((node) => node.id));
+    for (const row of db.select(SNAPSHOT_QUERIES.allEdges) as unknown as { source_id: number; target_id: number }[]) {
+      if (!present.has(row.source_id) || !present.has(row.target_id) || row.source_id === row.target_id) continue;
+      degree.set(row.source_id, (degree.get(row.source_id) ?? 0) + 1);
+      degree.set(row.target_id, (degree.get(row.target_id) ?? 0) + 1);
+    }
+  } else {
+    for (const row of db.select(SNAPSHOT_QUERIES.nodeDegrees) as unknown as { id: number; degree: number }[]) {
+      degree.set(Number(row.id), Number(row.degree));
+    }
   }
-  const selection = selectGlobal(candidates, edges);
+
+  const ranked = [...candidates].sort((a, b) => {
+    const left = degree.get(a.id) ?? 0;
+    const right = degree.get(b.id) ?? 0;
+    if (left !== right) return right - left;
+    return byTitleThenSlug(a, b);
+  });
+  const selected = ranked.slice(0, GLOBAL_NODE_LIMIT);
+  const selectedSlugs = new Set(selected.map((node) => node.slug));
   return {
-    nodes: selection.nodes.map(selectionSummary),
-    edges: selection.edges,
-    omitted: selection.omitted,
+    nodes: selected.map(selectionSummary),
+    edges: inducedEdges(selectedSlugs, edgesAmongIds(db, selected.map((node) => node.id))),
+    omitted: ranked.length - selected.length,
   };
 }

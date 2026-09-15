@@ -172,6 +172,15 @@ export const SNAPSHOT_QUERIES = {
     JOIN nodes AS t ON t.id = e.target_id
     ORDER BY source, target`.trim(),
 
+  /** Distinct adjacent notes per node, as one aggregate over the edge set. */
+  nodeDegrees: `
+    SELECT node_id AS id, COUNT(DISTINCT neighbour) AS degree FROM (
+      SELECT source_id AS node_id, target_id AS neighbour FROM edges
+      UNION
+      SELECT target_id AS node_id, source_id AS neighbour FROM edges
+    )
+    GROUP BY node_id`.trim(),
+
   tagNodeIds: `
     SELECT n.id, n.slug
     FROM tags AS t
