@@ -1413,8 +1413,18 @@ export interface ContentEntryInput {
  * caller records the counts and the dropped rows, and only then asks for the
  * artifact. A callback would have hidden that ordering inside this module,
  * where nothing depends on it.
+ *
+ * @param options.includeEdges When false, `outgoing`/`backlinks` are validated
+ *   against the in-memory producer result but not written: the packaged target's
+ *   relation authority is the finalized snapshot, and the caller builds that
+ *   from this same in-memory `Discovery` before Astro runs. Default true, which
+ *   is the fixture/committed-corpus path.
  */
-export async function writeArtifact(discovery: Discovery, destination: string): Promise<void> {
+export async function writeArtifact(
+  discovery: Discovery,
+  destination: string,
+  options: { includeEdges?: boolean } = {},
+): Promise<void> {
   if (discovery.entries.length === 0) {
     // Thrown here rather than at the end of `discover`, and that ordering is
     // load-bearing: a directory holding only a `.pdf` and a filename that
@@ -1434,6 +1444,13 @@ export async function writeArtifact(discovery: Discovery, destination: string): 
   // A source literal, not the content directory: `ContentValidationError`
   // prefixes its message with this, and that message reaches a stream.
   const artifact = validateArtifact({ version: 1, entries: discovery.entries }, 'content directory');
+  const serialized =
+    options.includeEdges === false
+      ? {
+          version: artifact.version,
+          entries: artifact.entries.map(({ outgoing: _outgoing, backlinks: _backlinks, ...entry }) => entry),
+        }
+      : artifact;
   await mkdir(dirname(destination), { recursive: true });
-  await writeFile(destination, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+  await writeFile(destination, `${JSON.stringify(serialized, null, 2)}\n`, 'utf8');
 }

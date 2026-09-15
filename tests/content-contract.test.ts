@@ -124,7 +124,6 @@ const REJECTED: ReadonlyArray<readonly [string, RegExp]> = [
   ['artifact-entries-not-array', /entries: must be an array/],
   ['entry-unknown-field', /\.sourcePath: unknown field is not allowed/],
   ['entry-missing-required-field', /\.markdown: is required and must be a string/],
-  ['entry-missing-outgoing', /\.outgoing: is required/],
   ['slug-uppercase', /\.slug: must be lowercase/],
   ['slug-leading-hyphen', /\.slug: must be lowercase/],
   ['slug-trailing-hyphen', /\.slug: must be lowercase/],
@@ -189,6 +188,45 @@ for (const [name, expected] of REJECTED) {
     );
   });
 }
+
+test('an artifact with no serialized relation authorities is the packaged target', () => {
+  const artifact = validateArtifact({
+    version: 1,
+    entries: [
+      { slug: 'one-note', title: 'One', excerpt: '', markdown: '# One\n' },
+      { slug: 'two-note', title: 'Two', excerpt: '', markdown: '# Two\n' },
+    ],
+  });
+  assert.deepEqual(artifact.entries[0]!.outgoing, []);
+  assert.deepEqual(artifact.entries[0]!.backlinks, []);
+});
+
+test('a mixed artifact, where only some entries declare edges, is rejected', () => {
+  const error = expectRejection(() =>
+    validateArtifact({
+      version: 1,
+      entries: [
+        { slug: 'one-note', title: 'One', excerpt: '', markdown: '# One\n', outgoing: [], backlinks: [] },
+        { slug: 'two-note', title: 'Two', excerpt: '', markdown: '# Two\n' },
+      ],
+    }),
+  );
+  assert.ok(
+    error.issues.some((issue) => issue.includes('outgoing/backlinks must be declared on every entry')),
+    error.issues.join('\n'),
+  );
+});
+
+test('an artifact that does serialize edges still validates its inverse', () => {
+  const artifact = validateArtifact({
+    version: 1,
+    entries: [
+      { slug: 'one-note', title: 'One', excerpt: '', markdown: '# One\n', outgoing: ['two-note'], backlinks: [] },
+      { slug: 'two-note', title: 'Two', excerpt: '', markdown: '# Two\n', outgoing: [], backlinks: ['one-note'] },
+    ],
+  });
+  assert.deepEqual(artifact.entries[0]!.outgoing, ['two-note']);
+});
 
 test('every invalid fixture is covered by a rejection test', () => {
   const files = readdirSync(INVALID)

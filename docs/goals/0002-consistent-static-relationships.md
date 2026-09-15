@@ -84,12 +84,19 @@ Commands and observed results:
 Nothing below is archived as completed, and no successor is claimed complete by
 this note.
 
-Remaining gaps found while implementing: the private IR still serializes
-producer-resolved `outgoing`/`backlinks` as the snapshot writer's input (the
-renderer reads the snapshot, not the IR, and `tests/snapshot.test.ts` proves the
-projection equals the corpus); and static tag routes still derive from the
-producer normalizer rather than a DB read (the `tags`/`node_tags` rows are built
-from that same normalizer, so the two agree by construction and by gate).
+Closed 2026-09-15: the packaged artifact no longer serializes
+`outgoing`/`backlinks`. `bin/anc.mjs` writes the artifact stripped
+(`writeArtifact(..., { includeEdges: false })`) and builds the snapshot from the
+same in-memory producer result (`buildSnapshotFromEntries`), so the relationship
+authority reaches the build as a transient handoff rather than a serialized page
+field; `tests/discovery.test.ts` gates both the stripped and the default writer,
+and `tests/content-contract.test.ts` accepts an edgeless artifact while rejecting
+a mixed one. This repository's committed `src/data/content.json` and the two
+fixture corpora still carry the arrays as the producer handoff for the repo build.
+
+Remaining gap: static tag routes still derive from the producer normalizer rather
+than a direct DB read (the `tags`/`node_tags` rows are built from that same
+normalizer, so the two agree by construction and by gate).
 
 ## Completion record
 

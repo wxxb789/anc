@@ -468,7 +468,7 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
       const { assertPublishSetReviewed } = await import('../scripts/publish-set-review.ts');
       assertPublishSetReviewed(contentDirectory, discovery.entries.map((entry) => entry.slug));
     }
-    await writeArtifact(discovery, artifact);
+    await writeArtifact(discovery, artifact, { includeEdges: false });
 
     // From here on the process runs as if it had been started in the package, so
     // every consumer that resolves against cwd — `artifact-source.ts` first among
@@ -499,8 +499,8 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     // workspace, never in `staging`: only the digest-named copy below is public.
     const snapshotDirectory = join(workspace, 'snapshot');
     process.env['SNAPSHOT_WORKSPACE'] = snapshotDirectory;
-    const { buildSnapshot } = await import('../scripts/build-snapshot.ts');
-    buildSnapshot(artifact, snapshotDirectory);
+    const { buildSnapshotFromEntries } = await import('../scripts/build-snapshot.ts');
+    buildSnapshotFromEntries(discovery.entries, snapshotDirectory);
     const { buildWasm } = await import('../scripts/build-wasm.ts');
     buildWasm(snapshotDirectory);
 

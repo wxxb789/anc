@@ -11,6 +11,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
+import type { ContentEntry } from '../src/lib/schema.ts';
 import { ARTIFACT_PATH, loadArtifact } from '../src/lib/artifact-source.ts';
 import { DEFAULT_SNAPSHOT_WORKSPACE, snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
 import { writeSnapshot, type WrittenSnapshot } from './write-snapshot.ts';
@@ -27,20 +28,18 @@ export interface BuiltSnapshot extends WrittenSnapshot {
 }
 
 /**
- * Build the snapshot and write the binding beside it.
+ * Build the snapshot from the producer's in-memory entries and write the binding.
  *
- * @param artifactPath Repository-relative artifact to read; defaults to the one
- *   this build selected (`CONTENT_ARTIFACT` or `src/data/content.json`).
- * @param workspace Absolute private directory. Defaults to `SNAPSHOT_WORKSPACE`
- *   or `.astro/snapshot`.
+ * The packaged build calls this directly: its serialized artifact deliberately
+ * omits `outgoing`/`backlinks`, so the edge authorities reach the snapshot
+ * builder as the transient producer result rather than through a file.
  */
-export function buildSnapshot(
-  artifactPath: string = ARTIFACT_PATH,
+export function buildSnapshotFromEntries(
+  entries: readonly ContentEntry[],
   workspace: string = snapshotWorkspace(),
 ): BuiltSnapshot {
-  const artifact = loadArtifact(artifactPath);
   mkdirSync(workspace, { recursive: true });
-  const written = writeSnapshot(artifact, resolve(workspace, 'snapshot.sqlite'));
+  const written = writeSnapshot({ version: 1, entries: [...entries] }, resolve(workspace, 'snapshot.sqlite'));
   writeFileSync(
     resolve(workspace, 'binding.json'),
     `${JSON.stringify(
@@ -58,6 +57,21 @@ export function buildSnapshot(
 
   const database = loadSnapshotCounts(written.path);
   return { ...written, workspace, ...database };
+}
+
+/**
+ * Build the snapshot and write the binding beside it.
+ *
+ * @param artifactPath Repository-relative artifact to read; defaults to the one
+ *   this build selected (`CONTENT_ARTIFACT` or `src/data/content.json`).
+ * @param workspace Absolute private directory. Defaults to `SNAPSHOT_WORKSPACE`
+ *   or `.astro/snapshot`.
+ */
+export function buildSnapshot(
+  artifactPath: string = ARTIFACT_PATH,
+  workspace: string = snapshotWorkspace(),
+): BuiltSnapshot {
+  return buildSnapshotFromEntries(loadArtifact(artifactPath).entries, workspace);
 }
 
 function loadSnapshotCounts(path: string): { nodes: number; edges: number; tags: number } {
