@@ -45,6 +45,7 @@ import {
   type GraphNode,
 } from '../src/lib/graph.ts';
 import { scriptBudgetFor } from './support/runtime-budget.ts';
+import { snapshotNotes } from './support/snapshot.ts';
 import {
   FIXED_ROUTES,
   GRAPH_SEGMENT,
@@ -146,25 +147,33 @@ test('a static 404 is emitted for the host to serve', () => {
   assert.ok(exists(new URL('404.html', DIST)), 'dist/404.html is missing');
 });
 
-test('the served content index describes the corpus the site was built from', () => {
-  // `public/` is copied verbatim, so a build from a different artifact than the
-  // one that generated `public/content-index.json` serves an index describing a
-  // corpus that is not on the site — and every hover preview silently finds
-  // nothing, with no error anywhere. The first fixture build did exactly that:
-  // one index entry alongside thirty-two note pages.
-  const served = JSON.parse(readFileSync(new URL('content-index.json', DIST), 'utf8')) as {
-    entries: { slug: string; title: string; excerpt: string; aliases?: string[] }[];
-  };
-  assert.deepEqual(
-    served.entries,
-    entries.map(({ slug, title, excerpt, aliases }) => ({
-      slug,
-      title,
-      excerpt,
-      ...(aliases === undefined ? {} : { aliases }),
-    })),
-    'dist/content-index.json is not the projection of the artifact this site was built from',
+test('the served snapshot describes the corpus the site was built from', () => {
+  // The snapshot is generated from the same artifact the pages are built from
+  // and ships inside `dist/`, so a build from a different artifact would serve
+  // preview data for a corpus that is not on the site — and every hover preview
+  // would silently find nothing, with no error anywhere. The first fixture build
+  // did exactly that: one index entry alongside thirty-two note pages.
+  const notes = snapshotNotes(fileURLToPath(DIST));
+  assert.ok(notes.length > 0, 'the served snapshot carries no note, so it was not measured');
+  const served = new Map(notes.map((note) => [note.slug, note]));
+  assert.equal(
+    served.size,
+    entries.length,
+    'dist/data/site.<digest>.sqlite describes a different corpus than the artifact this site was built from',
   );
+  for (const entry of entries) {
+    assert.deepEqual(
+      served.get(entry.slug),
+      {
+        slug: entry.slug,
+        title: entry.title,
+        excerpt: entry.excerpt,
+        language: entry.language ?? NAV_LANGUAGE,
+        aliases: entry.aliases ?? [],
+      },
+      `the served snapshot does not describe "${entry.slug}" as the artifact this site was built from`,
+    );
+  }
 });
 
 /**
@@ -274,7 +283,7 @@ function internalLinks(): { file: string; href: string }[] {
 }
 
 test('every internal link resolves to a built route', () => {
-  const assets = new Set(['/favicon.svg', '/favicon.ico', '/robots.txt', '/content-index.json']);
+  const assets = new Set(['/favicon.svg', '/favicon.ico', '/robots.txt']);
   const links = internalLinks();
   assert.ok(links.length > 0, 'the build emitted no internal links to check');
 

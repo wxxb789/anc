@@ -50,9 +50,10 @@
  *   profile, so duplicating it here with an entropy heuristic would be weaker.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { BuildFailure } from './write-report.ts';
@@ -60,6 +61,8 @@ import { readVendorProvenance, type VendorProvenanceReadOptions } from './vendor
 import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { MARKED_ATTRIBUTE, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
+import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
+import { suppressSqliteWarning } from '../src/lib/sqlite-warning.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 
@@ -575,8 +578,10 @@ const GZIP_MAGIC: readonly [number, number] = [0x1f, 0x8b];
  * third-party SQLite package would have been a worse answer even before the
  * runtime cost.
  */
-const loadSqlite = (): typeof import('node:sqlite') =>
-  createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+const loadSqlite = (): typeof import('node:sqlite') => {
+  suppressSqliteWarning();
+  return createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
+};
 
 /**
  * Every text value a database carries, as rows rather than as bytes.
@@ -648,48 +653,41 @@ interface DatabaseRead {
 /**
  * @param bytes The database, as bytes — the inflated payload where it was
  *   compressed.
- * @param path Where those bytes came from, when they came from a file. Used only
- *   as a fallback: a WAL-mode header is refused by `deserialize` and readable
- *   from its path. An inflated gzip member has no path and passes `undefined`.
+ * @param path The file those bytes came from, when they came from one. An
+ *   inflated gzip member has no path and passes `undefined`, which reads through
+ *   a private temporary copy instead.
  */
 function databaseText(bytes: Uint8Array, path?: string): DatabaseRead {
   const { DatabaseSync } = loadSqlite();
-  // Opened from the buffer rather than from the path, so one code path serves
-  // both a database on disk and one recovered by inflating a gzip member — and
-  // so the scan cannot write to, or create a journal beside, the artifact it is
-  // judging.
-  const database = new DatabaseSync(':memory:');
-  try {
-    // **A WAL-mode file is read from its path instead.** A database whose header
-    // declares WAL (bytes 18 and 19 are 2) cannot be served from a buffer: the
-    // format's shared-memory index has no in-memory equivalent, and measured,
-    // `deserialize` *succeeds* on such a file while the first query then throws
-    // "unable to open database file". So the fallback is keyed on the whole
-    // read failing rather than on the open — the open is not where it fails.
-    // That is a common `journal_mode`, and reporting it as unopenable would send
-    // the reader to a fix that is not the problem.
-    //
-    // The buffer stays the default because it is the only path that can serve an
-    // inflated gzip member, which has no file to open.
+
+  // **Read-only, from the file when there is one and from a private temporary
+  // copy when there is not.** An earlier version called `deserialize` on an
+  // in-memory connection, which is not a `node:sqlite` API on the pinned
+  // runtime: the call threw for every database, and every on-disk read silently
+  // recovered through a *writable* reopen of the artifact. An inflated gzip
+  // member has no path, so it had no fallback and was reported unopenable — the
+  // gzipped-database gate measured that. This path inspects the artifact without
+  // reopening it writable and without creating sidecars; the temporary copy for
+  // an inflated member lives in the OS temp directory, never beside the output,
+  // and is removed in the `finally`.
+  const inspect = (file: string): DatabaseRead => {
+    const database = new DatabaseSync(file, { readOnly: true });
     try {
-      database.deserialize(bytes);
       return readOpenDatabase(database);
-    } catch (error) {
-      if (path === undefined) throw error;
-      // Not `readOnly`: a WAL database needs its `-shm` file and a read-only
-      // connection cannot create one. Anything this leaves beside the artifact
-      // is itself scanned — a stray `-wal` or `-shm` in `dist/` falls through to
-      // the unclassified branch and fails the build by name, which is the
-      // fail-closed classifier covering this function's own side effects.
-      const fromDisk = new DatabaseSync(path);
-      try {
-        return readOpenDatabase(fromDisk);
-      } finally {
-        fromDisk.close();
-      }
+    } finally {
+      database.close();
     }
+  };
+
+  if (path !== undefined) return inspect(path);
+
+  const directory = mkdtempSync(join(tmpdir(), 'anc-scan-'));
+  try {
+    const temporary = join(directory, 'inflated.sqlite');
+    writeFileSync(temporary, bytes);
+    return inspect(temporary);
   } finally {
-    database.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 }
 
@@ -1179,7 +1177,21 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // one search index, the fix is always in the note the marker came from, and
     // the exact fragment is in the report's `detailed` half where the person who
     // can act on it reads it.
-    const publicWhere = isFragment ? `the search index (${THIRD_PARTY}/)` : where;
+    // **A public snapshot's filename may not be printed either**, for the same
+    // reason as a fragment's: it is `site.<sha256>.sqlite`, and that digest is a
+    // function of the corpus. The rename differential caught this too — a note
+    // body carrying a planted home path lands in the snapshot's `excerpt`, and
+    // the finding named the content-addressed file. The public half names the
+    // surface instead; the digest is in the report's `detailed` half.
+    const isSnapshot =
+      posixWhere.split('/').length === 2 &&
+      posixWhere.split('/')[0] === SNAPSHOT_DIRECTORY &&
+      SNAPSHOT_FILE_PATTERN.test(name);
+    const publicWhere = isFragment
+      ? `the search index (${THIRD_PARTY}/)`
+      : isSnapshot
+        ? `the site snapshot (${SNAPSHOT_DIRECTORY}/)`
+        : where;
 
     // Read once, and classify on what the bytes are rather than on what the
     // name claims. A fragment keeps its own branch below because its *location*

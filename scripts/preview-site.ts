@@ -87,52 +87,49 @@
  * for a tool whose entire premise is that excluded notes never ship is the worst
  * thing it could do.
  *
- * So the directory must carry `content-index.json`.
+ * So the directory must carry exactly one regular `data/site.<sha256>.sqlite`,
+ * matching SQLite magic, application ID, the reader's exact version, and the
+ * digest in its own filename.
  *
  * **That file and not `index.html`, because the marker has to be something only
  * this tool writes.** An `index.html` is the most ordinary file on earth — a
  * user may plausibly have one lying around in a notes directory, a downloaded
  * page, or any other static site's output, and every one of those would satisfy
- * a guard written against it while being no build of ours. `content-index.json`
- * is this tool's own projection of the corpus, written into the output by
- * `bin/anc.mjs` on every run and by `scripts/build-fixture.ts`,
- * and nothing else produces a file by that name. The guard is only as good as
- * the marker's exclusivity.
+ * a guard written against it while being no build of ours. A digest-named
+ * snapshot with ANC's own `application_id` is this tool's own projection of the
+ * corpus and nothing else produces it. The guard is only as good as the marker's
+ * exclusivity.
  *
- * **A hand-made `content-index.json` is accepted, deliberately.** `touch
- * content-index.json` in a notes directory defeats this, and that is the trade
- * taken: the alternative is validating the file's contents, which turns a
- * category check into a schema check and refuses the one user who most needs a
- * preview — the one debugging a build that came out wrong. The guard is aimed at
- * the *accident* (`--dist .`, a typo, a stale path), not at a user determined to
- * serve their own notes, who can do that with any static server in one command.
- * A guard that stops the accident and not the intent is the right size here, and
- * naming that ceiling is worth more than pretending it is a boundary.
+ * **A matching filename is not enough; the bytes are checked.** A hand-made
+ * `data/site.<64hex>.sqlite` still has to carry the SQLite header, the format
+ * constants, and a SHA-256 equal to the digest in its name. That refuses the
+ * ordinary accident (`--dist .`, a typo, a stale path, a truncated copy) without
+ * turning recognition into a full correctness proof.
  *
- * It is a marker of "this tool built this", not a validity check — a corrupt or
- * partial artifact still previews, for the reason above. What it excludes is the
- * *category* error of aiming the server at a directory that was never a build
- * output.
+ * It is a marker of "this tool built this", not a validity check — a
+ * schema-valid snapshot with wrong content still previews. What it excludes is
+ * the *category* error of aiming the server at a directory that was never a
+ * build output.
  *
  * **Checked before anything binds.** `resolveArtifactDirectory` throws and
  * `startPreview` is the only thing that opens a socket; the binary calls them in
  * that order. A server that starts and then refuses has already opened the port.
  */
 
-import { existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { DatabaseSync } from '../src/lib/sqlite.ts';
+import {
+  SNAPSHOT_APPLICATION_ID,
+  SNAPSHOT_DIRECTORY,
+  SNAPSHOT_FILE_PATTERN,
+  SNAPSHOT_USER_VERSION,
+} from '../src/lib/snapshot.ts';
 import { BuildFailure } from './write-report.ts';
 
-/**
- * The file every build writes into its output, and the marker a served directory
- * must carry.
- *
- * `bin/anc.mjs` writes it from `projectIndex(validated)` on
- * every run, and `scripts/build-fixture.ts` does the same. Spelled out here
- * rather than imported because the two writers spell it out too — it is a
- * filename in an artifact, not a shared constant with a home.
- */
-const ARTIFACT_MARKER = 'content-index.json';
+/** The SQLite file header every valid snapshot starts with. */
+const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'latin1');
 
 /**
  * Astro's default preview port, and deliberately the same number.
@@ -142,6 +139,91 @@ const ARTIFACT_MARKER = 'content-index.json';
  * nothing and cost the recognition.
  */
 export const DEFAULT_PREVIEW_PORT = 4321;
+
+/**
+ * Find and validate the one snapshot in a built output.
+ *
+ * @throws {BuildFailure} when the directory has no snapshot, more than one, a
+ *   member whose digest does not match its bytes, or a file that is not ANC's
+ *   SQLite format.
+ */
+function resolveSnapshot(directory: string): string {
+  const dataDirectory = resolve(directory, SNAPSHOT_DIRECTORY);
+  let candidates: string[] = [];
+  try {
+    candidates = existsSync(dataDirectory)
+      ? readdirSync(dataDirectory).filter((name) => SNAPSHOT_FILE_PATTERN.test(name))
+      : [];
+  } catch {
+    candidates = [];
+  }
+
+  if (candidates.length !== 1) {
+    throw new BuildFailure(
+      'preview-directory-not-an-artifact',
+      'not a built site: the directory named by --dist does not carry exactly one ' +
+        'data/site.<sha256>.sqlite snapshot, so it was not produced by this tool. ' +
+        'Refusing to serve it — a directory of notes served on a port publishes every ' +
+        'file in it. Name the build output directory instead; the default is `dist`.',
+      `${dataDirectory}: ${candidates.length} snapshot candidate(s)`,
+    );
+  }
+
+  const name = candidates[0]!;
+  const path = resolve(dataDirectory, name);
+  if (!statSync(path).isFile()) {
+    throw new BuildFailure(
+      'preview-directory-not-an-artifact',
+      'not a built site: the snapshot candidate is not a regular file.',
+      path,
+    );
+  }
+
+  const match = SNAPSHOT_FILE_PATTERN.exec(name)!;
+  const expected = match[1]!;
+  const bytes = readFileSync(path);
+  if (bytes.length < 100 || !bytes.subarray(0, SQLITE_MAGIC.length).equals(SQLITE_MAGIC)) {
+    throw new BuildFailure(
+      'preview-snapshot-invalid',
+      'the preview snapshot is not a SQLite database.',
+      `${path}: missing SQLite header`,
+    );
+  }
+  if (createHash('sha256').update(bytes).digest('hex') !== expected) {
+    throw new BuildFailure(
+      'preview-snapshot-digest',
+      'the preview snapshot bytes do not match the digest in their filename.',
+      path,
+    );
+  }
+
+  let database: DatabaseSync;
+  try {
+    database = new DatabaseSync(path, { readOnly: true });
+  } catch (error) {
+    throw new BuildFailure(
+      'preview-snapshot-unreadable',
+      'the preview snapshot could not be opened.',
+      `${path}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  try {
+    const applicationId = (database.prepare('PRAGMA application_id').get() as { application_id: number })
+      .application_id;
+    const userVersion = (database.prepare('PRAGMA user_version').get() as { user_version: number })
+      .user_version;
+    if (applicationId !== SNAPSHOT_APPLICATION_ID || userVersion !== SNAPSHOT_USER_VERSION) {
+      throw new BuildFailure(
+        'preview-snapshot-format',
+        'the preview snapshot is not a snapshot this reader accepts.',
+        `${path}: application_id=${applicationId}, user_version=${userVersion}`,
+      );
+    }
+  } finally {
+    database.close();
+  }
+  return path;
+}
 
 /**
  * Check a directory is one this tool built, and return its absolute path.
@@ -162,17 +244,18 @@ export function resolveArtifactDirectory(directory: string, from: string): strin
     );
   }
 
-  if (!existsSync(resolve(resolved, ARTIFACT_MARKER))) {
+  resolveSnapshot(resolved);
+
+  if (!existsSync(resolve(resolved, 'index.html'))) {
     // The path is not in the message. A user who typed `--dist clients/acme` is
     // looking at the command they typed, and the stream this reaches is one a
     // workflow log inherits — the same rule `bin/anc.mjs`
     // applies to every argv token it declines to echo.
     throw new BuildFailure(
       'preview-directory-not-an-artifact',
-      `not a built site: the directory named by --dist has no ${ARTIFACT_MARKER}, so it was ` +
-        'not produced by this tool. Refusing to serve it — a directory of notes served on a ' +
-        'port publishes every file in it. Name the build output directory instead; the ' +
-        'default is `dist`.',
+      'not a built site: the directory named by --dist has no entry page and no ' +
+        'data/site.<sha256>.sqlite snapshot, so it was not produced by this tool. ' +
+        'Refusing to serve it. Name the build output directory instead; the default is `dist`.',
       resolved,
     );
   }

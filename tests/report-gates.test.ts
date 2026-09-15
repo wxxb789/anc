@@ -33,6 +33,8 @@ import { test } from 'vitest';
 
 import { scanResidue } from '../scripts/scan-residue.ts';
 import { STATE_REPORT_MAX_AGE_MS } from '../scripts/write-report.ts';
+import { DatabaseSync } from '../src/lib/sqlite.ts';
+import { snapshotNotes } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'anc.mjs');
@@ -134,7 +136,7 @@ test('a marker that only the search index carries fails the build', () => {
     const notes = join(directory, 'notes');
     mkdirSync(notes, { recursive: true });
     // Padded, so nothing under test lands in the meta description or the
-    // content-index excerpt — both of which a raw scan reads, and either of
+    // snapshot excerpt — both of which a raw scan reads, and either of
     // which would make this gate pass for the wrong reason.
     const padding = Array.from(
       { length: 40 },
@@ -292,7 +294,7 @@ test('the marker the scan caught is one no page carries', () => {
  * asserts this rule over *hand-written* scratch HTML, where an inline
  * `<code>[[inline]]</code>` is trivially exempt. Through the real pipeline the
  * excerpt is derived from the raw body and re-emitted into
- * `<meta name="description">`, `content-index.json` and `rss.xml`, none of which
+ * `<meta name="description">`, the public snapshot and `rss.xml`, none of which
  * carry a `<code>` element for the exemption to find — so the page failed on its
  * own meta tag while its body was correctly exempt. Fixed in `excerptFor`; gated
  * here, over the binary, because that is the only place the difference shows.
@@ -328,12 +330,15 @@ test('a note documenting wikilink syntax builds, fenced or inline', () => {
 
     // **The excerpt of the inline note lost the code span rather than keeping
     // its brackets**, which is where the fix landed and is the half a reader of
-    // this gate would otherwise have to infer. `content-index.json` ships the
-    // excerpt to the browser verbatim, so it is the cheapest place to read it.
-    const index = JSON.parse(
-      readFileSync(join(directory, 'out', 'content-index.json'), 'utf8'),
-    ) as { entries: { slug: string; excerpt: string }[] };
-    const inline = index.entries.find((entry) => entry.slug === 'inline');
+    // this gate would otherwise have to infer. The public snapshot ships the
+    // excerpt to the browser — it is the artifact a reader actually downloads —
+    // so it is the cheapest place to read it.
+    const published = snapshotNotes(join(directory, 'out'));
+    assert.ok(
+      published.length > 0,
+      'the snapshot carries no notes, so the excerpt read below proves nothing',
+    );
+    const inline = published.find((note) => note.slug === 'inline');
     assert.ok(inline, 'the inline note did not publish, so its excerpt proves nothing');
     assert.equal(
       inline.excerpt,
@@ -379,7 +384,7 @@ test('a wikilink that reached output from prose is still residue', () => {
   scratch('tk29-genuine-', (directory) => {
     // Shaped like a built site, with the undegraded link in the two places the
     // excerpt reaches that carry no `<code>` element — a meta tag and the
-    // browser-facing index — plus a page whose body is correctly exempt. All
+    // public snapshot — plus a page whose body is correctly exempt. All
     // three in one fixture, because the property is that the exemption
     // distinguishes them rather than that it fires or does not.
     writeFileSync(
@@ -388,11 +393,14 @@ test('a wikilink that reached output from prose is still residue', () => {
         '<body><p>Documented <code>[[syntax]]</code> here.</p></body></html>',
       'utf8',
     );
-    writeFileSync(
-      join(directory, 'content-index.json'),
-      JSON.stringify({ version: 1, entries: [{ slug: 'x', title: 'X', excerpt: 'A link: [[nowhere]].' }] }),
-      'utf8',
-    );
+    // The snapshot carries the same excerpt in a `nodes` row, which is where a
+    // reader meets it now that the public index is gone. Built with SQLite
+    // directly, like `tests/database-residue.test.ts`: the carrier is what this
+    // gate is about, not the schema, and the row pass is what has to see it.
+    const snapshot = new DatabaseSync(join(directory, 'site.sqlite3'));
+    snapshot.exec('CREATE TABLE nodes(slug TEXT, excerpt TEXT)');
+    snapshot.prepare('INSERT INTO nodes VALUES(?, ?)').run('x', 'A link: [[nowhere]].');
+    snapshot.close();
 
     const { findings } = scanResidue(directory);
     assert.equal(

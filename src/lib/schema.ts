@@ -159,10 +159,11 @@ const ARRAY_LIMITS = {
   tags: { items: 50, itemChars: 128 },
   // Aliases are bounded public display/search/preview metadata.
   aliases: { items: 50, itemChars: 300 },
-  // Each member must already resolve to a published slug, so member length is
-  // bounded transitively by the slug ceiling; only the count needs one.
-  outgoing: { items: 500, itemChars: undefined },
-  backlinks: { items: 500, itemChars: undefined },
+  // `outgoing` and `backlinks` deliberately have no count ceiling. The old 500
+  // was a serialized-array limit, and the SQLite projection is the relationship
+  // authority now: a hub with thousands of backlinks must stay fully reachable,
+  // and a graph drawing bound must never reject a DB fact. A producer defect is
+  // caught by the edge's own resolution and foreign-key checks instead.
 } as const satisfies Partial<Record<keyof ContentEntry, { items: number; itemChars?: number }>>;
 
 /** Size ceilings for a field, exposed so a consumer can state the same number. */

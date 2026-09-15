@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { routeKey, tagRoute } from '../src/lib/routes.ts';
+import { snapshotNotes } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'anc.mjs');
@@ -51,13 +52,10 @@ test('frontmatter tags and the first folder reach their public routes', () => {
     assert.ok(note.includes('别名'));
     assert.ok(note.includes('<li>Earlier Note</li>'));
     assert.ok(note.includes('<li>旧标题</li>'));
-    const index = JSON.parse(readFileSync(join(directory, 'dist', 'content-index.json'), 'utf8')) as {
-      entries: { slug: string; aliases?: string[] }[];
-    };
-    assert.deepEqual(index.entries.find((entry) => entry.slug === 'custom-note')?.aliases, [
-      'Earlier Note',
-      '旧标题',
-    ]);
+    const snapshot = snapshotNotes(join(directory, 'dist'));
+    const custom = snapshot.find((entry) => entry.slug === 'custom-note');
+    assert.ok(custom, 'the snapshot carries no row for the custom note');
+    assert.deepEqual(custom.aliases, ['Earlier Note', '旧标题']);
     const fragments = filesUnder(join(directory, 'dist', 'pagefind'))
       .filter((path) => path.endsWith('.pf_fragment') && statSync(path).isFile())
       .map((path) => gunzipSync(readFileSync(path)).toString('utf8'))

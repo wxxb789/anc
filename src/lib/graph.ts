@@ -106,8 +106,8 @@ export interface Graph {
  * at 320 px inside its scroll container. Past that the labels are closer
  * together than they are tall.
  *
- * The content contract allows 500 outgoing edges on one entry, so this is a real
- * bound rather than a theoretical one; the fixture corpus's busiest note has 10
+ * The snapshot's `edges` table has no count ceiling, so this is a real bound
+ * rather than a theoretical one; the fixture corpus's busiest note has 10
  * neighbours and the published note has none. **Nothing is hidden by it**: the
  * outgoing and backlink lists immediately above the graph are complete and
  * unbounded, and the figure states how many notes it left out.

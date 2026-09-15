@@ -14,11 +14,23 @@
  */
 
 import { loadArtifact } from './artifact-source.ts';
+import { hydrateEntriesWithSnapshot, loadSnapshotEdges } from './snapshot-reader.ts';
 import type { ContentArtifact, ContentEntry } from './schema.ts';
 
 export type { ContentArtifact, ContentEntry };
 
 export const artifact: ContentArtifact = loadArtifact();
+
+/**
+ * Relationship authority is the finalized snapshot, not the private IR.
+ *
+ * When this build produced a snapshot, its edges replace whatever the private
+ * artifact carried, so every relationship surface renders a SQL query result.
+ * A build without a snapshot (`astro dev`, a unit test) keeps the producer's
+ * resolved pairs, which are the exact bytes the snapshot is built from.
+ */
+const snapshotEdges = loadSnapshotEdges();
+if (snapshotEdges !== undefined) hydrateEntriesWithSnapshot(artifact.entries, snapshotEdges);
 
 export const entries: readonly ContentEntry[] = artifact.entries;
 

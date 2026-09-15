@@ -26,6 +26,7 @@ import type { Browser, ConsoleMessage, Page } from 'playwright';
 
 import { otherLanguages } from '../src/scripts/search-dialog.ts';
 import { MESSAGE_DATASET, translate, type Translation } from '../src/lib/translations.ts';
+import { snapshotNotes } from './support/snapshot.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = fileURLToPath(new URL('dist/', ROOT));
@@ -73,12 +74,10 @@ function searchableTerms(text: string): string[] {
  *
  * A fixed English word made the gate vacuous for a Chinese-only repository.
  * Intl.Segmenter avoids turning an entire CJK title into one synthetic "word";
- * the content index, rendered note, and inflated Pagefind text independently
+ * the SQLite snapshot, rendered note, and inflated Pagefind text independently
  * prove the term exists before the browser asks Pagefind to find it.
  */
-const SEARCH_PROJECTION = JSON.parse(readFileSync(join(DIST, 'content-index.json'), 'utf8')) as {
-  entries: { slug: string; title: string; excerpt: string; aliases?: string[] }[];
-};
+const SEARCH_PROJECTION = { entries: snapshotNotes(DIST) };
 const INDEXED_FRAGMENTS = indexedFragments();
 const INDEXED_FRAGMENT_TEXT = INDEXED_FRAGMENTS.map((fragment) => fragment.content).join('\n');
 

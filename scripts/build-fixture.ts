@@ -26,10 +26,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { validateArtifact } from '../src/lib/schema.ts';
-import { projectIndex } from './validate-content.ts';
 import { lockDist } from './dist-lock.ts';
 import { LOCK_HELD_VARIABLE } from './build-site.ts';
 
@@ -38,7 +35,9 @@ const FIXTURE_ARTIFACT = 'tests/fixtures/valid-corpus.json';
 /** The published build chain, in order. The test suite runs after it. */
 const STEPS: readonly (readonly [string, ...string[]])[] = [
   ['node', 'scripts/validate-content.ts'],
+  ['node', 'scripts/build-snapshot.ts'],
   ['pnpm', 'exec', 'astro', 'build'],
+  ['node', 'scripts/copy-snapshot.ts'],
   ['node', 'scripts/emit-redirects.ts'],
   // `scripts/run-pagefind.ts` rather than `pnpm exec pagefind --site dist`,
   // which is what this line used to be. The two are not the same command: the
@@ -76,24 +75,6 @@ function runStep(command: string, args: readonly string[], env: NodeJS.ProcessEn
 }
 
 /**
- * Overwrite `dist/content-index.json` with the fixture's own projection.
- *
- * Astro copies `public/` verbatim, and `public/content-index.json` is the
- * projection of the *published* artifact — so without this the fixture build
- * serves a one-entry index alongside thirty-two note pages, and every hover
- * preview silently finds nothing. The published build is unaffected: there the
- * copied file is already the right projection, and `validate-content.ts` proves
- * it byte for byte.
- *
- * `public/content-index.json` itself is never touched. It is producer-generated
- * and the agent contract forbids editing it here.
- */
-function writeFixtureIndex(): void {
-  const artifact = validateArtifact(JSON.parse(readFileSync(FIXTURE_ARTIFACT, 'utf8')), FIXTURE_ARTIFACT);
-  writeFileSync('dist/content-index.json', JSON.stringify(projectIndex(artifact), null, 2) + '\n', 'utf8');
-}
-
-/**
  * Build the fixture site, run its gates, restore the published build.
  *
  * **The lock is taken and released three times, not held throughout**, and the
@@ -118,7 +99,6 @@ async function main(): Promise<number> {
         return status;
       }
     }
-    writeFixtureIndex();
     const inventoryStatus = runStep('node', ['scripts/verify-output-inventory.ts'], env);
     if (inventoryStatus !== 0) {
       console.error('\noutput inventory failed with status ' + inventoryStatus);

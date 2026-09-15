@@ -379,7 +379,11 @@ function gitDatesFor(contentDirectory: string, paths: readonly string[]): Readon
   let commitDate: string | undefined;
   for (const raw of history.stdout.split('\0')) {
     if (raw.startsWith('\x1e')) {
-      const candidate = raw.slice(1).trim();
+      // `%cI` is strict ISO 8601, and git spells UTC as `+00:00` rather than
+      // `Z` — both are the same instant, but a canonical `Z` keeps the artifact
+      // byte-stable across the git versions that format it either way. The
+      // schema accepts both forms; this is determinism, not validation.
+      const candidate = raw.slice(1).trim().replace(/[+-]00:00$/, 'Z');
       commitDate = Number.isNaN(Date.parse(candidate)) ? undefined : candidate;
       continue;
     }

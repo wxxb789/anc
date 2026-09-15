@@ -22,7 +22,6 @@
     "src",
     "tsconfig.json",
     "!src/data/content.json",
-    "!public/content-index.json",
     "!scripts/build-fixture.ts",
     "!scripts/compile-package.ts",
     "!scripts/build-site.ts",

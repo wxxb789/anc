@@ -16,6 +16,8 @@ import { gunzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
+import { snapshotSlugs, snapshotText } from './support/snapshot.ts';
+
 const CLI = fileURLToPath(new URL('../bin/anc.mjs', import.meta.url));
 
 function filesUnder(root: string): string[] {
@@ -47,20 +49,14 @@ function assertSurface(text: string, token: string, present: boolean, surface: s
   assert.equal(text.includes(token), present, surface + (present ? ' lost ' : ' retained ') + token);
 }
 
-function projectionPattern(surface: 'content index' | 'feed' | 'sitemap', slug: string): RegExp {
-  if (surface === 'content index') return new RegExp('"slug"\\s*:\\s*"' + slug + '"');
+function projectionPattern(surface: 'feed' | 'sitemap', slug: string): RegExp {
   if (surface === 'feed') {
     return new RegExp('<link rel="alternate" type="text/html" href="[^"]*/notes/' + slug + '/"/>');
   }
   return new RegExp('<loc>[^<]*/notes/' + slug + '/</loc>');
 }
 
-function assertProjection(
-  text: string,
-  slug: string,
-  present: boolean,
-  surface: 'content index' | 'feed' | 'sitemap',
-): void {
+function assertProjection(text: string, slug: string, present: boolean, surface: 'feed' | 'sitemap'): void {
   assert.equal(
     projectionPattern(surface, slug).test(text),
     present,
@@ -68,7 +64,7 @@ function assertProjection(
   );
 }
 
-test('deleting a note removes its route, feed, sitemap, content index, and search record', () => {
+test('deleting a note removes its route, feed, sitemap, snapshot, and search record', () => {
   const root = mkdtempSync(join(tmpdir(), 'publish-deletion-'));
   const dist = join(root, 'dist');
   const deleted = join(root, 'deleted-nebula.md');
@@ -83,8 +79,14 @@ test('deleting a note removes its route, feed, sitemap, content index, and searc
     build(root);
     assert.equal(existsSync(join(dist, 'notes', 'deleted-nebula', 'index.html')), true, 'first build never emitted the deleted route');
     assert.equal(existsSync(join(dist, 'notes', 'retained-asterism', 'index.html')), true, 'first build never emitted the retained control route');
+    const firstSlugs = snapshotSlugs(dist);
+    assert.ok(firstSlugs.length > 0, 'first snapshot stores no nodes, so its absence checks would be vacuous');
+    assertSurface(firstSlugs.join('\n'), 'deleted-nebula', true, 'first snapshot');
+    assertSurface(firstSlugs.join('\n'), 'retained-asterism', true, 'first snapshot');
+    const firstText = snapshotText(dist);
+    assertSurface(firstText, deletedToken, true, 'first snapshot');
+    assertSurface(firstText, retainedToken, true, 'first snapshot');
     for (const [surface, file] of [
-      ['content index', 'content-index.json'],
       ['feed', 'rss.xml'],
       ['sitemap', 'sitemap.xml'],
     ] as const) {
@@ -102,8 +104,14 @@ test('deleting a note removes its route, feed, sitemap, content index, and searc
     build(root);
     assert.equal(existsSync(join(dist, 'notes', 'deleted-nebula', 'index.html')), false, 'deleted route survived the rebuild');
     assert.equal(existsSync(join(dist, 'notes', 'retained-asterism', 'index.html')), true, 'retained control route vanished');
+    const secondSlugs = snapshotSlugs(dist);
+    assert.ok(secondSlugs.length > 0, 'rebuilt snapshot stores no nodes, so its absence checks would be vacuous');
+    assertSurface(secondSlugs.join('\n'), 'deleted-nebula', false, 'rebuilt snapshot');
+    assertSurface(secondSlugs.join('\n'), 'retained-asterism', true, 'rebuilt snapshot');
+    const secondText = snapshotText(dist);
+    assertSurface(secondText, deletedToken, false, 'rebuilt snapshot');
+    assertSurface(secondText, retainedToken, true, 'rebuilt snapshot');
     for (const [surface, file] of [
-      ['content index', 'content-index.json'],
       ['feed', 'rss.xml'],
       ['sitemap', 'sitemap.xml'],
     ] as const) {

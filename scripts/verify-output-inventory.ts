@@ -8,6 +8,7 @@
  */
 
 import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import {
   lstatSync,
   readFileSync,
@@ -15,6 +16,7 @@ import {
 } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from '../src/lib/sqlite.ts';
 
 import { loadArtifact } from '../src/lib/artifact-source.ts';
 import { noteRoute, WITHHELD_ROUTE } from '../src/lib/route-path.ts';
@@ -25,13 +27,16 @@ import {
   collectionFacets,
   tagFacets,
 } from '../src/lib/routes.ts';
+import { snapshotFileName } from '../src/lib/snapshot.ts';
+import { readBuildBinding } from '../src/lib/snapshot-reader.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
+import { assertSnapshotContract } from './write-snapshot.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 
-const GENERATED_FILES = ['_redirects', 'content-index.json', 'robots.txt', 'rss.xml', 'sitemap.xml'] as const;
+const GENERATED_FILES = ['_redirects', 'robots.txt', 'rss.xml', 'sitemap.xml'] as const;
 const PAGEFIND_RUNTIME = [
   'pagefind/pagefind-entry.json',
   'pagefind/pagefind-highlight.js',
@@ -89,6 +94,65 @@ function expectedHtml(artifact: ContentArtifact): Set<string> {
 
 function inflateIfGzip(bytes: Buffer): Buffer {
   return bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
+}
+
+/**
+ * The bound snapshot member, validated against its own filename and schema.
+ *
+ * An empty set when this build has no binding — a synthetic inventory fixture,
+ * or a checkout that has not run the snapshot step. When a binding exists, the
+ * exact digest-named file must be present: a misnamed or second `site.*.sqlite`
+ * is an unexpected member, and a wrong digest or schema fails here rather than
+ * after copy-out.
+ */
+function snapshotOutput(root: string, workspace?: string): Set<string> {
+  const binding = readBuildBinding(workspace);
+  if (binding === undefined) return new Set();
+
+  const file = snapshotFileName(binding.digest);
+  const path = join(root, ...file.split('/'));
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch {
+    throw new BuildFailure(
+      'output-inventory-snapshot-missing',
+      'output inventory is missing its bound snapshot',
+      file,
+    );
+  }
+
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (digest !== binding.digest) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-digest',
+      'output inventory snapshot digest does not match its bound URL',
+      file + ': expected ' + binding.digest + ', got ' + digest,
+    );
+  }
+
+  let database: DatabaseSync;
+  try {
+    database = new DatabaseSync(path, { readOnly: true });
+  } catch (error) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-unreadable',
+      'output inventory could not open its snapshot',
+      file + ': ' + (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  try {
+    assertSnapshotContract(database);
+  } catch (error) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-schema',
+      'output inventory snapshot does not carry the accepted schema',
+      file + ': ' + (error instanceof Error ? error.message : String(error)),
+    );
+  } finally {
+    database.close();
+  }
+  return new Set([file]);
 }
 
 function pagefindFiles(root: string, actual: readonly string[]): Set<string> {
@@ -168,7 +232,7 @@ function pagefindFiles(root: string, actual: readonly string[]): Set<string> {
 }
 
 /** Assert every final file belongs to one public route or one generated namespace. */
-export function assertOutputInventory(root: string, artifact: ContentArtifact): number {
+export function assertOutputInventory(root: string, artifact: ContentArtifact, workspace?: string): number {
   let actual: string[];
   try {
     actual = filesUnder(root);
@@ -204,6 +268,7 @@ export function assertOutputInventory(root: string, artifact: ContentArtifact): 
     ...staticPublic,
     ...GENERATED_FILES,
     ...PAGEFIND_RUNTIME,
+    ...snapshotOutput(root, workspace),
   ]);
   const pagefind = pagefindFiles(root, actual);
   const unexpected: string[] = [];
