@@ -158,6 +158,39 @@ test('nodes, edges, aliases, and tags equal the authored corpus', () => {
   });
 });
 
+test('the batched tag read equals the tagFacets projection over the fixture', () => {
+  // The build hydrates each entry's `tags` from this query and then calls
+  // `tagFacets`, while the browser reads the same `tags`/`node_tags` rows. The
+  // rows must therefore be exactly the (slug, key, label) triples that
+  // re-normalizing the labels reproduces — a changed key or a dropped label
+  // would put the static tag pages and the enhanced browser on two different
+  // facts. The expected value comes from `tagFacets`, the accepted producer
+  // normalizer, not from SQL written for this test.
+  const expected = tagFacets(artifact.entries)
+    .flatMap((facet) =>
+      facet.entries.map((entry) => ({ slug: entry.slug, key: facet.key, label: facet.label })),
+    )
+    .sort((left, right) =>
+      left.slug !== right.slug ? (left.slug < right.slug ? -1 : 1) : left.key < right.key ? -1 : 1,
+    );
+
+  withSnapshot((path) => {
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const rows = (
+        database.prepare(SNAPSHOT_QUERIES.allNodeTags).all() as unknown as {
+          slug: string;
+          key: string;
+          label: string;
+        }[]
+      ).map((row) => ({ ...row }));
+      assert.deepEqual(rows, expected);
+    } finally {
+      database.close();
+    }
+  });
+});
+
 test('two fresh snapshots of one corpus are byte-identical', () => {
   withSnapshot((first) => {
     withSnapshot((second) => {
@@ -301,6 +334,29 @@ test('representative queries use their declared access structures', () => {
         `allEdges does not walk the edge primary key: ${allEdges}`,
       );
       assert.doesNotMatch(allEdges, /TEMP B-TREE/, `allEdges sorts instead of reading primary-key order: ${allEdges}`);
+
+      // Build-time tags are one joined scan, not a query per page: the
+      // membership primary key is walked once and both dimension tables are
+      // probed by primary key. A rewrite that drove the join from `nodes` would
+      // scan `node_tags` once per node, which is the quadratic the contract's
+      // "One joined scan grouped in memory" row exists to forbid.
+      const allNodeTags = plan(SNAPSHOT_QUERIES.allNodeTags);
+      assert.match(allNodeTags, /SCAN nt\b/, `build-time tags do not scan the membership table once: ${allNodeTags}`);
+      assert.match(
+        allNodeTags,
+        /SEARCH t USING INTEGER PRIMARY KEY/,
+        `build-time tags do not probe the tag table by primary key: ${allNodeTags}`,
+      );
+      assert.match(
+        allNodeTags,
+        /SEARCH n USING INTEGER PRIMARY KEY/,
+        `build-time tags do not probe the node table by primary key: ${allNodeTags}`,
+      );
+      assert.doesNotMatch(
+        allNodeTags,
+        /SCAN (?:nodes|tags)\b/,
+        `build-time tags scan a dimension table instead of probing it: ${allNodeTags}`,
+      );
 
       const nodeDegrees = plan(SNAPSHOT_QUERIES.nodeDegrees);
       assert.match(

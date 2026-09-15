@@ -165,6 +165,24 @@ export const SNAPSHOT_QUERIES = {
     FROM edges
     ORDER BY source_id, target_id`.trim(),
 
+  /**
+   * Every tagged note, with its tag's canonical key and label.
+   *
+   * The build reads this once and groups in memory, which is the access path
+   * `docs/core-design/sqlite-contract.md` names for "build-time tags for all
+   * notes": `node_tags` is scanned through its primary key and the two joins
+   * probe `tags` and `nodes` by primary key, so the cost is the membership
+   * count and never an N-per-page scan. `slug` before `key` is the grouping
+   * order the reader wants; the `ORDER BY` is explicit rather than left to the
+   * tables' storage order, so two readers see the rows in one order.
+   */
+  allNodeTags: `
+    SELECT n.slug, t.key, t.label
+    FROM node_tags AS nt
+    JOIN tags AS t ON t.id = nt.tag_id
+    JOIN nodes AS n ON n.id = nt.node_id
+    ORDER BY n.slug, t.key`.trim(),
+
   /** Distinct adjacent notes per node, as one aggregate over the edge set. */
   nodeDegrees: `
     SELECT node_id AS id, COUNT(DISTINCT neighbour) AS degree FROM (

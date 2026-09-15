@@ -22,7 +22,8 @@ import { beforeAll, test } from 'vitest';
 import {
   SNAPSHOT_APPLICATION_ID,
   SNAPSHOT_EXPLICIT_INDEX,
-  SNAPSHOT_TABLE_COLUMNS,
+  SNAPSHOT_SCHEMA_SQL,
+  SNAPSHOT_TABLE_SHAPES,
   SNAPSHOT_TABLES,
   SNAPSHOT_USER_VERSION,
 } from '../src/lib/snapshot.ts';
@@ -51,22 +52,75 @@ interface FailureModes {
   closeThrows?: boolean;
 }
 
-/** The rows a driver must return for `assertSnapshotRows` to accept it. */
+/** The stored DDL of one table, as the writer's `SNAPSHOT_SCHEMA_SQL` spells it. */
+function storedTableSql(table: string): string {
+  const start = SNAPSHOT_SCHEMA_SQL.indexOf(`CREATE TABLE ${table} (`);
+  if (start < 0) throw new Error(`SNAPSHOT_SCHEMA_SQL does not declare table ${table}`);
+  return SNAPSHOT_SCHEMA_SQL.slice(start, SNAPSHOT_SCHEMA_SQL.indexOf(';', start));
+}
+
+/**
+ * The rows a driver must return for `assertSnapshotRows` to accept it, built
+ * from the normative metadata so a schema change reaches this fixture rather
+ * than letting it keep testing an older contract.
+ */
 function contractRows(sql: string): Record<string, unknown>[] {
   if (sql === 'PRAGMA application_id') return [{ application_id: SNAPSHOT_APPLICATION_ID }];
   if (sql === 'PRAGMA user_version') return [{ user_version: SNAPSHOT_USER_VERSION }];
-  if (sql.startsWith('SELECT type, name FROM sqlite_schema')) {
-    return [
-      ...SNAPSHOT_TABLES.map((name) => ({ type: 'table', name })),
-      { type: 'index', name: SNAPSHOT_EXPLICIT_INDEX },
-    ];
+  if (sql.startsWith('SELECT type, name')) {
+    return SNAPSHOT_TABLES.map((name) => ({ type: 'table', name, sql: storedTableSql(name) }));
   }
   const table = /^PRAGMA table_info\(([^)]+)\)$/.exec(sql)?.[1];
   if (table !== undefined) {
-    return (SNAPSHOT_TABLE_COLUMNS[table] ?? []).map((column) => ({ name: column.name, pk: column.pk }));
+    return (SNAPSHOT_TABLE_SHAPES[table]?.columns ?? []).map((column) => ({
+      name: column.name,
+      type: column.type,
+      notnull: column.notNull ? 1 : 0,
+      pk: column.pk,
+    }));
   }
-  if (sql.startsWith("SELECT name FROM sqlite_schema WHERE type = 'index'")) {
-    return [{ name: SNAPSHOT_EXPLICIT_INDEX }];
+  if (sql === 'PRAGMA table_list') {
+    return SNAPSHOT_TABLES.map((name) => {
+      const shape = SNAPSHOT_TABLE_SHAPES[name]!;
+      return {
+        schema: 'main',
+        name,
+        type: 'table',
+        ncol: shape.columns.length,
+        wr: shape.withoutRowid ? 1 : 0,
+        strict: shape.strict ? 1 : 0,
+      };
+    });
+  }
+  const foreignKeyTable = /^PRAGMA foreign_key_list\(([^)]+)\)$/.exec(sql)?.[1];
+  if (foreignKeyTable !== undefined) {
+    return (SNAPSHOT_TABLE_SHAPES[foreignKeyTable]?.foreignKeys ?? []).map((key, id) => ({
+      id,
+      seq: 0,
+      table: key.table,
+      from: key.from,
+      to: key.to,
+      on_update: 'NO ACTION',
+      on_delete: 'NO ACTION',
+      match: 'NONE',
+    }));
+  }
+  const indexTable = /^PRAGMA index_list\(([^)]+)\)$/.exec(sql)?.[1];
+  if (indexTable !== undefined) {
+    return indexTable === SNAPSHOT_EXPLICIT_INDEX.table
+      ? [
+          {
+            seq: 0,
+            name: SNAPSHOT_EXPLICIT_INDEX.name,
+            unique: SNAPSHOT_EXPLICIT_INDEX.unique ? 1 : 0,
+            origin: 'c',
+            partial: SNAPSHOT_EXPLICIT_INDEX.partial ? 1 : 0,
+          },
+        ]
+      : [];
+  }
+  if (sql === `PRAGMA index_info(${SNAPSHOT_EXPLICIT_INDEX.name})`) {
+    return SNAPSHOT_EXPLICIT_INDEX.columns.map((name, seqno) => ({ seqno, cid: seqno, name }));
   }
   throw new Error(`the fake driver was asked a statement it does not implement: ${sql}`);
 }

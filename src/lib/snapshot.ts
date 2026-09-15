@@ -62,6 +62,11 @@ export function configuredSnapshotWorkspace(environment: string | undefined): st
  * Applied in one `exec` before any row is written. `PRAGMA foreign_keys` is a
  * connection setting, not stored in the file, so a reader must set it too; the
  * producer enables and verifies it before the write transaction.
+ *
+ * `SNAPSHOT_TABLE_SHAPES` and `SNAPSHOT_EXPLICIT_INDEX` below restate this DDL
+ * for the reader's validator, which cannot parse SQL. Keep the two in step:
+ * the validator's positive control writes a real snapshot, so a change here
+ * that is not mirrored there fails the build rather than the browser.
  */
 export const SNAPSHOT_SCHEMA_SQL = `
 PRAGMA application_id = ${SNAPSHOT_APPLICATION_ID};
@@ -106,52 +111,156 @@ CREATE TABLE node_tags (
 `.trim();
 
 /**
- * The expected shape of each table: column name and, for a primary-key member,
- * its 1-based position in the key (SQLite's own `PRAGMA table_info` `pk` value);
- * `0` means the column is not part of the primary key. A reader validates this
- * once per imported snapshot, so a header that matches the constants but carries
- * an unexpected schema fails closed rather than running a query whose result
- * means something else.
+ * One column's declared shape, as `PRAGMA table_info` reports it: the declared
+ * type keyword and `NOT NULL` option are part of the storage contract, not a
+ * summary of the values a query later sees.
  */
 export interface SnapshotColumn {
   name: string;
+  /** Declared type keyword; `STRICT` admits only these two in this schema. */
+  type: 'INTEGER' | 'TEXT';
+  /**
+   * `PRAGMA table_info.notnull`: true only where the DDL spells `NOT NULL`.
+   * `INTEGER PRIMARY KEY` reports false even though `INTEGER PRIMARY KEY`
+   * values can never be null, so this mirrors the declared keyword exactly.
+   */
+  notNull: boolean;
   /** 0 when not a primary-key member, otherwise the 1-based key position. */
   pk: number;
 }
 
-export const SNAPSHOT_TABLE_COLUMNS: Readonly<Record<string, readonly SnapshotColumn[]>> = {
-  nodes: [
-    { name: 'id', pk: 1 },
-    { name: 'slug', pk: 0 },
-    { name: 'title', pk: 0 },
-    { name: 'excerpt', pk: 0 },
-    { name: 'language', pk: 0 },
-  ],
-  edges: [
-    { name: 'source_id', pk: 1 },
-    { name: 'target_id', pk: 2 },
-  ],
-  aliases: [
-    { name: 'node_id', pk: 1 },
-    { name: 'ordinal', pk: 2 },
-    { name: 'alias', pk: 0 },
-  ],
-  tags: [
-    { name: 'id', pk: 1 },
-    { name: 'key', pk: 0 },
-    { name: 'label', pk: 0 },
-  ],
-  node_tags: [
-    { name: 'tag_id', pk: 1 },
-    { name: 'node_id', pk: 2 },
-  ],
+/**
+ * One foreign key, as one row of `PRAGMA foreign_key_list` reports it. The
+ * schema declares only single-column references, so `seq` is not modelled.
+ */
+export interface SnapshotForeignKey {
+  /** Column in the declaring table. */
+  from: string;
+  /** Referenced table. */
+  table: string;
+  /** Referenced column, always the referenced table's `id`. */
+  to: string;
+}
+
+/**
+ * One table's full declared shape. `PRAGMA table_info` carries the columns and
+ * `PRAGMA table_list` the storage options; `CHECK` clauses are visible only in
+ * the stored `sqlite_schema.sql` text, which `SNAPSHOT_SCHEMA_SQL` supplies
+ * verbatim to the writer.
+ */
+export interface SnapshotTable {
+  columns: readonly SnapshotColumn[];
+  /** Declared `STRICT`; `PRAGMA table_list.strict`. */
+  strict: boolean;
+  /** Declared `WITHOUT ROWID`; `PRAGMA table_list.wr`. */
+  withoutRowid: boolean;
+  foreignKeys: readonly SnapshotForeignKey[];
+  /**
+   * Table-level `CHECK` clauses, matched inside the stored DDL after case and
+   * whitespace folding. Every entry is the exact clause text as spelled in
+   * `SNAPSHOT_SCHEMA_SQL`; a table with no `CHECK` has an empty list.
+   */
+  checks: readonly string[];
+}
+
+/**
+ * The expected shape of each table, keyed and ordered as `SNAPSHOT_SCHEMA_SQL`
+ * declares them. A reader validates every field once per imported snapshot, so
+ * a header that matches the constants but carries an unexpected column type,
+ * dropped constraint, storage option, or index fails closed rather than
+ * running a query whose result means something else.
+ *
+ * This restates the DDL above for the reader's validator; the positive control
+ * that validates a snapshot the writer just produced is what keeps the two
+ * from drifting apart.
+ */
+export const SNAPSHOT_TABLE_SHAPES: Readonly<Record<string, SnapshotTable>> = {
+  nodes: {
+    strict: true,
+    withoutRowid: false,
+    columns: [
+      { name: 'id', type: 'INTEGER', notNull: false, pk: 1 },
+      { name: 'slug', type: 'TEXT', notNull: true, pk: 0 },
+      { name: 'title', type: 'TEXT', notNull: true, pk: 0 },
+      { name: 'excerpt', type: 'TEXT', notNull: true, pk: 0 },
+      { name: 'language', type: 'TEXT', notNull: true, pk: 0 },
+    ],
+    foreignKeys: [],
+    checks: [],
+  },
+  edges: {
+    strict: true,
+    withoutRowid: true,
+    columns: [
+      { name: 'source_id', type: 'INTEGER', notNull: true, pk: 1 },
+      { name: 'target_id', type: 'INTEGER', notNull: true, pk: 2 },
+    ],
+    foreignKeys: [
+      { from: 'source_id', table: 'nodes', to: 'id' },
+      { from: 'target_id', table: 'nodes', to: 'id' },
+    ],
+    checks: ['CHECK (source_id <> target_id)'],
+  },
+  aliases: {
+    strict: true,
+    withoutRowid: true,
+    columns: [
+      { name: 'node_id', type: 'INTEGER', notNull: true, pk: 1 },
+      { name: 'ordinal', type: 'INTEGER', notNull: true, pk: 2 },
+      { name: 'alias', type: 'TEXT', notNull: true, pk: 0 },
+    ],
+    foreignKeys: [{ from: 'node_id', table: 'nodes', to: 'id' }],
+    checks: ['CHECK (ordinal >= 0)'],
+  },
+  tags: {
+    strict: true,
+    withoutRowid: false,
+    columns: [
+      { name: 'id', type: 'INTEGER', notNull: false, pk: 1 },
+      { name: 'key', type: 'TEXT', notNull: true, pk: 0 },
+      { name: 'label', type: 'TEXT', notNull: true, pk: 0 },
+    ],
+    foreignKeys: [],
+    checks: [],
+  },
+  node_tags: {
+    strict: true,
+    withoutRowid: true,
+    columns: [
+      { name: 'tag_id', type: 'INTEGER', notNull: true, pk: 1 },
+      { name: 'node_id', type: 'INTEGER', notNull: true, pk: 2 },
+    ],
+    foreignKeys: [
+      { from: 'tag_id', table: 'tags', to: 'id' },
+      { from: 'node_id', table: 'nodes', to: 'id' },
+    ],
+    checks: [],
+  },
 };
 
-/** The one explicitly created secondary index, outside the `UNIQUE` constraints. */
 /** The five user tables, in the order the schema declares them. */
-export const SNAPSHOT_TABLES: readonly string[] = Object.keys(SNAPSHOT_TABLE_COLUMNS);
+export const SNAPSHOT_TABLES: readonly string[] = Object.keys(SNAPSHOT_TABLE_SHAPES);
 
-export const SNAPSHOT_EXPLICIT_INDEX = 'edges_by_target';
+/** The one explicitly created secondary index and its exact definition. */
+export interface SnapshotIndex {
+  name: string;
+  /** Table the index is declared on. */
+  table: string;
+  /** Indexed columns, in index order. */
+  columns: readonly string[];
+  /** `PRAGMA index_list.unique`; the reverse index makes no uniqueness claim. */
+  unique: boolean;
+  /** `PRAGMA index_list.partial`; the reverse index covers every edge row. */
+  partial: boolean;
+}
+
+export const SNAPSHOT_EXPLICIT_INDEX: SnapshotIndex = {
+  name: 'edges_by_target',
+  table: 'edges',
+  columns: ['target_id', 'source_id'],
+  unique: false,
+  partial: false,
+};
 
 /** A full lowercase-hex SHA-256, as it appears in a digest-named artifact. */
 export function isHexDigest(value: string): boolean {
