@@ -528,7 +528,7 @@ function publishFlag(data: Record<string, unknown> | undefined): boolean | undef
  * `title` and `excerpt` are derived from the *rewritten* Markdown, so every
  * internal link in them is already `[label](/route/)`. Neither field goes
  * through the Markdown pipeline: the excerpt lands verbatim in
- * `content-index.json`, in `rss.xml`, and in the `<meta name="description">` of
+ * the public snapshot, in `rss.xml`, and in the `<meta name="description">` of
  * every page showing the card, and the title lands in `<title>` and `og:title`.
  * Measured before this existed — a heading and a body each containing one
  * ordinary link:
@@ -746,7 +746,7 @@ function titleFor(markdown: string, fallback: string): string {
  *
  * **Inline code is stripped as well as fenced, and the reason is a build break
  * rather than tidiness.** An excerpt is not rendered through the Markdown
- * pipeline — it lands verbatim in `content-index.json`, in `rss.xml`, and in the
+ * pipeline — it lands verbatim in the public snapshot, in `rss.xml`, and in the
  * `<meta name="description">` of every page that shows the card. Those surfaces
  * carry no `<code>` element, so the residue scan's code-region exemption cannot
  * see them, and a note writing ``Inline `[[syntax]]` is how you write it.``
@@ -772,7 +772,7 @@ function titleFor(markdown: string, fallback: string): string {
  *
  * **And math, one ticket later again, found by measuring the three surfaces
  * rather than by a build break.** `The identity $$\frac{a}{b} = \sqrt{c}$$
- * holds.` shipped verbatim into `content-index.json`, `rss.xml`, and every meta
+ * holds.` shipped verbatim into the public snapshot, `rss.xml`, and every meta
  * description. See {@link withoutMath} for what an excerpt carries instead and
  * what that costs.
  *

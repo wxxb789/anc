@@ -21,7 +21,9 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 
+import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { BuildFailure } from './write-report.ts';
+import { databaseText, isGzip, isSqlite } from './snapshot-rows.ts';
 
 export const GITLEAKS_VERSION = '8.30.1';
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
@@ -73,7 +75,7 @@ function filesUnder(root: string): string[] {
         throw new BuildFailure(
           'secret-scan-input-invalid',
           'secret scan found a non-file output member',
-          path,
+          relative(root, path),
         );
       }
     }
@@ -89,20 +91,52 @@ function projection(source: string, target: string): number {
   for (const path of files) {
     const relativePath = relative(source, path);
     const bytes = readFileSync(path);
-    const gzip = bytes[0] === 0x1f && bytes[1] === 0x8b;
+    const gzip = isGzip(bytes);
     const destination = join(target, relativePath);
     mkdirSync(dirname(destination), { recursive: true });
+    // Raw-byte coverage is unchanged: the member is copied verbatim, so a value
+    // that survives only in a free page is still scanned as bytes.
     copyFileSync(path, destination);
+
+    let payload: Uint8Array = bytes;
     if (gzip) {
       try {
-        writeFileSync(destination + '.inflated', gunzipSync(bytes));
+        payload = gunzipSync(bytes);
+        writeFileSync(destination + '.inflated', payload);
       } catch (error) {
         throw new BuildFailure(
           'secret-scan-input-unreadable',
           'secret scan could not inflate one output member',
-          path + ': ' + (error instanceof Error ? error.stack ?? error.message : String(error)),
+          relativePath + ': ' + (error instanceof Error ? error.stack ?? error.message : String(error)),
         );
       }
+    }
+
+    // A database is recognised by its magic, on the inflated payload, so gzip and
+    // any filename are the same case. The scanner copies raw bytes, so a row a
+    // `SELECT` cannot reach (a deleted payload in a free page) is still scanned;
+    // the reconstructed rows are a separate member, so a value no byte read can
+    // spell — a BLOB stored as gzip, or one split across an overflow-page pointer
+    // — reaches Gitleaks as text.
+    if (isSqlite(payload)) {
+      let read: ReturnType<typeof databaseText>;
+      try {
+        read = databaseText(payload);
+      } catch (error) {
+        throw new BuildFailure(
+          'secret-scan-input-unreadable',
+          'secret scan could not reconstruct one database member',
+          relativePath + ': ' + (error instanceof Error ? error.message : String(error)),
+        );
+      }
+      if (read.unreadable.length > 0) {
+        throw new BuildFailure(
+          'secret-scan-input-unreadable',
+          'secret scan could not read every table in one database member',
+          relativePath + ': ' + read.unreadable.join(', '),
+        );
+      }
+      writeFileSync(destination + '.rows', read.values.length === 0 ? '' : `${read.values.join('\n')}\n`);
     }
   }
   return files.length;
@@ -122,6 +156,27 @@ function projectedPath(file: string | undefined, projectionRoot: string): string
   const path = relative(projectionRoot, absolute);
   if (path === '..' || path.startsWith('..' + sep) || isAbsolute(path)) return '<outside projection>';
   return path.split(sep).join('/');
+}
+
+/** A sidecar this scan adds to a projected member. */
+const PROJECTED_SIDECAR = /\.(inflated|rows)$/;
+
+/**
+ * The public half of one projected path.
+ *
+ * The snapshot's name is `site.<sha256>.sqlite` and the digest tracks the corpus,
+ * so it may not reach a stream. It is replaced by one stable literal, keeping the
+ * representation as a suffix because the operator's next step differs: raw bytes
+ * can be a deleted payload in a free page; rows are a live stored value.
+ */
+function publicFindingFile(projected: string | undefined): string | undefined {
+  if (projected === undefined || projected === '<outside projection>') return projected;
+  const segments = projected.split('/');
+  if (segments.length !== 2 || segments[0] !== SNAPSHOT_DIRECTORY) return projected;
+  const name = segments[1]!;
+  if (!SNAPSHOT_FILE_PATTERN.test(name.replace(PROJECTED_SIDECAR, ''))) return projected;
+  const which = name.endsWith('.rows') ? ', reconstructed rows' : name.endsWith('.inflated') ? ', inflated' : '';
+  return `the site snapshot (${SNAPSHOT_DIRECTORY}/)${which}`;
 }
 
 function sanitize(findings: unknown, projectionRoot: string): Record<string, unknown>[] {
@@ -156,7 +211,7 @@ function sanitize(findings: unknown, projectionRoot: string): Record<string, unk
     return {
       rule: cleanString(finding.RuleID),
       description: cleanString(finding.Description),
-      file: projected,
+      file: publicFindingFile(projected),
       startLine: cleanNumber(finding.StartLine),
       endLine: cleanNumber(finding.EndLine),
       startColumn: cleanNumber(finding.StartColumn),

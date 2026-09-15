@@ -1556,29 +1556,25 @@ test('a link with child elements is one link, and an internal crossing retries a
       );
     }
 
-    // The pager link must be in the served index, or every assertion below reads
-    // "no preview" as a pass. This is not hypothetical: a `dist/` built from the
-    // fixture artifact while `public/content-index.json` is still the published
-    // one-note projection serves 32 note pages against a 1-entry index, and this
-    // gate then fails at its first wait with a bare timeout. `build-fixture.ts`
-    // overwrites the index for exactly this reason; the check is here so that a
-    // `dist/` assembled any other way says what is wrong instead of timing out.
+    // The pager link must resolve to a built note page, or every assertion below
+    // reads "no preview" as a pass. This is not hypothetical: a `dist/` built
+    // from the fixture artifact while the served snapshot still describes the
+    // published one-note corpus would carry 32 note pages against a 1-note
+    // projection, and this gate then fails at its first wait with a bare
+    // timeout. The check is here so that a `dist/` assembled any other way says
+    // what is wrong instead of timing out.
     const targetSlug = await page.evaluate(
       () =>
         document
           .querySelector<HTMLAnchorElement>('nav.collection-pager a[href^="/notes/"]')
           ?.pathname.replace(/^\/notes\/|\/$/g, '') ?? '',
     );
-    const isIndexed = await page.evaluate(async (slug) => {
-      const response = await fetch('/content-index.json');
-      const payload = (await response.json()) as { entries?: { slug?: string }[] };
-      return (payload.entries ?? []).some((entry) => entry.slug === slug);
-    }, targetSlug);
+    const isIndexed = await page.evaluate(async (slug) => (await fetch(`/notes/${slug}/`)).ok, targetSlug);
     assert.ok(
       isIndexed,
-      `${found.route}: its pager links to "${targetSlug}", which the served ` +
-        '/content-index.json does not carry — dist/ was built from one artifact and the index ' +
-        'copied from another, so no preview could open and this gate would measure nothing',
+      `${found.route}: its pager links to "${targetSlug}", whose note route is not served — ` +
+        'dist/ was built from one artifact and the snapshot copied from another, so no preview ' +
+        'could open and this gate would measure nothing',
     );
 
     const first = page.locator('nav.collection-pager a .pager-direction').first();
@@ -1629,10 +1625,10 @@ test('a link with child elements is one link, and an internal crossing retries a
 
     // --- 2. The crossing retries after a failed load --------------------------
     let isFailing = true;
-    await page.route('**/content-index.json', (route) =>
+    await page.route('**/data/site.*', (route) =>
       isFailing ? route.fulfill({ status: 500, body: 'nope' }) : route.fallback(),
     );
-    // A fresh document, so the index is fetched again under the stub.
+    // A fresh document, so the snapshot is fetched again under the stub.
     await page.goto(`${origin}${found.route}`, { waitUntil: 'load' });
     await first.scrollIntoViewIfNeeded();
 
@@ -1640,7 +1636,7 @@ test('a link with child elements is one link, and an internal crossing retries a
     await page.waitForTimeout(500);
     assert.ok(
       await page.evaluate(() => document.querySelector<HTMLElement>('#link-preview')?.hidden !== false),
-      'a failed index request still opened a preview',
+      'a failed snapshot request still opened a preview',
     );
 
     isFailing = false;
@@ -1651,7 +1647,7 @@ test('a link with child elements is one link, and an internal crossing retries a
       { timeout: 5_000 },
     ).catch(() => {
       assert.fail(
-        'after a failed index load, crossing between the link\'s own children never retried — ' +
+        'after a failed snapshot load, crossing between the link\'s own children never retried — ' +
           'the preview is permanently dead for that link and no pointer gesture short of ' +
           'leaving it can recover',
       );
@@ -1742,13 +1738,13 @@ test('a link that is not a published note previews nothing and requests nothing'
       'hovering a link that is not a published note issued an off-origin request',
     );
     // Scope item 5 is "never *fetch* a non-public target", not only "never show
-    // one". The index is the only thing a hover can request, and none of the
+    // one". The snapshot is the only thing a hover can request, and none of the
     // probes above is a note route on this origin, so none should have cost even
     // that. Asserted before the unknown-slug probe, which legitimately loads it.
     assert.deepEqual(
-      requested.filter((url) => url.endsWith('/content-index.json')),
+      requested.filter((url) => url.includes('/data/site.')),
       [],
-      'hovering a link that is not a note route on this origin fetched the preview index',
+      'hovering a link that is not a note route on this origin fetched the snapshot',
     );
 
     // Scope item 6's unknown slug: a well-formed note route the projection does
@@ -1866,95 +1862,14 @@ test('a link brushed past opens no preview, and a shown preview closes when the 
 }, 120_000);
 
 /**
- * The payload is data at every step, never markup.
- *
- * Requirements section 14 forbids raw `innerHTML`, and the panel is built with
- * `document.createElement` plus `textContent` for exactly that reason. The gate
- * cannot see which method was called, so it feeds the payload a string that only
- * an HTML parser would treat as an element and asserts that no element appeared
- * and that the text survived verbatim. Mutation-tested: `textContent` swapped for
- * `innerHTML` fails here, and passes every other gate in this file.
- *
- * The payload is stubbed rather than authored into a corpus: the artifact
- * contract rejects markup like this, so the only honest way to prove the reader
- * is robust to it is to hand the reader a payload the contract would never emit.
- */
-test('the preview renders its payload as text, never as markup', async (context) => {
-  const browser = requireBrowser(context);
-  const browserContext = await browser.newContext({
-    viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
-  });
-  const page = await browserContext.newPage();
-
-  const EXCERPT = '<img src=x onerror="throw new Error(1)"><b>bold</b> & plain';
-  const TITLE = '<i>Title</i>';
-  const ALIAS = '<em>Older</em>';
-
-  try {
-    let route: string | undefined;
-    let target = '';
-    for (const candidate of routes) {
-      await visit(page, candidate);
-      const href = await page.evaluate(
-        () => document.querySelector<HTMLAnchorElement>('a[href^="/notes/"]')?.getAttribute('href') ?? '',
-      );
-      if (href !== '') {
-        route = candidate;
-        target = href;
-        break;
-      }
-    }
-    assert.ok(route !== undefined, 'no built route carries a note link to hover');
-
-    const slug = target.replaceAll(/^\/notes\/|\/$/g, '');
-    await page.route('**/content-index.json', (route_) =>
-      route_.fulfill({
-        contentType: 'application/json',
-        body: JSON.stringify({
-          version: 1,
-          entries: [{ slug, title: TITLE, excerpt: EXCERPT, aliases: [ALIAS] }],
-        }),
-      }),
-    );
-
-    await visit(page, route);
-    await page.locator(`a[href="${target}"]`).first().hover();
-    await page.waitForFunction(
-      () => document.querySelector<HTMLElement>('#link-preview')?.hidden === false,
-      undefined,
-      { timeout: 5_000 },
-    );
-
-    const rendered = await page.evaluate(() => {
-      const panel = document.querySelector<HTMLElement>('#link-preview')!;
-      return {
-        elements: [...panel.querySelectorAll('*')].map((node) => node.localName).sort(),
-        title: panel.querySelector('strong')?.textContent ?? '',
-        excerpt: panel.querySelector('p')?.textContent ?? '',
-      };
-    });
-
-    assert.deepEqual(
-      rendered.elements,
-      ['p', 'strong'],
-      'a payload string became elements in the panel, so it was parsed as markup',
-    );
-    assert.equal(rendered.title, `${TITLE} (${ALIAS})`, 'the title and alias were not rendered verbatim');
-    assert.equal(rendered.excerpt, EXCERPT, 'the excerpt was not rendered verbatim');
-  } finally {
-    await browserContext.close();
-  }
-}, 120_000);
-
-/**
- * A failed index request fails silently, and the next hover retries.
+ * A failed snapshot request fails silently, and the next hover retries.
  *
  * The defect this replaces was the memoisation itself: `indexPromise ||= fetch()`
  * with no `catch` stored the *rejected* promise, so one failed request disabled
  * previews for the page's lifetime and logged an unhandled rejection on a site
  * whose gates require a clean console. Both halves are measured.
  */
-test('a failed index request fails silently and is retried', async (context) => {
+test('a failed snapshot request fails silently and is retried', async (context) => {
   const browser = requireBrowser(context);
   const browserContext = await browser.newContext({
     viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX },
@@ -1963,7 +1878,7 @@ test('a failed index request fails silently and is retried', async (context) => 
 
   try {
     let isFailing = true;
-    await page.route('**/content-index.json', (route) =>
+    await page.route('**/data/site.*', (route) =>
       isFailing ? route.fulfill({ status: 500, body: 'nope' }) : route.fallback(),
     );
 
@@ -1982,7 +1897,7 @@ test('a failed index request fails silently and is retried', async (context) => 
     const noise: string[] = [];
     page.on('console', (message) => {
       if (message.type() !== 'error') return;
-      if (message.location().url.endsWith('/content-index.json')) return;
+      if (message.location().url.includes('/data/site.')) return;
       noise.push(`console: ${message.text()}`);
     });
     page.on('pageerror', (error) => noise.push(`uncaught: ${error.message}`));

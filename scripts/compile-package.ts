@@ -232,8 +232,7 @@ function compile(destination: string, isExcluded: (path: string) => boolean): st
  *
  * Read rather than restated, so an entry added there cannot be forgotten here.
  * The exclusions are load-bearing and not merely tidiness: two are this owner's
- * content (`src/data/content.json`, `public/content-index.json`) and two are
- * development-only scripts. Ignoring them would not only ship those files, it
+ * content (`src/data/content.json`) and several are development-only scripts. Ignoring them would not only ship those files, it
  * would *compile* them — `scripts/compile-package.ts` imports `typescript`, a
  * devDependency, so a tarball carrying it would import a package npm never
  * installed for a consumer.

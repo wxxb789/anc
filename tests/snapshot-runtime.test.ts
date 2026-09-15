@@ -89,10 +89,24 @@ beforeAll(async () => {
   workspace = mkdtempSync(join(tmpdir(), 'anc-runtime-'));
   const notes = join(workspace, 'notes');
   mkdirSync(notes, { recursive: true });
-  writeFileSync(join(notes, 'alpha.md'), '# Alpha Note\n\nEnglish alpha body. Links to [[beta]] and [[withheld]].\n', 'utf8');
+  writeFileSync(join(notes, 'alpha.md'), '# Alpha Note\n\nEnglish alpha body. Links to [[beta]], [[markup]] and [[withheld]].\n', 'utf8');
   writeFileSync(
     join(notes, 'beta.md'),
     ['---', 'language: zh-CN', '---', '# 测试笔记', '', '这是中文正文，用于预览。', ''].join('\n'),
+    'utf8',
+  );
+  writeFileSync(
+    join(notes, 'markup.md'),
+    [
+      '---',
+      'title: "<i>Title</i>"',
+      'aliases: ["<em>Older"]',
+      '---',
+      '# Markup Title',
+      '',
+      'A note whose metadata only an HTML parser would treat as elements.',
+      '',
+    ].join('\n'),
     'utf8',
   );
   writeFileSync(join(notes, 'withheld.md'), '---\npublish: false\n---\n# Withheld Secret\n\nzzqwithheldbody\n', 'utf8');
@@ -134,6 +148,21 @@ test('ordinary reading downloads no SQLite assets and an intentional hover previ
   const titleLang = await panel.locator('strong').getAttribute('lang');
   assert.equal(titleLang, 'zh-CN', 'a foreign-language preview title did not carry its lang');
   assert.ok(requests.length >= 2, 'the preview did not use the snapshot runtime');
+
+  // Metadata reaches the panel as text: a title and alias only an HTML parser
+  // would treat as elements must not become elements in the DOM.
+  await page.mouse.move(0, 0);
+  await panel.waitFor({ state: 'hidden', timeout: 5_000 });
+  const markupLink = page.locator('a[href="/notes/markup/"]').first();
+  assert.equal(await markupLink.count(), 1, 'the markup note link is absent, so the text gate is vacuous');
+  await markupLink.hover();
+  await panel.waitFor({ state: 'visible', timeout: 10_000 });
+  const markup = await panel.evaluate((node) => ({
+    elements: [...node.querySelectorAll('*')].map((child) => child.localName).sort(),
+    title: node.querySelector('strong')?.textContent ?? '',
+  }));
+  assert.deepEqual(markup.elements, ['p', 'strong'], 'preview metadata became elements, so it was parsed as markup');
+  assert.equal(markup.title, '<i>Title</i> (<em>Older)', 'title and alias were not rendered verbatim');
 
   // The withheld target renders as a live `/private/` link, which is not a note
   // route, so it is never previewable and its metadata cannot surface.
