@@ -13,7 +13,6 @@ import {
   MAX_PAGE_SIZE,
   SNAPSHOT_QUERIES,
   pageOf,
-  type DirectedEdge,
   type GraphSelection,
   type LocalGraphSelection,
   type NotePage,
@@ -21,38 +20,18 @@ import {
   type NoteSummary,
   type TagPage,
 } from './snapshot-queries.ts';
+import { selectGlobal, selectLocal } from './graph-selection.ts';
 
 /** Runs one fixed statement with bound parameters and returns its rows. */
 export interface SnapshotDb {
   select(sql: string, params?: readonly unknown[]): Record<string, unknown>[];
 }
 
-/** A local graph draws at most this many neighbours, plus the center. */
-export const LOCAL_NODE_LIMIT = 12;
-/** The global graph draws at most this many nodes. */
-export const GLOBAL_NODE_LIMIT = 60;
-
-/** Total order over notes: title, then the unique slug. */
-function byTitleThenSlug(a: { title: string; slug: string }, b: { title: string; slug: string }): number {
-  if (a.title !== b.title) return a.title < b.title ? -1 : 1;
-  return a.slug < b.slug ? -1 : 1;
-}
+/** The presentation bounds, re-exported from the shared selection contract. */
+export { GLOBAL_NODE_LIMIT, LOCAL_NODE_LIMIT } from './graph-selection.ts';
 
 function summary(row: Record<string, unknown>): NoteSummary {
   return { slug: String(row['slug']), title: String(row['title']), language: String(row['language']) };
-}
-
-function fullNode(row: Record<string, unknown>): { id: number; slug: string; title: string; language: string } {
-  return {
-    id: Number(row['id']),
-    slug: String(row['slug']),
-    title: String(row['title']),
-    language: String(row['language']),
-  };
-}
-
-function graphNode(node: { slug: string; title: string; language: string }): NoteSummary {
-  return { slug: node.slug, title: node.title, language: node.language };
 }
 
 function slugOf(db: SnapshotDb, slug: string): number | undefined {
@@ -120,85 +99,64 @@ export function tagPage(
   return { known: true, tag: { key: String(tag['key']), label: String(tag['label']) }, notes: items, nextCursor };
 }
 
-interface EdgeRow {
-  source_id: number;
-  target_id: number;
+/** One node as the shared selection contract sees it. */
+function selectionNode(row: Record<string, unknown>): { id: number; slug: string; title: string; language: string } {
+  return {
+    id: Number(row['id']),
+    slug: String(row['slug']),
+    title: String(row['title']),
+    language: String(row['language']),
+  };
 }
 
-/** Distinct-neighbour adjacency over the candidate node set. */
-function adjacency(
-  nodes: readonly { id: number }[],
-  edges: readonly EdgeRow[],
-): Map<number, Set<number>> {
-  const present = new Set(nodes.map((node) => node.id));
-  const neighbours = new Map<number, Set<number>>(nodes.map((node) => [node.id, new Set<number>()]));
-  for (const edge of edges) {
-    if (!present.has(edge.source_id) || !present.has(edge.target_id)) continue;
-    neighbours.get(edge.source_id)!.add(edge.target_id);
-    neighbours.get(edge.target_id)!.add(edge.source_id);
-  }
-  return neighbours;
+/** The public summary of one selection node. */
+function selectionSummary(node: { slug: string; title: string; language: string }): NoteSummary {
+  return { slug: node.slug, title: node.title, language: node.language };
 }
 
-function inducedEdges(
-  selected: readonly { id: number; slug: string }[],
-  edges: readonly EdgeRow[],
-): DirectedEdge[] {
-  const slugById = new Map(selected.map((node) => [node.id, node.slug]));
-  const drawn = new Set(slugById.keys());
-  const result: DirectedEdge[] = [];
-  for (const edge of edges) {
-    if (!drawn.has(edge.source_id) || !drawn.has(edge.target_id)) continue;
-    result.push({ from: slugById.get(edge.source_id)!, to: slugById.get(edge.target_id)! });
-  }
-  result.sort((a, b) => (a.from !== b.from ? (a.from < b.from ? -1 : 1) : a.to < b.to ? -1 : 1));
-  return result;
-}
-
-/** The one-hop neighbourhood of a known center: union of incoming and outgoing. */
+/**
+ * The one-hop neighbourhood of a known center.
+ *
+ * The SQL `UNION` deduplicates incoming/outgoing and the shared selection
+ * contract sorts, limits, and extracts induced edges, so the Worker and the
+ * build cannot disagree about the drawn set.
+ */
 export function localGraph(db: SnapshotDb, slug: string): LocalGraphSelection | null {
   const center = db.select(SNAPSHOT_QUERIES.nodeBySlug, [slug])[0];
   if (center === undefined) return null;
-  const centerNode = fullNode(center);
-  const neighbors = db
+  const centerNode = selectionNode(center);
+  const neighbours = db
     .select(SNAPSHOT_QUERIES.neighbors, [centerNode.id, centerNode.id])
-    .map(fullNode)
-    .sort(byTitleThenSlug);
-  const drawn = neighbors.slice(0, LOCAL_NODE_LIMIT);
-  const edges = db.select(SNAPSHOT_QUERIES.allEdges) as unknown as EdgeRow[];
-  const selected = [centerNode, ...drawn];
+    .map(selectionNode);
+  const edges = (
+    db.select(SNAPSHOT_QUERIES.allEdgesBySlug) as unknown as { source: string; target: string }[]
+  ).map((row) => ({ from: row.source, to: row.target }));
+  const selection = selectLocal(centerNode, neighbours, edges);
   return {
-    center: graphNode(centerNode),
-    nodes: drawn.map(graphNode),
-    edges: inducedEdges(selected, edges),
-    omitted: neighbors.length - drawn.length,
+    center: selectionSummary(centerNode),
+    nodes: selection.drawn.map(selectionSummary),
+    edges: selection.edges,
+    omitted: selection.omitted,
   };
 }
 
 /** The ranked global graph, optionally restricted to one tag's members. */
 export function globalGraph(db: SnapshotDb, tagKey?: string | null): GraphSelection {
-  const all = (db.select(SNAPSHOT_QUERIES.allNodes) as unknown as Record<string, unknown>[]).map(fullNode);
-  const edges = db.select(SNAPSHOT_QUERIES.allEdges) as unknown as EdgeRow[];
-
-  let nodes = all;
+  const all = (db.select(SNAPSHOT_QUERIES.allNodes) as unknown as Record<string, unknown>[]).map(selectionNode);
+  const edges = (
+    db.select(SNAPSHOT_QUERIES.allEdgesBySlug) as unknown as { source: string; target: string }[]
+  ).map((row) => ({ from: row.source, to: row.target }));
+  let candidates = all;
   if (tagKey !== undefined && tagKey !== null) {
     const members = new Set(
       (db.select(SNAPSHOT_QUERIES.tagNodeIds, [tagKey]) as unknown as { id: number }[]).map((row) => Number(row.id)),
     );
-    nodes = all.filter((node) => members.has(node.id));
+    candidates = all.filter((node) => members.has(node.id));
   }
-
-  const neighbours = adjacency(nodes, edges);
-  const ranked = [...nodes].sort((a, b) => {
-    const left = neighbours.get(a.id)!.size;
-    const right = neighbours.get(b.id)!.size;
-    if (left !== right) return right - left;
-    return byTitleThenSlug(a, b);
-  });
-  const selected = ranked.slice(0, GLOBAL_NODE_LIMIT);
+  const selection = selectGlobal(candidates, edges);
   return {
-    nodes: selected.map(graphNode),
-    edges: inducedEdges(selected, edges),
-    omitted: ranked.length - selected.length,
+    nodes: selection.nodes.map(selectionSummary),
+    edges: selection.edges,
+    omitted: selection.omitted,
   };
 }

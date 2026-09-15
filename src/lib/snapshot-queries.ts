@@ -165,6 +165,13 @@ export const SNAPSHOT_QUERIES = {
     FROM edges
     ORDER BY source_id, target_id`.trim(),
 
+  allEdgesBySlug: `
+    SELECT s.slug AS source, t.slug AS target
+    FROM edges AS e
+    JOIN nodes AS s ON s.id = e.source_id
+    JOIN nodes AS t ON t.id = e.target_id
+    ORDER BY source, target`.trim(),
+
   tagNodeIds: `
     SELECT n.id, n.slug
     FROM tags AS t
