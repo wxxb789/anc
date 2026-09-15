@@ -98,6 +98,15 @@ export const MESSAGE_DATASET = {
   failed: 'messageFailed',
 } as const;
 
+/** The tag browser's live-status sentences, carried from the build as data attributes. */
+export const TAG_BROWSE_DATASET = {
+  loading: 'tagBrowseLoading',
+  empty: 'tagBrowseEmpty',
+  exhausted: 'tagBrowseExhausted',
+  unknown: 'tagBrowseUnknown',
+  failed: 'tagBrowseFailed',
+} as const;
+
 /**
  * The site navigation language: what a route that is not one document renders,
  * and what a document carrying no `language` falls back to.
@@ -222,6 +231,26 @@ export interface Translation {
   tagsDescription: string;
   tagCount: (count: number) => string;
   tagsEmpty: string;
+  /** Heading over the in-page tag browser. */
+  tagBrowseHeading: string;
+  /** Visible text of the control that starts an enumeration. */
+  tagBrowseStart: string;
+  /** Accessible label of the tag chooser. */
+  tagBrowseSelectLabel: string;
+  /** The chooser's placeholder option, before a tag is chosen. */
+  tagBrowsePrompt: string;
+  /** Visible text of the next-page control. */
+  tagBrowseMore: string;
+  /** Status while a page is in flight. */
+  tagBrowseLoading: string;
+  /** A canonical tag the snapshot carries but whose page is empty. */
+  tagBrowseEmpty: string;
+  /** Every result page has been delivered. */
+  tagBrowseExhausted: string;
+  /** The snapshot carries no such canonical tag. */
+  tagBrowseUnknown: string;
+  /** A page could not be delivered; the static list remains. */
+  tagBrowseFailed: string;
   collectionsTitle: string;
   collectionsDescription: string;
   collectionCount: (count: number) => string;
@@ -467,6 +496,16 @@ const EN = {
   tagsDescription: 'Every tag on a published note.',
   tagCount: (count) => `${count} ${count === 1 ? 'tag' : 'tags'}`,
   tagsEmpty: 'No published note carries a tag yet. This page lists every tag as soon as one does.',
+  tagBrowseHeading: 'Browse this tag here',
+  tagBrowseStart: 'Load notes from the live index',
+  tagBrowseSelectLabel: 'Tag to browse',
+  tagBrowsePrompt: 'Choose a tag\u2026',
+  tagBrowseMore: 'Load more',
+  tagBrowseLoading: 'Loading notes\u2026',
+  tagBrowseEmpty: 'No published note carries this tag in the live index.',
+  tagBrowseExhausted: 'All matching notes are shown.',
+  tagBrowseUnknown: 'That tag is not in the live index.',
+  tagBrowseFailed: 'The live index could not be loaded. The static list above is complete.',
   collectionsTitle: 'Collections',
   collectionsDescription: 'The collections published notes are grouped into.',
   collectionCount: (count) => `${count} ${count === 1 ? 'collection' : 'collections'}`,
@@ -656,6 +695,16 @@ const ZH_CN = {
   tagsDescription: '公开笔记上的全部标签。',
   tagCount: (count) => `${count} 个标签`,
   tagsEmpty: '目前还没有公开笔记带有标签。一旦有笔记带上标签，本页将逐个列出。',
+  tagBrowseHeading: '在此浏览这个标签',
+  tagBrowseStart: '从实时索引加载笔记',
+  tagBrowseSelectLabel: '要浏览的标签',
+  tagBrowsePrompt: '选择一个标签\u2026',
+  tagBrowseMore: '加载更多',
+  tagBrowseLoading: '正在加载笔记\u2026',
+  tagBrowseEmpty: '实时索引中没有公开笔记带有这个标签。',
+  tagBrowseExhausted: '已显示全部匹配的笔记。',
+  tagBrowseUnknown: '实时索引中没有这个标签。',
+  tagBrowseFailed: '实时索引加载失败；上方静态列表仍然完整。',
   collectionsTitle: '合集',
   collectionsDescription: '公开笔记所归入的合集。',
   collectionCount: (count) => `${count} 个合集`,

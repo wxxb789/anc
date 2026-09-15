@@ -248,6 +248,9 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncol
       if (document.querySelector('.toc')) {
         void import('../scripts/toc-active.ts');
       }
+      if (document.querySelector('#tag-browser')) {
+        void import('../scripts/tag-browser.ts');
+      }
     </script>
   </body>
 </html>

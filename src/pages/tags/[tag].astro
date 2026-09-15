@@ -9,13 +9,18 @@
  *
  * The tag itself is interpolated into the heading and the title as artifact
  * text, unchanged.
+ *
+ * The complete static `NoteList` is always rendered. The enhanced region below it
+ * is hidden until `tag-browser.ts` runs, so a reader with no scripting (or whose
+ * chunk failed) sees the whole tag through the static route.
  */
 import Layout from '../../layouts/Layout.astro';
 import NoteList from '../../components/NoteList.astro';
 import { entries } from '../../lib/content.ts';
 import { tagFacets } from '../../lib/routes.ts';
 import { TITLE_SUFFIX } from '../../lib/site.ts';
-import { NAV_LANGUAGE, translate } from '../../lib/translations.ts';
+import { TAG_PAGE_SIZE } from '../../lib/tag-browser-model.ts';
+import { NAV_LANGUAGE, TAG_BROWSE_DATASET, datasetAttribute, translate } from '../../lib/translations.ts';
 
 export function getStaticPaths() {
   // No facets means no paths, which is the correct static answer: `/tags/` still
@@ -26,6 +31,13 @@ export function getStaticPaths() {
 
 const { facet } = Astro.props;
 const t = translate(NAV_LANGUAGE);
+const browserData = Object.fromEntries([
+  [datasetAttribute(TAG_BROWSE_DATASET.loading), t.tagBrowseLoading],
+  [datasetAttribute(TAG_BROWSE_DATASET.empty), t.tagBrowseEmpty],
+  [datasetAttribute(TAG_BROWSE_DATASET.exhausted), t.tagBrowseExhausted],
+  [datasetAttribute(TAG_BROWSE_DATASET.unknown), t.tagBrowseUnknown],
+  [datasetAttribute(TAG_BROWSE_DATASET.failed), t.tagBrowseFailed],
+]);
 ---
 
 <Layout
@@ -38,6 +50,29 @@ const t = translate(NAV_LANGUAGE);
       <span>{t.noteCount(facet.entries.length)}</span>
     </div>
     <p class="facet-note"><a href="/tags/">{t.allTags}</a></p>
-    <NoteList entries={facet.entries} level={2} lang={NAV_LANGUAGE} />
+
+    <div id="tag-static-list">
+      <NoteList entries={facet.entries} level={2} lang={NAV_LANGUAGE} />
+    </div>
+
+    {/* Hidden until the script runs, and the script unhides the static list on
+        any failure. `data-pagefind-ignore` keeps this chrome out of the index. */}
+    <section
+      id="tag-browser"
+      hidden
+      data-pagefind-ignore
+      data-mode="fixed"
+      data-tag-key={facet.key}
+      data-page-size={String(TAG_PAGE_SIZE)}
+      aria-labelledby="tag-browser-title"
+      {...browserData}
+    >
+      <h2 id="tag-browser-title">{t.tagBrowseHeading}</h2>
+      <button id="tag-browse-start" type="button">{t.tagBrowseStart}</button>
+      <p id="tag-browser-current" hidden></p>
+      <p id="tag-browser-status" role="status"></p>
+      <ol id="tag-browser-results"></ol>
+      <button id="tag-browse-more" type="button" hidden>{t.tagBrowseMore}</button>
+    </section>
   </section>
 </Layout>
