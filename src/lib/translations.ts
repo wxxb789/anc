@@ -361,6 +361,33 @@ export interface Translation {
   graphMutualRelation: string;
   /** No direction at all: `/graph/` has no subject to be relative to. */
   graphLinkedRelation: string;
+  // --- Interactive graph explorer (goal 0005). Templates for the client. ---
+  /** Visible text of the control that starts live exploration. */
+  graphExplorerOpen: string;
+  /** Visible text of the reset control. */
+  graphExplorerReset: string;
+  /** Visible text of a re-center control. */
+  graphExplorerRecenter: string;
+  /** Accessible label of the tag filter chooser. */
+  graphExplorerFilterLabel: string;
+  /** The filter's "no filter" option. */
+  graphExplorerFilterAll: string;
+  /** Live status: local scope. `{shown}` and `{total}` are numbers. */
+  graphExplorerStatusLocal: string;
+  /** Live status: global scope. */
+  graphExplorerStatusGlobal: string;
+  /** Live status: tag-filtered global scope. `{tag}` is artifact text. */
+  graphExplorerStatusFiltered: string;
+  /** A live graph could not be produced; the static figure remains. */
+  graphExplorerFailed: string;
+  /** The requested center is not in the snapshot. */
+  graphExplorerUnknownCenter: string;
+  /** A tag filter matched nothing. */
+  graphExplorerEmptyFilter: string;
+  /** Enhanced node label, plural. `{title}`, `{relation}`, `{degree}`. */
+  graphExplorerNodeLabel: string;
+  /** Enhanced node label, singular (degree 1). */
+  graphExplorerNodeLabelOne: string;
   /** The equivalent table's caption and column headers. */
   graphTableCaption: string;
   graphColumnNote: string;
@@ -573,6 +600,19 @@ const EN = {
   graphIncomingRelation: 'links to this note',
   graphMutualRelation: 'linked both ways',
   graphLinkedRelation: 'published note',
+  graphExplorerOpen: 'Explore interactively',
+  graphExplorerReset: 'Reset',
+  graphExplorerRecenter: 'Re-center',
+  graphExplorerFilterLabel: 'Tag',
+  graphExplorerFilterAll: 'All notes',
+  graphExplorerStatusLocal: 'Live graph: {shown} of {total} neighbouring notes drawn.',
+  graphExplorerStatusGlobal: 'Live graph: {shown} of {total} published notes drawn.',
+  graphExplorerStatusFiltered: 'Live graph for tag {tag}: {shown} of {total} matching notes drawn.',
+  graphExplorerFailed: 'The live graph could not be loaded. The static figure above is complete.',
+  graphExplorerUnknownCenter: 'That note is not in the live index.',
+  graphExplorerEmptyFilter: 'No published note carries that tag.',
+  graphExplorerNodeLabel: '{title} — {relation}, {degree} links drawn',
+  graphExplorerNodeLabelOne: '{title} — {relation}, {degree} link drawn',
   graphTableCaption: 'The same notes and links, as a table',
   graphColumnNote: 'Note',
   graphColumnRelation: 'Relationship',
@@ -765,6 +805,19 @@ const ZH_CN = {
   graphIncomingRelation: '它链接到本篇',
   graphMutualRelation: '互相链接',
   graphLinkedRelation: '公开笔记',
+  graphExplorerOpen: '交互探索',
+  graphExplorerReset: '重置',
+  graphExplorerRecenter: '以此为中心',
+  graphExplorerFilterLabel: '标签',
+  graphExplorerFilterAll: '全部笔记',
+  graphExplorerStatusLocal: '实时图：已画出 {total} 篇相邻笔记中的 {shown} 篇。',
+  graphExplorerStatusGlobal: '实时图：已画出 {total} 篇公开笔记中的 {shown} 篇。',
+  graphExplorerStatusFiltered: '标签 {tag} 的实时图：已画出 {total} 篇匹配笔记中的 {shown} 篇。',
+  graphExplorerFailed: '实时图加载失败；上方静态图仍然完整。',
+  graphExplorerUnknownCenter: '实时索引中没有这篇笔记。',
+  graphExplorerEmptyFilter: '没有公开笔记带有这个标签。',
+  graphExplorerNodeLabel: '{title} — {relation}，已绘制 {degree} 条连线',
+  graphExplorerNodeLabelOne: '{title} — {relation}，已绘制 {degree} 条连线',
   graphTableCaption: '同样的笔记与链接，以表格呈现',
   graphColumnNote: '笔记',
   graphColumnRelation: '关系',

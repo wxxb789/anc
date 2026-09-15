@@ -251,6 +251,9 @@ const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncol
       if (document.querySelector('#tag-browser')) {
         void import('../scripts/tag-browser.ts');
       }
+      if (document.querySelector('[data-graph-controls]')) {
+        void import('../scripts/graph-client.ts');
+      }
     </script>
   </body>
 </html>

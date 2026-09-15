@@ -2687,7 +2687,7 @@ test('the rail collection link is named in the page own language', (context) => 
  */
 function graphSection(html: string, region: string): string | undefined {
   const pattern = new RegExp(
-    `<section class="graph-region" aria-labelledby="${region}-title">[\\s\\S]*?</section>`,
+    `<section class="graph-region"[^>]*aria-labelledby="${region}-title"[^>]*>[\\s\\S]*?</section>`,
   );
   return pattern.exec(html)?.[0];
 }

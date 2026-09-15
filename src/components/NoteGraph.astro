@@ -72,6 +72,18 @@ interface Props {
   lang: string;
   /** Heading level, so the region sits correctly in each page's outline. */
   level?: 1 | 2;
+  /**
+   * When present, a live explorer enhances this figure over the shared snapshot
+   * Worker. Absent means the static figure is the whole experience.
+   */
+  explore?: {
+    scope: 'local' | 'global';
+    centerSlug: string | null;
+    /** An initial tag filter for a global scope, if any. */
+    initialTag?: string | null;
+    /** Tag choices for a global scope; absent for a local one. */
+    tags?: readonly { key: string; label: string }[];
+  };
 }
 
 const {
@@ -84,6 +96,7 @@ const {
   bounded,
   lang,
   level = 2,
+  explore,
 } = Astro.props;
 const t = translate(lang);
 
@@ -128,13 +141,66 @@ const { shown, total } = boundCounts(graph);
 
 /** Which notes each drawn node is joined to, for the table's fourth column. */
 const joined = drawnNeighbours(graph);
+
+/**
+ * The client's chrome, carried as data attributes so the script bundle holds no
+ * locale table. Only the attributes the explorer reads are emitted.
+ */
+const exploreData = explore
+  ? Object.fromEntries([
+      ['data-graph-scope', explore.scope],
+      ['data-graph-center', explore.centerSlug ?? ''],
+      ['data-graph-initial-tag', explore.initialTag ?? ''],
+      ['data-graph-open', t.graphExplorerOpen],
+      ['data-graph-reset-label', t.graphExplorerReset],
+      ['data-graph-recenter', t.graphExplorerRecenter],
+      ['data-graph-filter-label', t.graphExplorerFilterLabel],
+      ['data-graph-filter-all', t.graphExplorerFilterAll],
+      ['data-graph-status-local', t.graphExplorerStatusLocal],
+      ['data-graph-status-global', t.graphExplorerStatusGlobal],
+      ['data-graph-status-filtered', t.graphExplorerStatusFiltered],
+      ['data-graph-failed', t.graphExplorerFailed],
+      ['data-graph-unknown-center', t.graphExplorerUnknownCenter],
+      ['data-graph-empty-filter', t.graphExplorerEmptyFilter],
+      ['data-graph-node-label', t.graphExplorerNodeLabel],
+      ['data-graph-node-label-one', t.graphExplorerNodeLabelOne],
+      ['data-graph-relation-subject', t.graphSubjectRelation],
+      ['data-graph-relation-outgoing', t.graphOutgoingRelation],
+      ['data-graph-relation-incoming', t.graphIncomingRelation],
+      ['data-graph-relation-mutual', t.graphMutualRelation],
+      ['data-graph-relation-linked', t.graphLinkedRelation],
+      ['data-graph-no-links', t.graphNoLinks],
+      ['data-graph-table-caption', t.graphTableCaption],
+    ])
+  : undefined;
 ---
 
-<section class="graph-region" aria-labelledby={titleId}>
+<section class="graph-region" aria-labelledby={titleId} data-graph-region={region}>
   <div class="section-heading">
     <Heading id={titleId}>{heading}</Heading>
     {isDrawable && <span>{t.graphFigureLabel(drawn, graph.edges.length)}</span>}
   </div>
+
+  {/* Progressive enhancement. Hidden until the client runs; every string is a
+      `data-` attribute above, so the script carries no locale table. */}
+  {explore && (
+    <div class="graph-explorer" hidden data-graph-controls {...exploreData}>
+      <button type="button" data-graph-activate>{t.graphExplorerOpen}</button>
+      <button type="button" data-graph-reset-control hidden>{t.graphExplorerReset}</button>
+      {explore.tags && explore.tags.length > 0 && (
+        <label>
+          <span>{t.graphExplorerFilterLabel}</span>
+          <select data-graph-tag>
+            <option value="">{t.graphExplorerFilterAll}</option>
+            {explore.tags.map((tag) => (
+              <option value={tag.key}>{tag.label}</option>
+            ))}
+          </select>
+        </label>
+      )}
+    </div>
+  )}
+  <p class="graph-status" role="status" aria-live="polite" data-graph-status></p>
 
   {!isDrawable ? (
     <p class="empty-state">{empty}</p>
@@ -149,7 +215,7 @@ const joined = drawnNeighbours(graph);
           is already named by it, and naming it twice is how an element ends up
           announced twice. */}
       <figure class="graph">
-        <div class="graph-canvas" tabindex="0">
+        <div class="graph-canvas" tabindex="0" data-graph-canvas>
           {/*
             `role="group"`, **not** `role="img"`.
 
@@ -231,7 +297,8 @@ const joined = drawnNeighbours(graph);
               ))}
             </g>
 
-            {graph.nodes.map((node) => (
+            <g class="graph-nodes">
+              {graph.nodes.map((node) => (
               /*
                * A real `<a href>`, which is the whole point: this is a link in
                * the HTML, so a crawler follows it, the keyboard reaches it, and
@@ -261,6 +328,7 @@ const joined = drawnNeighbours(graph);
                 <text class="graph-label" x={node.x} y={node.y} dy="1.9em" aria-hidden="true">{node.label}</text>
               </a>
             ))}
+            </g>
           </svg>
         </div>
         <figcaption>{derivation}</figcaption>
@@ -300,7 +368,7 @@ const joined = drawnNeighbours(graph);
               <th scope="col">{t.graphColumnLinkedTo}</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody data-graph-body>
             {graph.nodes.map((node) => (
               <tr>
                 <th scope="row">
