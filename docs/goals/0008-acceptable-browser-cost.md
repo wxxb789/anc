@@ -67,6 +67,17 @@ comparison, finite policies and material UX trade-off. Lack of access to a suita
 device or acceptance authority leaves this goal open; it does not reopen settled
 architecture choices or postpone SQLite beyond 0.1.0.
 
+## Implementation progress (2026-09-15)
+
+The functional prerequisites (0002–0007) are implemented and their gates pass on
+this host, but **this goal's own measurement and acceptance cannot be produced
+here**: it requires a named physical mid-range mobile device for the p95 target
+and a recorded maintainer decision accepting the cold-preview/resource policies.
+Neither the device nor the acceptance authority is available in this
+environment, so no number is invented and the goal stays open. A benchmark
+harness and desktop-throttled numbers can be added, but they are labeled
+simulation and do not satisfy the mobile judgment.
+
 ## Completion record
 
 Not completed. Record reproducible benchmark command/tool, candidate identity, raw
