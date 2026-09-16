@@ -96,7 +96,11 @@ test('a blocked WASM download leaves the article usable and a later intent previ
   // exercises a different failure code than the DB gate in
   // `tests/snapshot-runtime.test.ts`, and the failed runtime import must settle
   // as "nothing to show" rather than reject past the awaiting caller.
-  await page.route('**/wasm/**', (route) => route.abort());
+  let wasmRoutes = 0;
+  await page.route('**/wasm/**', (route) => {
+    wasmRoutes += 1;
+    return route.abort();
+  });
   await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
   const link = page.locator(ALPHA_LINK).first();
   assert.equal(await link.count(), 1, 'the corpus did not render the cross-note link, so these checks are vacuous');
@@ -104,6 +108,10 @@ test('a blocked WASM download leaves the article usable and a later intent previ
   // Long enough for the 120 ms intent delay plus the failed Worker attempt to
   // settle, so the assertions below read the page after that failure.
   await page.waitForTimeout(1_500);
+  // Confirm the plant was delivered before judging the control: a hover whose
+  // WASM request never reached the route would leave every assertion below
+  // satisfiable by the static page alone.
+  assert.ok(wasmRoutes > 0, 'the WASM route never matched, so the blocked-WASM phase is vacuous');
   await assertStaticFallback(page, link, 'blocked WASM');
 
   // A failed preview never replaces the link: following it must be a real
@@ -184,6 +192,44 @@ test('a Worker-startup failure settles, and a later intent starts a real Worker'
     await link.getAttribute('aria-describedby'),
     'link-preview',
     'the visible panel is not the description the recovered link points at',
+  );
+  assertNoPageErrors(errors);
+  await page.close();
+}, 120_000);
+
+test('a Worker chunk that never loads settles the preview and a later intent recovers', async () => {
+  const page = await browser.newPage();
+  const errors = collectPageErrors(page);
+  let chunkRoutes = 0;
+
+  // The constructor succeeds synchronously here; the failure arrives as the
+  // module script fetch is aborted, which fires an `error` event on the Worker.
+  // That is the production shape of a page whose hashed chunk disappeared at
+  // the next republish, and it is a different path from a throwing constructor.
+  await page.route('**/_astro/snapshot-worker-*.js', (route) => {
+    chunkRoutes += 1;
+    return route.abort();
+  });
+  await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
+  const link = page.locator(ALPHA_LINK).first();
+  assert.equal(await link.count(), 1, 'the corpus did not render the cross-note link, so these checks are vacuous');
+  await link.hover();
+  await page.waitForTimeout(1_500);
+  assert.ok(chunkRoutes > 0, 'the Worker chunk was never requested, so the blocked-chunk phase is vacuous');
+  await assertStaticFallback(page, link, 'blocked Worker chunk');
+  assertNoPageErrors(errors);
+
+  // Restore availability: the failed initialization cached nothing, so a later
+  // explicit intent builds and previews from a live Worker.
+  await page.unroute('**/_astro/snapshot-worker-*.js');
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(300);
+  await link.hover();
+  const panel = page.locator(PANEL);
+  await panel.waitFor({ state: 'visible', timeout: 10_000 });
+  assert.ok(
+    ((await panel.textContent()) ?? '').includes('Beta'),
+    'a later intent did not recover from a failed Worker chunk',
   );
   assertNoPageErrors(errors);
   await page.close();

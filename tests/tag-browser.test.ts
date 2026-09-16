@@ -4,21 +4,15 @@
  * The corpus is authored here with independent expected membership, so the gate
  * does not derive its answer from `tagFacets` or `tagPage`. It is served with the
  * headers `public/_headers` declares, so the shared Worker, the WASM, and the
- * snapshot are exercised under the deployed CSP.
+ * snapshot are exercised under the deployed CSP. The build and the server come
+ * from `tests/support/browser-site.ts`.
  */
 
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
-import { tmpdir } from 'node:os';
-import { extname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test } from 'vitest';
 import type { Browser, Page } from 'playwright';
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'anc.mjs');
+import { buildAndServe, removeWorkspace, type RunningSite } from './support/browser-site.ts';
 
 const TAG_KEY = 'gardening';
 const TAG_LABEL = 'Gardening';
@@ -27,60 +21,8 @@ const EXPECTED = Array.from({ length: 21 }, (_, index) => `tag-${String(index + 
 const NOTEBOOK = ['tag-01', 'tag-02', 'tag-03'];
 const PAGE_SIZE = 10;
 
-function shippedHeaders(): Record<string, string> {
-  const text = readFileSync(join(ROOT, 'public', '_headers'), 'utf8');
-  const headers: Record<string, string> = {};
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith(' ') || line.trim() === '' || line.trimStart().startsWith('#')) continue;
-    const trimmed = line.trim();
-    const separator = trimmed.indexOf(':');
-    if (separator > 0) headers[trimmed.slice(0, separator)] = trimmed.slice(separator + 1).trim();
-  }
-  return headers;
-}
-
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.wasm': 'application/wasm',
-  '.sqlite': 'application/octet-stream',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.xml': 'application/xml',
-  '.txt': 'text/plain; charset=utf-8',
-};
-
-let workspace: string;
-let server: Server;
-let origin: string;
+let site: RunningSite;
 let browser: Browser;
-
-function startServer(dist: string): Promise<Server> {
-  const headers = shippedHeaders();
-  const running = createServer((request, response) => {
-    let pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
-    if (pathname.endsWith('/')) pathname += 'index.html';
-    const file = resolve(dist, `.${pathname}`);
-    if (!file.startsWith(dist)) {
-      response.writeHead(403, headers);
-      response.end();
-      return;
-    }
-    try {
-      const body = readFileSync(file);
-      response.writeHead(200, {
-        ...headers,
-        'Content-Type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream',
-      });
-      response.end(body);
-    } catch {
-      response.writeHead(404, headers);
-      response.end('not found');
-    }
-  });
-  return new Promise((done) => running.listen(0, '127.0.0.1', () => done(running)));
-}
 
 async function seenSlugs(page: Page): Promise<string[]> {
   return page.evaluate(() =>
@@ -91,9 +33,10 @@ async function seenSlugs(page: Page): Promise<string[]> {
 }
 
 beforeAll(async () => {
-  workspace = mkdtempSync(join(tmpdir(), 'anc-tags-'));
-  const notes = join(workspace, 'notes');
-  mkdirSync(notes, { recursive: true });
+  const corpus: Record<string, string> = {
+    'island.md': '# Island\n\nNo tags, no links.\n',
+    'secret.md': '---\npublish: false\ntags: [withheld-only]\n---\n\n# Secret\n\nNot published.\n',
+  };
   for (let index = 1; index <= EXPECTED.length; index += 1) {
     const slug = `tag-${String(index).padStart(2, '0')}`;
     const label = index % 2 === 0 ? 'gardening' : 'Gardening';
@@ -101,40 +44,24 @@ beforeAll(async () => {
     const language = index === 7 ? 'language: zh-CN\n' : '';
     // Titles reverse slug order, so static title order differs from cursor order.
     const title = `Title ${String(EXPECTED.length - index).padStart(2, '0')}`;
-    writeFileSync(
-      join(notes, `${slug}.md`),
-      `---\ntitle: "${title}"\n${language}tags: ${tags}\n---\n\n# ${title}\n\nBody for ${slug}.\n`,
-      'utf8',
-    );
+    corpus[`${slug}.md`] =
+      `---\ntitle: "${title}"\n${language}tags: ${tags}\n---\n\n# ${title}\n\nBody for ${slug}.\n`;
   }
-  writeFileSync(join(notes, 'island.md'), '# Island\n\nNo tags, no links.\n', 'utf8');
-  writeFileSync(
-    join(notes, 'secret.md'),
-    '---\npublish: false\ntags: [withheld-only]\n---\n\n# Secret\n\nNot published.\n',
-    'utf8',
-  );
 
-  const build = spawnSync(process.execPath, [BINARY, 'build', '--content', 'notes', '--out', 'dist'], {
-    cwd: workspace,
-    encoding: 'utf8',
-  });
-  assert.equal(build.status, 0, build.stdout + build.stderr);
-
-  server = await startServer(join(workspace, 'dist'));
-  origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  site = await buildAndServe(corpus);
   const { chromium } = await import('playwright');
   browser = await chromium.launch();
 }, 180_000);
 
 afterAll(async () => {
   await browser?.close();
-  await new Promise<void>((done) => server?.close(() => done()));
-  rmSync(workspace, { recursive: true, force: true });
+  await site?.close();
+  if (site !== undefined) removeWorkspace(site.workspace);
 });
 
 test('the tag chooser enumerates every matching note across pages, in cursor order', async () => {
   const page = await browser.newPage();
-  await page.goto(`${origin}/tags/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/tags/`, { waitUntil: 'load' });
   await page.selectOption('#tag-browser-select', TAG_KEY);
   await page.waitForSelector('#tag-browser-results a');
 
@@ -221,7 +148,7 @@ test('two Load more clicks before the first reply cannot duplicate a page', asyn
   const dispatches = (): Promise<number> =>
     page.evaluate(() => (window as unknown as { byTagDispatches: number }).byTagDispatches);
 
-  await page.goto(`${origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
   await page.click('#tag-browse-start');
   await page.waitForSelector('#tag-browser-results a');
   assert.equal(await dispatches(), 1, 'the first page should be one byTag request');
@@ -266,7 +193,7 @@ test('switching tags resets the continuation and a stale reply cannot win', asyn
     await new Promise((resume) => setTimeout(resume, 700));
     await route.continue();
   });
-  await page.goto(`${origin}/tags/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/tags/`, { waitUntil: 'load' });
   await page.selectOption('#tag-browser-select', TAG_KEY);
   await page.selectOption('#tag-browser-select', OTHER_TAG_KEY);
   await page.waitForSelector('#tag-browser-results a');
@@ -281,7 +208,7 @@ test('switching tags resets the continuation and a stale reply cannot win', asyn
 test('the static tag route is complete and usable with scripting disabled', async () => {
   const context = await browser.newContext({ javaScriptEnabled: false });
   const page = await context.newPage();
-  await page.goto(`${origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
   assert.equal(await page.locator('#tag-browser').isVisible(), false, 'the enhanced region is visible without scripting');
   const staticSlugs = await page.evaluate(() =>
     [

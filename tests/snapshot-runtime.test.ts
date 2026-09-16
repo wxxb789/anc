@@ -5,134 +5,52 @@
  * Worker, the WASM import, and the snapshot fetch are exercised under
  * `worker-src 'self'`, `script-src 'self' 'wasm-unsafe-eval'`, and
  * `connect-src 'self'`. A skipped run is not evidence, so these tests fail when
- * Chromium is absent rather than skipping silently; the shared runner in
- * `tests/support` is not used because this file owns its corpus build.
+ * Chromium is absent rather than skipping silently. The build, the per-path
+ * header rules, and the server come from `tests/support/browser-site.ts`.
  */
 
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
-import { tmpdir } from 'node:os';
-import { extname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test } from 'vitest';
-import type { Browser, Page } from 'playwright';
+import assert from 'node:assert/strict';
+import type { Browser } from 'playwright';
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'anc.mjs');
+import {
+  buildAndServe,
+  removeWorkspace,
+  sqliteAssetRequests,
+  type RunningSite,
+} from './support/browser-site.ts';
 
-/** Headers `public/_headers` declares, applied by the test server. */
-function shippedHeaders(): Record<string, string> {
-  const text = readFileSync(join(ROOT, 'public', '_headers'), 'utf8');
-  const headers: Record<string, string> = {};
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith(' ') || line.trim() === '' || line.trimStart().startsWith('#')) continue;
-    const trimmed = line.trim();
-    const separator = trimmed.indexOf(':');
-    if (separator > 0) headers[trimmed.slice(0, separator)] = trimmed.slice(separator + 1).trim();
-  }
-  return headers;
-}
-
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript',
-  '.mjs': 'text/javascript',
-  '.css': 'text/css',
-  '.wasm': 'application/wasm',
-  '.sqlite': 'application/octet-stream',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.xml': 'application/xml',
-  '.txt': 'text/plain; charset=utf-8',
+/**
+ * alpha links to beta, to a markup-titled note, and to a withheld one; beta is
+ * Chinese so the preview must carry its language.
+ */
+const CORPUS = {
+  'alpha.md': '# Alpha Note\n\nEnglish alpha body. Links to [[beta]], [[markup]] and [[withheld]].\n',
+  'beta.md': '---\nlanguage: zh-CN\n---\n# 测试笔记\n\n这是中文正文，用于预览。\n',
+  'markup.md':
+    '---\ntitle: "<i>Title</i>"\naliases: ["<em>Older"]\n---\n# Markup Title\n\nA note whose metadata only an HTML parser would treat as elements.\n',
+  'withheld.md': '---\npublish: false\n---\n# Withheld Secret\n\nzzqwithheldbody\n',
 };
 
-let workspace: string;
-let server: Server;
-let origin: string;
+let site: RunningSite;
 let browser: Browser;
 
-function startServer(dist: string): Promise<Server> {
-  const headers = shippedHeaders();
-  const running = createServer((request, response) => {
-    let pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
-    if (pathname.endsWith('/')) pathname += 'index.html';
-    const file = resolve(dist, `.${pathname}`);
-    if (!file.startsWith(dist)) {
-      response.writeHead(403, headers);
-      response.end();
-      return;
-    }
-    try {
-      const body = readFileSync(file);
-      response.writeHead(200, { ...headers, 'Content-Type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' });
-      response.end(body);
-    } catch {
-      response.writeHead(404, headers);
-      response.end('not found');
-    }
-  });
-  return new Promise((done) => running.listen(0, '127.0.0.1', () => done(running)));
-}
-
-function sqliteRequests(page: Page): string[] {
-  const found: string[] = [];
-  page.on('request', (request) => {
-    const url = request.url();
-    if (url.includes('/data/site.') || url.includes('/wasm/')) found.push(url);
-  });
-  return found;
-}
-
 beforeAll(async () => {
-  workspace = mkdtempSync(join(tmpdir(), 'anc-runtime-'));
-  const notes = join(workspace, 'notes');
-  mkdirSync(notes, { recursive: true });
-  writeFileSync(join(notes, 'alpha.md'), '# Alpha Note\n\nEnglish alpha body. Links to [[beta]], [[markup]] and [[withheld]].\n', 'utf8');
-  writeFileSync(
-    join(notes, 'beta.md'),
-    ['---', 'language: zh-CN', '---', '# 测试笔记', '', '这是中文正文，用于预览。', ''].join('\n'),
-    'utf8',
-  );
-  writeFileSync(
-    join(notes, 'markup.md'),
-    [
-      '---',
-      'title: "<i>Title</i>"',
-      'aliases: ["<em>Older"]',
-      '---',
-      '# Markup Title',
-      '',
-      'A note whose metadata only an HTML parser would treat as elements.',
-      '',
-    ].join('\n'),
-    'utf8',
-  );
-  writeFileSync(join(notes, 'withheld.md'), '---\npublish: false\n---\n# Withheld Secret\n\nzzqwithheldbody\n', 'utf8');
-
-  const build = spawnSync(process.execPath, [BINARY, 'build', '--content', 'notes', '--out', 'dist'], {
-    cwd: workspace,
-    encoding: 'utf8',
-  });
-  assert.equal(build.status, 0, build.stdout + build.stderr);
-
-  server = await startServer(join(workspace, 'dist'));
-  origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  site = await buildAndServe(CORPUS);
   const { chromium } = await import('playwright');
   browser = await chromium.launch();
 }, 180_000);
 
 afterAll(async () => {
   await browser?.close();
-  await new Promise<void>((done) => server?.close(() => done()));
-  rmSync(workspace, { recursive: true, force: true });
+  await site?.close();
+  if (site !== undefined) removeWorkspace(site.workspace);
 });
 
 test('ordinary reading downloads no SQLite assets and an intentional hover previews from the snapshot', async () => {
   const page = await browser.newPage();
-  const requests = sqliteRequests(page);
-  await page.goto(`${origin}/notes/alpha/`, { waitUntil: 'load' });
+  const requests = sqliteAssetRequests(page);
+  await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
   await page.evaluate(() => window.scrollTo(0, 400));
   await page.waitForTimeout(300);
   assert.deepEqual(requests, [], 'ordinary reading requested SQLite assets');
@@ -179,7 +97,7 @@ test('ordinary reading downloads no SQLite assets and an intentional hover previ
 test('a blocked snapshot leaves static reading intact and a later intent retries', async () => {
   const page = await browser.newPage();
   await page.route('**/data/site.*', (route) => route.abort());
-  await page.goto(`${origin}/notes/alpha/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
   const link = page.locator('a[href="/notes/beta/"]').first();
   await link.hover();
   await page.waitForTimeout(1_500);

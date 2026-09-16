@@ -5,79 +5,21 @@
  * note, more than twelve neighbours, and a tag subset whose top-ranked note
  * differs from the unfiltered graph. Expected sets are hand-listed here, not
  * computed from the selection module, so the gate is an oracle rather than a
- * restatement.
+ * restatement. The build and the server come from
+ * `tests/support/browser-site.ts`.
  */
 
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer, type Server } from 'node:http';
-import { tmpdir } from 'node:os';
-import { extname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test } from 'vitest';
 import type { Browser, Page } from 'playwright';
 import { translate } from '../src/lib/translations.ts';
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url));
-const BINARY = join(ROOT, 'bin', 'anc.mjs');
+import { buildAndServe, removeWorkspace, type RunningSite } from './support/browser-site.ts';
 
 const PEERS = Array.from({ length: 15 }, (_, index) => `peer-${String(index + 1).padStart(2, '0')}`);
 
-function shippedHeaders(): Record<string, string> {
-  const text = readFileSync(join(ROOT, 'public', '_headers'), 'utf8');
-  const headers: Record<string, string> = {};
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith(' ') || line.trim() === '' || line.trimStart().startsWith('#')) continue;
-    const trimmed = line.trim();
-    const separator = trimmed.indexOf(':');
-    if (separator > 0) headers[trimmed.slice(0, separator)] = trimmed.slice(separator + 1).trim();
-  }
-  return headers;
-}
-
-const CONTENT_TYPES: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript',
-  '.css': 'text/css',
-  '.wasm': 'application/wasm',
-  '.sqlite': 'application/octet-stream',
-  '.json': 'application/json',
-  '.svg': 'image/svg+xml',
-  '.xml': 'application/xml',
-  '.txt': 'text/plain; charset=utf-8',
-};
-
-let workspace: string;
-let server: Server;
-let origin: string;
+let site: RunningSite;
 let browser: Browser;
-
-function startServer(dist: string): Promise<Server> {
-  const headers = shippedHeaders();
-  const running = createServer((request, response) => {
-    let pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
-    if (pathname.endsWith('/')) pathname += 'index.html';
-    const file = resolve(dist, `.${pathname}`);
-    if (!file.startsWith(dist)) {
-      response.writeHead(403, headers);
-      response.end();
-      return;
-    }
-    try {
-      const body = readFileSync(file);
-      response.writeHead(200, {
-        ...headers,
-        'Content-Type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream',
-      });
-      response.end(body);
-    } catch {
-      response.writeHead(404, headers);
-      response.end('not found');
-    }
-  });
-  return new Promise((done) => running.listen(0, '127.0.0.1', () => done(running)));
-}
 
 async function drawnSlugs(page: Page): Promise<string[]> {
   return page.evaluate(() =>
@@ -144,38 +86,26 @@ function assertFrameCovers(frame: FigureFrame): void {
 }
 
 beforeAll(async () => {
-  workspace = mkdtempSync(join(tmpdir(), 'anc-graph-'));
-  const notes = join(workspace, 'notes');
-  mkdirSync(notes, { recursive: true });
-  // hub -> each peer, plus a reciprocal pair, a cycle, and a tag subset.
-  writeFileSync(
-    join(notes, 'hub.md'),
-    `---\ntags: [hub]\n---\n\n# Hub\n\n${PEERS.map((peer) => `[[${peer}]]`).join(' ')}\n`,
-    'utf8',
-  );
+  const corpus: Record<string, string> = {
+    // hub -> each peer, plus a reciprocal pair, a cycle, and a tag subset.
+    'hub.md': `---\ntags: [hub]\n---\n\n# Hub\n\n${PEERS.map((peer) => `[[${peer}]]`).join(' ')}\n`,
+    'island.md': '# Island\n\nNo links, no tags.\n',
+  };
   PEERS.forEach((peer, index) => {
     const links = peer === 'peer-02' ? ' [[peer-01]]' : peer === 'peer-03' ? ' [[peer-02]]' : peer === 'peer-01' ? ' [[peer-02]]' : '';
     const tag = index < 3 ? '\ntags: [team]' : '';
-    writeFileSync(join(notes, `${peer}.md`), `---${tag}\n---\n\n# ${peer}\n\nBody.${links}\n`, 'utf8');
+    corpus[`${peer}.md`] = `---${tag}\n---\n\n# ${peer}\n\nBody.${links}\n`;
   });
-  writeFileSync(join(notes, 'island.md'), '# Island\n\nNo links, no tags.\n', 'utf8');
 
-  const build = spawnSync(process.execPath, [BINARY, 'build', '--content', 'notes', '--out', 'dist'], {
-    cwd: workspace,
-    encoding: 'utf8',
-  });
-  assert.equal(build.status, 0, build.stdout + build.stderr);
-
-  server = await startServer(join(workspace, 'dist'));
-  origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  site = await buildAndServe(corpus);
   const { chromium } = await import('playwright');
   browser = await chromium.launch();
 }, 180_000);
 
 afterAll(async () => {
   await browser?.close();
-  await new Promise<void>((done) => server?.close(() => done()));
-  rmSync(workspace, { recursive: true, force: true });
+  await site?.close();
+  if (site !== undefined) removeWorkspace(site.workspace);
 });
 
 test('a note page explores its bounded neighbourhood, re-centres, and shows the right bound', async () => {
@@ -185,7 +115,7 @@ test('a note page explores its bounded neighbourhood, re-centres, and shows the 
     if (request.url().includes('/data/site.') || request.url().includes('/wasm/')) sqliteRequests.push(request.url());
   });
 
-  await page.goto(`${origin}/notes/hub/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/notes/hub/`, { waitUntil: 'load' });
   await page.waitForTimeout(300);
   assert.deepEqual(sqliteRequests, [], 'ordinary reading requested SQLite assets');
   assert.equal(
@@ -265,7 +195,7 @@ test('a note page explores its bounded neighbourhood, re-centres, and shows the 
 
 test('the global graph filters by tag, labels the scope honestly, and resets', async () => {
   const page = await browser.newPage();
-  await page.goto(`${origin}/graph/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/graph/`, { waitUntil: 'load' });
   const staticFrame = await figureFrame(page);
   await page.locator('[data-graph-activate]').click();
   await page.waitForFunction(() => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0);
@@ -318,7 +248,7 @@ test('the global graph filters by tag, labels the scope honestly, and resets', a
 
 test('a note with no neighbourhood offers no explorer that would draw nothing', async () => {
   const page = await browser.newPage();
-  await page.goto(`${origin}/notes/island/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/notes/island/`, { waitUntil: 'load' });
   await page.waitForTimeout(300);
   assert.equal(
     await page.locator('.graph-region .empty-state').isVisible(),
@@ -344,7 +274,7 @@ test('a note with no neighbourhood offers no explorer that would draw nothing', 
 test('a blocked snapshot leaves the static figure, table, and links intact', async () => {
   const page = await browser.newPage();
   await page.route('**/data/site.*', (route) => route.abort());
-  await page.goto(`${origin}/notes/hub/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/notes/hub/`, { waitUntil: 'load' });
   const staticNodes = await page.locator('.graph-region .graph-nodes a.graph-node').count();
   const staticRows = await page.locator('.graph-region .graph-table tbody tr').count();
   await page.locator('[data-graph-activate]').click();

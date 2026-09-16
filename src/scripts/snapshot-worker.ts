@@ -47,18 +47,26 @@ function codeOf(error: unknown): SnapshotErrorCode {
 /**
  * Fetch with a running decoded-byte cap, cancelled before the cap is exceeded.
  *
- * Exported for `tests/snapshot-fetch-bounded.test.ts`, which drives it against
- * a server whose `Content-Length` disagrees with the body; `load` is the only
- * production caller.
+ * The optional `signal` lets `load` abort the sibling download when the other
+ * one fails, so a failed initialization cannot leave a response draining toward
+ * its cap behind the failure. Exported for
+ * `tests/snapshot-fetch-bounded.test.ts`, which drives it against a server whose
+ * `Content-Length` disagrees with the body; `load` is the only production
+ * caller.
  */
-export async function fetchBounded(url: string, limit: number): Promise<Uint8Array> {
+export async function fetchBounded(url: string, limit: number, signal?: AbortSignal): Promise<Uint8Array> {
   let response: Response;
   try {
-    response = await fetch(url, { credentials: 'same-origin', redirect: 'error' });
+    response = await fetch(url, { credentials: 'same-origin', redirect: 'error', signal });
   } catch {
     return fault('fetch');
   }
-  if (!response.ok) fault('fetch');
+  if (!response.ok) {
+    // Release the connection rather than leaving the body undrained behind the
+    // failure the caller is about to see.
+    if (response.body !== null) await response.body.cancel().catch(() => {});
+    fault('fetch');
+  }
 
   const reader = response.body?.getReader();
   if (reader === undefined) {
@@ -208,11 +216,15 @@ async function load(): Promise<SnapshotDb> {
   const wasmBinding = __ANC_WASM_BINDING__;
   if (snapshotBinding === null || wasmBinding === null) fault('not-ready');
 
-  // Neither download depends on the other, and both are on the cold path.
+  // Neither download depends on the other, and both are on the cold path. One
+  // controller bounds the pair: whichever fails first settles the `Promise.all`
+  // and aborts the sibling, so a failed load cannot leave a response draining
+  // toward its cap behind the failure.
+  const controller = new AbortController();
   const [databaseBytes, wasmBytes] = await Promise.all([
-    fetchBounded(snapshotBinding.url, WORKER_LIMITS.maxSnapshotBytes),
-    fetchBounded(wasmBinding.url, WORKER_LIMITS.maxWasmBytes),
-  ]);
+    fetchBounded(snapshotBinding.url, WORKER_LIMITS.maxSnapshotBytes, controller.signal),
+    fetchBounded(wasmBinding.url, WORKER_LIMITS.maxWasmBytes, controller.signal),
+  ]).finally(() => controller.abort());
   const [databaseDigest, wasmDigest] = await Promise.all([sha256(databaseBytes), sha256(wasmBytes)]);
   if (databaseDigest !== snapshotBinding.digest) fault('integrity');
   if (databaseBytes.length < 100) fault('header');

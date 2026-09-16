@@ -81,6 +81,37 @@ test('ordinary reading and scrolling past a graph stay lazy, and intent starts t
   const allRequests: string[] = [];
   page.on('request', (request) => allRequests.push(request.url()));
 
+  // Page-side hover-delay instrument. `pointerover` is the browser's own event
+  // and the panel's first un-hidden frame is the only honest "opened" moment;
+  // reading either from the driver crosses a process boundary, and a loaded
+  // run's round trip can outlast the delay the check is trying to observe. The
+  // observer is installed before the page's own client runs, so no transition
+  // can be missed.
+  await page.addInitScript(() => {
+    const state = window as unknown as { __hoverDelayMs: { over?: number; open?: number } };
+    state.__hoverDelayMs = {};
+    document.addEventListener(
+      'pointerover',
+      (event) => {
+        const target = event.target;
+        if (
+          state.__hoverDelayMs.over === undefined &&
+          target instanceof Element &&
+          target.closest('a[href="/notes/beta/"]') !== null
+        ) {
+          state.__hoverDelayMs.over = performance.now();
+        }
+      },
+      { capture: true },
+    );
+    new MutationObserver(() => {
+      const element = document.querySelector('#link-preview');
+      if (state.__hoverDelayMs.open === undefined && element instanceof HTMLElement && !element.hidden) {
+        state.__hoverDelayMs.open = performance.now();
+      }
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ['hidden'] });
+  });
+
   await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
   await page.waitForTimeout(300);
   assert.deepEqual(sqlite, [], 'an ordinary article load requested SQLite assets before any intent');
@@ -158,14 +189,23 @@ test('ordinary reading and scrolling past a graph stay lazy, and intent starts t
 
   // --- The hover delay is a delay, not a euphemism --------------------------
   // A panel that ignores `OPEN_DELAY_MS` (120 ms) flashes over the page every
-  // time the pointer crosses a link on the way somewhere else. 60 ms must not
-  // open it; the bounded wait after that is the proof it does open.
+  // time the pointer crosses a link on the way somewhere else. The delay is
+  // measured page-side, from the pointer's own `pointerover` to the panel's
+  // first visible frame, so a slow driver read cannot turn a violating
+  // implementation green or a correct one red.
   await page.mouse.move(0, 0);
   await panel.waitFor({ state: 'hidden', timeout: 5_000 });
   await beta.hover();
-  await page.waitForTimeout(60);
-  assert.equal(await panel.isHidden(), true, 'the panel opened inside the 120 ms hover-intent delay');
   await panel.waitFor({ state: 'visible', timeout: 10_000 });
+  const delay = await page.evaluate(
+    () => (window as unknown as { __hoverDelayMs: { over?: number; open?: number } }).__hoverDelayMs,
+  );
+  assert.ok(delay.over !== undefined, 'the pointer never entered the beta link, so the delay check is vacuous');
+  assert.ok(delay.open !== undefined, 'the panel never became visible, so the delay check is vacuous');
+  assert.ok(
+    delay.open - delay.over > 60,
+    `the panel opened ${(delay.open - delay.over).toFixed(1)} ms after pointerover, inside the first 60 ms of hover`,
+  );
   assert.ok(
     ((await panel.textContent()) ?? '').includes('Beta'),
     'the hover preview did not show the target note after its delay',

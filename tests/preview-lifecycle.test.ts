@@ -80,8 +80,9 @@ afterAll(async () => {
  * Hold every `preview` message for `alpha` inside the page until released.
  *
  * The patch keeps the *message*, not the fetch: the Worker is already
- * constructed by the time `show()` posts, so this plant exercises the client's
- * own late-reply guard rather than a network delay. The release function is
+ * constructed by the time `show()` posts, so this plant exercises the
+ * consumer's late-reply guard — the dismissed link is no longer `current` in
+ * `link-preview.ts` — rather than a network delay. The release function is
  * exposed on `window` because the test must decide when the late reply lands.
  */
 async function holdAlphaPreview(page: Page): Promise<void> {
@@ -263,7 +264,8 @@ test('a dismissed preview delivered late cannot open or replace the focused one'
     const beforeRelease = (await panel.textContent()) ?? '';
     assert.ok(beforeRelease.includes('Beta One'), `focusing beta did not preview it: ${JSON.stringify(beforeRelease)}`);
 
-    // Deliver A late. The generation guard must drop it: `current` is beta.
+    // Deliver A late. The consumer's identity guard must drop it: `current` is
+    // beta.
     await page.evaluate(() => (window as unknown as { __releaseHeldAlpha(): void }).__releaseHeldAlpha());
     await page.waitForTimeout(500);
     const afterRelease = (await panel.textContent()) ?? '';
@@ -332,6 +334,58 @@ test('pagehide terminates the Worker, releases what it owed, and reinitializes o
       'the reinitialized preview terminated or reused a Worker without replacing it',
     );
     assert.deepEqual(pageErrors, [], 'pagehide lifecycle produced an uncaught page error');
+  } finally {
+    await page.close();
+  }
+}, 120_000);
+
+test('a real navigation fires pagehide, terminates the Worker, and a later intent reinitializes', async () => {
+  const page = await browser.newPage();
+  const pageErrors = collectPageErrors(page);
+  // `countWorkerTerminations` keeps its count on `window`, which dies with the
+  // document a real navigation tears down. `sessionStorage` survives same-origin
+  // navigations, so the teardown the browser performs is still observable from
+  // the document that replaces it.
+  await page.addInitScript(() => {
+    const original = Worker.prototype.terminate;
+    Worker.prototype.terminate = function (this: Worker): void {
+      const count = Number(sessionStorage.getItem('__terminations') ?? '0');
+      sessionStorage.setItem('__terminations', String(count + 1));
+      original.call(this);
+    };
+  });
+  try {
+    await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
+    const panel = page.locator('#link-preview');
+    await page.locator('a[href="/notes/beta/"]').first().hover();
+    await panel.waitFor({ state: 'visible', timeout: 10_000 });
+
+    // A real document navigation, not a synthetic `PageTransitionEvent`: the
+    // browser fires `pagehide` on the outgoing document, which is the teardown
+    // the client hangs `dispose()` on.
+    await page.goto(`${site.origin}/notes/beta/`, { waitUntil: 'load' });
+    assert.equal(
+      await page.evaluate(() => Number(sessionStorage.getItem('__terminations') ?? '0')),
+      1,
+      'a real navigation did not terminate the preview Worker',
+    );
+
+    // Back to the first route. Whether Chromium rebuilt or bfcache-restored the
+    // document, the terminated Worker cannot be reused, so the next explicit
+    // intent must start a fresh one and preview from it.
+    await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
+    await page.locator('a[href="/notes/beta/"]').first().hover();
+    await panel.waitFor({ state: 'visible', timeout: 10_000 });
+    assert.ok(
+      ((await panel.textContent()) ?? '').includes('Beta One'),
+      'the Worker after a real navigation did not preview',
+    );
+    assert.equal(
+      await page.evaluate(() => Number(sessionStorage.getItem('__terminations') ?? '0')),
+      1,
+      'the reinitialized preview terminated a Worker without replacing it',
+    );
+    assert.deepEqual(pageErrors, [], 'real-navigation teardown produced an uncaught page error');
   } finally {
     await page.close();
   }

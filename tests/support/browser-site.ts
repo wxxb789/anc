@@ -4,9 +4,10 @@
  * Goal 0003's evidence needs an actual generated site with the intended policy
  * applied by the test server; a header file merely present on disk does not
  * enforce CSP. Each browser gate would otherwise repeat the same corpus build,
- * header parse, and static server, so this is that code once. The server sends
- * the exact `public/_headers` policy on every response, which is what makes a
- * test that exercises the Worker, WASM, and snapshot a CSP test as well.
+ * header parse, and static server, so this is that code once. The server
+ * applies the matching `public/_headers` rules to each response — per path, not
+ * flattened onto every path — which is what makes a test that exercises the
+ * Worker, WASM, and snapshot a CSP test as well.
  *
  * `serve` is switchable on purpose: a static deployment's snapshot change
  * arrives as a new build served at the same origin, and `serve(newDist)` is the
@@ -41,17 +42,62 @@ const CONTENT_TYPES: Record<string, string> = {
 
 const WORKER_CHUNK_PATTERN = /\/_astro\/snapshot-worker-[\w-]+\.js$/;
 
-/** The headers `public/_headers` declares, ready to apply to every response. */
-export function shippedHeaders(): Record<string, string> {
+/** One `_headers` rule: a path pattern and the headers it sets. */
+interface HeaderRule {
+  matcher: RegExp;
+  headers: Record<string, string>;
+}
+
+/**
+ * Parse the Cloudflare Pages `_headers` grammar: an unindented line is a path
+ * pattern, an indented `Name: value` line attaches to the pattern above it, and
+ * `#` starts a comment. Patterns keep their path structure: the shipped file
+ * grants immutable caching to `/_astro/*` alone, and applying that rule to every
+ * response would make the harness stricter about caching than the deployment it
+ * stands in for.
+ */
+function headerRules(): HeaderRule[] {
   const text = readFileSync(join(ROOT, 'public', '_headers'), 'utf8');
-  const headers: Record<string, string> = {};
+  const rules: HeaderRule[] = [];
   for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith(' ') || line.trim() === '' || line.trimStart().startsWith('#')) continue;
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+    if (!/^\s/.test(line)) {
+      const pattern = line.trim();
+      const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+      rules.push({
+        matcher: new RegExp(`^${escaped.replace(/\*/g, '.*').replace(/:\w+/g, '[^/]+')}$`),
+        headers: {},
+      });
+      continue;
+    }
+    const rule = rules.at(-1);
+    if (rule === undefined) continue;
     const trimmed = line.trim();
     const separator = trimmed.indexOf(':');
-    if (separator > 0) headers[trimmed.slice(0, separator)] = trimmed.slice(separator + 1).trim();
+    if (separator > 0) rule.headers[trimmed.slice(0, separator)] = trimmed.slice(separator + 1).trim();
+  }
+  return rules;
+}
+
+/**
+ * The headers `public/_headers` declares for one request path.
+ *
+ * Cloudflare joins same-named headers from every matching rule with a comma;
+ * `tests/deployment.test.ts` forbids the shipped file from relying on that, so
+ * this merge is indistinguishable for the file actually served.
+ */
+export function headersFor(pathname: string): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const rule of headerRules()) {
+    if (!rule.matcher.test(pathname)) continue;
+    Object.assign(headers, rule.headers);
   }
   return headers;
+}
+
+/** The site-wide headers (the `/*` rule) `public/_headers` declares. */
+export function shippedHeaders(): Record<string, string> {
+  return headersFor('/');
 }
 
 export interface BuiltSite {
@@ -99,18 +145,18 @@ export function buildSite(files: Record<string, string>, out = 'dist'): BuiltSit
 
 /** Serve a built output on loopback with the shipped policy on every response. */
 export async function serveDist(initial: string): Promise<ServedSite> {
-  const headers = shippedHeaders();
   let current = initial;
   const running = createServer((request, response) => {
     let pathname: string;
     try {
       pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
     } catch {
-      response.writeHead(400, headers);
+      response.writeHead(400, shippedHeaders());
       response.end('bad request');
       return;
     }
     if (pathname.endsWith('/')) pathname += 'index.html';
+    const headers = headersFor(pathname);
     const root = resolve(current);
     const file = resolve(root, `.${pathname}`);
     // Directory boundary, not a string prefix: `/tmp/x/dist2/...` starts with
@@ -159,11 +205,16 @@ export async function serveDist(initial: string): Promise<ServedSite> {
   return site;
 }
 
-/** Build a corpus and serve it under the shipped policy. */
+/**
+ * Build a corpus and serve it under the shipped policy.
+ *
+ * The returned object is the live server handle, so a caller that later calls
+ * `serve()` on it reads the replaced `dist` rather than a stale copy.
+ */
 export async function buildAndServe(files: Record<string, string>): Promise<RunningSite> {
   const built = buildSite(files);
   const served = await serveDist(built.dist);
-  return { ...built, ...served };
+  return Object.assign(served, built);
 }
 
 /** Remove a workspace after its server has closed. */

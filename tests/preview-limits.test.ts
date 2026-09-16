@@ -382,6 +382,21 @@ test('the shipped CSP is served and enforced in the document', async () => {
     assert.ok(shipped, 'public/_headers declares no Content-Security-Policy');
     assert.equal(served, shipped, 'the served document does not carry the shipped policy verbatim');
 
+    // Per-path rule fidelity, both directions: the document must not inherit
+    // the `/_astro/*` immutable rule, and the hashed Worker chunk must still
+    // receive it. A flattened header map would fail one of these two.
+    assert.equal(
+      response.headers()['cache-control'],
+      undefined,
+      'the document response inherited a cache rule `public/_headers` does not grant it',
+    );
+    const chunk = await page.request.get(`${site.origin}${workerScriptPath(site.dist)}`);
+    assert.match(
+      chunk.headers()['cache-control'] ?? '',
+      /immutable/,
+      'the hashed Worker chunk did not receive the cache rule `public/_headers` grants it',
+    );
+
     assert.ok(
       served!.includes("script-src 'self' 'wasm-unsafe-eval'"),
       'the served policy does not allow the pinned WASM the runtime needs',

@@ -297,8 +297,10 @@ test('invalid operation arguments are refused without executing, and extras are 
   // for any numeric id (`handle` in `src/scripts/snapshot-worker.ts` admits 0),
   // and the client only mints ids from 1. Either implementation satisfies the
   // property that matters — no result, no database work — so if a reply arrives
-  // inside the race it must be exactly the small refusal.
-  const zero = await ask(page, { id: 0, type: 'preview', slug: 'beta' }, 300);
+  // inside the race it must be exactly the small refusal. The bound is generous
+  // on purpose: a loaded run's slow round trip must not turn this into a check
+  // that inspects nothing and still passes.
+  const zero = await ask(page, { id: 0, type: 'preview', slug: 'beta' }, 5_000);
   if (zero !== null) {
     console.log(`preview-integrity id-0 reply: ${JSON.stringify(zero)}`);
     const record = zero as Record<string, unknown>;
@@ -313,6 +315,9 @@ test('invalid operation arguments are refused without executing, and extras are 
       ['code', 'id', 'ok'],
       `the id-0 refusal carries fields it should not: ${JSON.stringify(zero)}`,
     );
+  } else {
+    // The row's wording permits a silent refusal; the shipped Worker replies.
+    console.log('preview-integrity id-0 reply: none (the shape checker refused silently)');
   }
 
   // Nothing above may have corrupted the connection: a final valid preview

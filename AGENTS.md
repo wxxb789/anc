@@ -189,7 +189,7 @@ on the first failure. Run it before proposing a merge and report the pass count.
 | Exclusion: `publish: false`, globs, zero-match refusal | — | — | — | yes |
 | Release qualification: public origin + committed exact publish set | — | — | — | `build --release` |
 | Test suite | yes | — | yes | — |
-| Rendered-browser gates (Playwright) | when Chromium is installed | — | yes, always | — |
+| Rendered-browser gates (Playwright) | when Chromium is installed; the preview and runtime gates fail without it | — | yes, always | — |
 
 The last column replaces what used to say "Cloudflare Pages". `bin/anc.mjs`
 runs the same generated-output chain `package.json`'s `build` names, link for link. Secret

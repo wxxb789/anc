@@ -349,3 +349,62 @@ test('an over-claiming Content-Length fails closed on the truncated transport', 
     await server.close();
   }
 }, 120_000);
+
+test('an aborted signal cancels the read mid-stream and the server sees the abort', async () => {
+  // `load` passes one controller to both downloads, so whichever fails first
+  // aborts the other. This drives that seam directly: the cap is deliberately
+  // far above the body, so the abort is the only thing that can stop the read.
+  const server = await serve(async (_request, response, stats) => {
+    response.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+    await trickle(response, stats, patterned(OVER_CAP_BYTES));
+  });
+  try {
+    const controller = new AbortController();
+    const aborted = assert.rejects(
+      fetchBounded(server.url, LIMIT * 100, controller.signal),
+      (error: Error) => error.name === 'AbortError',
+      'an aborted fetch did not reject with AbortError',
+    );
+    await delay(CHUNK_DELAY_MS * 2);
+    controller.abort();
+    await aborted;
+    assert.equal(
+      await observed(() => server.stats.aborted),
+      true,
+      'the server finished writing, so the signal did not cancel the read',
+    );
+    assert.ok(
+      server.stats.written < OVER_CAP_BYTES,
+      `the server wrote its whole ${OVER_CAP_BYTES}-byte body, so the abort did not cut the response short`,
+    );
+  } finally {
+    await server.close();
+  }
+}, 120_000);
+
+test('a response without a readable stream enforces the cap on the buffered body', async () => {
+  // Some engines do not expose `Response.body`; the fallback buffers the whole
+  // body and then applies the same limit. It is the one branch the streaming
+  // cases above cannot reach, and it must still refuse over-cap data.
+  const exact = (buffer: Buffer): ArrayBuffer =>
+    buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  const realFetch = globalThis.fetch;
+  try {
+    const over = patterned(OVER_CAP_BYTES);
+    const within = patterned(256);
+    (globalThis as unknown as { fetch: unknown }).fetch = async (url: string) => ({
+      ok: true,
+      body: null,
+      arrayBuffer: async () => exact(url.endsWith('/within') ? within : over),
+    });
+    await assert.rejects(
+      fetchBounded('http://runtime.test/over', LIMIT),
+      (error: Error & { code?: string }) => error.code === 'integrity',
+      'an over-cap buffered body was not refused as an integrity failure',
+    );
+    const bytes = await fetchBounded('http://runtime.test/within', LIMIT);
+    assert.deepEqual(Buffer.from(bytes), within, 'a within-cap buffered body did not round-trip');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}, 120_000);

@@ -3,9 +3,9 @@
  *
  * Ordinary reading must download zero SQLite assets, so this module creates the
  * Worker only on first explicit intent and shares one instance for previews,
- * tag browsing, and graph exploration. It owns request ids, deadlines, the
- * pending bound, and generation invalidation: a reply from a torn-down Worker or
- * an older snapshot is discarded rather than attached to the current UI.
+ * tag browsing, and graph exploration. It owns request ids, deadlines, and the
+ * pending bound: a reply from a torn-down Worker is discarded rather than
+ * attached to the current UI.
  */
 
 import {
@@ -20,7 +20,6 @@ type Pending = {
   resolve: (result: SnapshotResult) => void;
   reject: (error: SnapshotClientError) => void;
   timer: ReturnType<typeof setTimeout>;
-  generation: number;
   /** `performance.now()` when the request was dispatched, for measurement. */
   started: number;
 };
@@ -35,7 +34,6 @@ export class SnapshotClientError extends Error {
 }
 
 let worker: Worker | undefined;
-let generation = 0;
 let nextId = 1;
 let initialized = false;
 const pending = new Map<number, Pending>();
@@ -52,7 +50,6 @@ function reset(code: SnapshotErrorCode): void {
   worker?.terminate();
   worker = undefined;
   initialized = false;
-  generation += 1;
   failAll(code);
 }
 
@@ -63,7 +60,6 @@ function ensureWorker(): Worker {
     const reply = event.data as SnapshotReply;
     const entry = pending.get(reply.id);
     if (entry === undefined) return;
-    if (entry.generation !== generation) return;
     const elapsed = performance.now() - entry.started;
     pending.delete(reply.id);
     clearTimeout(entry.timer);
@@ -136,7 +132,7 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
       // Worker, so the only bounded stop is terminating it.
       reset('timeout');
     }, deadline);
-    pending.set(id, { resolve, reject, timer, generation, started: performance.now() });
+    pending.set(id, { resolve, reject, timer, started: performance.now() });
     instance.postMessage(message);
   });
 }

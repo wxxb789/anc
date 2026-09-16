@@ -190,18 +190,24 @@ test('truncated snapshot bytes fail closed and leave no database open', async ()
     const bytes = new Uint8Array(readFileSync(path));
     const counted = countHandles(sqlite3);
     try {
-      for (const [label, truncated] of [
+      // The padded direction of the same invariant: one byte over the file's
+      // page multiple. The import's comparison is exact, so both directions
+      // must be refused, not just the truncations production's digest catches.
+      const padded = new Uint8Array(bytes.length + 1);
+      padded.set(bytes);
+      for (const [label, invalid] of [
         ['a 128-byte prefix', bytes.slice(0, 128)],
         ['all but the last byte', bytes.slice(0, bytes.length - 1)],
+        ['one padded byte', padded],
       ] as const) {
-        // Both cases are `format`: SQLite tolerates a partial final page (the
+        // Each case is `format`: SQLite tolerates a partial final page (the
         // file-based `PRAGMA integrity_check` still reports `ok`), so the import
         // itself compares `page_size * page_count` with the received byte length
         // and refuses a file that is not exactly its pages. Production normally
         // catches truncation one layer up, in `load`'s SHA-256 check; this gate
         // requires the import boundary itself to fail closed too.
         assert.throws(
-          () => importSnapshot(sqlite3, truncated),
+          () => importSnapshot(sqlite3, invalid),
           { code: 'format' },
           `${label} was imported instead of failing closed`,
         );

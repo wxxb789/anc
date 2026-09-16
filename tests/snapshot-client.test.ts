@@ -2,7 +2,7 @@
  * The main-thread snapshot client's lifecycle, in Node.
  *
  * `src/scripts/snapshot-client.ts` owns the shared Worker, the request ids, the
- * pending bound, the deadlines, and generation invalidation. Those are all
+ * pending bound, the deadlines, and the crash/teardown paths. Those are all
  * decisions that can be read without a browser, so this file drives them with a
  * fake `Worker` against the real module; a browser gate cannot see a promise
  * that never settles, and this one can.
@@ -65,6 +65,12 @@ class FakeWorker {
   emit(reply: SnapshotReply): void {
     const event = new MessageEvent('message', { data: reply });
     for (const listener of this.listeners.get('message') ?? []) listener(event);
+  }
+
+  /** Deliver one `error` event: the Worker-crash path the client resets on. */
+  emitError(): void {
+    const event = new Event('error');
+    for (const listener of this.listeners.get('error') ?? []) listener(event as unknown as MessageEvent);
   }
 }
 
@@ -180,7 +186,7 @@ test('the startup deadline terminates the Worker and a later request reinitializ
   );
 });
 
-test('a late reply from a torn-down generation is discarded', async () => {
+test('a late reply from a torn-down Worker is discarded', async () => {
   vi.useFakeTimers();
   const client = await loadClient();
   let settlements = 0;
@@ -199,8 +205,8 @@ test('a late reply from a torn-down generation is discarded', async () => {
   await rejected;
   assert.equal(settlements, 1, 'the timeout did not settle the original request exactly once');
 
-  // The reply the terminated generation owed arrives after teardown. It must be
-  // dropped: the pending entry is gone and the generation has moved on.
+  // The reply the terminated Worker owed arrives after teardown. It must be
+  // dropped: the pending entry is gone with the Worker.
   worker.emit({
     id: 1,
     ok: true,
@@ -211,7 +217,7 @@ test('a late reply from a torn-down generation is discarded', async () => {
   assert.equal(settlements, 1, 'the stale reply settled the original promise a second time');
 
   // And no state was resurrected: the next request builds a new Worker rather
-  // than attaching to the torn-down generation.
+  // than attaching to the torn-down one.
   const second = client.request({ id: 2, type: 'preview', slug: 'alpha' });
   assert.equal(FakeWorker.instances.length, 2, 'the stale reply kept the torn-down Worker alive');
   const replacement = FakeWorker.instances[1]!;
@@ -239,6 +245,30 @@ test('dispose terminates, fails pending with cancelled, and a later request rebu
   const result: SnapshotResult = { type: 'preview', preview: null };
   replacement.emit({ id: 2, ok: true, result });
   assert.deepEqual(await later, result, 'the request after dispose did not settle from the new Worker');
+});
+
+test('a Worker crash rejects every pending request and a later intent rebuilds', async () => {
+  const client = await loadClient();
+  const first = client.request({ id: 1, type: 'preview', slug: 'alpha' });
+  const second = client.request({ id: 2, type: 'preview', slug: 'beta' });
+  const crashed = FakeWorker.instances[0]!;
+
+  // The `error` listener is the crash path the browser gates cannot reach: a
+  // module Worker whose script fails to load fires it with no message ever
+  // sent. Both owed requests must settle rather than hang.
+  const firstRejected = assert.rejects(first, (error: { code?: string }) => error.code === 'terminated');
+  const secondRejected = assert.rejects(second, (error: { code?: string }) => error.code === 'terminated');
+  crashed.emitError();
+  await firstRejected;
+  await secondRejected;
+  assert.equal(crashed.terminations, 1, 'the crash path did not terminate the crashed Worker');
+
+  const later = client.request({ id: 3, type: 'preview', slug: 'alpha' });
+  assert.equal(FakeWorker.instances.length, 2, 'the request after a crash reused the crashed Worker');
+  const replacement = FakeWorker.instances[1]!;
+  const result: SnapshotResult = { type: 'preview', preview: null };
+  replacement.emit({ id: 3, ok: true, result });
+  assert.deepEqual(await later, result, 'the replacement Worker did not settle the later request');
 });
 
 test('a Worker constructor that throws returns a rejected promise and can be retried', async () => {

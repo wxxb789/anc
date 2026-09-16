@@ -246,9 +246,12 @@ error collection moved into `tests/support/browser-site.ts`; `snapshot-wasm`
 initializes one WASM runtime for the file and restores its handle-accounting
 wrapper; `preview-content`'s independent static fetches run concurrently; and
 `snapshot-client`'s constructor-failure comment now matches the catch's scope.
-No assertion or output changed: `pnpm run verify` on `d565428` — 73 files, 896
+One assertion changed rather than disappeared: the never-failing
+`assert.ok(site.origin.length > 0, ...)` in `preview-lifecycle.test.ts` became a
+browser-version `console.log`, so the file reports the browser it ran on without
+an assertion that could not fail. `pnpm run verify` on `d565428` — 73 files, 896
 passed / 34 skipped, exit 0; oxlint 0 warnings/errors and `astro check` 0
-errors.
+errors — the counts were unchanged.
 
 ### Explicitly not claimed
 
