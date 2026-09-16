@@ -15,7 +15,7 @@ graph drawing; the graph can consume the same tag semantics under 0005.
 ## Material bounds and prerequisites
 
 Requires the normalized snapshot/static routes of
-[0002](0002-consistent-static-relationships.md) and the shared working browser
+[0002](archive/0002-consistent-static-relationships.md) and the shared working browser
 runtime established with [0003](0003-reliable-lazy-previews.md). Follow
 [tag semantics](../core-design/content-semantics.md),
 [cursor rules](../core-design/sqlite-contract.md), and the existing

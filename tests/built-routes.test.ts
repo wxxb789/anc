@@ -17,7 +17,12 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'vitest';
 
-import { entries, getEntry } from '../src/lib/content.ts';
+import {
+  entries,
+  getEntry,
+  tagFacets as authoritativeTagFacets,
+  tagRouteForLabel,
+} from '../src/lib/content.ts';
 import { readArtifact } from '../src/lib/artifact-source.ts';
 import { SCHEMA_VERSION } from '../src/lib/schema.ts';
 import { GROUP_WINDOW } from '../src/lib/collection-navigation.ts';
@@ -60,7 +65,6 @@ import {
   noteTimestamp,
   recentFirst,
   renderRedirects,
-  routeKey,
   tagFacets,
   tagRoute,
 } from '../src/lib/routes.ts';
@@ -112,7 +116,12 @@ function expectedRoutes(): string[] {
     // text it replaced.
     WITHHELD_ROUTE,
     ...entries.map((entry) => noteRoute(entry.slug)),
-    ...tagFacets(entries).map((facet) => tagRoute(facet.key)),
+    // The pages' own authority, not the producer normalizer: the emitted tag
+    // routes are the facets `content.ts` reads (the snapshot's `tags.key` rows
+    // on the build path), so this expectation cannot drift from what
+    // `tags/[tag].astro` renders. `route-model.test.ts` keeps the producer's
+    // normalization/collision checks as the independent writer oracle.
+    ...authoritativeTagFacets().map((facet) => tagRoute(facet.key)),
     ...collectionFacets(entries).map((facet) => collectionRoute(facet.key)),
   ].sort();
 }
@@ -822,7 +831,7 @@ test('note metadata renders every field the artifact carries, and no other', () 
     }
     for (const tag of entry.tags ?? []) {
       assert.ok(
-        meta.includes(`href="${tagRoute(routeKey(tag))}"`) && meta.includes(asRendered(tag)),
+        meta.includes(`href="${tagRouteForLabel(tag)}"`) && meta.includes(asRendered(tag)),
         `${slug}: tag "${tag}" is not rendered as a link to its facet page`,
       );
     }

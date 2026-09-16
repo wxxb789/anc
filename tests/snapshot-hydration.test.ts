@@ -286,6 +286,7 @@ test('tagFacets over hydrated entries is the snapshot projection', () => {
 });
 
 const CONTENT_URL = new URL('../src/lib/content.ts', import.meta.url).href;
+const SITE_URL = new URL('../src/lib/site.ts', import.meta.url).href;
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 interface ObservedEntry {
@@ -366,17 +367,25 @@ test('content.ts hydrates only when the staged snapshot matches the artifact', (
 interface ObservedFacets {
   facets: { key: string; label: string; members: string[] }[];
   route: string;
+  tagRoutes: string[];
 }
 
 /**
- * Read the tag facet index through `content.ts` in a child process.
+ * Read the tag facet index and the route model through `content.ts` in a
+ * child process.
  *
- * Same mechanism as {@link observeEntries}: the module reads its snapshot at
+ * Same mechanism as {@link observeEntries}: the modules read their snapshot at
  * evaluation, so the workspace and artifact must be in the environment before
- * the import, which one process cannot change after the fact.
+ * the import, which one process cannot change after the fact. `tagRoutes` is
+ * `publicRoutes(entries, tagFacets())` reduced to its tag paths — the same
+ * call the sitemap makes — so the probe covers the route surface and not only
+ * the accessors.
  */
 function observeFacets(artifactPath: string, workspace: string): ObservedFacets {
-  const script = `import(${JSON.stringify(CONTENT_URL)}).then((content) => {
+  const script = `Promise.all([
+  import(${JSON.stringify(CONTENT_URL)}),
+  import(${JSON.stringify(SITE_URL)}),
+]).then(([content, site]) => {
   console.log(JSON.stringify({
     facets: content.tagFacets().map((facet) => ({
       key: facet.key,
@@ -384,6 +393,10 @@ function observeFacets(artifactPath: string, workspace: string): ObservedFacets 
       members: facet.entries.map((entry) => entry.slug),
     })),
     route: content.tagRouteForLabel('Field Notes'),
+    tagRoutes: site
+      .publicRoutes(content.entries, content.tagFacets())
+      .map((route) => route.path)
+      .filter((path) => path.startsWith('/tags/')),
   }));
 });`;
   const child = spawnSync(process.execPath, ['--experimental-strip-types', '-e', script], {
@@ -438,6 +451,18 @@ test("the static tag route key is the snapshot's tags.key, not a re-derivation",
     // label link follows it.
     const observed = observeFacets('tests/fixtures/valid-corpus.json', staged);
     assert.equal(observed.route, '/tags/renamed-route/', 'the note tag link did not follow the stored key');
+    // The route surface the sitemap emits follows the row too, and the
+    // re-derived key is gone from it, so an emitted route cannot be predicted
+    // by the producer normalizer while the stored row says otherwise.
+    assert.ok(
+      observed.tagRoutes.includes('/tags/renamed-route/'),
+      'the route model did not carry the stored key',
+    );
+    assert.equal(
+      observed.tagRoutes.includes('/tags/field-notes/'),
+      false,
+      'the route model kept the re-derived key beside the stored one',
+    );
     const rendered = observed.facets.find((facet) => facet.key === 'renamed-route');
     assert.ok(rendered !== undefined, 'the build-facing facet index lost the stored key');
     assert.equal(rendered.label, 'Field Notes', 'the build-facing facet index lost the display label');

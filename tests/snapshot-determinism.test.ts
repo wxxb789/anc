@@ -1,7 +1,7 @@
 /**
  * Determinism of the public snapshot producer.
  *
- * `docs/goals/0002-consistent-static-relationships.md` requires the completed
+ * `docs/goals/archive/0002-consistent-static-relationships.md` requires the completed
  * goal to show that two fresh builds and shuffled discovery under one toolchain
  * produce identical DB bytes, while changed public metadata changes the
  * projection and a body-only edit may leave it unchanged. `writeSnapshot` is

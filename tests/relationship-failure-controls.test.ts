@@ -2,7 +2,7 @@
  * The relationship projection's failure controls, and the helper routes that
  * must not become relationships.
  *
- * `docs/goals/0002-consistent-static-relationships.md`'s "Useful failure
+ * `docs/goals/archive/0002-consistent-static-relationships.md`'s "Useful failure
  * controls" row requires that invalid self/dangling/duplicate rows, tag-key
  * collisions, unexpected schema members, and a deliberately inverted or omitted
  * authored relation are each rejected by a gate. Three of those are held
