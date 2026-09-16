@@ -1,7 +1,7 @@
 /**
- * The removed public index, graph manifest, and adjacency payload are absent
- * from the built output — by name, by serialized relation shape, and by SQLite
- * header.
+ * The removed public index, graph manifest, adjacency, and tag-membership
+ * payloads are absent from the built output — by name, by serialized relation
+ * shape, and by SQLite header.
  *
  * `assertOutputInventory` already rejects any unexpected file, and
  * `tests/output-inventory.test.ts` exercises it. This gate exists because the
@@ -14,7 +14,7 @@
  *
  * **Measured over this repository's own `dist/` when this gate was added:**
  * 150 files inspected, exactly one `.json` (`pagefind/pagefind-entry.json`),
- * zero files with any of the six legacy basenames at any depth, and exactly
+ * zero files with any of the eight legacy basenames at any depth, and exactly
  * two files carrying the NUL-terminated SQLite header — the bound
  * `data/site.<64 hex>.sqlite` payload and `wasm/sqlite3.<64 hex>.wasm`, the
  * WASM build of SQLite itself. `sqlite-wasm.js` and `sqlite3-worker1.mjs` both
@@ -47,7 +47,10 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const DIST = join(ROOT, 'dist');
 const ARTIFACT = loadArtifact();
 
-/** The basenames the removed public index, manifest, and adjacency payloads had. */
+/**
+ * The basenames the removed public index, manifest, adjacency, and
+ * tag-membership payloads had.
+ */
 const LEGACY_PAYLOAD_NAMES = new Set([
   'content-index.json',
   'graph-manifest.json',
@@ -55,6 +58,8 @@ const LEGACY_PAYLOAD_NAMES = new Set([
   'graph.json',
   'site.json',
   'index.json',
+  'tags.json',
+  'memberships.json',
 ]);
 
 /** The public names the retired payloads referred to each other by. */
@@ -170,8 +175,9 @@ test('the built output ships no legacy public index, graph manifest, or adjacenc
   const files = filesUnder(DIST);
   assert.ok(files.length > 0, 'the output walk inspected no file');
 
-  // Named absence, at any depth. The six names are the legacy public-index,
-  // manifest, and adjacency shapes; the probe recorded zero hits for each.
+  // Named absence, at any depth. The eight names are the legacy public-index,
+  // manifest, adjacency, and tag-membership shapes; the probe recorded zero
+  // hits for each.
   assert.deepEqual(legacyNamed(files), [], 'a retired payload name reappeared in the output');
 
   // Serialized relation shape. Only `.json` files are parsed: Pagefind's
@@ -237,8 +243,14 @@ test('the legacy-payload detectors fire on planted samples, so the absence above
   }
 
   assert.deepEqual(
-    legacyNamed(['content-index.json', 'notes/deep/graph-manifest.json', 'index.html']),
-    ['content-index.json', 'notes/deep/graph-manifest.json'],
+    legacyNamed([
+      'content-index.json',
+      'notes/deep/graph-manifest.json',
+      'tags.json',
+      'notes/deep/memberships.json',
+      'index.html',
+    ]),
+    ['content-index.json', 'notes/deep/graph-manifest.json', 'tags.json', 'notes/deep/memberships.json'],
     'the name predicate missed a legacy name outside the output root',
   );
   assert.deepEqual(legacyNamed(['index.html', 'pagefind/pagefind-entry.json']), []);

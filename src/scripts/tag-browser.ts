@@ -14,7 +14,7 @@
 
 import { noteRoute } from '../lib/route-path.ts';
 import { classifyTagPage, TAG_PAGE_SIZE, type TagBrowseState } from '../lib/tag-browser-model.ts';
-import { TAG_BROWSE_DATASET } from '../lib/translations.ts';
+import { partLanguage, TAG_BROWSE_DATASET } from '../lib/translations.ts';
 import { requestByTag } from './snapshot-client.ts';
 
 export {};
@@ -98,7 +98,10 @@ function install(root: HTMLElement): void {
       const link = document.createElement('a');
       link.href = noteRoute(note.slug);
       link.textContent = note.title;
-      if (note.language.toLowerCase() !== language) link.lang = note.language;
+      // One rule owns "this title is foreign": `partLanguage` is what the
+      // static tag list applies, so the enhanced list cannot drift from it.
+      const lang = partLanguage(note.language, language);
+      if (lang !== undefined) link.lang = lang;
       item.append(link);
       results.append(item);
     }

@@ -268,6 +268,26 @@ export async function focusByTab(page: Page, href: string, maxPresses = 80): Pro
 }
 
 /**
+ * Tab until the element matching `selector` holds focus, and report whether it
+ * was reached.
+ *
+ * A companion to `focusByTab` for controls addressed by selector rather than
+ * href — the tag chooser and its buttons. `focusByTab` cannot serve them: it
+ * compares `activeElement.href`, which a `<select>` or `<button>` does not
+ * have. Real presses either way, so a control is only reached if the page's
+ * own tab order exposes it.
+ */
+export async function tabTo(page: Page, selector: string, maxPresses = 80): Promise<boolean> {
+  for (let press = 0; press < maxPresses; press += 1) {
+    await page.keyboard.press('Tab');
+    if (await page.evaluate((expected) => document.activeElement?.matches(expected) ?? false, selector)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Count the Worker terminations the page performs.
  *
  * The count is read with `workerTerminations`; a test waiting on a transition

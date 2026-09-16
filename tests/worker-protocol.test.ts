@@ -42,6 +42,9 @@ test('a malformed request is refused before any SQL runs', () => {
     { id: 1, type: 'preview' },
     { id: 1, type: 'preview', slug: '../../etc/passwd' },
     { id: 1, type: 'byTag' },
+    { id: 1, type: 'byTag', tagKey: 'a/b' },
+    { id: 1, type: 'byTag', tagKey: 'garden-notes', cursor: 'not a slug' },
+    { id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: '10' },
     { id: 1, type: 'backlinks', slug: 'note-a', cursor: 'not a slug' },
     { id: 1, type: 'backlinks', slug: 'note-a', pageSize: '10' },
     { id: 1, type: 'globalGraph', tagKey: '' },
@@ -71,6 +74,10 @@ test('page size is clamped to the accepted range', () => {
   assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 10 }), 10);
   assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 10_000 }), MAX_PAGE_SIZE);
   assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 0 }), DEFAULT_PAGE_SIZE);
+  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes' }), DEFAULT_PAGE_SIZE);
+  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: 10 }), 10);
+  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: 10_000 }), MAX_PAGE_SIZE);
+  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: 0 }), DEFAULT_PAGE_SIZE);
 });
 
 test('a reply is narrowed to the result type the caller asked for', () => {

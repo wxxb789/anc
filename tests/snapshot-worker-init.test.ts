@@ -61,6 +61,13 @@ function storedTableSql(table: string): string {
   return SNAPSHOT_SCHEMA_SQL.slice(start, SNAPSHOT_SCHEMA_SQL.indexOf(';', start));
 }
 
+/** The stored DDL of the one explicit index, as the writer spells it. */
+function storedIndexSql(): string {
+  const start = SNAPSHOT_SCHEMA_SQL.indexOf(`CREATE INDEX ${SNAPSHOT_EXPLICIT_INDEX.name}`);
+  if (start < 0) throw new Error(`SNAPSHOT_SCHEMA_SQL does not declare index ${SNAPSHOT_EXPLICIT_INDEX.name}`);
+  return SNAPSHOT_SCHEMA_SQL.slice(start, SNAPSHOT_SCHEMA_SQL.indexOf(';', start));
+}
+
 /**
  * The rows a driver must return for `assertSnapshotRows` to accept it, built
  * from the normative metadata so a schema change reaches this fixture rather
@@ -70,7 +77,13 @@ function contractRows(sql: string): Record<string, unknown>[] {
   if (sql === 'PRAGMA application_id') return [{ application_id: SNAPSHOT_APPLICATION_ID }];
   if (sql === 'PRAGMA user_version') return [{ user_version: SNAPSHOT_USER_VERSION }];
   if (sql.startsWith('SELECT type, name')) {
-    return SNAPSHOT_TABLES.map((name) => ({ type: 'table', name, sql: storedTableSql(name) }));
+    // The writer creates the one explicit index, so `sqlite_schema` carries it
+    // beside the five tables; leaving it out would make the fake driver
+    // describe a schema the writer cannot produce.
+    return [
+      ...SNAPSHOT_TABLES.map((name) => ({ type: 'table', name, sql: storedTableSql(name) })),
+      { type: 'index', name: SNAPSHOT_EXPLICIT_INDEX.name, sql: storedIndexSql() },
+    ];
   }
   const table = /^PRAGMA table_info\(([^)]+)\)$/.exec(sql)?.[1];
   if (table !== undefined) {

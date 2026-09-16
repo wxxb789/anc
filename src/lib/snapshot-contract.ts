@@ -10,8 +10,9 @@
  * The check is deliberately not satisfied by the header constants: a file can
  * carry the right `application_id` and `user_version` and still have an
  * unexpected column type, dropped `NOT NULL`, foreign key, `STRICT`/
- * `WITHOUT ROWID` option, `CHECK`, or index, and a query against it would then
- * return something whose meaning differs from the contract.
+ * `WITHOUT ROWID` option, `CHECK`, or explicit index — added, removed, or
+ * redefined — and a query against it would then return something whose meaning
+ * differs from the contract.
  *
  * Every statement issued here is a read-only `PRAGMA` or `sqlite_schema`
  * query, so the reader can stay read-only. `CHECK` clauses are the one
@@ -182,6 +183,21 @@ export function assertSnapshotRows(read: SnapshotRowReader): void {
   const expectedTables = [...SNAPSHOT_TABLES].sort();
   if (tables.join(',') !== expectedTables.join(',')) {
     throw new Error(`snapshot tables are [${tables.join(', ')}], expected [${SNAPSHOT_TABLES.join(', ')}]`);
+  }
+  // `sqlite_schema` hides the UNIQUE constraints' implicit `sqlite_%` indexes
+  // behind the query's name filter, so the index rows that remain are exactly
+  // the explicitly created ones. This must equal the one accepted index: an
+  // added reverse membership index, a renamed accepted index, or a missing
+  // accepted index each change the storage contract. `assertExplicitIndex`
+  // below still checks that index's declared shape.
+  const indexes = objects
+    .filter((row) => row['type'] === 'index')
+    .map((row) => String(row['name']))
+    .sort();
+  if (indexes.join(',') !== SNAPSHOT_EXPLICIT_INDEX.name) {
+    throw new Error(
+      `snapshot explicit indexes are [${indexes.join(', ')}], expected [${SNAPSHOT_EXPLICIT_INDEX.name}]`,
+    );
   }
   const otherObjects = objects.filter((row) => row['type'] !== 'table' && row['type'] !== 'index');
   if (otherObjects.length > 0) {
