@@ -5,7 +5,7 @@
  * is. These gates first accept a snapshot the producer actually wrote, then
  * mutate one declaration in each direction the contract names — column type,
  * `NOT NULL`, a foreign key, `STRICT`, `WITHOUT ROWID`, the self-edge `CHECK`,
- * and the one explicit index (redefined or joined by another) — so the check is
+ * and the one explicit index (reshaped or joined by another) — so the check is
  * proven to read the schema rather than the header alone.
  */
 

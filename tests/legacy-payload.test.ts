@@ -1,7 +1,7 @@
 /**
- * The removed public index, graph manifest, adjacency, and tag-membership
- * payloads are absent from the built output — by name, by serialized relation
- * shape, and by SQLite header.
+ * The removed public index, and the retired graph, adjacency, and
+ * tag-membership payload shapes, are absent from the built output — by name, by
+ * serialized relation shape, and by SQLite header.
  *
  * `assertOutputInventory` already rejects any unexpected file, and
  * `tests/output-inventory.test.ts` exercises it. This gate exists because the
@@ -48,8 +48,9 @@ const DIST = join(ROOT, 'dist');
 const ARTIFACT = loadArtifact();
 
 /**
- * The basenames the removed public index, manifest, adjacency, and
- * tag-membership payloads had.
+ * Names a retired payload shape would plausibly return under. Only
+ * `content-index.json` ever existed as a file, so these are guards against
+ * shape, not a record of filenames that were once shipped.
  */
 const LEGACY_PAYLOAD_NAMES = new Set([
   'content-index.json',

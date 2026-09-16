@@ -68,7 +68,7 @@ afterAll(async () => {
   await browser?.close();
   await site?.close();
   if (site !== undefined) removeWorkspace(site.workspace);
-});
+}, 180_000);
 
 test('the tag chooser enumerates every matching note across pages, in cursor order', async () => {
   const page = await browser.newPage();
@@ -287,15 +287,23 @@ test('a tag used only by a withheld note reaches neither the snapshot nor the ch
 test('tag browsing downloads the shared runtime once, and not before intent', async () => {
   const page = await browser.newPage();
   const requests = sqliteAssetRequests(page);
-  await page.goto(`${site.origin}/tags/`, { waitUntil: 'load' });
+  await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
+  // The enhanced region unhides when the script runs, and the static list must
+  // make the page genuinely scrollable: otherwise "scrolling does not prefetch"
+  // would pass without a scroll having happened.
+  await page.waitForFunction(() => document.querySelector('#tag-browser')?.hidden === false);
+  const scrollable = await page.evaluate(
+    () => document.documentElement.scrollHeight > window.innerHeight,
+  );
+  assert.equal(scrollable, true, 'the tag page does not scroll, so the zero-request probe measured nothing');
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
   await page.waitForTimeout(300);
   // `requests.length` rather than `assert.deepEqual(requests, [])`: the
   // assertion's `asserts actual is T` signature would narrow the array to
   // `never[]` and make the later `.filter` calls type errors.
-  assert.equal(requests.length, 0, 'loading the chooser ahead of intent fetched the SQLite runtime');
+  assert.equal(requests.length, 0, 'loading and scrolling the tag page fetched the SQLite runtime');
 
-  await page.selectOption('#tag-browser-select', TAG_KEY);
+  await page.click('#tag-browse-start');
   await page.waitForSelector('#tag-browser-results a');
   await page.locator('#tag-browse-more').click();
   await page.waitForFunction(() => document.querySelectorAll('#tag-browser-results a').length === 20);
@@ -431,7 +439,8 @@ test('switching tags after a continuation starts the new tag at its first page',
   );
 
   // ...then switch subjects. The new tag must start at page one rather than
-  // inherit the old tag's cursor, and no late reply for the old tag may append.
+  // inherit the old tag's cursor; the delayed-route test above owns the
+  // late-reply half of the same property.
   await page.selectOption('#tag-browser-select', OTHER_TAG_KEY);
   await page.waitForSelector('#tag-browser-results a');
   await page.waitForTimeout(300);
