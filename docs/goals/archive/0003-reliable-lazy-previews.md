@@ -232,6 +232,24 @@ the same client gate's deadline test. The numeric policies are
 correctness-fixture evidence, as the goal requires; 0008 owns validating or
 replacing them on the benchmark workloads.
 
+### Simplification pass (2026-09-16)
+
+A behavior-preserving `ce-simplify-code` pass followed in commit `d565428`,
+from three parallel reviews (reuse, quality, efficiency): the shared test
+server now enforces a directory boundary rather than a string prefix, answers
+malformed percent-encoding with 400, and streams file bodies with an explicit
+Content-Length instead of buffering each request; the two duplicated
+Worker/WASM probe blocks in `preview-limits` collapsed into one helper;
+`preview-lifecycle` no longer rebuilds the beforeAll corpus for the
+snapshot-replacement test; `focusByTab`, worker-termination counting, and page
+error collection moved into `tests/support/browser-site.ts`; `snapshot-wasm`
+initializes one WASM runtime for the file and restores its handle-accounting
+wrapper; `preview-content`'s independent static fetches run concurrently; and
+`snapshot-client`'s constructor-failure comment now matches the catch's scope.
+No assertion or output changed: `pnpm run verify` on `d565428` — 73 files, 896
+passed / 34 skipped, exit 0; oxlint 0 warnings/errors and `astro check` 0
+errors.
+
 ### Explicitly not claimed
 
 No mobile UX or performance acceptance, no release authorization, no CI/Action
