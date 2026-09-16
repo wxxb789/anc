@@ -291,7 +291,7 @@ test('tag browsing downloads the shared runtime once, and not before intent', as
   // The enhanced region unhides when the script runs, and the static list must
   // make the page genuinely scrollable: otherwise "scrolling does not prefetch"
   // would pass without a scroll having happened.
-  await page.waitForFunction(() => document.querySelector('#tag-browser')?.hidden === false);
+  await page.waitForFunction(() => document.querySelector<HTMLElement>('#tag-browser')?.hidden === false);
   const scrollable = await page.evaluate(
     () => document.documentElement.scrollHeight > window.innerHeight,
   );
