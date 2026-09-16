@@ -18,15 +18,20 @@ import {
   type SnapshotReply,
 } from '../src/lib/worker-protocol.ts';
 
-test('every named operation has a shape the Worker accepts', () => {
+test('every named operation has one minimal accepted shape that can carry no SQL, URL, or path', () => {
   for (const type of SNAPSHOT_OPERATIONS) {
     const message: Record<string, unknown> = { id: 1, type };
-    if (type === 'byTag') message['tagKey'] = 'garden-notes';
-    else if (type === 'globalGraph') message['tagKey'] = 'garden-notes';
-    else if (type === 'preview' || type === 'localGraph' || type === 'backlinks' || type === 'outgoing') {
-      message['slug'] = 'note-a';
-    }
+    const lookup = type === 'byTag' || type === 'globalGraph' ? 'tagKey' : 'slug';
+    message[lookup] = lookup === 'tagKey' ? 'garden-notes' : 'note-a';
+
     assert.ok(isSnapshotMessage(message), `${type} was refused`);
+    // Extra fields are ignored by the Worker; the accepted keys cannot carry
+    // executable or location data.
+    assert.deepEqual(
+      Object.keys(message).sort(),
+      ['id', lookup, 'type'].sort(),
+      `${type} grew a field the Worker would have to trust`,
+    );
   }
 });
 
@@ -40,44 +45,40 @@ test('a malformed request is refused before any SQL runs', () => {
     { id: 1.5, type: 'preview', slug: 'note-a' },
     { id: 1, type: 'drop-everything', slug: 'note-a' },
     { id: 1, type: 'preview' },
+    { id: 1, type: 'localGraph', slug: '' },
     { id: 1, type: 'preview', slug: '../../etc/passwd' },
+    // SQL-ish or non-canonical text is refused by the lookup grammar rather
+    // than by a denylist, so no interpolation is possible by construction.
+    { id: 1, type: 'preview', slug: "note-a' OR 1=1 --" },
+    { id: 1, type: 'preview', slug: 'Note-A' },
+    { id: 1, type: 'preview', slug: 'a'.repeat(129) },
     { id: 1, type: 'byTag' },
     { id: 1, type: 'byTag', tagKey: 'a/b' },
+    { id: 1, type: 'byTag', tagKey: 'tag\u0000name' },
+    { id: 1, type: 'byTag', tagKey: 'a'.repeat(129) },
     { id: 1, type: 'byTag', tagKey: 'garden-notes', cursor: 'not a slug' },
     { id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: '10' },
     { id: 1, type: 'backlinks', slug: 'note-a', cursor: 'not a slug' },
+    { id: 1, type: 'backlinks', slug: 'note-a', cursor: 'a'.repeat(129) },
     { id: 1, type: 'backlinks', slug: 'note-a', pageSize: '10' },
     { id: 1, type: 'globalGraph', tagKey: '' },
+    { id: 1, type: 'globalGraph', tagKey: 'a/b' },
   ];
   for (const value of rejected) assert.equal(isSnapshotMessage(value), false, `accepted ${JSON.stringify(value)}`);
 });
 
-test('no accepted message shape names SQL, a URL, or a path', () => {
-  for (const type of SNAPSHOT_OPERATIONS) {
-    const message: Record<string, unknown> = { id: 1, type };
-    if (type === 'byTag' || type === 'globalGraph') message['tagKey'] = 'garden-notes';
-    else message['slug'] = 'note-a';
-    assert.ok(isSnapshotMessage(message));
-    // Extra fields are ignored by the Worker; the accepted keys cannot carry
-    // executable or location data.
-    const keys = Object.keys(message).sort();
-    assert.deepEqual(
-      keys,
-      type === 'globalGraph' ? ['id', 'tagKey', 'type'] : type === 'byTag' ? ['id', 'tagKey', 'type'] : ['id', 'slug', 'type'],
-      `${type} grew a field the Worker would have to trust`,
-    );
-  }
-});
+test('page size is clamped to the accepted range for every paginated operation', () => {
+  const request = (type: 'backlinks' | 'byTag', pageSize?: number) =>
+    type === 'byTag'
+      ? { id: 1, type, tagKey: 'garden-notes', ...(pageSize === undefined ? {} : { pageSize }) }
+      : { id: 1, type, slug: 'a', ...(pageSize === undefined ? {} : { pageSize }) };
 
-test('page size is clamped to the accepted range', () => {
-  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a' }), DEFAULT_PAGE_SIZE);
-  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 10 }), 10);
-  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 10_000 }), MAX_PAGE_SIZE);
-  assert.equal(requestPageSize({ id: 1, type: 'backlinks', slug: 'a', pageSize: 0 }), DEFAULT_PAGE_SIZE);
-  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes' }), DEFAULT_PAGE_SIZE);
-  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: 10 }), 10);
-  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: 10_000 }), MAX_PAGE_SIZE);
-  assert.equal(requestPageSize({ id: 1, type: 'byTag', tagKey: 'garden-notes', pageSize: 0 }), DEFAULT_PAGE_SIZE);
+  for (const type of ['backlinks', 'byTag'] as const) {
+    assert.equal(requestPageSize(request(type)), DEFAULT_PAGE_SIZE);
+    assert.equal(requestPageSize(request(type, 10)), 10);
+    assert.equal(requestPageSize(request(type, 10_000)), MAX_PAGE_SIZE);
+    assert.equal(requestPageSize(request(type, 0)), DEFAULT_PAGE_SIZE);
+  }
 });
 
 test('a reply is narrowed to the result type the caller asked for', () => {
@@ -85,6 +86,9 @@ test('a reply is narrowed to the result type the caller asked for', () => {
     id: 1,
     ok: true,
     result: { type: 'preview', preview: { slug: 'a', title: 'A', excerpt: '', language: 'en', aliases: [] } },
+    // The success branch carries the Worker's own measured SQL span beside the
+    // result; narrowing must not depend on it.
+    operationMs: 0.5,
   };
   assert.ok(isResultOf(reply, 'preview'));
   assert.equal(isResultOf(reply, 'backlinks'), false);

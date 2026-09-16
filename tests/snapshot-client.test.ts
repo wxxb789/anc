@@ -15,8 +15,8 @@
  *
  * The client reads `window.__snapshotMeasurement` on its success path before it
  * resolves, so the tests install a minimal `window` stub after the dynamic
- * import; the import itself still runs under the module's `typeof window` Node
- * guard.
+ * import; the measurement-event test also stubs `document.dispatchEvent`. The
+ * import itself still runs under the module's `typeof window` Node guard.
  */
 
 import assert from 'node:assert/strict';
@@ -87,6 +87,7 @@ async function loadClient(): Promise<SnapshotClient> {
   FakeWorker.constructionFails = false;
   delete (globalThis as Record<string, unknown>).window;
   (globalThis as Record<string, unknown>).Worker = FakeWorker;
+  windowStub.__snapshotMeasurement = false;
   const client = await import('../src/scripts/snapshot-client.ts');
   // Installed after the import so the module still evaluates under its
   // `typeof window` Node guard; only the reply path needs the global.
@@ -98,6 +99,7 @@ afterEach(() => {
   vi.useRealTimers();
   delete (globalThis as Record<string, unknown>).Worker;
   delete (globalThis as Record<string, unknown>).window;
+  delete (globalThis as Record<string, unknown>).document;
 });
 
 test('two concurrent requests construct one Worker and settle from their own replies', async () => {
@@ -120,11 +122,45 @@ test('two concurrent requests construct one Worker and settle from their own rep
     type: 'preview',
     preview: { slug: 'beta', title: 'Beta One', excerpt: 'second', aliases: [], language: 'en' },
   };
-  worker.emit({ id: 1, ok: true, result: firstResult });
-  worker.emit({ id: 2, ok: true, result: secondResult });
+  worker.emit({ id: 1, ok: true, result: firstResult, operationMs: 0.5 });
+  worker.emit({ id: 2, ok: true, result: secondResult, operationMs: 0.5 });
 
   assert.deepEqual(await first, firstResult, 'the first request did not settle from its own reply');
   assert.deepEqual(await second, secondResult, 'the second request did not settle from its own reply');
+});
+
+test('the armed measurement seam carries the result type, elapsed time, and SQL time', async () => {
+  const client = await loadClient();
+  const dispatched: CustomEvent<{ type: string; ms: number; operationMs: number }>[] = [];
+  (globalThis as Record<string, unknown>).document = {
+    dispatchEvent: (event: Event): boolean => {
+      dispatched.push(event as CustomEvent<{ type: string; ms: number; operationMs: number }>);
+      return true;
+    },
+  };
+
+  // Unarmed, the seam stays silent: an ordinary reader dispatches nothing.
+  const unarmed = client.request({ id: 1, type: 'preview', slug: 'alpha' });
+  const worker = FakeWorker.instances[0]!;
+  worker.emit({ id: 1, ok: true, result: { type: 'preview', preview: null }, operationMs: 0.5 });
+  await unarmed;
+  assert.equal(dispatched.length, 0, 'the measurement event fired without the explicit arming flag');
+
+  // Armed, one event carries the reply's own type and the Worker's measured
+  // SQL span beside the client's dispatch-to-result span. Goal 0005 requires
+  // the two recorded separately for goal 0008.
+  windowStub.__snapshotMeasurement = true;
+  const armed = client.request({ id: 2, type: 'localGraph', slug: 'alpha' });
+  worker.emit({ id: 2, ok: true, result: { type: 'localGraph', graph: null }, operationMs: 1.75 });
+  assert.equal((await armed).type, 'localGraph', 'the emitted reply did not settle the armed request');
+  assert.equal(dispatched.length, 1, 'the armed measurement event did not fire exactly once');
+  const detail = dispatched[0]!.detail;
+  assert.equal(detail.type, 'localGraph', 'the event named a different operation than the reply');
+  assert.ok(
+    Number.isFinite(detail.ms) && detail.ms >= 0,
+    `the dispatch-to-result span was not a finite non-negative number: ${detail.ms}`,
+  );
+  assert.equal(detail.operationMs, 1.75, 'the Worker SQL span did not reach the event unchanged');
 });
 
 test('the pending bound rejects past its finite limit instead of queueing', async () => {
@@ -155,38 +191,7 @@ test('the pending bound rejects past its finite limit instead of queueing', asyn
   );
 });
 
-test('the startup deadline terminates the Worker and a later request reinitializes', async () => {
-  vi.useFakeTimers();
-  const client = await loadClient();
-  const first = client.request({ id: 1, type: 'preview', slug: 'alpha' });
-  const worker = FakeWorker.instances[0]!;
-  const rejected = assert.rejects(first, (error: { code?: string }) => error.code === 'timeout');
-  await vi.advanceTimersByTimeAsync(WORKER_LIMITS.startupDeadlineMs + 1);
-  await rejected;
-  assert.equal(worker.terminations, 1, 'the startup deadline did not terminate the unresponsive Worker');
-
-  // No poisoned initialization promise: the next intent builds a new Worker and
-  // can resolve rather than inheriting the failed one's rejection.
-  const second = client.request({ id: 2, type: 'preview', slug: 'alpha' });
-  assert.equal(FakeWorker.instances.length, 2, 'the next intent reused the timed-out Worker');
-  const replacement = FakeWorker.instances[1]!;
-  const secondResult: SnapshotResult = { type: 'preview', preview: null };
-  replacement.emit({ id: 2, ok: true, result: secondResult });
-  assert.deepEqual(await second, secondResult, 'the reinitialized request did not settle');
-
-  // Once initialized, the shorter request deadline governs, not the startup one.
-  const third = client.request({ id: 3, type: 'preview', slug: 'beta' });
-  const thirdRejected = assert.rejects(third, (error: { code?: string }) => error.code === 'timeout');
-  await vi.advanceTimersByTimeAsync(WORKER_LIMITS.requestDeadlineMs + 1);
-  await thirdRejected;
-  assert.equal(
-    replacement.terminations,
-    1,
-    'an initialized request did not use requestDeadlineMs, or its timeout did not terminate the Worker',
-  );
-});
-
-test('a late reply from a torn-down Worker is discarded', async () => {
+test('a deadline tears down the Worker, a late reply is discarded, and the next intent rebuilds', async () => {
   vi.useFakeTimers();
   const client = await loadClient();
   let settlements = 0;
@@ -203,72 +208,72 @@ test('a late reply from a torn-down Worker is discarded', async () => {
   const rejected = assert.rejects(first, (error: { code?: string }) => error.code === 'timeout');
   await vi.advanceTimersByTimeAsync(WORKER_LIMITS.startupDeadlineMs + 1);
   await rejected;
+  assert.equal(worker.terminations, 1, 'the startup deadline did not terminate the unresponsive Worker');
   assert.equal(settlements, 1, 'the timeout did not settle the original request exactly once');
 
-  // The reply the terminated Worker owed arrives after teardown. It must be
-  // dropped: the pending entry is gone with the Worker.
+  // The reply the terminated Worker owed arrives after teardown. The pending
+  // entry is gone with the Worker, so it must be dropped.
   worker.emit({
     id: 1,
     ok: true,
     result: { type: 'preview', preview: { slug: 'alpha', title: 'Late', excerpt: '', aliases: [], language: 'en' } },
+    operationMs: 0.5,
   });
   await Promise.resolve();
   await Promise.resolve();
-  assert.equal(settlements, 1, 'the stale reply settled the original promise a second time');
+  assert.equal(settlements, 1, 'a stale reply settled the original promise a second time');
 
-  // And no state was resurrected: the next request builds a new Worker rather
-  // than attaching to the torn-down one.
+  // No poisoned initialization promise: the next intent builds a new Worker and
+  // can resolve rather than inheriting the failed one's rejection.
   const second = client.request({ id: 2, type: 'preview', slug: 'alpha' });
-  assert.equal(FakeWorker.instances.length, 2, 'the stale reply kept the torn-down Worker alive');
+  assert.equal(FakeWorker.instances.length, 2, 'the next intent reused the timed-out Worker');
   const replacement = FakeWorker.instances[1]!;
   const secondResult: SnapshotResult = { type: 'preview', preview: null };
-  replacement.emit({ id: 2, ok: true, result: secondResult });
-  assert.deepEqual(await second, secondResult, 'the request after teardown did not settle from the new Worker');
-});
+  replacement.emit({ id: 2, ok: true, result: secondResult, operationMs: 0.5 });
+  assert.deepEqual(await second, secondResult, 'the reinitialized request did not settle');
 
-test('dispose terminates, fails pending with cancelled, and a later request rebuilds', async () => {
-  const client = await loadClient();
-  const pending = client.request({ id: 1, type: 'preview', slug: 'alpha' });
-  const worker = FakeWorker.instances[0]!;
-
-  client.dispose();
-  await assert.rejects(
-    pending,
-    (error: { code?: string }) => error.code === 'cancelled',
-    'dispose did not reject the pending request with cancelled',
+  // Once initialized, the shorter request deadline governs, not the startup one.
+  const third = client.request({ id: 3, type: 'preview', slug: 'beta' });
+  const thirdRejected = assert.rejects(third, (error: { code?: string }) => error.code === 'timeout');
+  await vi.advanceTimersByTimeAsync(WORKER_LIMITS.requestDeadlineMs + 1);
+  await thirdRejected;
+  assert.equal(
+    replacement.terminations,
+    1,
+    'an initialized request did not use requestDeadlineMs, or its timeout did not terminate the Worker',
   );
-  assert.equal(worker.terminations, 1, 'dispose did not terminate the Worker');
-
-  const later = client.request({ id: 2, type: 'preview', slug: 'beta' });
-  assert.equal(FakeWorker.instances.length, 2, 'the request after dispose reused the terminated Worker');
-  const replacement = FakeWorker.instances[1]!;
-  const result: SnapshotResult = { type: 'preview', preview: null };
-  replacement.emit({ id: 2, ok: true, result });
-  assert.deepEqual(await later, result, 'the request after dispose did not settle from the new Worker');
 });
 
-test('a Worker crash rejects every pending request and a later intent rebuilds', async () => {
-  const client = await loadClient();
-  const first = client.request({ id: 1, type: 'preview', slug: 'alpha' });
-  const second = client.request({ id: 2, type: 'preview', slug: 'beta' });
-  const crashed = FakeWorker.instances[0]!;
+test('dispose and a Worker crash settle every pending request with their own codes, and the next intent rebuilds', async () => {
+  const scenarios = [
+    { name: 'dispose', code: 'cancelled', trigger: (client: SnapshotClient, _worker: FakeWorker) => client.dispose() },
+    { name: 'a Worker crash', code: 'terminated', trigger: (_client: SnapshotClient, worker: FakeWorker) => worker.emitError() },
+  ] as const;
 
-  // The `error` listener is the crash path the browser gates cannot reach: a
-  // module Worker whose script fails to load fires it with no message ever
-  // sent. Both owed requests must settle rather than hang.
-  const firstRejected = assert.rejects(first, (error: { code?: string }) => error.code === 'terminated');
-  const secondRejected = assert.rejects(second, (error: { code?: string }) => error.code === 'terminated');
-  crashed.emitError();
-  await firstRejected;
-  await secondRejected;
-  assert.equal(crashed.terminations, 1, 'the crash path did not terminate the crashed Worker');
+  for (const scenario of scenarios) {
+    const client = await loadClient();
+    const first = client.request({ id: 1, type: 'preview', slug: 'alpha' });
+    const second = client.request({ id: 2, type: 'preview', slug: 'beta' });
+    const worker = FakeWorker.instances[0]!;
 
-  const later = client.request({ id: 3, type: 'preview', slug: 'alpha' });
-  assert.equal(FakeWorker.instances.length, 2, 'the request after a crash reused the crashed Worker');
-  const replacement = FakeWorker.instances[1]!;
-  const result: SnapshotResult = { type: 'preview', preview: null };
-  replacement.emit({ id: 3, ok: true, result });
-  assert.deepEqual(await later, result, 'the replacement Worker did not settle the later request');
+    // The handlers are attached before the trigger so neither rejection is
+    // reported as unhandled.
+    const firstRejected = assert.rejects(first, (error: { code?: string }) => error.code === scenario.code);
+    const secondRejected = assert.rejects(second, (error: { code?: string }) => error.code === scenario.code);
+    scenario.trigger(client, worker);
+    await firstRejected;
+    await secondRejected;
+    assert.equal(worker.terminations, 1, `${scenario.name}: the dead Worker was not terminated`);
+
+    // The reply the dead Worker owed must be dropped, and no state resurrected:
+    // the next intent builds a new Worker.
+    const later = client.request({ id: 3, type: 'preview', slug: 'alpha' });
+    assert.equal(FakeWorker.instances.length, 2, `${scenario.name}: the next intent reused the dead Worker`);
+    const replacement = FakeWorker.instances[1]!;
+    const result: SnapshotResult = { type: 'preview', preview: null };
+    replacement.emit({ id: 3, ok: true, result, operationMs: 0.5 });
+    assert.deepEqual(await later, result, `${scenario.name}: the replacement Worker did not settle the later request`);
+  }
 });
 
 test('a Worker constructor that throws returns a rejected promise and can be retried', async () => {
@@ -297,6 +302,6 @@ test('a Worker constructor that throws returns a rejected promise and can be ret
   assert.equal(FakeWorker.instances.length, 1, 'the retry after a refused construction did not build a Worker');
   const worker = FakeWorker.instances[0]!;
   const result: SnapshotResult = { type: 'preview', preview: null };
-  worker.emit({ id: 2, ok: true, result });
+  worker.emit({ id: 2, ok: true, result, operationMs: 0.5 });
   assert.deepEqual(await later, result, 'the retry after a refused construction did not settle');
 });

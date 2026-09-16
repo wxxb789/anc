@@ -66,11 +66,15 @@ function ensureWorker(): Worker {
     if (reply.ok) {
       initialized = true;
       // Observability seam for the benchmark harness, armed explicitly by the
-      // measurer: the operation and its dispatch-to-validated-result time. No
-      // corpus data is carried, and an ordinary reader dispatches nothing.
+      // measurer: the operation, its dispatch-to-validated-result time, and the
+      // Worker's own SQL time. Goal 0005 requires the two recorded separately
+      // for goal 0008. No corpus data is carried, and an ordinary reader
+      // dispatches nothing.
       if (typeof window !== 'undefined' && (window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
         document.dispatchEvent(
-          new CustomEvent('snapshot-result', { detail: { type: reply.result.type, ms: elapsed } }),
+          new CustomEvent('snapshot-result', {
+            detail: { type: reply.result.type, ms: elapsed, operationMs: reply.operationMs },
+          }),
         );
       }
       entry.resolve(reply.result);
