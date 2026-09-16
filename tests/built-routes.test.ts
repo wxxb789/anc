@@ -3199,25 +3199,21 @@ test('the site graph route renders the corpus graph with real links', () => {
  * the reader sees a figure and has no way to know it is partial. Checked in
  * both directions, so a complete figure cannot claim to be truncated either.
  *
- * **The truncation half is not exercised by either corpus**, and that is
+ * **The truncation half is not exercised by this gate's corpora**, and that is
  * recorded here rather than hidden: the fixture corpus's busiest note has 10
- * neighbours against a bound of 12, and the published note has none. So no
- * built page renders the truncation sentence, and this gate cannot prove that
- * branch. `boundCounts` — the single place the two numbers are computed, and
- * what the component interpolates — is pinned in `tests/graph.test.ts` against
- * synthetic corpora on both sides of the bound, and below against this corpus.
+ * neighbours against a bound of 12, and the repository's published corpus has
+ * none that reach it. So no page this gate inspects renders the truncation
+ * sentence. That branch — including the component's *use* of the numbers — is
+ * gated by `tests/backlink-scale.test.ts`, which builds a 502-note corpus whose
+ * hub carries 501 backlinks and asserts the rendered omission sentence, and by
+ * `tests/graph-runtime.test.ts`, which reads the literal `12 of 17` off a built
+ * page from its browser corpus. `boundCounts` — the single place the two
+ * numbers are computed, and what the component interpolates — is pinned in
+ * `tests/graph.test.ts` against synthetic corpora on both sides of the bound,
+ * and below against this corpus.
  *
- * **What remains ungated is the component's *use* of it.** Re-inlining the
- * arithmetic in `NoteGraph.astro` would ship green, because no page renders the
- * sentence for a gate to read. Closing that needs one fixture note with more
- * than `LOCAL_NODE_LIMIT` neighbours; the fixture corpus is TK-11's and adding
- * an edge re-baselines every gate that counts notes, so it is left as a stated
- * gap rather than taken here. The exposure is narrow — the numbers come from
- * one exported function that the component destructures — and it is the third
- * thing this one sentence has taught.
- *
- * What is left is the complete case, asserted as a positive: the bound element
- * exists and carries the expansion link. A corpus that grows past
+ * What is left for this gate is the complete case, asserted as a positive: the
+ * bound element exists and carries the expansion link. A corpus that grows past
  * `LOCAL_NODE_LIMIT` starts exercising the other branch here automatically, at
  * which point this note stops being true and the gate gets stronger on its own.
  */

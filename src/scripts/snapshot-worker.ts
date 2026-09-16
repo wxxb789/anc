@@ -286,7 +286,19 @@ async function handle(value: unknown): Promise<void> {
     return;
   }
   try {
-    reply({ id: value.id, ok: true, result: run(await database(), value) });
+    // The measurement goal needs the operation's SQL/Worker time separated from
+    // main-thread dispatch and rendering time, so a successful reply carries the
+    // span around `run()` alone: the shared initialization promise is awaited
+    // first so a cold start's download, hashing, WASM init, import, and schema
+    // validation can never land in a reply's duration. The span still covers the
+    // operation's selection and induced-edge work beside its queries; that is
+    // the worker-side half goal 0005 records for goal 0008, which owns any
+    // finer SQL-only split.
+    const db = await database();
+    const started = performance.now();
+    const result = run(db, value);
+    const operationMs = performance.now() - started;
+    reply({ id: value.id, ok: true, result, operationMs });
   } catch (error) {
     reply({ id: value.id, ok: false, code: codeOf(error) });
   }

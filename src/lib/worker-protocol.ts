@@ -96,7 +96,21 @@ export type SnapshotResult =
   | { type: 'globalGraph'; graph: GraphSelection };
 
 export type SnapshotReply =
-  | { id: number; ok: true; result: SnapshotResult }
+  | {
+      id: number;
+      ok: true;
+      result: SnapshotResult;
+      /**
+       * Milliseconds this named operation spent executing in the Worker,
+       * measured around its `run()` call after initialization is already
+       * settled: its queries plus its selection/induced-edge work, and never a
+       * cold start. Goal 0005 requires SQL/Worker and rendering timing recorded
+       * separately for goal 0008, so a duration crosses the boundary as a
+       * number; the header's no-SQL/no-URL/no-path rule is about text that could
+       * be executed or resolved, and a duration is none.
+       */
+      operationMs: number;
+    }
   | { id: number; ok: false; code: SnapshotErrorCode };
 
 /**

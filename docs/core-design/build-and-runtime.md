@@ -129,7 +129,10 @@ Do not label the filtered result as the whole corpus.
 
 Messages use a discriminated `type`, a request ID, and operation-specific validated
 arguments; replies echo the request ID and carry either a typed result or a small
-error code. Results are structured-clone-safe values. IDs never cross snapshot
+error code, and a successful reply also carries the measured milliseconds the
+named operation spent in the Worker after initialization settled — its queries
+and selection work, never a cold start (a number for the performance goal, not a
+data-model field). Results are structured-clone-safe values. IDs never cross snapshot
 boundaries. Validate slug/key shape, cursor, and bounded page size in the Worker;
 SQL uses bound parameters. No message accepts SQL text, arbitrary URLs, filesystem
 paths, or a table/column name supplied by the UI.

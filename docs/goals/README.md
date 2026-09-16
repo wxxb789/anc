@@ -53,7 +53,18 @@ native snapshot gates for identity, a three-page enumeration, the lookahead-row
 control, NOCASE exactness and the duplicate-membership refusal, and the real
 Chromium gates add the failed-initialization fallback, keyboard operation,
 static parity, withheld-tag absence, and one shared runtime and download for
-previews and tag browsing. Three goals are archived; four remain active.
+previews and tag browsing.
+
+On 2026-09-17, [0005](archive/0005-interactive-graph-exploration.md) was
+completed on branch `feat/0005-graph-exploration-evidence` (commits `1d22934`,
+`610bb5f`, `38c9467`, PR #6): the live drawing is gated against hand-written
+oracles for its exact edge set with direction, table cells, language attributes
+and no-match states, native/Worker selection is one full-identity comparison,
+the required mutation and failure controls were re-run, SQL/Worker and render
+timings are recorded separately for 0008, and CI run `35134417363` is green on
+the last code commit. `pnpm run verify` reported 76 files / 916 passed /
+34 skipped and `pnpm run build:fixture` 76 files / 945 passed / 5 skipped, both
+exit 0. Four goals are archived; three remain active.
 
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
@@ -68,7 +79,6 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 
 | Goal | Single completion judgment | Material prerequisites |
 | --- | --- | --- |
-| [0005 — Interactive graph exploration](0005-interactive-graph-exploration.md) | A reader explores correct bounded local/global/filtered graphs with complete accessible relations | 0002 (completed); shared runtime (0003, completed); tag query from [0004](archive/0004-complete-tag-browsing.md) (completed) |
 | [0006 — Safe release output](0006-safe-release-output.md) | Publication gates reject incomplete, inconsistent or disallowed output without damaging the previous build | 0002 (completed); 0003 (completed) assets for Worker/WASM inventory checks |
 | [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md) | The shipped package and Action work in a foreign notes repository | 0002–0006 |
 | [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md) | Measured packaged behavior meets the mobile target and accepted cold-preview/resource policies | 0007, including its functional prerequisites |
@@ -80,8 +90,9 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 | [0002 — Consistent static relationships](archive/0002-consistent-static-relationships.md) | 2026-09-16 | Implementation commit `24cea57`; the actual no-JS site and one reproducible SQLite snapshot agree on published relationships, with static tag surfaces read from the snapshot's own rows. |
 | [0003 — Reliable lazy previews](archive/0003-reliable-lazy-previews.md) | 2026-09-16 | Implementation commit `948696e`; all six evaluation rows executed as real Chromium gates against generated sites under the served CSP, with the read-only, failure/retry, race, and provisional-limit controls recorded in the file. |
 | [0004 — Complete tag browsing](archive/0004-complete-tag-browsing.md) | 2026-09-16 | Implementation commit `718700e`, review fixes `c119678`/`c401315`, PR #5; the reader's tag chooser and the static tag route enumerate one snapshot's membership across pages, with the lookahead-row control, NOCASE exactness, failed-initialization fallback, keyboard operation, withheld-tag absence, and shared-runtime measurements recorded in the file. |
+| [0005 — Interactive graph exploration](archive/0005-interactive-graph-exploration.md) | 2026-09-17 | Implementation commits `1d22934`, `610bb5f`, `38c9467`, PR #6; the live graph and its accessible representation agree on the bounded induced subgraph over a 65-note browser corpus, complete relations stay reachable beyond the drawing, the required mutation and failure controls were re-run, and SQL/Worker and render timings are recorded separately for 0008 — all in the file. |
 
-Four goals remain `ready` and active. Schema creation, query-module code,
+Three goals remain `ready` and active. Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
 separate judgments, with no circular dependency on final performance budgets.
@@ -99,7 +110,7 @@ integration evidence; they do not create competing schema or test implementation
 | Exact DB URL/digest binding | Build output in 0002; browser validation in 0003; host/package validation in 0007 |
 | Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003 (completed); cross-consumer evidence in 0004 (completed)/0005 |
 | Canonical runtime tag lookup and exhaustive pagination | 0004 (completed) |
-| Local/global/tag-filtered graph, ranking, re-centering, complete relation enumeration | 0005 |
+| Local/global/tag-filtered graph, ranking, re-centering, complete relation enumeration | [0005](archive/0005-interactive-graph-exploration.md) (completed) |
 | Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 |
 | CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006; foreign installation/transport in 0007 |
 | Snapshot caching, stale-page fallback, no substitution of a newer DB | 0007 |
@@ -162,7 +173,9 @@ hosting and post-deployment checks remain separately scoped external actions.
 [0001 — Unified public query model](0001-unified-public-query-model.md) was split
 on 2026-09-14 into 0002–0008 without declaring completion. Its number is retained.
 
-[0002](archive/0002-consistent-static-relationships.md) and
-[0003](archive/0003-reliable-lazy-previews.md) are the numbered goals completed
-and moved into the [archive](archive/README.md) (2026-09-16); no other number
-has been completed.
+[0002](archive/0002-consistent-static-relationships.md),
+[0003](archive/0003-reliable-lazy-previews.md) and
+[0004](archive/0004-complete-tag-browsing.md) were completed and moved into the
+[archive](archive/README.md) on 2026-09-16, and
+[0005](archive/0005-interactive-graph-exploration.md) on 2026-09-17; no other
+number has been completed.

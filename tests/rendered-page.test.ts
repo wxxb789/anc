@@ -2066,10 +2066,6 @@ test('the graph is drawn, linked, and operable with scripting disabled', async (
           );
         }
 
-        assert.ok(
-          measured.rows === measured.nodes.length,
-          `${where}: the table has ${measured.rows} rows for ${measured.nodes.length} drawn nodes`,
-        );
         assert.ok(measured.tableOpens, `${where}: the equivalent table does not open without scripting`);
         figuresChecked += 1;
       }

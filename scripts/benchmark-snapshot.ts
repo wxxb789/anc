@@ -154,6 +154,10 @@ interface Sample {
   coldPreviewMs: number | null;
   warmPreviewMs: number | null;
   localGraphMs: number[];
+  /** The Worker's own operation span for the same actions, from `operationMs`. */
+  localGraphOperationMs: number[];
+  /** The graph client's layout/draw span, from the `graph-render` event. */
+  localGraphRenderMs: number[];
   ordinaryReadingSqliteRequests: number;
 }
 
@@ -172,12 +176,34 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
     if (request.url().includes('/data/site.') || request.url().includes('/wasm/')) sqliteRequests.push(request.url());
   });
   const localMs: number[] = [];
+  const localOperationMs: number[] = [];
+  const localRenderMs: number[] = [];
   await page.addInitScript(() => {
     (window as unknown as { __snapshotMeasurement?: boolean }).__snapshotMeasurement = true;
-    (window as unknown as { __ancLocalGraphMs: number[] }).__ancLocalGraphMs = [];
+    const globals = window as unknown as {
+      __ancLocalGraphMs: number[];
+      __ancLocalGraphOperationMs: number[];
+      __ancLocalGraphRenderMs: number[];
+    };
+    globals.__ancLocalGraphMs = [];
+    globals.__ancLocalGraphOperationMs = [];
+    globals.__ancLocalGraphRenderMs = [];
     document.addEventListener('snapshot-result', (event) => {
-      const detail = (event as CustomEvent<{ type: string; ms: number }>).detail;
-      if (detail.type === 'localGraph') (window as unknown as { __ancLocalGraphMs: number[] }).__ancLocalGraphMs.push(detail.ms);
+      const detail = (event as CustomEvent<{ type: string; ms: number; operationMs: number }>).detail;
+      if (detail.type === 'localGraph') {
+        globals.__ancLocalGraphMs.push(detail.ms);
+        globals.__ancLocalGraphOperationMs.push(detail.operationMs);
+      }
+    });
+    // The graph client's own layout/draw span for the same action; it arrives
+    // after the reply and belongs to another owner's script. This init script
+    // runs before any page script, so the listener exists before the client's
+    // first dispatch. The event's `scope` names which graph action rendered.
+    document.addEventListener('graph-render', (event) => {
+      const detail = (event as CustomEvent<{ scope: string; ms: number }>).detail;
+      // Only the local action is sampled below; a future global draw on the same
+      // page must not silently mix into a field named for the local graph.
+      if (detail.scope === 'local') globals.__ancLocalGraphRenderMs.push(detail.ms);
     });
   });
 
@@ -230,9 +256,25 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
           { timeout: 15_000 },
         );
       }
-      localMs.push(
-        ...(await page.evaluate(() => (window as unknown as { __ancLocalGraphMs: number[] }).__ancLocalGraphMs)),
-      );
+      // The render event follows the reply it renders, so let an in-flight draw
+      // dispatch before reading; the read below takes whatever has arrived
+      // rather than waiting on another owner's dispatch.
+      await page.waitForTimeout(100);
+      const measured = await page.evaluate(() => {
+        const globals = window as unknown as {
+          __ancLocalGraphMs: number[];
+          __ancLocalGraphOperationMs: number[];
+          __ancLocalGraphRenderMs: number[];
+        };
+        return {
+          ms: globals.__ancLocalGraphMs,
+          operationMs: globals.__ancLocalGraphOperationMs,
+          renderMs: globals.__ancLocalGraphRenderMs,
+        };
+      });
+      localMs.push(...measured.ms);
+      localOperationMs.push(...measured.operationMs);
+      localRenderMs.push(...measured.renderMs);
     }
 
     // JS heap after readiness; explicitly not total memory or WASM memory.
@@ -262,6 +304,8 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
       coldPreviewMs,
       warmPreviewMs,
       localGraphMs: localMs,
+      localGraphOperationMs: localOperationMs,
+      localGraphRenderMs: localRenderMs,
       ordinaryReadingSqliteRequests: beforeIntent,
     };
   } finally {
@@ -295,10 +339,14 @@ async function main(): Promise<number> {
         const sample = await measure(corpus, size, topology, options, Number(((Date.now() - buildStarted) / 1000).toFixed(2)));
         samples.push(sample);
         const locals = sample.localGraphMs;
+        const localSqls = sample.localGraphOperationMs;
+        const renders = sample.localGraphRenderMs;
         process.stdout.write(
           `${size}/${topology}: build=${sample.buildSeconds}s db=${sample.dbDecodedBytes}B gzip=${sample.dbGzipBytes}B ` +
             `coldPreview=${sample.coldPreviewMs}ms warmPreview=${sample.warmPreviewMs}ms ` +
-            `localGraph p50=${percentile(locals, 0.5)}ms p95=${percentile(locals, 0.95)}ms n=${locals.length}\n`,
+            `localGraph p50=${percentile(locals, 0.5)}ms p95=${percentile(locals, 0.95)}ms n=${locals.length} ` +
+            `localGraphOp p50=${percentile(localSqls, 0.5)}ms p95=${percentile(localSqls, 0.95)}ms n=${localSqls.length} ` +
+            `graphRender p50=${percentile(renders, 0.5)}ms p95=${percentile(renders, 0.95)}ms n=${renders.length}\n`,
         );
       } finally {
         rmSync(root, { recursive: true, force: true });
