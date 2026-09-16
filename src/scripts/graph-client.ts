@@ -5,9 +5,11 @@
  * Progressive enhancement only. The server-rendered SVG, table, and lists remain
  * the baseline and are never blanked by a failure here; the controls are hidden
  * until this module runs. It imports only leaf modules (`graph-selection`,
- * `graph-layout`, `route-path`, the shared client), never the content artifact
- * or the route model, so graph-free pages do not carry it and the bundle stays
- * small.
+ * `graph-layout`, `route-path`, `translations`, the shared client), never the
+ * content artifact or the route model, so graph-free pages do not carry it and
+ * the bundle stays small. `partLanguage` is the one thing it takes from the
+ * translations contract, and it is a BCP 47 comparison rather than a locale
+ * lookup, so the built bundle still ships no locale table.
  */
 
 import {
@@ -24,6 +26,7 @@ import {
 } from '../lib/graph-layout.ts';
 import type { SelectionNode } from '../lib/graph-selection.ts';
 import { noteSlugFromPath, noteRoute } from '../lib/route-path.ts';
+import { partLanguage } from '../lib/translations.ts';
 import { requestGlobalGraph, requestLocalGraph } from './snapshot-client.ts';
 
 export {};
@@ -55,6 +58,18 @@ function install(region: HTMLElement, controls: HTMLElement): void {
   let center = origin;
   let tag = data['graphInitialTag'] || null;
   let sequence = 0;
+  /**
+   * Whether a live drawing has replaced the static figure and table.
+   *
+   * The client redraws in place, so once that has happened the page's own
+   * baseline cannot come back. An unknown-center reply that arrives before any
+   * drawing is a stale binding whose subject is absent from the snapshot, and
+   * the baseline it leaves in place is still this page's own graph; the same
+   * reply after a drawing blanks that drawing instead. The empty-filter branch
+   * is different — the baseline was never the requested graph — and clears
+   * unconditionally.
+   */
+  let live = false;
 
   controls.hidden = false;
 
@@ -100,13 +115,33 @@ function install(region: HTMLElement, controls: HTMLElement): void {
 
   function render(answer: SelectionAnswer): void {
     if (answer.center === null && scope === 'local') {
+      // A reply with no center is a successful no-match, not a runtime failure:
+      // the failure-preservation contract (`docs/core-design/build-and-runtime.md`,
+      // "Failure, accessibility, and security") keeps the static article,
+      // figure, and table for fetch, integrity, schema, CSP, Worker, and WASM
+      // failures, and none of those happened here. On first load this branch is
+      // a stale binding whose subject is absent from the snapshot — no drawing
+      // has replaced the baseline, and that baseline is still this page's own
+      // graph, so it stays visible while the status says what was not found.
+      // Only a drawing this client already replaced is cleared: it depicts a
+      // center the snapshot does not have, and leaving it would contradict the
+      // status sentence.
       if (status) status.textContent = template('graphUnknownCenter');
+      if (live) clearLiveDrawing();
       return;
     }
     if (scope === 'global' && tag && answer.nodes.length === 0) {
+      // The status states the empty result, so any drawing shown beside it would
+      // contradict it: picture and status would describe different sets. Unlike
+      // the unknown-center branch above, there is no baseline that is still the
+      // requested graph — a first load on `/graph/` is the unfiltered static
+      // figure, not the filter's — so this clears unconditionally. The empty
+      // selection is a successful answer and is depicted as one.
       if (status) status.textContent = template('graphEmptyFilter');
+      clearLiveDrawing();
       return;
     }
+    const drawingStarted = performance.now();
     const graph =
       scope === 'local' && answer.center !== null
         ? layoutLocal({ center: answer.center, drawn: answer.nodes, edges: answer.edges, omitted: answer.omitted })
@@ -114,6 +149,11 @@ function install(region: HTMLElement, controls: HTMLElement): void {
 
     if (canvas) drawFigure(canvas, graph);
     if (tableBody) drawTable(tableBody, graph);
+    // Layout and drawing only: the Worker wait that produced `answer` is not
+    // part of what this render costs the main thread. Goal 0008 consumes the
+    // event below beside the snapshot timing it does not replace.
+    const drawingMs = performance.now() - drawingStarted;
+    live = true;
     // The heading's count span describes the static figure. A live redraw makes
     // it a second, stale total for the same picture, so it goes and the status
     // sentence below is the live home for counts.
@@ -128,6 +168,29 @@ function install(region: HTMLElement, controls: HTMLElement): void {
         tag: tag ?? '',
       });
     }
+    // The render instrument, armed explicitly by the measurer: no corpus data
+    // is carried, and an ordinary reader dispatches nothing. Only the actual
+    // drawing path reaches this line — an unknown center or an empty filter
+    // returns above with a status and no render to time.
+    if ((window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
+      document.dispatchEvent(new CustomEvent('graph-render', { detail: { scope, ms: drawingMs } }));
+    }
+  }
+
+  /**
+   * Blank a live drawing's figure and table.
+   *
+   * The children are replaced rather than the containers hidden: an empty
+   * picture and an empty equivalent table are the depiction of an empty result,
+   * and the static baseline cannot be restored — the client replaced it in
+   * place. Leaving the previous selection on screen would state two different
+   * sets at once, which is the contradiction this removes.
+   */
+  function clearLiveDrawing(): void {
+    const svg = canvas?.querySelector('svg');
+    svg?.querySelector('.graph-edges')?.replaceChildren();
+    svg?.querySelector('.graph-nodes')?.replaceChildren();
+    tableBody?.replaceChildren();
   }
 
   function drawFigure(target: HTMLElement, graph: Graph<SelectionNode>): void {
@@ -173,9 +236,12 @@ function install(region: HTMLElement, controls: HTMLElement): void {
         anchor.setAttribute('class', node.isSubject ? 'graph-node graph-node-subject' : 'graph-node');
         anchor.setAttribute('href', noteRoute(node.entry.slug));
         anchor.setAttribute('aria-label', labelFor(node));
-        if (node.entry.language && node.entry.language.toLowerCase() !== language.toLowerCase()) {
-          anchor.setAttribute('lang', node.entry.language);
-        }
+        // The same `partLanguage` result the static SVG anchor carries, so a
+        // live redraw cannot drop a foreign title's language where the static
+        // figure had it — including an entry declaring no language, which the
+        // helper resolves to the navigation language.
+        const lang = partLanguage(node.entry.language, language);
+        if (lang !== undefined) anchor.setAttribute('lang', lang);
         const circle = document.createElementNS(namespace, 'circle');
         circle.setAttribute('class', 'graph-dot');
         circle.setAttribute('cx', String(node.x));
@@ -210,6 +276,7 @@ function install(region: HTMLElement, controls: HTMLElement): void {
 
   function drawTable(target: HTMLElement, graph: Graph<SelectionNode>): void {
     const joined = drawnNeighbours(graph);
+    const language = document.documentElement.lang || 'en';
 
     target.replaceChildren(
       ...graph.nodes.map((node) => {
@@ -219,6 +286,10 @@ function install(region: HTMLElement, controls: HTMLElement): void {
         const link = document.createElement('a');
         link.href = noteRoute(node.entry.slug);
         link.textContent = node.entry.title;
+        // The static table marks its title link with `partLanguage`; the live
+        // one has to carry the same attribute or a redraw quietly drops it.
+        const titleLang = partLanguage(node.entry.language, language);
+        if (titleLang !== undefined) link.setAttribute('lang', titleLang);
         head.append(link);
         const relation = document.createElement('td');
         relation.textContent = labelForRelation(node);
@@ -239,6 +310,10 @@ function install(region: HTMLElement, controls: HTMLElement): void {
             const anchor = document.createElement('a');
             anchor.href = noteRoute(other.slug);
             anchor.textContent = other.title;
+            // As in the static "linked to" list, each joined note is marked
+            // with its own language.
+            const otherLang = partLanguage(other.language, language);
+            if (otherLang !== undefined) anchor.setAttribute('lang', otherLang);
             item.append(anchor);
             list.append(item);
           }
@@ -250,6 +325,14 @@ function install(region: HTMLElement, controls: HTMLElement): void {
           control.type = 'button';
           control.setAttribute('data-graph-recenter', node.entry.slug);
           control.textContent = template('graphRecenter');
+          // The visible text is the same on every row, so the accessible name
+          // carries the note this control acts on. `{title}` is the token the
+          // build substituted into `graphExplorerRecenterLabel`; the client
+          // fills it per row, which keeps the bundle free of a locale table.
+          // Guarded like `graphFigureName` above: an absent template would
+          // otherwise replace the visible text as the name with an empty one.
+          const recenterLabel = fill(template('graphRecenterLabel'), { title: node.entry.title });
+          if (recenterLabel !== '') control.setAttribute('aria-label', recenterLabel);
           head.append(control);
           control.addEventListener('click', () => {
             center = node.entry.slug;

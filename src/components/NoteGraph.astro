@@ -158,6 +158,10 @@ const exploreData = explore
       ['data-graph-center', explore.centerSlug ?? ''],
       ['data-graph-initial-tag', explore.initialTag ?? ''],
       ['data-graph-recenter', t.graphExplorerRecenter],
+      // The same visible text, but named for the note it re-centers on: a table
+      // holds one of these per row, so twelve identical "Re-center" names say
+      // nothing about which control does what.
+      ['data-graph-recenter-label', t.graphExplorerRecenterLabel('{title}')],
       ['data-graph-status-local', t.graphExplorerStatusLocal],
       ['data-graph-status-global', t.graphExplorerStatusGlobal],
       ['data-graph-status-filtered', t.graphExplorerStatusFiltered],

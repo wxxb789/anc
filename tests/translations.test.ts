@@ -63,6 +63,7 @@ const TEXT_KEYS = [
   'feedTitle',
   'socialCardAlt',
   'footnoteBackLabel',
+  'graphExplorerRecenterLabel',
 ] as const;
 const THEME_KEYS = ['themeLabel'] as const;
 /**
