@@ -13,7 +13,7 @@ The shipped GitHub Action produces the same kind of qualified artifact.
 ## Material bounds and prerequisites
 
 Requires the functional outcomes [0002](archive/0002-consistent-static-relationships.md),
-[0003](0003-reliable-lazy-previews.md),
+[0003](archive/0003-reliable-lazy-previews.md),
 [0004](0004-complete-tag-browsing.md),
 [0005](0005-interactive-graph-exploration.md), and the release protection in
 [0006](0006-safe-release-output.md). Packaging must not declare those features

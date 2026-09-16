@@ -174,7 +174,7 @@ fixed in `ba24f30`, and the review's testing gap is closed by the link gate in
   `tests/fixtures/` for relative links and images that resolve to an existing
   path, with a detector control that proves each supported and skipped shape.
   The gate was falsified against this finding: restoring the stale
-  `0003-reliable-lazy-previews.md:18` link turns it red with that exact
+  `archive/0003-reliable-lazy-previews.md:19` link turns it red with that exact
   file:line and passes once the link is repointed.
 
 `pnpm run verify` on `ba24f30` — 64 test files, **856 passed / 34 skipped**,

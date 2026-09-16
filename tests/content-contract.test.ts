@@ -8,7 +8,6 @@ import {
   RESERVED_SLUGS,
   SCHEMA_VERSION,
   ContentValidationError,
-  aliasConflictsFor,
   validateArtifact,
   type ContentArtifact,
 } from '../src/lib/schema.ts';
@@ -35,7 +34,15 @@ function rejection(name: string): ContentValidationError {
   return expectRejection(() => validateArtifact(load(new URL(`${name}.json`, INVALID)), name));
 }
 
-test('one alias can report both an owner and a slug collision', () => {
+test('aliases are metadata, not globally unique names', () => {
+  // A rule this contract used to carry, removed with its producer check and
+  // recorded positively here. `docs/core-design/content-semantics.md` owns the
+  // rule: aliases are "not alternate resolver targets, routes, globally unique
+  // names, or graph nodes", and "the same alias may belong to different notes".
+  // The two entries below share an alias, and the first uses the second's slug
+  // as an alias; both remain metadata, so the artifact validates. The
+  // `alias-collides-with-other-entry` invalid fixture and its rejection row
+  // were deleted with the check.
   const entry = (slug: string, aliases?: string[]) => ({
     slug,
     title: slug,
@@ -45,15 +52,12 @@ test('one alias can report both an owner and a slug collision', () => {
     backlinks: [],
     ...(aliases === undefined ? {} : { aliases }),
   });
-  assert.deepEqual(aliasConflictsFor([
-    entry('first', ['shared']),
-    entry('shared'),
-    entry('third', ['shared']),
-  ]), [
-    { alias: 'shared', claimant: 'first', kind: 'slug', other: 'shared' },
-    { alias: 'shared', claimant: 'third', kind: 'alias', other: 'first' },
-    { alias: 'shared', claimant: 'third', kind: 'slug', other: 'shared' },
-  ]);
+  const artifact = validateArtifact({
+    version: 1,
+    entries: [entry('first', ['shared', 'second']), entry('second', ['shared'])],
+  });
+  assert.deepEqual(artifact.entries[0]!.aliases, ['shared', 'second']);
+  assert.deepEqual(artifact.entries[1]!.aliases, ['shared']);
 });
 
 test('minimal artifact passes the contract', () => {
@@ -143,7 +147,6 @@ const REJECTED: ReadonlyArray<readonly [string, RegExp]> = [
   ['outgoing-duplicate', /\.outgoing: must not contain duplicates/],
   ['backlinks-unsorted', /\.backlinks: must be sorted in ascending order/],
   ['backlinks-duplicate', /\.backlinks: must not contain duplicates/],
-  ['alias-collides-with-other-entry', /alias "Shared Alias" is claimed by both/],
   ['privacy-msw-marker', /forbidden private "msw\/" path marker/],
   ['privacy-absolute-local-path', /forbidden absolute local path/],
   ['privacy-file-url', /forbidden file:\/\/ URL/],

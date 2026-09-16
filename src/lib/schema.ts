@@ -548,33 +548,6 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
   return issues.length === before ? (value as unknown as ContentEntry) : undefined;
 }
 
-export interface AliasConflict {
-  alias: string;
-  claimant: string;
-  kind: 'alias' | 'slug';
-  other: string;
-}
-
-export function aliasConflictsFor(entries: readonly ContentEntry[]): AliasConflict[] {
-  const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
-  const aliasOwner = new Map<string, string>();
-  const conflicts: AliasConflict[] = [];
-  for (const entry of entries) {
-    for (const alias of entry.aliases ?? []) {
-      const owner = aliasOwner.get(alias);
-      if (owner !== undefined && owner !== entry.slug) {
-        conflicts.push({ alias, claimant: entry.slug, kind: 'alias', other: owner });
-      }
-      const slugOwner = bySlug.get(alias);
-      if (slugOwner !== undefined && slugOwner !== entry) {
-        conflicts.push({ alias, claimant: entry.slug, kind: 'slug', other: slugOwner.slug });
-      }
-      aliasOwner.set(alias, entry.slug);
-    }
-  }
-  return conflicts;
-}
-
 function checkCorpus(entries: readonly ContentEntry[], issues: string[], edges: boolean): void {
   const bySlug = new Map<string, ContentEntry>();
   for (const entry of entries) {
@@ -582,18 +555,12 @@ function checkCorpus(entries: readonly ContentEntry[], issues: string[], edges: 
     else bySlug.set(entry.slug, entry);
   }
 
-  for (const conflict of aliasConflictsFor(entries)) {
-    if (conflict.kind === 'alias') {
-      issues.push(
-        `entries: alias "${conflict.alias}" is claimed by both "${conflict.other}" and ` +
-          `"${conflict.claimant}"`,
-      );
-    } else {
-      issues.push(
-        `entries: alias "${conflict.alias}" on "${conflict.claimant}" collides with another entry's slug`,
-      );
-    }
-  }
+  // No alias is checked across entries. `docs/core-design/content-semantics.md`
+  // owns the rule: aliases are "not alternate resolver targets, routes, globally
+  // unique names, or graph nodes", and "the same alias may belong to different
+  // notes" — so a repeated alias, or an alias that equals another note's slug,
+  // is metadata, not a conflict. The schema still enforces per-note uniqueness
+  // in the SQLite projection's `(node_id, alias)` key.
 
   if (!edges) return;
 

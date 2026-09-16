@@ -641,7 +641,7 @@
       "slug": "alias-heavy",
       "title": "A Note Under Several Names",
       "excerpt": "Four public aliases, none of which is a route or a link target. They make the note findable and visible under older names without creating duplicate pages.",
-      "markdown": "# A Note Under Several Names\n\nAn alias is public display and search metadata, not a second address or a link target.\n\n## What an alias does\n\nIt lets a reader find this note under an older name and appears in previews. It does not\npublish a second page or change wikilink resolution, which follows Obsidian desktop.\n\n## What the contract enforces\n\nNo two notes may claim the same alias, and no alias may collide with another\nnote's slug. Both are corpus-level checks whose source details stay in the private report.\n\nRelated: [the content contract](/content-contract/).\n",
+      "markdown": "# A Note Under Several Names\n\nAn alias is public display and search metadata, not a second address or a link target.\n\n## What an alias does\n\nIt lets a reader find this note under an older name and appears in previews. It does not\npublish a second page or change wikilink resolution, which follows Obsidian desktop.\n\n## What the contract enforces\n\nThe same alias may appear on more than one note, and an alias may equal another\nnote's slug. An alias is never a route and resolves no link; only slugs are addresses.\n\nRelated: [the content contract](/content-contract/).\n",
       "outgoing": [
         "content-contract"
       ],

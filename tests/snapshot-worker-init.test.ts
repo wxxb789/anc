@@ -48,6 +48,8 @@ interface FailureModes {
   deserialize?: number;
   /** `PRAGMA query_only`'s value; `1` is the accepted state. */
   queryOnly?: number;
+  /** `PRAGMA page_count`'s value; one 512-byte page by default. */
+  pageCount?: number;
   schema?: 'fail' | 'ok';
   closeThrows?: boolean;
 }
@@ -150,7 +152,11 @@ function fakeSqlite(failure: FailureModes = {}) {
       if (failure.schema === 'fail') throw new Error('schema probe failed');
       return contractRows(sql);
     }
-    selectValue(): unknown {
+    selectValue(sql: string): unknown {
+      // `importSnapshot` reads the page count as well as `query_only`; the
+      // fake's BYTES carries a 512-byte header page, so one page is the
+      // accepted accounting.
+      if (sql === 'PRAGMA page_count') return failure.pageCount ?? 1;
       return failure.queryOnly ?? 1;
     }
     close(): void {
@@ -183,7 +189,14 @@ function fakeSqlite(failure: FailureModes = {}) {
   };
 }
 
-const BYTES = new Uint8Array(8);
+/**
+ * One SQLite header page's worth of bytes: 512 bytes with the header's
+ * big-endian page-size field set to 512 (offset 16 becomes `0x02 0x00`). The
+ * import's truncation check reads that field, so an all-zero buffer would be a
+ * header the product correctly refuses.
+ */
+const BYTES = new Uint8Array(512);
+BYTES[16] = 0x02;
 
 test('a deserialize failure closes the handle', () => {
   const fake = fakeSqlite({ deserialize: 1 });
@@ -236,4 +249,33 @@ test('a successful retry after a failed import holds exactly one handle', () => 
 
   database.close();
   assert.equal(fake.liveCount, 0, 'the successful import could not be closed');
+});
+
+/**
+ * One 65536-byte page: the header's page-size field holds the format's sentinel
+ * `1` at offset 16, big-endian, which means 64 KiB rather than one byte.
+ */
+const BIG_PAGE = new Uint8Array(65536);
+BIG_PAGE[16] = 0x00;
+BIG_PAGE[17] = 0x01;
+
+test('the page-size header sentinel 1 reads as 65536 bytes', () => {
+  const fake = fakeSqlite({ pageCount: 1 });
+
+  const database = importSnapshot(fake.sqlite3, BIG_PAGE);
+
+  assert.equal(fake.liveCount, 1, 'the import refused a valid 65536-byte page');
+  database.close();
+  assert.equal(fake.liveCount, 0, 'the valid import could not be closed');
+});
+
+test('a page count that disagrees with the byte length fails as format', () => {
+  // `BYTES` is one 512-byte page; a driver reporting two of them is the padded
+  // direction of the same boundary the truncation cases cover with real bytes.
+  const fake = fakeSqlite({ pageCount: 2 });
+
+  assert.throws(() => importSnapshot(fake.sqlite3, BYTES), { code: 'format' });
+
+  assert.equal(fake.openCount, 1, 'the import never opened a database');
+  assert.equal(fake.liveCount, 0, 'the mismatched import left its handle open');
 });

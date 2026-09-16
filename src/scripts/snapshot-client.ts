@@ -3,9 +3,9 @@
  *
  * Ordinary reading must download zero SQLite assets, so this module creates the
  * Worker only on first explicit intent and shares one instance for previews,
- * tag browsing, and graph exploration. It owns request ids, deadlines, the
- * pending bound, and generation invalidation: a reply from a torn-down Worker or
- * an older snapshot is discarded rather than attached to the current UI.
+ * tag browsing, and graph exploration. It owns request ids, deadlines, and the
+ * pending bound: a reply from a torn-down Worker is discarded rather than
+ * attached to the current UI.
  */
 
 import {
@@ -20,7 +20,6 @@ type Pending = {
   resolve: (result: SnapshotResult) => void;
   reject: (error: SnapshotClientError) => void;
   timer: ReturnType<typeof setTimeout>;
-  generation: number;
   /** `performance.now()` when the request was dispatched, for measurement. */
   started: number;
 };
@@ -35,7 +34,6 @@ export class SnapshotClientError extends Error {
 }
 
 let worker: Worker | undefined;
-let generation = 0;
 let nextId = 1;
 let initialized = false;
 const pending = new Map<number, Pending>();
@@ -52,7 +50,6 @@ function reset(code: SnapshotErrorCode): void {
   worker?.terminate();
   worker = undefined;
   initialized = false;
-  generation += 1;
   failAll(code);
 }
 
@@ -63,7 +60,6 @@ function ensureWorker(): Worker {
     const reply = event.data as SnapshotReply;
     const entry = pending.get(reply.id);
     if (entry === undefined) return;
-    if (entry.generation !== generation) return;
     const elapsed = performance.now() - entry.started;
     pending.delete(reply.id);
     clearTimeout(entry.timer);
@@ -72,7 +68,7 @@ function ensureWorker(): Worker {
       // Observability seam for the benchmark harness, armed explicitly by the
       // measurer: the operation and its dispatch-to-validated-result time. No
       // corpus data is carried, and an ordinary reader dispatches nothing.
-      if ((window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
+      if (typeof window !== 'undefined' && (window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
         document.dispatchEvent(
           new CustomEvent('snapshot-result', { detail: { type: reply.result.type, ms: elapsed } }),
         );
@@ -90,6 +86,24 @@ function ensureWorker(): Worker {
 }
 
 /**
+ * Release the Worker and settle what it owed.
+ *
+ * A document's snapshot cannot change in place — its binding is compiled into
+ * the page — so the lifecycle contract's "snapshot change" case arrives as a
+ * new document with a new binding, and teardown is the only in-place
+ * transition. Registering it on `pagehide` releases the Worker (and its
+ * deserialized database) with the document, without an idle timer that would
+ * make a later preview cold.
+ */
+export function dispose(): void {
+  reset('cancelled');
+}
+
+// `typeof window` keeps this module loadable in Node for the client gate; a
+// browser is the only environment where the listener has anything to release.
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => dispose());
+
+/**
  * Send one named operation.
  *
  * @throws {SnapshotClientError} with a small code on failure, a bounded reject
@@ -101,7 +115,15 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
   if (pending.size >= WORKER_LIMITS.maxPendingRequests) {
     return Promise.reject(new SnapshotClientError('busy'));
   }
-  const instance = ensureWorker();
+  let instance: Worker;
+  try {
+    instance = ensureWorker();
+  } catch {
+    // A Worker the document may not construct (CSP refusal, unsupported engine)
+    // rejects this request instead of throwing past an awaiting caller; the
+    // client's init state stays clean, so the next intent tries again.
+    return Promise.reject(new SnapshotClientError('terminated'));
+  }
   const deadline = initialized ? WORKER_LIMITS.requestDeadlineMs : WORKER_LIMITS.startupDeadlineMs;
   return new Promise<SnapshotResult>((resolve, reject) => {
     const id = message.id;
@@ -110,7 +132,7 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
       // Worker, so the only bounded stop is terminating it.
       reset('timeout');
     }, deadline);
-    pending.set(id, { resolve, reject, timer, generation, started: performance.now() });
+    pending.set(id, { resolve, reject, timer, started: performance.now() });
     instance.postMessage(message);
   });
 }

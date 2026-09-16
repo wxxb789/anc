@@ -84,7 +84,6 @@ import { parse as parseYaml } from 'yaml';
 import {
   FIELD_LIMITS,
   RESERVED_SLUGS,
-  aliasConflictsFor,
   contentLimitIssues,
   contentPrivacyIssues,
   isLanguageTag,
@@ -1158,26 +1157,11 @@ export async function discover(
     );
   }
 
-  // Aliases are public search/display metadata, not link targets, but the
-  // version-1 contract still promises one owner for each alias and no collision
-  // with another note's slug. Check here so the private report names both source
-  // paths instead of the schema error putting public labels on a workflow stream.
-  const aliasConflicts = aliasConflictsFor(entries);
-  if (aliasConflicts.length > 0) {
-    throw new BuildFailure(
-      'alias-collision',
-      `${aliasConflicts.length} published alias ${aliasConflicts.length === 1 ? 'claim conflicts' : 'claims conflict'}`,
-      aliasConflicts
-        .map((conflict) => {
-          const claimant = pathBySlug.get(conflict.claimant);
-          const other = pathBySlug.get(conflict.other);
-          return conflict.kind === 'alias'
-            ? `${claimant}: alias ${JSON.stringify(conflict.alias)} is also claimed by ${other}`
-            : `${claimant}: alias ${JSON.stringify(conflict.alias)} collides with the slug from ${other}`;
-        })
-        .join('\n'),
-    );
-  }
+  // No alias check runs here. `docs/core-design/content-semantics.md` owns the
+  // rule: aliases are display/search/preview metadata and "not alternate
+  // resolver targets, routes, globally unique names, or graph nodes", so two
+  // notes may carry the same alias and an alias may equal another note's slug.
+  // The accepted YAML order still round-trips per note.
 
   return {
     entries,
