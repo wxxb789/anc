@@ -12,7 +12,7 @@ relationships remain reachable when the drawing omits nodes.
 ## Material bounds and prerequisites
 
 Requires [0002](archive/0002-consistent-static-relationships.md), the shared runtime in
-[0003](0003-reliable-lazy-previews.md), and the tag identity/query outcome of
+[0003](archive/0003-reliable-lazy-previews.md), and the tag identity/query outcome of
 [0004](0004-complete-tag-browsing.md) for filtered exploration. Follow the
 [graph selection contract](../core-design/content-semantics.md) and
 [named graph/list operations](../core-design/build-and-runtime.md).

@@ -16,7 +16,7 @@ query returns the right result or that a preview looks correct.
 
 Requires the real snapshot/static output of
 [0002](archive/0002-consistent-static-relationships.md) and the actual browser assets from
-[0003](0003-reliable-lazy-previews.md) for JS/WASM inventory acceptance. Follow the
+[0003](archive/0003-reliable-lazy-previews.md) for JS/WASM inventory acceptance. Follow the
 [publication semantics](../core-design/content-semantics.md),
 [staging and preview-recognition contract](../core-design/build-and-runtime.md),
 and [verification contract](../core-design/verification-and-evolution.md).

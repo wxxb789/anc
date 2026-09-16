@@ -1,7 +1,7 @@
 /**
  * Failure and retry evidence for the lazy snapshot preview.
  *
- * Goal 0003's "Failure and retry" row (`docs/goals/0003-reliable-lazy-previews.md`)
+ * Goal 0003's "Failure and retry" row (`docs/goals/archive/0003-reliable-lazy-previews.md`)
  * requires each failure path to be blocked *separately* — DB fetch, WASM, Worker
  * startup — and a deadline to be forced, with the static article staying usable
  * and a later explicit intent succeeding. `tests/snapshot-runtime.test.ts`
