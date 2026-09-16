@@ -20,12 +20,11 @@ import { tagFacets } from '../src/lib/routes.ts';
 import { NAV_LANGUAGE } from '../src/lib/translations.ts';
 import {
   SNAPSHOT_APPLICATION_ID,
-  SNAPSHOT_SCHEMA_SQL,
   SNAPSHOT_USER_VERSION,
   readSnapshotBinding,
   snapshotRoute,
 } from '../src/lib/snapshot.ts';
-import { pageOf, SNAPSHOT_QUERIES } from '../src/lib/snapshot-queries.ts';
+import { SNAPSHOT_QUERIES } from '../src/lib/snapshot-queries.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
 import { assertSnapshotContract, writeSnapshot } from '../scripts/write-snapshot.ts';
 
@@ -234,13 +233,6 @@ test('a dangling or self edge is rejected rather than silently dropped', () => {
   }
 });
 
-test('cursor pagination uses the last returned slug and never the lookahead row', () => {
-  const rows = [{ slug: 'a' }, { slug: 'b' }, { slug: 'c' }];
-  assert.deepEqual(pageOf(rows, 2), { items: [{ slug: 'a' }, { slug: 'b' }], nextCursor: 'b' });
-  assert.deepEqual(pageOf(rows, 3), { items: rows, nextCursor: null });
-  assert.deepEqual(pageOf([], 2), { items: [], nextCursor: null });
-});
-
 test('representative queries use their declared access structures', () => {
   withSnapshot((path) => {
     const database = new DatabaseSync(path, { readOnly: true });
@@ -307,12 +299,12 @@ test('representative queries use their declared access structures', () => {
         /SEARCH nt USING PRIMARY KEY \(tag_id=\? AND node_id=\?\)/,
         `tag degrees do not test the far endpoint's membership by primary key: ${tagDegrees}`,
       );
-      // The distinct-neighbour semantics are gated by the returned rows in
-      // `degrees count a reciprocal pair once` below, not by plan text: the
-      // planner's representation of `COUNT(DISTINCT ...)` differs across the
-      // SQLite versions Node ships (22 emits `USE TEMP B-TREE FOR
-      // count(DISTINCT)`; 24 dedupes through a `MERGE (UNION)` co-routine and
-      // emits no such row).
+      // The distinct-neighbour semantics are gated by returned rows in
+      // `tests/graph-selection.test.ts` (the reciprocal-pair ranking and the
+      // per-tag parity walk), not by plan text: the planner's representation of
+      // `COUNT(DISTINCT ...)` differs across the SQLite versions Node ships (22
+      // emits `USE TEMP B-TREE FOR count(DISTINCT)`; 24 dedupes through a
+      // `MERGE (UNION)` co-routine and emits no such row).
       assert.doesNotMatch(
         tagDegrees,
         /SCAN (?:e|edges)\b/,
@@ -368,52 +360,4 @@ test('representative queries use their declared access structures', () => {
       database.close();
     }
   });
-});
-
-test('degrees count a reciprocal pair once and stay scoped to their graph', () => {
-  // The plan for a `COUNT(DISTINCT ...)` aggregate differs across the SQLite
-  // versions Node ships, so these gates pin the returned values instead: a
-  // reciprocal pair is one neighbour, and the tag-scoped degree counts only
-  // neighbours that are members too (node c links to a but does not carry the
-  // tag, so it contributes to the global degree and not to the tag's).
-  // `COUNT(DISTINCT ...)` and `COUNT(...)` are equivalent here because the
-  // UNION deduplicates each pair before the aggregate; dropping that dedup
-  // (UNION ALL) doubles each reciprocal degree and reds the length checks.
-  const database = new DatabaseSync(':memory:');
-  try {
-    database.exec(SNAPSHOT_SCHEMA_SQL);
-    database.exec(`
-      INSERT INTO nodes (id, slug, title, excerpt, language) VALUES
-        (1, 'a', 'A', '', 'en'),
-        (2, 'b', 'B', '', 'en'),
-        (3, 'c', 'C', '', 'en');
-      INSERT INTO edges (source_id, target_id) VALUES (1, 2), (2, 1), (1, 3);
-      INSERT INTO tags (id, key, label) VALUES (1, 't', 'T');
-      INSERT INTO node_tags (tag_id, node_id) VALUES (1, 1), (1, 2);
-    `);
-    const degrees = (sql: string, params: readonly unknown[] = []): [number, number][] =>
-      (database.prepare(sql).all(...(params as never[])) as unknown as { id: number; degree: number }[])
-        .map((row): [number, number] => [Number(row.id), Number(row.degree)])
-        .sort((left, right) => left[0] - right[0]);
-
-    assert.deepEqual(
-      degrees(SNAPSHOT_QUERIES.tagNodeDegrees, ['t']),
-      [
-        [1, 1],
-        [2, 1],
-      ],
-      'the tag subgraph counted a reciprocal edge twice or a non-member neighbour',
-    );
-    assert.deepEqual(
-      degrees(SNAPSHOT_QUERIES.nodeDegrees),
-      [
-        [1, 2],
-        [2, 1],
-        [3, 1],
-      ],
-      'the global degree counted a reciprocal edge twice',
-    );
-  } finally {
-    database.close();
-  }
 });

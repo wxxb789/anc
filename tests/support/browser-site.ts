@@ -40,7 +40,7 @@ const CONTENT_TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-const WORKER_CHUNK_PATTERN = /\/_astro\/snapshot-worker-[\w-]+\.js$/;
+export const WORKER_CHUNK_PATTERN = /\/_astro\/snapshot-worker-[\w-]+\.js$/;
 
 /** One `_headers` rule: a path pattern and the headers it sets. */
 interface HeaderRule {
