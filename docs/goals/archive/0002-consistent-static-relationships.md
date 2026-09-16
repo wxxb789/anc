@@ -146,7 +146,8 @@ rerun on that commit — **64 files, 856 passed / 34 skipped**, exit 0, inventor
 ### Post-review fixes (2026-09-16)
 
 A `ce-code-review` round over commit `8c4e78f` returned two findings; both are
-fixed in `ba24f30`.
+fixed in `ba24f30`, and the review's testing gap is closed by the link gate in
+`66ae50d`.
 
 - **Dangling incoming links (P2, confirmed by the independent validator).**
   The archive move (`5287bff`) rewrote the moved file's own links but left the
@@ -168,9 +169,18 @@ fixed in `ba24f30`.
   refuses a tampered file, so divergence is not reachable through the build
   path.
 
+- **Documentation-link gate (the review's testing gap, `66ae50d`).**
+  `tests/markdown-links.test.ts` now checks every tracked `*.md` outside
+  `tests/fixtures/` for relative links and images that resolve to an existing
+  path, with a detector control that proves each supported and skipped shape.
+  The gate was falsified against this finding: restoring the stale
+  `0003-reliable-lazy-previews.md:18` link turns it red with that exact
+  file:line and passes once the link is repointed.
+
 `pnpm run verify` on `ba24f30` — 64 test files, **856 passed / 34 skipped**,
 exit 0; output inventory 150 files, secret scan 150 files / 0 findings,
-residue scan 33 files / 0 findings.
+residue scan 33 files / 0 findings. `pnpm run verify` on `66ae50d` — 65 test
+files, **858 passed / 34 skipped**, exit 0.
 
 ### Skips and conditional gates
 
