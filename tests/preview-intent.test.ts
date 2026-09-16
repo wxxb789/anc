@@ -36,6 +36,7 @@ import type { Browser } from 'playwright';
 
 import {
   buildAndServe,
+  focusByTab,
   removeWorkspace,
   sqliteAssetRequests,
   workerScriptPath,
@@ -177,14 +178,7 @@ test('ordinary reading and scrolling past a graph stay lazy, and intent starts t
   // focused directly would pass while every keyboard reader got nothing.
   await page.mouse.move(0, 0);
   await panel.waitFor({ state: 'hidden', timeout: 5_000 });
-  let reached = false;
-  for (let press = 0; press < 60 && !reached; press += 1) {
-    await page.keyboard.press('Tab');
-    reached = await page.evaluate(
-      (href) => document.activeElement?.getAttribute('href') === href,
-      '/notes/gamma/',
-    );
-  }
+  const reached = await focusByTab(page, '/notes/gamma/', 60);
   assert.ok(reached, 'tabbing never reached the gamma link, so the keyboard path was not measured');
   await panel.waitFor({ state: 'visible', timeout: 10_000 });
   assert.ok(

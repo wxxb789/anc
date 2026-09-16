@@ -124,7 +124,8 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
     instance = ensureWorker();
   } catch {
     // A Worker the document may not construct (CSP refusal, unsupported engine)
-    // settles every pending request instead of throwing past an awaiting caller.
+    // rejects this request instead of throwing past an awaiting caller; the
+    // client's init state stays clean, so the next intent tries again.
     return Promise.reject(new SnapshotClientError('terminated'));
   }
   const deadline = initialized ? WORKER_LIMITS.requestDeadlineMs : WORKER_LIMITS.startupDeadlineMs;

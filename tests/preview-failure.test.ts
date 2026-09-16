@@ -26,7 +26,14 @@ import { afterAll, beforeAll, test } from 'vitest';
 import type { Browser, Locator, Page } from 'playwright';
 
 import { WORKER_LIMITS } from '../src/lib/worker-protocol.ts';
-import { buildAndServe, removeWorkspace, type RunningSite } from './support/browser-site.ts';
+import {
+  buildAndServe,
+  collectPageErrors,
+  countWorkerTerminations,
+  removeWorkspace,
+  workerTerminations,
+  type RunningSite,
+} from './support/browser-site.ts';
 
 const PANEL = '#link-preview';
 const ALPHA_LINK = 'a[href="/notes/beta/"]';
@@ -52,18 +59,6 @@ afterAll(async () => {
   await site?.close();
   removeWorkspace(site.workspace);
 }, 180_000);
-
-/**
- * Collect `pageerror` events so every test can assert the page stayed clean.
- *
- * A failure path that throws past an async caller, or leaves an unhandled
- * rejection, surfaces here rather than as a red assertion about the panel.
- */
-function collectPageErrors(page: Page): Error[] {
-  const errors: Error[] = [];
-  page.on('pageerror', (error) => errors.push(error));
-  return errors;
-}
 
 /** Fail with every collected error's message; an empty list is the pass condition. */
 function assertNoPageErrors(errors: Error[]): void {
@@ -199,22 +194,14 @@ test('a request the Worker never answers hits its deadline and a later intent st
   const errors = collectPageErrors(page);
 
   // The seam that makes a stuck request reproducible: swallow a dispatched
-  // `preview` message before the Worker sees it, so no reply can ever come, and
-  // count terminations to see which stop the client chose.
+  // `preview` message before the Worker sees it, so no reply can ever come.
+  // Terminations are counted by the shared wrapper, which reads which stop the
+  // client chose.
+  await countWorkerTerminations(page);
   await page.addInitScript(() => {
-    const state = window as unknown as {
-      __terminateCount: number;
-      __dropPreviews: boolean;
-      __droppedCount: number;
-    };
-    state.__terminateCount = 0;
+    const state = window as unknown as { __dropPreviews: boolean; __droppedCount: number };
     state.__dropPreviews = false;
     state.__droppedCount = 0;
-    const realTerminate = Worker.prototype.terminate;
-    Worker.prototype.terminate = function (this: Worker): void {
-      state.__terminateCount += 1;
-      realTerminate.call(this);
-    };
     const realPostMessage = Worker.prototype.postMessage;
     Worker.prototype.postMessage = function (this: Worker, message: unknown, ...rest: unknown[]): void {
       if (state.__dropPreviews && (message as { type?: string } | null)?.type === 'preview') {
@@ -255,7 +242,7 @@ test('a request the Worker never answers hits its deadline and a later intent st
   await page.waitForTimeout(WORKER_LIMITS.requestDeadlineMs + 2_000);
   await assertStaticFallback(page, link, 'deadline');
   assert.equal(
-    await page.evaluate(() => (window as unknown as { __terminateCount: number }).__terminateCount),
+    await workerTerminations(page),
     1,
     'the request deadline did not terminate the unresponsive Worker exactly once',
   );
@@ -276,7 +263,7 @@ test('a request the Worker never answers hits its deadline and a later intent st
   await panel.waitFor({ state: 'visible', timeout: 10_000 });
   assert.ok(((await panel.textContent()) ?? '').includes('Beta'), 'a later intent did not recover after a deadline');
   assert.equal(
-    await page.evaluate(() => (window as unknown as { __terminateCount: number }).__terminateCount),
+    await workerTerminations(page),
     1,
     'recovery needed a termination, or reused the terminated Worker',
   );

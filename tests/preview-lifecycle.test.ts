@@ -28,9 +28,13 @@ import type { Browser, BrowserContext, Page } from 'playwright';
 import {
   buildAndServe,
   buildIn,
-  outputPath,
+  collectPageErrors,
+  countWorkerTerminations,
+  focusByTab,
   removeWorkspace,
+  serveDist,
   sqliteAssetRequests,
+  workerTerminations,
   type RunningSite,
 } from './support/browser-site.ts';
 import { snapshotPath } from './support/snapshot.ts';
@@ -62,6 +66,8 @@ beforeAll(async () => {
   // No skip when Chromium is missing: a skipped browser test is not goal
   // evidence, so a missing binary fails the file loudly.
   browser = await chromium.launch();
+  // Goal 0003's completion evidence asks for the browser this was measured on.
+  console.log(`browser: ${browser.browserType().name()} ${browser.version()}`);
 }, 180_000);
 
 afterAll(async () => {
@@ -69,9 +75,6 @@ afterAll(async () => {
   await site?.close();
   if (site !== undefined) removeWorkspace(site.workspace);
 }, 180_000);
-
-/** Read the browser version into the failure message, as the goal record asks. */
-const browserEvidence = (): string => `Chromium ${browser?.version() ?? 'unknown'}`;
 
 /**
  * Hold every `preview` message for `alpha` inside the page until released.
@@ -114,19 +117,6 @@ async function holdAlphaPreview(page: Page): Promise<void> {
   });
 }
 
-/** Count Worker terminations the page performs. */
-async function countWorkerTerminations(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const state = window as unknown as { __terminateCount: number };
-    state.__terminateCount = 0;
-    const original = Worker.prototype.terminate;
-    Worker.prototype.terminate = function (this: Worker): void {
-      state.__terminateCount += 1;
-      original.call(this);
-    };
-  });
-}
-
 /**
  * Record every time the panel becomes visible, with its text and page time.
  *
@@ -159,7 +149,6 @@ async function holdState(page: Page): Promise<{ held: boolean; deliveredAt: numb
 }
 
 test('concurrent intent initializes one Worker and one snapshot download', async () => {
-  assert.ok(site.origin.length > 0, `${browserEvidence()}: the test server has no origin`);
   const page = await browser.newPage();
   const requests = sqliteAssetRequests(page);
   const dbStarts: number[] = [];
@@ -267,14 +256,7 @@ test('a dismissed preview delivered late cannot open or replace the focused one'
     // Intent B: a real keyboard reader Tabs to the beta link. Programmatic
     // `focus()` is not equivalent: the client gates on `:focus-visible`, so the
     // test drives the same real presses a keyboard produces.
-    let reached = false;
-    for (let press = 0; press < 80 && !reached; press += 1) {
-      await page.keyboard.press('Tab');
-      reached = await page.evaluate(
-        (href) => document.activeElement?.getAttribute('href') === href,
-        '/notes/beta/',
-      );
-    }
+    const reached = await focusByTab(page, '/notes/beta/');
     assert.ok(reached, 'tabbing never reached the beta link, so the keyboard path was not measured');
     const panel = page.locator('#link-preview');
     await panel.waitFor({ state: 'visible', timeout: 10_000 });
@@ -319,8 +301,7 @@ test('a dismissed preview delivered late cannot open or replace the focused one'
 test('pagehide terminates the Worker, releases what it owed, and reinitializes on a later intent', async () => {
   const page = await browser.newPage();
   await countWorkerTerminations(page);
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
+  const pageErrors = collectPageErrors(page);
   try {
     await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
     const panel = page.locator('#link-preview');
@@ -346,7 +327,7 @@ test('pagehide terminates the Worker, releases what it owed, and reinitializes o
     await panel.waitFor({ state: 'visible', timeout: 10_000 });
     assert.ok(((await panel.textContent()) ?? '').includes('Beta One'), 'the reinitialized Worker did not preview');
     assert.equal(
-      await page.evaluate(() => (window as unknown as { __terminateCount: number }).__terminateCount),
+      await workerTerminations(page),
       1,
       'the reinitialized preview terminated or reused a Worker without replacing it',
     );
@@ -360,8 +341,7 @@ test('pagehide while a preview is held settles it without ever showing a panel',
   const page = await browser.newPage();
   await countWorkerTerminations(page);
   await holdAlphaPreview(page);
-  const pageErrors: Error[] = [];
-  page.on('pageerror', (error) => pageErrors.push(error));
+  const pageErrors = collectPageErrors(page);
   try {
     await page.goto(`${site.origin}/notes/gamma/`, { waitUntil: 'load' });
     await installPanelTimeline(page);
@@ -397,7 +377,10 @@ test('pagehide while a preview is held settles it without ever showing a panel',
 }, 120_000);
 
 test('a replaced served snapshot changes the bound digest and the previewed title', async () => {
-  const running = await buildAndServe(corpus('Alpha One'));
+  // The file's beforeAll already built this corpus; only the replacement build
+  // below is new. Serving the existing dist again avoids a second identical
+  // `anc build` merely to get a `serve()` handle.
+  const running = await serveDist(site.dist);
   let firstContext: BrowserContext | undefined;
   let secondContext: BrowserContext | undefined;
   try {
@@ -425,10 +408,10 @@ test('a replaced served snapshot changes the bound digest and the previewed titl
     // compiled into the page (and the Worker chunk), so a snapshot change is a
     // new build served at the same origin. Rebuild the same workspace, then
     // replace what the server hands out.
-    const rebuilt = buildIn(running.workspace, corpus('Alpha Two'), 'dist2');
+    const rebuilt = buildIn(site.workspace, corpus('Alpha Two'), 'dist2');
     const digestB = basename(snapshotPath(rebuilt.dist));
     assert.notEqual(digestB, digestA, 'the rebuilt snapshot has the same digest, so the replacement was not a change');
-    running.serve(outputPath(running.workspace, 'dist2'));
+    running.serve(rebuilt.dist);
 
     // Fresh context: the second load must prove its own binding rather than
     // inherit the first load's cached bytes.
@@ -457,7 +440,8 @@ test('a replaced served snapshot changes the bound digest and the previewed titl
   } finally {
     await firstContext?.close();
     await secondContext?.close();
+    // The workspace belongs to `site` and its afterAll; `running` only owns the
+    // server it opened over the same bytes.
     await running.close();
-    removeWorkspace(running.workspace);
   }
 }, 180_000);

@@ -35,7 +35,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test } from 'vitest';
-import type { Browser, Page } from 'playwright';
+import type { Browser, Page, Worker as PlaywrightWorker } from 'playwright';
 
 import { WORKER_LIMITS } from '../src/lib/worker-protocol.ts';
 import {
@@ -114,6 +114,71 @@ async function firstWorkerReply(page: Page): Promise<{ ok: boolean; code?: strin
   );
 }
 
+/**
+ * Run one direct `preview` through the built Worker while counting every
+ * WebAssembly entry point.
+ *
+ * Constructing the Worker, patching WebAssembly, and posting the request in
+ * that order is what makes a zero counter mean "the import never ran" rather
+ * than "the patch was late"; the `patched` flag makes the same distinction for
+ * the patch itself.
+ */
+async function probePreviewWithWasmCounter(
+  page: Page,
+  slug: string,
+): Promise<{
+  reply: { ok: boolean; code?: string };
+  counter: { calls: number; patched: boolean };
+}> {
+  const workerCreated = page.waitForEvent('worker');
+  await page.evaluate((script: string) => {
+    const state = window as unknown as { __snapshotProbe?: Worker; __snapshotReplies?: unknown[] };
+    const worker = new Worker(script, { type: 'module' });
+    state.__snapshotProbe = worker;
+    state.__snapshotReplies = [];
+    worker.addEventListener('message', (event) => state.__snapshotReplies!.push(event.data));
+  }, workerScriptPath(site.dist));
+  const worker: PlaywrightWorker = await workerCreated;
+
+  await worker.evaluate(() => {
+    const scope = self as unknown as { __wasmCalls: number; __wasmPatched: boolean };
+    scope.__wasmCalls = 0;
+    scope.__wasmPatched = false;
+    const wasm = WebAssembly as unknown as Record<string, unknown>;
+    for (const name of ['instantiate', 'compile', 'instantiateStreaming']) {
+      const original = wasm[name];
+      if (typeof original !== 'function') continue;
+      wasm[name] = function (this: unknown, ...args: unknown[]): unknown {
+        scope.__wasmCalls += 1;
+        return Reflect.apply(original as (...callArgs: unknown[]) => unknown, wasm, args);
+      };
+    }
+    scope.__wasmPatched = true;
+  });
+
+  await page.evaluate((probeSlug: string) => {
+    (window as unknown as { __snapshotProbe: Worker }).__snapshotProbe.postMessage({
+      id: 1,
+      type: 'preview',
+      slug: probeSlug,
+    });
+  }, slug);
+  await page.waitForFunction(
+    () => ((window as unknown as { __snapshotReplies?: unknown[] }).__snapshotReplies ?? []).length > 0,
+    undefined,
+    { timeout: 30_000 },
+  );
+  const reply = await page.evaluate(
+    () =>
+      (window as unknown as { __snapshotReplies: { ok: boolean; code?: string }[] }).__snapshotReplies[0]!,
+  );
+  const counter = await worker.evaluate(() => {
+    const scope = self as unknown as { __wasmCalls: number; __wasmPatched: boolean };
+    return { calls: scope.__wasmCalls, patched: scope.__wasmPatched };
+  });
+  return { reply, counter };
+}
+
 test('oversized snapshot data rejects integrity before any WASM import', async () => {
   const page = probePage;
   writeFileSync(snapshotPath(site.dist), Buffer.alloc(WORKER_LIMITS.maxSnapshotBytes + 1, 0x41));
@@ -145,65 +210,19 @@ test('oversized snapshot data rejects integrity before any WASM import', async (
   // The direct Worker proves the abort happens before WASM. Patching first and
   // posting second is what makes a zero counter mean "the import never ran"
   // rather than "the patch was late".
-  const workerCreated = page.waitForEvent('worker');
-  await page.evaluate((script: string) => {
-    const state = window as unknown as { __snapshotProbe?: Worker; __snapshotReplies?: unknown[] };
-    const worker = new Worker(script, { type: 'module' });
-    state.__snapshotProbe = worker;
-    state.__snapshotReplies = [];
-    worker.addEventListener('message', (event) => state.__snapshotReplies!.push(event.data));
-  }, workerScriptPath(site.dist));
-  const worker = await workerCreated;
-
-  await worker.evaluate(() => {
-    const scope = self as unknown as { __wasmCalls: number; __wasmPatched: boolean };
-    scope.__wasmCalls = 0;
-    scope.__wasmPatched = false;
-    const wasm = WebAssembly as unknown as Record<string, unknown>;
-    for (const name of ['instantiate', 'compile', 'instantiateStreaming']) {
-      const original = wasm[name];
-      if (typeof original !== 'function') continue;
-      wasm[name] = function (this: unknown, ...args: unknown[]): unknown {
-        scope.__wasmCalls += 1;
-        return Reflect.apply(original as (...callArgs: unknown[]) => unknown, wasm, args);
-      };
-    }
-    scope.__wasmPatched = true;
-  });
-
-  await page.evaluate(() => {
-    (window as unknown as { __snapshotProbe: Worker }).__snapshotProbe.postMessage({
-      id: 1,
-      type: 'preview',
-      slug: 'beta',
-    });
-  });
-  await page.waitForFunction(
-    () => ((window as unknown as { __snapshotReplies?: unknown[] }).__snapshotReplies ?? []).length > 0,
-    undefined,
-    { timeout: 30_000 },
-  );
-  const reply = await page.evaluate(
-    () =>
-      (window as unknown as { __snapshotReplies: { ok: boolean; code?: string }[] }).__snapshotReplies[0]!,
-  );
+  const probe = await probePreviewWithWasmCounter(page, 'beta');
   assert.equal(
-    reply.ok,
+    probe.reply.ok,
     false,
-    `the direct Worker did not fail closed on oversized data: ${JSON.stringify(reply)}`,
+    `the direct Worker did not fail closed on oversized data: ${JSON.stringify(probe.reply)}`,
   );
   assert.equal(
-    reply.code,
+    probe.reply.code,
     'integrity',
-    `the direct Worker refused oversized data with the wrong verdict: ${JSON.stringify(reply)}`,
+    `the direct Worker refused oversized data with the wrong verdict: ${JSON.stringify(probe.reply)}`,
   );
-
-  const counter = await worker.evaluate(() => {
-    const scope = self as unknown as { __wasmCalls: number; __wasmPatched: boolean };
-    return { calls: scope.__wasmCalls, patched: scope.__wasmPatched };
-  });
-  assert.equal(counter.patched, true, 'the WASM patch did not install, so a zero counter would prove nothing');
-  assert.equal(counter.calls, 0, 'the oversized snapshot reached WebAssembly despite the decoded-byte cap');
+  assert.equal(probe.counter.patched, true, 'the WASM patch did not install, so a zero counter would prove nothing');
+  assert.equal(probe.counter.calls, 0, 'the oversized snapshot reached WebAssembly despite the decoded-byte cap');
 }, 120_000);
 
 test('restoring the snapshot previews on the next intent in the same page', async () => {
@@ -258,56 +277,15 @@ test('oversized WASM data rejects integrity before instantiation and a later int
 
     // The direct Worker proves the abort happens before instantiation, with the
     // patch installed before the request so a zero counter cannot be lateness.
-    const workerCreated = page.waitForEvent('worker');
-    await page.evaluate((script: string) => {
-      const state = window as unknown as { __snapshotProbe?: Worker; __snapshotReplies?: unknown[] };
-      const worker = new Worker(script, { type: 'module' });
-      state.__snapshotProbe = worker;
-      state.__snapshotReplies = [];
-      worker.addEventListener('message', (event) => state.__snapshotReplies!.push(event.data));
-    }, workerScriptPath(site.dist));
-    const worker = await workerCreated;
-
-    await worker.evaluate(() => {
-      const scope = self as unknown as { __wasmCalls: number; __wasmPatched: boolean };
-      scope.__wasmCalls = 0;
-      scope.__wasmPatched = false;
-      const wasm = WebAssembly as unknown as Record<string, unknown>;
-      for (const name of ['instantiate', 'compile', 'instantiateStreaming']) {
-        const original = wasm[name];
-        if (typeof original !== 'function') continue;
-        wasm[name] = function (this: unknown, ...args: unknown[]): unknown {
-          scope.__wasmCalls += 1;
-          return Reflect.apply(original as (...callArgs: unknown[]) => unknown, wasm, args);
-        };
-      }
-      scope.__wasmPatched = true;
-    });
-
-    await page.evaluate(() => {
-      (window as unknown as { __snapshotProbe: Worker }).__snapshotProbe.postMessage({
-        id: 1,
-        type: 'preview',
-        slug: 'beta',
-      });
-    });
-    await page.waitForFunction(
-      () => ((window as unknown as { __snapshotReplies?: unknown[] }).__snapshotReplies ?? []).length > 0,
-      undefined,
-      { timeout: 30_000 },
+    const probe = await probePreviewWithWasmCounter(page, 'beta');
+    assert.equal(
+      probe.reply.code,
+      'integrity',
+      `the direct Worker refused oversized WASM with the wrong verdict: ${JSON.stringify(probe.reply)}`,
     );
-    const reply = await page.evaluate(
-      () =>
-        (window as unknown as { __snapshotReplies: { ok: boolean; code?: string }[] }).__snapshotReplies[0]!,
-    );
-    assert.equal(reply.code, 'integrity', `the direct Worker refused oversized WASM with the wrong verdict: ${JSON.stringify(reply)}`);
     assert.equal(fulfilled > 0, true, 'the route never served the oversized WASM, so this case is vacuous');
-    const counter = await worker.evaluate(() => {
-      const scope = self as unknown as { __wasmCalls: number; __wasmPatched: boolean };
-      return { calls: scope.__wasmCalls, patched: scope.__wasmPatched };
-    });
-    assert.equal(counter.patched, true, 'the WASM patch did not install, so a zero counter would prove nothing');
-    assert.equal(counter.calls, 0, 'the oversized WASM reached WebAssembly despite the decoded-byte cap');
+    assert.equal(probe.counter.patched, true, 'the WASM patch did not install, so a zero counter would prove nothing');
+    assert.equal(probe.counter.calls, 0, 'the oversized WASM reached WebAssembly despite the decoded-byte cap');
 
     // Restore availability; the next explicit intent previews rather than
     // staying poisoned.

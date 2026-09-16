@@ -15,10 +15,11 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createReadStream, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
-import { dirname, extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve, sep } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import type { Page } from 'playwright';
 
@@ -101,18 +102,41 @@ export async function serveDist(initial: string): Promise<ServedSite> {
   const headers = shippedHeaders();
   let current = initial;
   const running = createServer((request, response) => {
-    let pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
+    let pathname: string;
+    try {
+      pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
+    } catch {
+      response.writeHead(400, headers);
+      response.end('bad request');
+      return;
+    }
     if (pathname.endsWith('/')) pathname += 'index.html';
-    const file = resolve(current, `.${pathname}`);
-    if (!file.startsWith(current)) {
+    const root = resolve(current);
+    const file = resolve(root, `.${pathname}`);
+    // Directory boundary, not a string prefix: `/tmp/x/dist2/...` starts with
+    // `/tmp/x/dist`, so a prefix test would serve a sibling directory's bytes
+    // through this origin even though the comment above promises containment.
+    if (file !== root && !file.startsWith(root + sep)) {
       response.writeHead(403, headers);
       response.end();
       return;
     }
     try {
-      const body = readFileSync(file);
-      response.writeHead(200, { ...headers, 'Content-Type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' });
-      response.end(body);
+      // Streamed, not read whole: the oversized-data gates deliberately serve a
+      // snapshot of `maxSnapshotBytes + 1` (~64 MiB), and buffering it would
+      // block the server's event loop for the duration of every such request.
+      // The catch swallows the client's cap-abort, which is the expected
+      // premature close in those gates.
+      const size = statSync(file).size;
+      response.writeHead(200, {
+        ...headers,
+        'Content-Type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream',
+        'Content-Length': String(size),
+      });
+      void pipeline(createReadStream(file), response).catch(() => {
+        // The client aborted, or the file vanished after the stat; either way
+        // the response is already unusable and there is nothing to report.
+      });
     } catch {
       response.writeHead(404, headers);
       response.end('not found');
@@ -174,12 +198,56 @@ export function workerScriptPath(dist: string): string {
   return `/_astro/${name}`;
 }
 
-/** The directory name a build wrote, from a `workspace` and an output name. */
-export function outputPath(workspace: string, out: string): string {
-  return join(workspace, out);
+/**
+ * Tab until the element with `href` holds focus, and report whether it was
+ * reached.
+ *
+ * Real presses, not `locator.focus()`: the preview client gates on
+ * `:focus-visible`, and programmatic focus does not set it, so a gate that
+ * focused directly would pass while every keyboard reader got nothing.
+ */
+export async function focusByTab(page: Page, href: string, maxPresses = 80): Promise<boolean> {
+  for (let press = 0; press < maxPresses; press += 1) {
+    await page.keyboard.press('Tab');
+    if (await page.evaluate((expected) => document.activeElement?.getAttribute('href') === expected, href)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-/** The workspace a build created, for callers that only kept the dist path. */
-export function workspaceOf(dist: string): string {
-  return dirname(dist);
+/**
+ * Count the Worker terminations the page performs.
+ *
+ * The count is read with `workerTerminations`; a test waiting on a transition
+ * can `waitForFunction` over the same `window.__terminateCount` the wrapper
+ * maintains.
+ */
+export async function countWorkerTerminations(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const state = window as unknown as { __terminateCount: number };
+    state.__terminateCount = 0;
+    const original = Worker.prototype.terminate;
+    Worker.prototype.terminate = function (this: Worker): void {
+      state.__terminateCount += 1;
+      original.call(this);
+    };
+  });
+}
+
+/** The termination count `countWorkerTerminations` has recorded so far. */
+export async function workerTerminations(page: Page): Promise<number> {
+  return page.evaluate(() => (window as unknown as { __terminateCount: number }).__terminateCount);
+}
+
+/**
+ * Collect `pageerror` events so a test can assert the page stayed clean.
+ *
+ * A failure path that throws past an async caller, or leaves an unhandled
+ * rejection, surfaces here rather than as an assertion about the panel.
+ */
+export function collectPageErrors(page: Page): Error[] {
+  const errors: Error[] = [];
+  page.on('pageerror', (error) => errors.push(error));
+  return errors;
 }

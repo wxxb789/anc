@@ -305,34 +305,37 @@ test('static note pages carry the same DB title and author-ordered aliases', asy
   // Node fetch against the same origin the browser used: the preview is only
   // "correct content" if the static page a reader would land on agrees with the
   // DB the preview read. Titles are plain text (no markup), so containment is
-  // exact rather than an escaping guess.
-  for (const slug of TARGETS) {
-    const expected = note(slug);
-    const response = await fetch(`${site.origin}/notes/${slug}/`);
-    assert.equal(response.status, 200, `/notes/${slug}/ returned ${response.status}`);
-    const html = await response.text();
+  // exact rather than an escaping guess. The targets are independent, so the
+  // five fetches run together rather than serially.
+  await Promise.all(
+    TARGETS.map(async (slug) => {
+      const expected = note(slug);
+      const response = await fetch(`${site.origin}/notes/${slug}/`);
+      assert.equal(response.status, 200, `/notes/${slug}/ returned ${response.status}`);
+      const html = await response.text();
 
-    assert.ok(
-      html.includes(expected.title),
-      `${slug}: the static page does not contain the DB title ${JSON.stringify(expected.title)}`,
-    );
-    const heading = /<h1\b[^>]*\bnote-title\b[^>]*>([\s\S]*?)<\/h1>/.exec(html);
-    assert.ok(heading !== null, `${slug}: the static page has no note-title heading`);
-    assert.equal(heading[1]!.trim(), expected.title, `${slug}: the static heading is not the DB title`);
+      assert.ok(
+        html.includes(expected.title),
+        `${slug}: the static page does not contain the DB title ${JSON.stringify(expected.title)}`,
+      );
+      const heading = /<h1\b[^>]*\bnote-title\b[^>]*>([\s\S]*?)<\/h1>/.exec(html);
+      assert.ok(heading !== null, `${slug}: the static page has no note-title heading`);
+      assert.equal(heading[1]!.trim(), expected.title, `${slug}: the static heading is not the DB title`);
 
-    const aliasList = /<ul\b[^>]*\bnote-aliases\b[^>]*>([\s\S]*?)<\/ul>/.exec(html);
-    if (expected.aliases.length === 0) {
-      assert.equal(aliasList, null, `${slug}: the page rendered an alias list for a note the DB gives none`);
-      continue;
-    }
-    assert.ok(aliasList !== null, `${slug}: the DB has aliases but the static page rendered no alias list`);
-    const rendered = [...aliasList[1]!.matchAll(/<li>([\s\S]*?)<\/li>/g)].map((match) => match[1]!.trim());
-    assert.deepEqual(
-      rendered,
-      expected.aliases,
-      `${slug}: the static page's alias sequence disagrees with the DB ordinal order (non-alphabetical order must not be re-sorted)`,
-    );
-  }
+      const aliasList = /<ul\b[^>]*\bnote-aliases\b[^>]*>([\s\S]*?)<\/ul>/.exec(html);
+      if (expected.aliases.length === 0) {
+        assert.equal(aliasList, null, `${slug}: the page rendered an alias list for a note the DB gives none`);
+        return;
+      }
+      assert.ok(aliasList !== null, `${slug}: the DB has aliases but the static page rendered no alias list`);
+      const rendered = [...aliasList[1]!.matchAll(/<li>([\s\S]*?)<\/li>/g)].map((match) => match[1]!.trim());
+      assert.deepEqual(
+        rendered,
+        expected.aliases,
+        `${slug}: the static page's alias sequence disagrees with the DB ordinal order (non-alphabetical order must not be re-sorted)`,
+      );
+    }),
+  );
 }, 120_000);
 
 test('unknown, withheld, and external targets stay panel-free and unpublished', async () => {

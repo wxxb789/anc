@@ -32,6 +32,7 @@ type ImportSnapshot = typeof import('../src/scripts/snapshot-worker.ts')['import
 type Sqlite3 = Parameters<ImportSnapshot>[0];
 
 let importSnapshot: ImportSnapshot;
+let sqlite3: Sqlite3;
 
 beforeAll(async () => {
   // The Worker entry reads `self` at module scope; the stub is what lets it
@@ -41,6 +42,10 @@ beforeAll(async () => {
     value: { addEventListener() {}, postMessage() {} },
   });
   ({ importSnapshot } = await import('../src/scripts/snapshot-worker.ts'));
+  // One WASM runtime for the whole file. Each `sqlite3InitModule()` loads and
+  // instantiates the module again, and nothing here mutates it beyond the
+  // `oo1.DB` accounting the truncated test installs and restores.
+  sqlite3 = (await sqlite3InitModule()) as unknown as Sqlite3;
 });
 
 const artifact = validateArtifact(
@@ -56,7 +61,7 @@ const artifact = validateArtifact(
  * so the accounting is around production behavior, not a replacement driver:
  * the bytes still go through the product's `sqlite3_deserialize` path.
  */
-function countHandles(sqlite3: Sqlite3): () => number {
+function countHandles(sqlite3: Sqlite3): { live(): number; restore(): void } {
   const realDb = sqlite3.oo1.DB;
   let live = 0;
   class CountedDb extends realDb {
@@ -70,7 +75,14 @@ function countHandles(sqlite3: Sqlite3): () => number {
     }
   }
   sqlite3.oo1.DB = CountedDb;
-  return () => live;
+  return {
+    live: () => live,
+    // The runtime is shared by the whole file, so the accounting wrapper must
+    // not outlive the test that installed it.
+    restore: () => {
+      sqlite3.oo1.DB = realDb;
+    },
+  };
 }
 
 test('a read-only snapshot rejects writes and satisfies the shared schema contract', async () => {
@@ -79,7 +91,6 @@ test('a read-only snapshot rejects writes and satisfies the shared schema contra
   try {
     writeSnapshot(artifact, path);
     const bytes = new Uint8Array(readFileSync(path));
-    const sqlite3 = (await sqlite3InitModule()) as unknown as Sqlite3;
 
     const database = importSnapshot(sqlite3, bytes);
     try {
@@ -116,7 +127,6 @@ test('a snapshot with a foreign application id fails the import', async () => {
     mutable.exec('PRAGMA application_id = 0');
     mutable.close();
     const bytes = new Uint8Array(readFileSync(path));
-    const sqlite3 = (await sqlite3InitModule()) as unknown as Sqlite3;
 
     assert.throws(
       () => importSnapshot(sqlite3, bytes),
@@ -139,7 +149,6 @@ test('a foreign user_version fails the import', async () => {
     mutable.exec('PRAGMA user_version = 2');
     mutable.close();
     const bytes = new Uint8Array(readFileSync(path));
-    const sqlite3 = (await sqlite3InitModule()) as unknown as Sqlite3;
 
     assert.throws(
       () => importSnapshot(sqlite3, bytes),
@@ -162,7 +171,6 @@ test('a mutated schema fails the import', async () => {
     mutable.exec('ALTER TABLE aliases RENAME TO aliases_x');
     mutable.close();
     const bytes = new Uint8Array(readFileSync(path));
-    const sqlite3 = (await sqlite3InitModule()) as unknown as Sqlite3;
 
     assert.throws(
       () => importSnapshot(sqlite3, bytes),
@@ -180,37 +188,39 @@ test('truncated snapshot bytes fail closed and leave no database open', async ()
   try {
     writeSnapshot(artifact, path);
     const bytes = new Uint8Array(readFileSync(path));
-    const sqlite3 = (await sqlite3InitModule()) as unknown as Sqlite3;
-    const live = countHandles(sqlite3);
-
-    for (const [label, truncated] of [
-      ['a 128-byte prefix', bytes.slice(0, 128)],
-      ['all but the last byte', bytes.slice(0, bytes.length - 1)],
-    ] as const) {
-      // Both cases are `format`: SQLite tolerates a partial final page (the
-      // file-based `PRAGMA integrity_check` still reports `ok`), so the import
-      // itself compares `page_size * page_count` with the received byte length
-      // and refuses a file that is not exactly its pages. Production normally
-      // catches truncation one layer up, in `load`'s SHA-256 check; this gate
-      // requires the import boundary itself to fail closed too.
-      assert.throws(
-        () => importSnapshot(sqlite3, truncated),
-        { code: 'format' },
-        `${label} was imported instead of failing closed`,
-      );
-      assert.equal(live(), 0, `${label} left a database handle open`);
-    }
-
-    // A valid import after those failures still works, so a failed attempt did
-    // not carry a partial database into the next one and did not poison the
-    // module's state.
-    const database = importSnapshot(sqlite3, bytes);
+    const counted = countHandles(sqlite3);
     try {
-      assertSnapshotRows((sql) => database.selectObjects(sql));
+      for (const [label, truncated] of [
+        ['a 128-byte prefix', bytes.slice(0, 128)],
+        ['all but the last byte', bytes.slice(0, bytes.length - 1)],
+      ] as const) {
+        // Both cases are `format`: SQLite tolerates a partial final page (the
+        // file-based `PRAGMA integrity_check` still reports `ok`), so the import
+        // itself compares `page_size * page_count` with the received byte length
+        // and refuses a file that is not exactly its pages. Production normally
+        // catches truncation one layer up, in `load`'s SHA-256 check; this gate
+        // requires the import boundary itself to fail closed too.
+        assert.throws(
+          () => importSnapshot(sqlite3, truncated),
+          { code: 'format' },
+          `${label} was imported instead of failing closed`,
+        );
+        assert.equal(counted.live(), 0, `${label} left a database handle open`);
+      }
+
+      // A valid import after those failures still works, so a failed attempt did
+      // not carry a partial database into the next one and did not poison the
+      // module's state.
+      const database = importSnapshot(sqlite3, bytes);
+      try {
+        assertSnapshotRows((sql) => database.selectObjects(sql));
+      } finally {
+        database.close();
+      }
+      assert.equal(counted.live(), 0, 'the successful import could not be closed');
     } finally {
-      database.close();
+      counted.restore();
     }
-    assert.equal(live(), 0, 'the successful import could not be closed');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
