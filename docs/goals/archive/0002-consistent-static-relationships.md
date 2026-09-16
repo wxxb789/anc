@@ -143,6 +143,35 @@ test-local statement/route hoists. No outputs changed: `pnpm run verify` was
 rerun on that commit — **64 files, 856 passed / 34 skipped**, exit 0, inventory
 150 files, secret scan 150 files / 0 findings, residue 33 files / 0 findings.
 
+### Post-review fixes (2026-09-16)
+
+A `ce-code-review` round over commit `8c4e78f` returned two findings; both are
+fixed in `ba24f30`.
+
+- **Dangling incoming links (P2, confirmed by the independent validator).**
+  The archive move (`5287bff`) rewrote the moved file's own links but left the
+  six goal files that point at `0002-consistent-static-relationships.md`
+  unchanged, plus two new test prose references. All eight now point at
+  `archive/0002-consistent-static-relationships.md`, restoring the lifecycle
+  rule in `AGENTS.md`.
+- **Emitted-route authority (P2, design call).** The mutated-`tags.key` gate
+  proved the reader and the page-facing accessors but not the route surface,
+  and `tests/built-routes.test.ts` still predicted tag routes from the producer
+  normalizer. The route model is now asserted too:
+  `publicRoutes(entries, tagFacets())` tag paths must carry the stored key and
+  must not carry the re-derived one, and the built-HTML gates take their
+  expected tag route set and note tag href from `content.ts` (`tagFacets`,
+  `tagRouteForLabel`). `tests/route-model.test.ts` and the output inventory
+  keep the producer normalizer as the independent writer oracle. A full Astro
+  build over a deliberately diverging DB remains unexercised: the writer
+  guarantees `tags.key = routeKey(tags.label)` and the output inventory
+  refuses a tampered file, so divergence is not reachable through the build
+  path.
+
+`pnpm run verify` on `ba24f30` — 64 test files, **856 passed / 34 skipped**,
+exit 0; output inventory 150 files, secret scan 150 files / 0 findings,
+residue scan 33 files / 0 findings.
+
 ### Skips and conditional gates
 
 No relationship gate is skipped in both configurations. `pnpm run verify`
