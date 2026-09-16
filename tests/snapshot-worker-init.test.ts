@@ -115,20 +115,37 @@ function contractRows(sql: string): Record<string, unknown>[] {
   }
   const indexTable = /^PRAGMA index_list\(([^)]+)\)$/.exec(sql)?.[1];
   if (indexTable !== undefined) {
-    return indexTable === SNAPSHOT_EXPLICIT_INDEX.table
-      ? [
-          {
-            seq: 0,
-            name: SNAPSHOT_EXPLICIT_INDEX.name,
-            unique: SNAPSHOT_EXPLICIT_INDEX.unique ? 1 : 0,
-            origin: 'c',
-            partial: SNAPSHOT_EXPLICIT_INDEX.partial ? 1 : 0,
-          },
-        ]
-      : [];
+    // The writer's UNIQUE constraints each get an implicit index SQLite names
+    // `sqlite_autoindex_<table>_<n>`; the fake derives them from the same
+    // declaration the contract validates, so the two cannot drift.
+    const implicit = (SNAPSHOT_TABLE_SHAPES[indexTable]?.uniqueConstraints ?? []).map((columns, index) => ({
+      seq: index,
+      name: `sqlite_autoindex_${indexTable}_${index + 1}`,
+      unique: 1,
+      origin: 'u',
+      partial: 0,
+    }));
+    const explicit =
+      indexTable === SNAPSHOT_EXPLICIT_INDEX.table
+        ? [
+            {
+              seq: implicit.length,
+              name: SNAPSHOT_EXPLICIT_INDEX.name,
+              unique: SNAPSHOT_EXPLICIT_INDEX.unique ? 1 : 0,
+              origin: 'c',
+              partial: SNAPSHOT_EXPLICIT_INDEX.partial ? 1 : 0,
+            },
+          ]
+        : [];
+    return [...implicit, ...explicit];
   }
   if (sql === `PRAGMA index_info(${SNAPSHOT_EXPLICIT_INDEX.name})`) {
     return SNAPSHOT_EXPLICIT_INDEX.columns.map((name, seqno) => ({ seqno, cid: seqno, name }));
+  }
+  const implicitIndex = /^PRAGMA index_info\(sqlite_autoindex_([^)]+)_(\d+)\)$/.exec(sql);
+  if (implicitIndex !== null) {
+    const columns = SNAPSHOT_TABLE_SHAPES[implicitIndex[1]!]?.uniqueConstraints[Number(implicitIndex[2]) - 1];
+    return (columns === undefined ? [] : columns.split(',')).map((name, seqno) => ({ seqno, cid: seqno, name }));
   }
   throw new Error(`the fake driver was asked a statement it does not implement: ${sql}`);
 }

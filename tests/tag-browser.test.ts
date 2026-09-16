@@ -394,6 +394,14 @@ test('the enhanced list and the static list agree on the same membership', async
   await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
   await page.click('#tag-browse-start');
   await page.waitForSelector('#tag-browser-results a');
+  // Selection must hide the static list, not merely sit beside it: the failure
+  // test's "the static list returns" wording only means something if the
+  // successful path takes it away.
+  assert.equal(
+    await page.locator('#tag-static-list').isVisible(),
+    false,
+    'the static route stayed visible under the enhanced list',
+  );
   let collected = await seenSlugs(page);
   while (await page.locator('#tag-browse-more').isVisible()) {
     collected = await loadMore(page);

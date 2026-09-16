@@ -157,6 +157,43 @@ function assertExplicitIndex(read: SnapshotRowReader): void {
 }
 
 /**
+ * Fail unless every declared `UNIQUE` constraint survives as exactly one
+ * implicit index, matched by its indexed columns.
+ *
+ * SQLite names these `sqlite_autoindex_*` and the reader query filters every
+ * `sqlite_` name out, so this is the only check that sees them: an added
+ * `UNIQUE (node_id, tag_id)` — the reverse membership index the accepted
+ * design forbids — appears here as an extra origin-`u` row and fails closed.
+ * Matched by columns rather than name because SQLite generates the names.
+ */
+function assertUniqueIndexes(
+  read: SnapshotRowReader,
+  table: string,
+  expected: SnapshotTable['uniqueConstraints'],
+): void {
+  const actual = read(`PRAGMA index_list(${table})`)
+    .filter((row) => String(row['origin']) === 'u')
+    .map((row) => {
+      const name = String(row['name']);
+      const columns = read(`PRAGMA index_info(${name})`)
+        .map((info) => ({ seqno: Number(info['seqno']), name: String(info['name']) }))
+        .sort((left, right) => left.seqno - right.seqno)
+        .map((info) => info.name)
+        .join(',');
+      return columns;
+    })
+    .sort();
+  const wanted = [...expected].sort();
+  if (actual.join('|') !== wanted.join('|')) {
+    const printed = (sets: readonly string[]): string => sets.map((set) => `(${set})`).join(', ');
+    throw new Error(
+      `snapshot table ${table} has implicit unique indexes on [${printed(actual)}], ` +
+        `expected [${printed(wanted)}]`,
+    );
+  }
+}
+
+/**
  * Fail unless the connection carries exactly the accepted schema.
  *
  * @param read A function that executes one SQL statement on the imported
@@ -189,10 +226,11 @@ export function assertSnapshotRows(read: SnapshotRowReader): void {
   // the explicitly created ones. The filter matches `sqlite_` literally — the
   // underscore is escaped, because an unescaped LIKE `_` is a wildcard and
   // would also hide a user-creatable name such as `sqliteX`. This must equal
-  // the one accepted index: an added reverse membership index, a renamed
-  // accepted index, or a missing accepted index each change the storage
+  // the one accepted index: an added explicit reverse membership index, a
+  // renamed accepted index, or a missing accepted index each change the storage
   // contract. `assertExplicitIndex` below still checks that index's declared
-  // shape.
+  // shape, and `assertUniqueIndexes` checks the implicit indexes this filter
+  // hides, so a added `UNIQUE` constraint cannot slip through either spelling.
   const indexes = objects
     .filter((row) => row['type'] === 'index')
     .map((row) => String(row['name']))
@@ -226,6 +264,7 @@ export function assertSnapshotRows(read: SnapshotRowReader): void {
     assertTableOptions(listed, table, shape);
     assertForeignKeys(read, table, shape.foreignKeys);
     assertChecks(storedSql.get(table) ?? '', table, shape.checks);
+    assertUniqueIndexes(read, table, shape.uniqueConstraints);
   }
   assertExplicitIndex(read);
 }

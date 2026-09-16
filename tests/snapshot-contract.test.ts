@@ -131,6 +131,22 @@ test('an additional explicit index is rejected beside the accepted one', () => {
       /explicit indexes are \[edges_by_target, sqliteX\], expected \[edges_by_target\]/,
     );
   });
+  // The same forbidden reverse index spelled as a constraint instead of an
+  // explicit index: SQLite backs it with `sqlite_autoindex_node_tags_2`, which
+  // the `sqlite_`-name filter hides, so only the implicit-index check can see
+  // it. Without that check this fixture is accepted.
+  withDdl(
+    mutatedSchema(
+      '    PRIMARY KEY (tag_id, node_id)\n) WITHOUT ROWID, STRICT;',
+      '    PRIMARY KEY (tag_id, node_id),\n    UNIQUE (node_id, tag_id)\n) WITHOUT ROWID, STRICT;',
+    ),
+    (database) => {
+      assert.throws(
+        () => assertSnapshotRows(reader(database)),
+        /table node_tags has implicit unique indexes on \[\(node_id,tag_id\)\], expected \[\]/,
+      );
+    },
+  );
 });
 
 test('a view is rejected even when the five tables are intact', () => {

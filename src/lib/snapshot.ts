@@ -161,6 +161,17 @@ export interface SnapshotTable {
    * `SNAPSHOT_SCHEMA_SQL`; a table with no `CHECK` has an empty list.
    */
   checks: readonly string[];
+  /**
+   * The table's `UNIQUE` constraints, each as its indexed columns in
+   * declaration order joined with commas. SQLite backs every UNIQUE constraint
+   * with an implicit `sqlite_autoindex_*` index that the name filter above
+   * hides from the explicit-index comparison, so without this list a
+   * producer-side `UNIQUE (node_id, tag_id)` would grow a reverse membership
+   * index the contract never sees. A table with no `UNIQUE` constraint has an
+   * empty list. Flat strings rather than nested arrays so the bundled Worker
+   * chunk cannot spell an unresolved `[[` byte sequence.
+   */
+  uniqueConstraints: readonly string[];
 }
 
 /**
@@ -187,6 +198,7 @@ export const SNAPSHOT_TABLE_SHAPES: Readonly<Record<string, SnapshotTable>> = {
     ],
     foreignKeys: [],
     checks: [],
+    uniqueConstraints: ['slug'],
   },
   edges: {
     strict: true,
@@ -200,6 +212,7 @@ export const SNAPSHOT_TABLE_SHAPES: Readonly<Record<string, SnapshotTable>> = {
       { from: 'target_id', table: 'nodes', to: 'id' },
     ],
     checks: ['CHECK (source_id <> target_id)'],
+    uniqueConstraints: [],
   },
   aliases: {
     strict: true,
@@ -211,6 +224,7 @@ export const SNAPSHOT_TABLE_SHAPES: Readonly<Record<string, SnapshotTable>> = {
     ],
     foreignKeys: [{ from: 'node_id', table: 'nodes', to: 'id' }],
     checks: ['CHECK (ordinal >= 0)'],
+    uniqueConstraints: ['node_id,alias'],
   },
   tags: {
     strict: true,
@@ -222,6 +236,7 @@ export const SNAPSHOT_TABLE_SHAPES: Readonly<Record<string, SnapshotTable>> = {
     ],
     foreignKeys: [],
     checks: [],
+    uniqueConstraints: ['key'],
   },
   node_tags: {
     strict: true,
@@ -235,6 +250,7 @@ export const SNAPSHOT_TABLE_SHAPES: Readonly<Record<string, SnapshotTable>> = {
       { from: 'node_id', table: 'nodes', to: 'id' },
     ],
     checks: [],
+    uniqueConstraints: [],
   },
 };
 

@@ -1,6 +1,6 @@
 /**
  * Tag browsing over the real snapshot: identity, exhaustive cursor pagination,
- * and the page-boundary controls `docs/goals/0004-complete-tag-browsing.md`
+ * and the page-boundary controls `docs/goals/archive/0004-complete-tag-browsing.md`
  * names.
  *
  * The corpus is authored here, and every expected membership list, page size,
@@ -415,7 +415,10 @@ test('page size normalizes to the bounded default instead of unbounded work', ()
         assertEnumerates(page.notes, EXPECTED_GARDENING_SLUGS);
         assert.equal(page.nextCursor, null, `pageSize ${String(requested)} did not exhaust the tag`);
         assert.equal(
-          boundParams.at(-1)?.[1],
+          // The lookahead limit is the trailing bound parameter of both
+          // `byTagFirst` and `byTagAfter`; asserting the position would break on
+          // a behavior-preserving unification of the two statements.
+          boundParams.at(-1)?.at(-1),
           limit,
           `pageSize ${String(requested)} did not bind the clamped lookahead limit`,
         );
