@@ -169,8 +169,8 @@ the fixture corpus carries
    alias sequences as the DB. The withheld note has no node, its title and body
    are absent from the snapshot text, and its `/private/` link never previews;
    the unknown route never previews and `example.com` is never requested.
-3. **Shared lifecycle — `tests/preview-lifecycle.test.ts` (5 tests, real
-   Chromium) and `tests/snapshot-client.test.ts` (6 tests, Node over the real
+3. **Shared lifecycle — `tests/preview-lifecycle.test.ts` (6 tests, real
+   Chromium) and `tests/snapshot-client.test.ts` (7 tests, Node over the real
    client module and a fake Worker).** Two concurrent hovers on a held DB
    response produce exactly one DB request, one WASM request, one Worker chunk
    request, and one Worker; the hold is confirmed delivered before the
@@ -182,10 +182,11 @@ the fixture corpus carries
    snapshot served at the same origin changes the bound digest: the reloaded
    document requests only the new DB and previews the new title. The Node gate
    drives the real client: one Worker for concurrent requests, the pending bound
-   rejects `busy`, deadlines reject `timeout` and terminate, late replies from a
-   torn-down generation are discarded, `dispose()` rejects `cancelled` and
-   reinitializes, and a throwing Worker constructor yields a rejected promise
-   rather than a throw.
+   rejects `busy`, deadlines reject `timeout` and terminate, a late reply from a
+   torn-down Worker is discarded, `dispose()` rejects `cancelled` and
+   reinitializes, a crashed Worker rejects every pending request and the next
+   intent builds a replacement, and a throwing Worker constructor yields a
+   rejected promise rather than a throw.
 4. **Read-only and validation — `tests/preview-integrity.test.ts` (3 tests,
    real Chromium driving the built Worker chunk) and `tests/snapshot-wasm.test.ts`
    (5 tests over the pinned WASM).** A `preview` through the packaged runtime
@@ -199,16 +200,16 @@ the fixture corpus carries
    `SQLITE_READONLY`; foreign `application_id`, foreign `user_version`, a renamed
    table, and truncated bytes (a 128-byte prefix, all but the last byte) each
    fail closed and leave no handle open.
-5. **Failure and retry — `tests/preview-failure.test.ts` (3 tests, real
-   Chromium).** A blocked WASM download, a Worker constructor that throws, and a
-   Worker that never answers (forced past `requestDeadlineMs`) each leave the
-   static article and anchor usable, show no panel and no stale
-   `aria-describedby`, and settle. Each restores availability and a later
-   explicit intent previews; the deadline case terminates exactly the
+5. **Failure and retry — `tests/preview-failure.test.ts` (4 tests, real
+   Chromium).** A blocked WASM download, a Worker chunk that never loads, a
+   Worker constructor that throws, and a Worker that never answers (forced past
+   `requestDeadlineMs`) each leave the static article and anchor usable, show no
+   panel and no stale `aria-describedby`, and settle. Each restores availability
+   and a later explicit intent previews; the deadline case terminates exactly the
    unresponsive Worker once and a later intent starts a live one, so no poisoned
    initialization promise remains. `pageerror` stays empty throughout.
 6. **Resource and CSP controls — `tests/preview-limits.test.ts` (6 tests, real
-   Chromium) and `tests/snapshot-fetch-bounded.test.ts` (8 tests over real HTTP
+   Chromium) and `tests/snapshot-fetch-bounded.test.ts` (10 tests over real HTTP
    streams).** An oversized snapshot body (`maxSnapshotBytes + 1`, with a
    misleading `Content-Length: 64`) is refused with `integrity` while patched
    `WebAssembly.instantiate/compile/instantiateStreaming` counters stay at zero,
@@ -218,8 +219,10 @@ the fixture corpus carries
    chunked bodies with no `Content-Length`, a lying small length, and an honest
    larger one, aborting the stream instead of buffering it; a large claimed
    length with a small body fails closed; 500 and redirect responses reject
-   `fetch`. The served `Content-Security-Policy` equals `public/_headers`, an
-   injected inline script is blocked with a recorded `securitypolicyviolation`,
+   `fetch`; an aborted signal cancels the read mid-stream, and a response with no
+   readable stream still enforces the cap on its buffered body. The served
+   `Content-Security-Policy` equals `public/_headers`, an injected inline script
+   is blocked with a recorded `securitypolicyviolation`,
    normal previewing produces none, and every request in the session is
    same-origin. The request queue bound is enforced by row 3's Node gate.
 
