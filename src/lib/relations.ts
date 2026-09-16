@@ -103,11 +103,16 @@ function facetsFor(entries: readonly ContentEntry[]): Facet[] {
   return computed;
 }
 
-/** The published tag groups this note belongs to. */
-function sharedFacets(entry: ContentEntry, entries: readonly ContentEntry[]): Facet[] {
-  return facetsFor(entries).filter((facet) =>
-    facet.entries.some((member) => member.slug === entry.slug),
-  );
+/**
+ * The published tag groups this note belongs to.
+ *
+ * `facets` is the same index the tag routes render — the snapshot's own rows on
+ * the build path (`content.ts`), the producer normalization otherwise — so
+ * "shares a tag" here names exactly the pages the site publishes, and grouping
+ * never independently renormalizes what those pages show.
+ */
+function sharedFacets(entry: ContentEntry, facets: readonly Facet[]): Facet[] {
+  return facets.filter((facet) => facet.entries.some((member) => member.slug === entry.slug));
 }
 
 /**
@@ -153,11 +158,13 @@ function sharedFacets(entry: ContentEntry, entries: readonly ContentEntry[]): Fa
  * simply be linked already. {@link hasTagPeer} answers that question so the
  * page can say which of the two it is.
  *
- * Grouping comes from {@link tagFacets} rather than from a second pass over
- * `entry.tags`, so "shares a tag" means exactly what "appears on the same tag
- * page" means: `Gardening` and `gardening` are one tag here because they are
- * one tag there. A private second normalization would let a note be listed as
- * related on a tag the site never publishes.
+ * Grouping comes from the facet index the caller passes — the snapshot's own
+ * tag rows on the build path, `content.ts`'s `tagFacets()`, and the producer
+ * normalization otherwise — rather than from a second pass over `entry.tags`,
+ * so "shares a tag" means exactly what "appears on the same tag page" means:
+ * `Gardening` and `gardening` are one tag here because they are one tag there.
+ * A private second normalization would let a note be listed as related on a tag
+ * the site never publishes.
  *
  * **The rule below is also stated to the reader, and that prose is not here.**
  * It lives in `Translation.relatedDerivation`, in both languages, because it is
@@ -177,11 +184,15 @@ function sharedFacets(entry: ContentEntry, entries: readonly ContentEntry[]): Fa
  * operations across the build, well under a second. Hoist the facets into a
  * parameter if a build ever spends measurable time here.
  */
-export function relatedNotes(entry: ContentEntry, entries: readonly ContentEntry[]): ContentEntry[] {
+export function relatedNotes(
+  entry: ContentEntry,
+  entries: readonly ContentEntry[],
+  facets: readonly Facet[] = facetsFor(entries),
+): ContentEntry[] {
   const excluded = new Set([entry.slug, ...entry.outgoing, ...entry.backlinks]);
   const scored = new Map<string, { entry: ContentEntry; rarest: number; shared: number }>();
 
-  for (const facet of sharedFacets(entry, entries)) {
+  for (const facet of sharedFacets(entry, facets)) {
     for (const candidate of facet.entries) {
       if (excluded.has(candidate.slug)) continue;
       const current = scored.get(candidate.slug);
@@ -220,8 +231,12 @@ export function relatedNotes(entry: ContentEntry, entries: readonly ContentEntry
  * second case would be a statement the artifact contradicts, which is exactly
  * what the empty states exist to avoid.
  */
-export function hasTagPeer(entry: ContentEntry, entries: readonly ContentEntry[]): boolean {
-  return sharedFacets(entry, entries).some((facet) =>
+export function hasTagPeer(
+  entry: ContentEntry,
+  entries: readonly ContentEntry[],
+  facets: readonly Facet[] = facetsFor(entries),
+): boolean {
+  return sharedFacets(entry, facets).some((facet) =>
     facet.entries.some((member) => member.slug !== entry.slug),
   );
 }

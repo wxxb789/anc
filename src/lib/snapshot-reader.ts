@@ -47,6 +47,16 @@ export function snapshotWorkspace(
   return resolve(process.cwd(), workspace);
 }
 
+/** One `tags` row with the `node_tags` members the snapshot stores for it. */
+export interface SnapshotTagFacet {
+  /** `tags.key`, exactly the string the static route and the browser query use. */
+  key: string;
+  /** `tags.label`, the representative display spelling. */
+  label: string;
+  /** Member slugs, sorted. */
+  slugs: string[];
+}
+
 /** The build-time relation projection the pages render from. */
 export interface SnapshotRelations {
   /** Slug to the slugs it links out to, sorted. */
@@ -55,15 +65,21 @@ export interface SnapshotRelations {
   backlinks: ReadonlyMap<string, string[]>;
   /**
    * Slug to the tags the snapshot projects for it, as `tags.label` spellings in
-   * canonical key order.
-   *
-   * Labels rather than keys because the one normalizer both the producer and
-   * the pages call, `tagFacets`, derives a route key from the label it is
-   * handed. Handing it the DB's key would turn `Field Notes` into `field-notes`
-   * on every static tag surface while the browser keeps rendering the
-   * `tags.label` row — the disagreement this shared read exists to remove.
+   * canonical key order. Note metadata and related-note grouping consume this;
+   * the public tag routes consume {@link tagFacets}, which carries the row key.
    */
   tags: ReadonlyMap<string, string[]>;
+  /**
+   * Every tag the snapshot stores, with its own key, label, and members.
+   *
+   * This is the static tag routes' authority: `tags.key` is read here rather
+   * than re-derived from `tags.label`, so a route path, a sitemap entry, and a
+   * browser `byTag` query all name the row the producer wrote. The producer
+   * still owns normalization and collision failure when it writes the rows
+   * (`tagFacets` in `routes.ts`); readers of the finalized file do not repeat
+   * that work.
+   */
+  tagFacets: readonly SnapshotTagFacet[];
 }
 
 interface EdgeRow {
@@ -147,14 +163,24 @@ export function loadSnapshotRelations(workspace?: string): SnapshotRelations | u
       outgoing.get(source)!.push(target);
       backlinks.get(target)!.push(source);
     }
+    // Tags carry both spellings the static surfaces need: the label on the
+    // note's own metadata, and the row's key and members on the facet the tag
+    // routes render. Both come from this same batched scan, grouped here
+    // instead of queried per page.
+    const facetByKey = new Map<string, SnapshotTagFacet>();
     for (const row of memberships) {
       // The join reaches nodes by primary key, so every row's slug is one of
       // the nodes above; the guard covers a file this process did not write.
       tags.get(row.slug)?.push(row.label);
+      const facet = facetByKey.get(row.key);
+      if (facet === undefined) facetByKey.set(row.key, { key: row.key, label: row.label, slugs: [row.slug] });
+      else facet.slugs.push(row.slug);
     }
     for (const list of outgoing.values()) list.sort();
     for (const list of backlinks.values()) list.sort();
-    return { outgoing, backlinks, tags };
+    const tagFacets = [...facetByKey.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
+    for (const facet of tagFacets) facet.slugs.sort();
+    return { outgoing, backlinks, tags, tagFacets };
   } finally {
     database.close();
   }
@@ -165,11 +191,12 @@ export function loadSnapshotRelations(workspace?: string): SnapshotRelations | u
  *
  * Outgoing and backlinks keep their existing shape so every pure relationship
  * function (`relations.ts`, `graph.ts`) is unchanged; only the authority moved.
- * `tags` carries the snapshot's label spelling, so `tagFacets` — still the one
- * normalization and label authority — reproduces exactly the keys and labels
- * the browser reads from the same rows. A slug the snapshot does not carry
- * keeps empty arrays rather than its IR values, so a stale entry cannot render
- * a relationship the public projection does not contain.
+ * `tags` carries the snapshot's label spelling, which note metadata and
+ * related-note grouping consume; the route key and member list the tag pages
+ * render come from {@link SnapshotRelations.tagFacets}, also read here. A slug
+ * the snapshot does not carry keeps empty arrays rather than its IR values, so
+ * a stale entry cannot render a relationship the public projection does not
+ * contain.
  */
 export function hydrateEntriesWithSnapshot<
   T extends { slug: string; outgoing: string[]; backlinks: string[]; tags?: string[] },

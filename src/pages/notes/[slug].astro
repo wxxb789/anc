@@ -32,7 +32,7 @@ import Layout from '../../layouts/Layout.astro';
 import LinkedNotes from '../../components/LinkedNotes.astro';
 import NoteGraph from '../../components/NoteGraph.astro';
 import TableOfContents from '../../components/TableOfContents.astro';
-import { entries, getEntry } from '../../lib/content.ts';
+import { entries, getEntry, tagFacets, tagRouteForLabel } from '../../lib/content.ts';
 import { hasDrawableGraph, localGraph } from '../../lib/graph.ts';
 import { renderMarkdown } from '../../lib/markdown.ts';
 import {
@@ -41,13 +41,7 @@ import {
   notesForSlugs,
   relatedNotes,
 } from '../../lib/relations.ts';
-import {
-  GRAPH_SEGMENT,
-  collectionRoute,
-  noteRoute,
-  routeKey,
-  tagRoute,
-} from '../../lib/routes.ts';
+import { GRAPH_SEGMENT, collectionRoute, noteRoute } from '../../lib/routes.ts';
 import { canonicalUrl, TITLE_SUFFIX } from '../../lib/site.ts';
 import { translate, NAV_LANGUAGE, partLanguage } from '../../lib/translations.ts';
 // Loaded as a URL rather than imported, so the stylesheet becomes its own
@@ -186,7 +180,7 @@ const canonicalRoute = noteRoute(entry.slug);
  */
 const outgoing = notesForSlugs(entry.outgoing, getEntry);
 const backlinks = notesForSlugs(entry.backlinks, getEntry);
-const related = relatedNotes(entry, entries);
+const related = relatedNotes(entry, entries, tagFacets());
 
 /**
  * Why the related list is empty, when it is.
@@ -197,7 +191,7 @@ const related = relatedNotes(entry, entries);
  * shares a tag" in the second case is a claim the artifact contradicts, which
  * is precisely what an honest empty state must not do.
  */
-const relatedEmpty = hasTagPeer(entry, entries) ? t.relatedAlreadyListed : t.relatedNoTagPeer;
+const relatedEmpty = hasTagPeer(entry, entries, tagFacets()) ? t.relatedAlreadyListed : t.relatedNoTagPeer;
 
 /**
  * The pager: its two links and the name it announces, or nothing at all.
@@ -348,7 +342,7 @@ const graph = localGraph(entry, getEntry);
             <dd>
               <ul class="note-tags">
                 {entry.tags.map((tag) => (
-                  <li><a href={tagRoute(routeKey(tag))}>{tag}</a></li>
+                  <li><a href={tagRouteForLabel(tag)}>{tag}</a></li>
                 ))}
               </ul>
             </dd>

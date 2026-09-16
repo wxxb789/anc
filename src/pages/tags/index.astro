@@ -15,13 +15,13 @@
 import Layout from '../../layouts/Layout.astro';
 import FacetIndex from '../../components/FacetIndex.astro';
 import TagBrowser from '../../components/TagBrowser.astro';
-import { entries } from '../../lib/content.ts';
-import { tagFacets, tagRoute } from '../../lib/routes.ts';
+import { tagFacets } from '../../lib/content.ts';
+import { tagRoute } from '../../lib/routes.ts';
 import { TITLE_SUFFIX } from '../../lib/site.ts';
 import { NAV_LANGUAGE, translate } from '../../lib/translations.ts';
 
 const t = translate(NAV_LANGUAGE);
-const facets = tagFacets(entries);
+const facets = tagFacets();
 ---
 
 <Layout title={`${t.tagsTitle}${TITLE_SUFFIX}`} description={t.tagsDescription}>

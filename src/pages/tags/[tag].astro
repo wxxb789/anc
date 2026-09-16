@@ -18,8 +18,7 @@
 import Layout from '../../layouts/Layout.astro';
 import NoteList from '../../components/NoteList.astro';
 import TagBrowser from '../../components/TagBrowser.astro';
-import { entries } from '../../lib/content.ts';
-import { tagFacets } from '../../lib/routes.ts';
+import { tagFacets } from '../../lib/content.ts';
 import { TITLE_SUFFIX } from '../../lib/site.ts';
 import { NAV_LANGUAGE, translate } from '../../lib/translations.ts';
 
@@ -27,7 +26,7 @@ export function getStaticPaths() {
   // No facets means no paths, which is the correct static answer: `/tags/` still
   // renders its empty state, and any `/tags/<anything>/` request is a 404
   // because that tag genuinely does not exist.
-  return tagFacets(entries).map((facet) => ({ params: { tag: facet.key }, props: { facet } }));
+  return tagFacets().map((facet) => ({ params: { tag: facet.key }, props: { facet } }));
 }
 
 const { facet } = Astro.props;

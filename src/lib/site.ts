@@ -33,6 +33,7 @@ import {
   recentFirst,
   tagFacets,
   tagRoute,
+  type Facet,
 } from './routes.ts';
 
 /**
@@ -500,8 +501,15 @@ export interface PublicRoute {
  * page lists only its published members, but the page itself exists as long as
  * any note carries the tag — deriving facets from the filtered set would drop a
  * live page from the sitemap whenever its last remaining member was withdrawn.
+ *
+ * `facets` defaults to the producer normalization so fixture-driven callers and
+ * tests keep the pure signature. The build path passes `content.ts`'s
+ * `tagFacets()`, whose keys are the snapshot's own `tags.key` rows.
  */
-export function publicRoutes(entries: readonly ContentEntry[]): PublicRoute[] {
+export function publicRoutes(
+  entries: readonly ContentEntry[],
+  facets: readonly Facet[] = tagFacets(entries),
+): PublicRoute[] {
   // Withdrawn notes are not advertised to crawlers; their pages are still built.
   // See `isPublished`.
   const notes = entries
@@ -512,7 +520,7 @@ export function publicRoutes(entries: readonly ContentEntry[]): PublicRoute[] {
   return [
     ...FIXED_ROUTES.map((path) => ({ path })),
     ...notes,
-    ...tagFacets(entries).map((facet) => ({ path: tagRoute(facet.key) })),
+    ...facets.map((facet) => ({ path: tagRoute(facet.key) })),
     ...collectionFacets(entries).map((facet) => ({ path: collectionRoute(facet.key) })),
   ];
 }
