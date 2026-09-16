@@ -219,9 +219,9 @@ Aliases are **not** link targets. Obsidian desktop and Obsidian Publish genuinel
 here and this follows desktop. A YAML `aliases:` list is still public metadata: the note shows
 it, search indexes it, and hover previews include it, but it creates no route and changes no
 link resolution. The public `/data/site.<sha256>.sqlite` snapshot downloaded for previews
-contains every alias of every published note in its `aliases` table. Duplicate aliases, or an
-alias colliding with another note's slug, stop the build; the private report names both
-sources.
+contains every alias of every published note in its `aliases` table. The same alias may belong
+to more than one note, and an alias may equal another note's slug: aliases create no route and
+resolve no link, so there is nothing to own or collide with.
 
 ## Reading the report
 

@@ -48,6 +48,8 @@ interface FailureModes {
   deserialize?: number;
   /** `PRAGMA query_only`'s value; `1` is the accepted state. */
   queryOnly?: number;
+  /** `PRAGMA page_count`'s value; one 512-byte page by default. */
+  pageCount?: number;
   schema?: 'fail' | 'ok';
   closeThrows?: boolean;
 }
@@ -150,7 +152,11 @@ function fakeSqlite(failure: FailureModes = {}) {
       if (failure.schema === 'fail') throw new Error('schema probe failed');
       return contractRows(sql);
     }
-    selectValue(): unknown {
+    selectValue(sql: string): unknown {
+      // `importSnapshot` reads the page count as well as `query_only`; the
+      // fake's BYTES carries a 512-byte header page, so one page is the
+      // accepted accounting.
+      if (sql === 'PRAGMA page_count') return failure.pageCount ?? 1;
       return failure.queryOnly ?? 1;
     }
     close(): void {
@@ -183,7 +189,14 @@ function fakeSqlite(failure: FailureModes = {}) {
   };
 }
 
-const BYTES = new Uint8Array(8);
+/**
+ * One SQLite header page's worth of bytes: 512 bytes with the header's
+ * big-endian page-size field set to 512 (offset 16 becomes `0x02 0x00`). The
+ * import's truncation check reads that field, so an all-zero buffer would be a
+ * header the product correctly refuses.
+ */
+const BYTES = new Uint8Array(512);
+BYTES[16] = 0x02;
 
 test('a deserialize failure closes the handle', () => {
   const fake = fakeSqlite({ deserialize: 1 });

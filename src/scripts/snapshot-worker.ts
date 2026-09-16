@@ -44,8 +44,14 @@ function codeOf(error: unknown): SnapshotErrorCode {
   return typeof code === 'string' ? (code as SnapshotErrorCode) : 'sql';
 }
 
-/** Fetch with a running decoded-byte cap, cancelled before the cap is exceeded. */
-async function fetchBounded(url: string, limit: number): Promise<Uint8Array> {
+/**
+ * Fetch with a running decoded-byte cap, cancelled before the cap is exceeded.
+ *
+ * Exported for `tests/snapshot-fetch-bounded.test.ts`, which drives it against
+ * a server whose `Content-Length` disagrees with the body; `load` is the only
+ * production caller.
+ */
+export async function fetchBounded(url: string, limit: number): Promise<Uint8Array> {
   let response: Response;
   try {
     response = await fetch(url, { credentials: 'same-origin', redirect: 'error' });
@@ -160,6 +166,26 @@ export function importSnapshot(sqlite3: Sqlite3, databaseBytes: Uint8Array): Sql
 
     database.exec('PRAGMA query_only = ON');
     if (database.selectValue('PRAGMA query_only') !== 1) fault('format');
+    // A deserialize sizes its page list from the buffer length, so a file whose
+    // last page is partial still imports — and `PRAGMA integrity_check` calls it
+    // `ok`. The producer's snapshot is exactly its pages; any other byte length
+    // is truncated or padded, and the import refuses it. The page size comes
+    // from the file's own header (offset 16, big-endian; 1 means 65536) rather
+    // than `PRAGMA page_size`, which on the pinned WASM build reports the
+    // connection's compiled-in default for a freshly deserialized database.
+    // This is the second line: `load` already fails truncated data on the
+    // digest before import.
+    const headerPageSize = (databaseBytes[16]! << 8) | databaseBytes[17]!;
+    const pageSize = headerPageSize === 1 ? 65536 : headerPageSize;
+    let pageCount: number;
+    try {
+      pageCount = Number(database.selectValue('PRAGMA page_count'));
+    } catch {
+      // A buffer too corrupt to answer `page_count` is refused as a format
+      // fault rather than escaping as a raw driver error.
+      fault('format');
+    }
+    if (!Number.isInteger(pageCount) || pageSize * pageCount !== databaseBytes.byteLength) fault('format');
     try {
       assertSnapshotRows((sql) => database.selectObjects(sql));
     } catch {

@@ -562,26 +562,22 @@ test('invalid alias lists fail with the source only in private detail', async ()
   }
 });
 
-test('alias conflicts fail by count with both source paths only in private detail', async () => {
-  for (const [secondSlug, secondAlias] of [
-    ['second', 'Shared Name'],
-    ['shared-name', 'first'],
-  ] as const) {
-    await scratch('producer-alias-conflict-', async (root) => {
-      put(root, 'first.md', '---\naliases: ["Shared Name"]\n---\n\n# First\n');
-      put(root, `${secondSlug}.md`, `---\naliases: [${JSON.stringify(secondAlias)}]\n---\n\n# Second\n`);
-      const failure = await discover(root).then(
-        () => undefined,
-        (error: unknown) => error as BuildFailure,
-      );
-      assert.equal(failure?.code, 'alias-collision');
-      assert.match(failure?.message ?? '', /^1 published alias claim conflicts$/);
-      assert.ok(failure?.detail.includes('first.md'));
-      assert.ok(failure?.detail.includes(`${secondSlug}.md`));
-      assert.ok(!failure?.message.includes('Shared Name'));
-      assert.ok(!failure?.message.includes('first.md'));
-    });
-  }
+test('the same alias may belong to two notes, and an alias may equal another note’s slug', async () => {
+  // `docs/core-design/content-semantics.md`: aliases are "not alternate
+  // resolver targets, routes, globally unique names, or graph nodes", and "the
+  // same alias may belong to different notes". This test replaced the old
+  // `alias-collision` refusal, which named both source paths in the private
+  // report but also made the design's shared-alias case unbuildable.
+  await scratch('producer-alias-shared-', async (root) => {
+    put(root, 'first.md', '---\naliases: ["Shared Name", "second"]\n---\n\n# First\n');
+    put(root, 'second.md', '---\naliases: ["Shared Name"]\n---\n\n# Second\n');
+    const artifact = await discover(root);
+    const first = artifact.entries.find((entry) => entry.slug === 'first');
+    const second = artifact.entries.find((entry) => entry.slug === 'second');
+    assert.deepEqual(first?.aliases, ['Shared Name', 'second'], 'the first note lost its accepted alias order');
+    assert.deepEqual(second?.aliases, ['Shared Name'], 'the shared alias did not reach the second note');
+    assert.equal(artifact.entries.length, 2, 'the shared-alias corpus did not publish both notes');
+  });
 });
 
 test('aliases remain metadata rather than wikilink targets', async () => {

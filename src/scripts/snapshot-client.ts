@@ -72,7 +72,7 @@ function ensureWorker(): Worker {
       // Observability seam for the benchmark harness, armed explicitly by the
       // measurer: the operation and its dispatch-to-validated-result time. No
       // corpus data is carried, and an ordinary reader dispatches nothing.
-      if ((window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
+      if (typeof window !== 'undefined' && (window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
         document.dispatchEvent(
           new CustomEvent('snapshot-result', { detail: { type: reply.result.type, ms: elapsed } }),
         );
@@ -90,6 +90,24 @@ function ensureWorker(): Worker {
 }
 
 /**
+ * Release the Worker and settle what it owed.
+ *
+ * A document's snapshot cannot change in place — its binding is compiled into
+ * the page — so the lifecycle contract's "snapshot change" case arrives as a
+ * new document with a new binding, and teardown is the only in-place
+ * transition. Registering it on `pagehide` releases the Worker (and its
+ * deserialized database) with the document, without an idle timer that would
+ * make a later preview cold.
+ */
+export function dispose(): void {
+  reset('cancelled');
+}
+
+// `typeof window` keeps this module loadable in Node for the client gate; a
+// browser is the only environment where the listener has anything to release.
+if (typeof window !== 'undefined') window.addEventListener('pagehide', () => dispose());
+
+/**
  * Send one named operation.
  *
  * @throws {SnapshotClientError} with a small code on failure, a bounded reject
@@ -101,7 +119,14 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
   if (pending.size >= WORKER_LIMITS.maxPendingRequests) {
     return Promise.reject(new SnapshotClientError('busy'));
   }
-  const instance = ensureWorker();
+  let instance: Worker;
+  try {
+    instance = ensureWorker();
+  } catch {
+    // A Worker the document may not construct (CSP refusal, unsupported engine)
+    // settles every pending request instead of throwing past an awaiting caller.
+    return Promise.reject(new SnapshotClientError('terminated'));
+  }
   const deadline = initialized ? WORKER_LIMITS.requestDeadlineMs : WORKER_LIMITS.startupDeadlineMs;
   return new Promise<SnapshotResult>((resolve, reject) => {
     const id = message.id;
