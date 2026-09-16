@@ -39,6 +39,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { loadArtifact } from '../src/lib/artifact-source.ts';
+import { SQLITE_MAGIC } from '../scripts/snapshot-rows.ts';
 import { assertOutputInventory } from '../scripts/verify-output-inventory.ts';
 import { BuildFailure } from '../scripts/write-report.ts';
 
@@ -61,8 +62,6 @@ const RETIRED_PAYLOAD_NAMES = ['content-index.json', 'graph-manifest.json'] as c
 
 /** The relation-authority keys the removed public index serialized. */
 const RELATION_AUTHORITY_KEYS = new Set(['outgoing', 'backlinks']);
-
-const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'latin1');
 
 /**
  * The only two members the build may ship with the SQLite header in them.

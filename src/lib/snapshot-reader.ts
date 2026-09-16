@@ -31,7 +31,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { DatabaseSync } from './sqlite.ts';
 import { configuredSnapshotWorkspace, readSnapshotBinding, type SnapshotBinding } from './snapshot.ts';
-import { SNAPSHOT_QUERIES } from './snapshot-queries.ts';
+import { SNAPSHOT_QUERIES, type TagIdentity } from './snapshot-queries.ts';
 
 /**
  * The private workspace `SNAPSHOT_WORKSPACE` names, anchored at the working
@@ -47,12 +47,14 @@ export function snapshotWorkspace(
   return resolve(process.cwd(), workspace);
 }
 
-/** One `tags` row with the `node_tags` members the snapshot stores for it. */
-export interface SnapshotTagFacet {
-  /** `tags.key`, exactly the string the static route and the browser query use. */
-  key: string;
-  /** `tags.label`, the representative display spelling. */
-  label: string;
+/**
+ * One `tags` row with the `node_tags` members the snapshot stores for it.
+ *
+ * `TagIdentity` is the row's `key` and `label`, exactly the pair the static
+ * route and the browser `byTag` query use; one spelling of that pair avoids
+ * the reader and the query module drifting apart.
+ */
+export interface SnapshotTagFacet extends TagIdentity {
   /** Member slugs, sorted. */
   slugs: string[];
 }

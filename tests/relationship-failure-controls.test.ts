@@ -226,14 +226,14 @@ test('the finalized snapshot refuses a duplicate, self, or dangling relationship
       const ids = (database.prepare('SELECT id FROM nodes ORDER BY id').all() as unknown as { id: number }[]).map(
         (row) => row.id,
       );
+      const edgeExists = database.prepare(
+        'SELECT 1 FROM edges WHERE source_id = ? AND target_id = ?',
+      );
       let pair: [number, number] | undefined;
       for (const source of ids) {
         for (const target of ids) {
           if (source === target) continue;
-          const exists = database
-            .prepare('SELECT 1 FROM edges WHERE source_id = ? AND target_id = ?')
-            .get(source, target);
-          if (exists === undefined) {
+          if (edgeExists.get(source, target) === undefined) {
             pair = [source, target];
             break;
           }

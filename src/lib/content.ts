@@ -14,7 +14,7 @@
  */
 
 import { loadArtifact } from './artifact-source.ts';
-import { byTitleThenSlug } from './relations.ts';
+import { notesForSlugs } from './relations.ts';
 import { routeKey, tagFacets as producerTagFacets, tagRoute, type Facet } from './routes.ts';
 import type { ContentArtifact, ContentEntry } from './schema.ts';
 import {
@@ -64,10 +64,10 @@ if (snapshotIsAuthority) hydrateEntriesWithSnapshot(entries, snapshot);
  * The snapshot's facets as the `Facet` shape the static surfaces render.
  *
  * `entries` are the artifact's own objects, resolved through the same map
- * `getEntry` uses, so a tag page and a note page list the same instances. A
- * member the artifact does not carry is skipped rather than rendered as a dead
- * link; `snapshotMatchesEntries` already proves the node sets are equal, so
- * this is unreachable through the validated loader.
+ * `getEntry` uses, so a tag page and a note page list the same instances.
+ * `notesForSlugs` owns the presentation order and the skip of a member the
+ * artifact does not carry; `snapshotMatchesEntries` already proves the node
+ * sets are equal, so the skip is unreachable through the validated loader.
  */
 function facetsFromSnapshot(
   relation: SnapshotRelations,
@@ -76,10 +76,7 @@ function facetsFromSnapshot(
   return relation.tagFacets.map((facet) => ({
     key: facet.key,
     label: facet.label,
-    entries: facet.slugs
-      .map((slug) => lookup.get(slug))
-      .filter((entry): entry is ContentEntry => entry !== undefined)
-      .sort(byTitleThenSlug),
+    entries: notesForSlugs(facet.slugs, (slug) => lookup.get(slug)),
   }));
 }
 

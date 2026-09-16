@@ -179,10 +179,11 @@ function sharedFacets(entry: ContentEntry, facets: readonly Facet[]): Facet[] {
  * asserts the page renders exactly the resolved sentence — but it was the
  * reminder, and this paragraph is what replaces it.
  *
- * ponytail: the facets are recomputed per call, so a whole build is quadratic
- * in tag membership — at 900 entries that is roughly two million set
- * operations across the build, well under a second. Hoist the facets into a
- * parameter if a build ever spends measurable time here.
+ * ponytail: `sharedFacets` still scans the whole index per call, so a build
+ * that asks for every note's related list is notes × tags. The `WeakMap` above
+ * removed the quadratic grouping, and the build path now also shares one index
+ * instead of rebuilding it. A per-note membership lookup would be the next
+ * step only if a corpus makes the remaining scan measurable.
  */
 export function relatedNotes(
   entry: ContentEntry,

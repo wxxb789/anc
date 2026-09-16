@@ -180,7 +180,8 @@ const canonicalRoute = noteRoute(entry.slug);
  */
 const outgoing = notesForSlugs(entry.outgoing, getEntry);
 const backlinks = notesForSlugs(entry.backlinks, getEntry);
-const related = relatedNotes(entry, entries, tagFacets());
+const facets = tagFacets();
+const related = relatedNotes(entry, entries, facets);
 
 /**
  * Why the related list is empty, when it is.
@@ -190,8 +191,15 @@ const related = relatedNotes(entry, entries, tagFacets());
  * tag-sharer is already rendered in the two sections above. Saying "nothing
  * shares a tag" in the second case is a claim the artifact contradicts, which
  * is precisely what an honest empty state must not do.
+ *
+ * `hasTagPeer` runs only for an empty list, which is the only case
+ * `LinkedNotes` renders the message; a page with related notes skips a second
+ * full scan of the facet index.
  */
-const relatedEmpty = hasTagPeer(entry, entries, tagFacets()) ? t.relatedAlreadyListed : t.relatedNoTagPeer;
+const relatedEmpty =
+  related.length === 0 && !hasTagPeer(entry, entries, facets)
+    ? t.relatedNoTagPeer
+    : t.relatedAlreadyListed;
 
 /**
  * The pager: its two links and the name it announces, or nothing at all.

@@ -45,6 +45,9 @@ const PEER_COUNT = 501;
 /** `peer-000` … `peer-500`, the exact slugs the artifact must publish. */
 const PEER_SLUGS = Array.from({ length: PEER_COUNT }, (_, index) => `peer-${String(index).padStart(3, '0')}`);
 
+/** Membership for the per-edge lookups below; the array itself stays ordered. */
+const PEER_SLUG_SET = new Set(PEER_SLUGS);
+
 /** The title written into `peer-<n>.md`, distinct per file. */
 function peerTitle(index: number): string {
   return `Peer ${String(index).padStart(3, '0')}`;
@@ -167,7 +170,7 @@ test(
       assert.equal(edges.length, PEER_COUNT, `the snapshot carries ${edges.length} edges, expected ${PEER_COUNT}`);
       for (const [source, target] of edges) {
         assert.equal(target, 'hub', `edge "${source}" -> "${target}" does not point at the hub`);
-        assert.ok(PEER_SLUGS.includes(source), `edge "${source}" -> "${target}" starts at a slug the corpus never wrote`);
+        assert.ok(PEER_SLUG_SET.has(source), `edge "${source}" -> "${target}" starts at a slug the corpus never wrote`);
       }
       // Set equality, not just the count: 501 edges with a duplicate source
       // and a missing peer would satisfy the count and fail a reader.
@@ -231,10 +234,11 @@ test(
         seen.set(href, (seen.get(href) ?? 0) + 1);
       }
       for (const slug of PEER_SLUGS) {
+        const route = noteRoute(slug);
         assert.equal(
-          seen.get(noteRoute(slug)),
+          seen.get(route),
           1,
-          `peer "${slug}" is linked ${seen.get(noteRoute(slug)) ?? 0} times, expected exactly once`,
+          `peer "${slug}" is linked ${seen.get(route) ?? 0} times, expected exactly once`,
         );
       }
 

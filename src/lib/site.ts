@@ -504,7 +504,10 @@ export interface PublicRoute {
  *
  * `facets` defaults to the producer normalization so fixture-driven callers and
  * tests keep the pure signature. The build path passes `content.ts`'s
- * `tagFacets()`, whose keys are the snapshot's own `tags.key` rows.
+ * `tagFacets()`, whose keys are the snapshot's own `tags.key` rows. A caller
+ * that supplies `facets` must supply the unfiltered corpus's index: the
+ * withdrawal property above depends on the index covering every tag the corpus
+ * carries, not on the default.
  */
 export function publicRoutes(
   entries: readonly ContentEntry[],

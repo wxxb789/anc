@@ -51,17 +51,22 @@ function withWorkspace<T>(body: (directory: string) => T): T {
   }
 }
 
+/** Write the binding file in the one shape `scripts/build-snapshot.ts` writes. */
+function writeBinding(directory: string, url: string, digest: string): void {
+  writeFileSync(
+    join(directory, 'binding.json'),
+    `${JSON.stringify({ url, digest }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
 /**
  * Stage a workspace the way `scripts/build-snapshot.ts` does: the finalized
  * file and the binding that names the digest of its bytes.
  */
 function stage(directory: string, content: ContentArtifact): void {
   const written = writeSnapshot(content, join(directory, 'snapshot.sqlite'));
-  writeFileSync(
-    join(directory, 'binding.json'),
-    `${JSON.stringify({ url: written.url, digest: written.digest }, null, 2)}\n`,
-    'utf8',
-  );
+  writeBinding(directory, written.url, written.digest);
 }
 
 /**
@@ -76,11 +81,7 @@ function stage(directory: string, content: ContentArtifact): void {
 function rebind(directory: string): void {
   const bytes = readFileSync(join(directory, 'snapshot.sqlite'));
   const digest = createHash('sha256').update(bytes).digest('hex');
-  writeFileSync(
-    join(directory, 'binding.json'),
-    `${JSON.stringify({ url: snapshotRoute(digest), digest }, null, 2)}\n`,
-    'utf8',
-  );
+  writeBinding(directory, snapshotRoute(digest), digest);
 }
 
 test('the reader returns the digest-bound edges and tag labels', () => {
