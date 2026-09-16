@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { test, type TestContext } from 'vitest';
 
 import { rawStartTags, startTags } from './support/css-cascade.ts';
+import { snapshotNotes } from './support/snapshot.ts';
 import { DIAGRAM_MODE, REQUIRED_STYLE_SRC, STYLE_SRC_BY_MODE } from '../src/lib/diagram-mode.ts';
 
 const DIST = new URL('../dist/', import.meta.url);
@@ -422,12 +423,12 @@ test('no page requests a search asset before the reader opens search', () => {
 
 test('no surface that serves an excerpt or a title carries TeX', (context: TestContext) => {
   // **Three surfaces, and a gate on one of them would have passed.** An excerpt
-  // is plain text in `content-index.json`, in `rss.xml`, and in every page's
-  // `<meta name="description">`; a title reaches `<title>` and `og:title`. The
-  // three are written by different code — the feed is built from the artifact
-  // separately from the page's head — so a defect can live in one and not the
-  // others, and this asserts over the shipped bytes rather than over the
-  // producer that `tests/link-traversal.test.ts` already covers.
+  // is plain text stored in the SQLite snapshot, in `rss.xml`, and in every
+  // page's `<meta name="description">`; a title reaches `<title>` and
+  // `og:title`. The three are written by different code — the feed is built from
+  // the artifact separately from the page's head — so a defect can live in one
+  // and not the others, and this asserts over the shipped bytes rather than over
+  // the producer that `tests/link-traversal.test.ts` already covers.
   //
   // Measured on `cabcc6a`, one note containing `$$\frac{a}{b} = \sqrt{c}$$`: all
   // three carried the TeX verbatim.
@@ -444,13 +445,11 @@ test('no surface that serves an excerpt or a title carries TeX', (context: TestC
   // backslash in prose is not followed by two letters.
   const TEX = /\$\$|\\[a-zA-Z]{2,}/;
 
-  const index = JSON.parse(readFileSync(new URL('content-index.json', DIST), 'utf8')) as {
-    entries: { slug: string; title: string; excerpt: string }[];
-  };
-  assert.ok(index.entries.length > 0, 'the index is empty, so this gate inspected nothing');
-  for (const entry of index.entries) {
-    assert.doesNotMatch(entry.excerpt, TEX, `content-index.json: ${entry.slug}'s excerpt carries TeX`);
-    assert.doesNotMatch(entry.title, TEX, `content-index.json: ${entry.slug}'s title carries TeX`);
+  const notes = snapshotNotes(fileURLToPath(DIST));
+  assert.ok(notes.length > 0, 'the snapshot is empty, so this gate inspected nothing');
+  for (const note of notes) {
+    assert.doesNotMatch(note.excerpt, TEX, `the snapshot: ${note.slug}'s excerpt carries TeX`);
+    assert.doesNotMatch(note.title, TEX, `the snapshot: ${note.slug}'s title carries TeX`);
   }
 
   // The feed's per-entry `<summary>` is the same excerpt through a different

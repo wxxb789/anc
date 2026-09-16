@@ -52,7 +52,6 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
-import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { BuildFailure } from './write-report.ts';
@@ -60,6 +59,8 @@ import { readVendorProvenance, type VendorProvenanceReadOptions } from './vendor
 import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { MARKED_ATTRIBUTE, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
+import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
+import { databaseText, isGzip, isSqlite } from './snapshot-rows.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 
@@ -385,6 +386,7 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
   '.jpg',
   '.jpeg',
   '.png',
+  '.wasm',
   '.webp',
   '.woff',
   '.woff2',
@@ -470,6 +472,18 @@ const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
  */
 const THIRD_PARTY = 'pagefind';
 
+/**
+ * The pinned SQLite runtime, also third-party and also anchored at the root.
+ *
+ * Its Emscripten glue legitimately contains `[[` and `file://` strings, which the
+ * residue rules would otherwise read as ANC content. It is copied verbatim from
+ * the pinned package (see `scripts/build-wasm.ts`), never authored here, and its
+ * WASM binary is a compiled artifact; `tests/built-output.test.ts` and the
+ * output inventory still bind its exact members. A note slugged `wasm` builds
+ * under `/notes/wasm/`, so anchoring keeps that page scanned.
+ */
+const WASM_RUNTIME = 'wasm';
+
 /** The one member of that bundle whose text is this site's own content. */
 const FRAGMENT_EXTENSION = '.pf_fragment';
 
@@ -541,377 +555,6 @@ const FRAGMENT_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']
  * of one carrier — and nothing makes those three co-vary.
  */
 const RAW_BYTES_EXEMPT: ReadonlySet<string> = new Set(['unresolved [[wikilink]]']);
-
-/**
- * The first sixteen bytes of every SQLite file, and the reason the database
- * branch keys on them rather than on an extension.
- *
- * An extension is a naming convention: `.sqlite3`, `.db`, `.sqlite`, or no
- * extension at all are the same format, and a build step choosing a fifth
- * spelling would fall through to the unclassified branch — correct, but it
- * fails the build on a file this scan is now able to read. The header is what
- * the format actually guarantees, so the classifier asks the bytes.
- *
- * This does not weaken the fail-closed property. A file whose first bytes are
- * not this magic is classified exactly as it was before; a file whose bytes
- * *are* this magic and which SQLite then refuses to open is reported, not
- * skipped.
- */
-const SQLITE_MAGIC = 'SQLite format 3\0';
-
-/** The first two bytes of a gzip member. */
-const GZIP_MAGIC: readonly [number, number] = [0x1f, 0x8b];
-
-/**
- * `node:sqlite` is loaded through `createRequire` rather than imported.
- *
- * This module is imported by five test files and by `bin/anc.mjs`
- * on every build, and all but one of those runs scan a `dist/` holding no
- * database at all. A static import would load the SQLite binding into every one
- * of them to serve a branch they never reach.
- *
- * It is a Node builtin, so it needs no entry in `package.json` — which
- * `tests/packaging.test.ts`'s undeclared-import gate checks, and which is why a
- * third-party SQLite package would have been a worse answer even before the
- * runtime cost.
- */
-const loadSqlite = (): typeof import('node:sqlite') =>
-  createRequire(import.meta.url)('node:sqlite') as typeof import('node:sqlite');
-
-/**
- * Every text value a database carries, as rows rather than as bytes.
- *
- * ## Why rows, and why bytes are still read alongside them
- *
- * A byte scan of a SQLite file is not a scan of its contents, for a reason that
- * is this project's own recurring defect in a new carrier. A row larger than a
- * page is stored as a chain of overflow pages, each linked by a **4-byte
- * pointer written into the middle of the payload** — so a marker straddling a
- * page boundary exists in the file as two fragments with four bytes of pointer
- * between them, and matches nothing. Measured here: sweeping
- * `/home/someone/private` through a fixed-length body across 12,000 rows at
- * `page_size=4096`, **60 rows carried the marker where the file's bytes did
- * not**, while all 12,000 were returned by a single `SELECT … LIKE`. At byte
- * 81,694,700 a page ends `/home/someone/privat`, four pointer bytes follow, then
- * `e`. That is TK-29's `ms**w/s**ecret` again — a marker the reader receives
- * whole and no raw read can see — arriving through B-tree structure instead of
- * markup.
- *
- * So reading rows is what makes the scan see the database at all. The bytes are
- * read **as well**, and the reason is the opposite direction of the same
- * question: a deleted row's payload stays in the file until a `VACUUM`
- * reclaims it, and a `SELECT` cannot see it. Measured: a row inserted and then
- * deleted left `WITHHELD /home/someone/private msw/secret` in the file with
- * `freelist_count` at 0, invisible to every query and present in every byte a
- * reader downloads. Under an artifact the reader receives whole, that is a
- * withheld note shipping.
- *
- * Neither read subsumes the other, and the cost of running both is measured at
- * zero: over a database built from this repository's own `docs/`, **no rule
- * matched in the bytes that did not also match in the rows** — the byte pass
- * contributes no false positive of its own, only the free-page case.
- *
- * ## What "every text value" means
- *
- * Every user table in `sqlite_schema`, every column, every row. Not a named set
- * of columns: a scan that knows the schema is a scan that goes blind the first
- * time a column is added, and the whole point of the fail-closed classifier is
- * that novelty is not silently skipped.
- *
- * **A BLOB is read as text too**, and an earlier version of this function
- * skipped one on the argument that a BLOB is bytes already read by the byte
- * pass. That argument is false for exactly the reason this function exists: the
- * byte pass cannot see across an overflow-page boundary, and a BLOB body
- * overflows identically to a TEXT one. Measured — the same boundary fixture with
- * the column typed `BLOB` carried the marker in three rows, satisfied no rule
- * over the file's bytes, and produced zero findings. Values that are numbers or
- * null are ignored, because neither can carry a marker.
- *
- * @returns The text of every row as separate values, and the tables that could
- *   not be read as text. **Separate, never joined**: concatenating two rows
- *   manufactures a marker that neither carries, which is the same false positive
- *   {@link normalizedForms} refuses a whitespace-stripped form to avoid. It also
- *   keeps the scan's peak memory to one copy of the corpus — measured, joining
- *   them exhausted a 4 GB heap on a 168 MB database. `corpusRows` counts only
- *   rows of tables that yielded text, which is what makes it a coverage measure
- *   rather than a count of SQLite's own bookkeeping. A caller must treat a
- *   non-empty `unreadable` as a finding: see the database branch of
- *   {@link scanResidue}.
- */
-/** What one database yielded. See {@link databaseText}. */
-interface DatabaseRead {
-  values: string[];
-  corpusRows: number;
-  unreadable: string[];
-}
-
-/**
- * @param bytes The database, as bytes — the inflated payload where it was
- *   compressed.
- * @param path Where those bytes came from, when they came from a file. Used only
- *   as a fallback: a WAL-mode header is refused by `deserialize` and readable
- *   from its path. An inflated gzip member has no path and passes `undefined`.
- */
-function databaseText(bytes: Uint8Array, path?: string): DatabaseRead {
-  const { DatabaseSync } = loadSqlite();
-  // Opened from the buffer rather than from the path, so one code path serves
-  // both a database on disk and one recovered by inflating a gzip member — and
-  // so the scan cannot write to, or create a journal beside, the artifact it is
-  // judging.
-  const database = new DatabaseSync(':memory:');
-  try {
-    // **A WAL-mode file is read from its path instead.** A database whose header
-    // declares WAL (bytes 18 and 19 are 2) cannot be served from a buffer: the
-    // format's shared-memory index has no in-memory equivalent, and measured,
-    // `deserialize` *succeeds* on such a file while the first query then throws
-    // "unable to open database file". So the fallback is keyed on the whole
-    // read failing rather than on the open — the open is not where it fails.
-    // That is a common `journal_mode`, and reporting it as unopenable would send
-    // the reader to a fix that is not the problem.
-    //
-    // The buffer stays the default because it is the only path that can serve an
-    // inflated gzip member, which has no file to open.
-    try {
-      database.deserialize(bytes);
-      return readOpenDatabase(database);
-    } catch (error) {
-      if (path === undefined) throw error;
-      // Not `readOnly`: a WAL database needs its `-shm` file and a read-only
-      // connection cannot create one. Anything this leaves beside the artifact
-      // is itself scanned — a stray `-wal` or `-shm` in `dist/` falls through to
-      // the unclassified branch and fails the build by name, which is the
-      // fail-closed classifier covering this function's own side effects.
-      const fromDisk = new DatabaseSync(path);
-      try {
-        return readOpenDatabase(fromDisk);
-      } finally {
-        fromDisk.close();
-      }
-    }
-  } finally {
-    database.close();
-  }
-}
-
-/** The reading half of {@link databaseText}, over a handle already open. */
-function readOpenDatabase(database: {
-  prepare: (sql: string) => { all: () => unknown[] };
-  exec: (sql: string) => void;
-}): DatabaseRead {
-  const values: string[] = [];
-  const unreadable: string[] = [];
-  let corpusRows = 0;
-  let vocabSequence = 0;
-  const orphanCandidates: { name: string; terms: string[] }[] = [];
-  // Row text only, kept apart from `values` so an index's terms are not checked
-  // for orphanhood against themselves. See the orphan pass below.
-  const rowText: string[] = [];
-
-  const tables = database
-    .prepare(`SELECT name, sql FROM sqlite_schema WHERE type = 'table' ORDER BY name`)
-    .all() as { name: string; sql: string | null }[];
-  const virtualNames = tables
-    .filter(({ sql }) => /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(sql ?? ''))
-    .map(({ name }) => name);
-
-  for (const { name, sql } of tables) {
-    const isVirtual = /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(sql ?? '');
-    const isShadow = virtualNames.some((owner) => name.startsWith(`${owner}_`));
-    let rows: Record<string, unknown>[];
-    try {
-      rows = database.prepare(`SELECT * FROM "${name.replaceAll('"', '""')}"`).all() as Record<
-        string,
-        unknown
-      >[];
-    } catch {
-      // A table that exists and cannot be selected from is "could not look",
-      // and lesson 3 of `docs/gate-reading.md` is that it must not be spelled
-      // like "looked and found nothing".
-      unreadable.push(name);
-      continue;
-    }
-
-    let textValues = 0;
-    for (const row of rows) {
-      for (const value of Object.values(row)) {
-        if (typeof value === 'string' && value.length > 0) {
-          textValues += 1;
-          values.push(value);
-          if (!isShadow) rowText.push(value);
-        } else if (value instanceof Uint8Array && value.length > 0) {
-          // A BLOB, read as text for the reason stated above: the byte pass
-          // cannot see across an overflow-page boundary and a BLOB body
-          // overflows exactly as a TEXT one does.
-          //
-          // **Inflated first where it is a gzip member**, by the same rule the
-          // file loop applies and for the same reason: a compressed body is
-          // unreadable to both passes at once. Measured — a note stored as
-          // `gzip(body)` in a BLOB column produced zero findings, with the
-          // marker absent from the file's bytes and absent from the value.
-          // Storing bodies compressed is the obvious thing to do when the
-          // whole database is downloaded, so this is the shape a real build
-          // takes rather than a contrived one. An inflate failure falls back
-          // to the raw value, which is the *conservative* direction here: the
-          // value is still scanned, unlike a file-level failure where falling
-          // back would mean scanning compressed bytes and calling it clean.
-          textValues += 1;
-          let blob = Buffer.from(value);
-          if (blob.length >= 2 && blob[0] === GZIP_MAGIC[0] && blob[1] === GZIP_MAGIC[1]) {
-            try {
-              blob = Buffer.from(gunzipSync(blob));
-            } catch {
-              // Kept as the raw bytes, and still scanned.
-            }
-          }
-          values.push(blob.toString('utf8'));
-          // **Not counted toward the orphan corpus when this is a shadow
-          // table.** An FTS5 `_data` blob stores the index's own term list, so
-          // including it means every term finds itself there and no index can
-          // ever have an orphan — measured, the stale case came back clean with
-          // its five withheld terms visible inside `s_data`. The corpus an index
-          // is checked against has to be the text a *reader* gets back, which is
-          // the ordinary tables.
-          if (!isShadow) rowText.push(blob.toString('utf8'));
-        }
-      }
-    }
-    // **Only a corpus table's rows count toward coverage.** Counting every row
-    // makes the guard satisfiable by SQLite's own bookkeeping: measured, a
-    // database with zero notes and one empty FTS5 index reports three rows —
-    // two from its `_data` shadow table and one from `_config`, whose single
-    // text value is the literal `"version"`. A build shipping an empty corpus
-    // would then pass a non-zero row count, and the guard is meant to move
-    // with what is published.
-    //
-    // A shadow table is one whose name is a virtual table's name plus a known
-    // suffix, which is how SQLite itself names them. Excluded by that shape
-    // rather than by a list of suffixes, so a future FTS5 version adding a
-    // fourth shadow table is covered by the sentence rather than missing from
-    // an enumeration — the corollary about enumerations in
-    // `docs/gate-reading.md`.
-    if (textValues > 0 && !isShadow) corpusRows += rows.length;
-
-    // **An index's own terms, read through `fts5vocab`, and counted.** A
-    // full-text index is a second copy of the corpus and it does not have to
-    // agree with the first: an external-content index whose source row is
-    // later rewritten keeps the *old* terms, `SELECT` returns the new body,
-    // `integrity-check` does not notice, and prefix compression hides them
-    // from the byte pass. Measured — a note rewritten after indexing, then
-    // `VACUUM`ed, left `msw path secret someone` recoverable by any reader in
-    // one statement.
-    //
-    // The terms are pushed as subjects like any other text, but they are also
-    // what decides the unreadable finding below, and the two are different
-    // questions. A tokenizer is lossy: `unicode61` splits `msw/secret` into
-    // `msw` and `secret`, so **no marker rule can match a term even when the
-    // index plainly carries the marker**. Reading the terms therefore proves
-    // the index is *enumerable*, not that it is *scannable* — and an index
-    // holding text no rule can be applied to is exactly the "could not look"
-    // case, whether it is contentless or merely tokenized.
-    const vocabTerms: string[] = [];
-    let vocabReadable = false;
-    if (isVirtual && /\bfts5\b/i.test(sql ?? '')) {
-      const view = `residue_vocab_${vocabSequence++}`;
-      try {
-        // **The schema is named explicitly.** An `fts5vocab` table created in
-        // `temp` resolves its target in `temp` too — measured, the
-        // `temp.`-qualified form fails with `no such fts5 table: temp.search`
-        // — so the two-argument form naming `main` is what reaches the index.
-        // The first version of this used the qualified form and therefore
-        // never read a term: every index landed in `unreadable` instead,
-        // which reads as a stricter gate and is in fact a blinder one.
-        database.exec(
-          `CREATE VIRTUAL TABLE temp."${view}" USING fts5vocab(main, "${name.replaceAll('"', '""')}", 'row')`,
-        );
-        for (const { term } of database.prepare(`SELECT term FROM temp."${view}"`).all() as {
-          term: string | null;
-        }[]) {
-          if (typeof term === 'string' && term.length > 0) {
-            vocabTerms.push(term);
-            values.push(term);
-          }
-        }
-        vocabReadable = true;
-      } catch {
-        // An index whose terms cannot be enumerated at all is the strongest
-        // form of the same case.
-        vocabReadable = false;
-      } finally {
-        // Dropped whether or not the read succeeded: a live virtual table
-        // keeps a handle on the file, and on Windows that makes the artifact
-        // undeletable by anything that runs after the scan.
-        try {
-          database.exec(`DROP TABLE IF EXISTS temp."${view}"`);
-        } catch {
-          // Already absent because the create failed, which is the only way
-          // here — and nothing downstream depends on it.
-        }
-      }
-    }
-
-    // **A contentless FTS5 index is the case this check exists for**, and it
-    // is unreadable in both directions at once — which is what makes it a
-    // finding rather than an exclusion. Measured on `fts5(body, content='')`:
-    // `SELECT body` returns `null` for every row and `snippet()` returns
-    // `null`, so it carries no text to read; and its stored terms are not
-    // byte-findable either, because `unicode61` strips the separators every
-    // rule here keys on (`msw/` absent while `msw` present, `javascript:`
-    // absent while `javascript` present, `C:/` absent) and prefix compression
-    // stores a term sharing a prefix with its neighbour as a suffix only
-    // (`zzqalpha zzqalphabet zzqalphabetical` leaves only `zzqalpha`
-    // findable). An index this scan can neither query nor grep is exactly the
-    // artifact the header's property 1 refuses to pass in silence.
-    //
-    // Keyed on the measured shape — a virtual table holding rows and yielding
-    // no text — rather than on parsing `content=''` out of the DDL, because
-    // the spelling varies (`content=''`, `content=""`, `content = ''` all
-    // measured) while the shape does not. An *empty* contentless index yields
-    // no rows and is not reported: it holds nothing to disclose.
-    //
-    // **Decided after the vocab read.** A tokenizer is lossy — `unicode61`
-    // splits `msw/secret` into `msw` and `secret`, so no marker rule can match a
-    // term even when the index plainly carries the marker — which is why the
-    // question here is whether the index's text is *readable*, not whether a
-    // rule fired on it.
-    if (isVirtual && (rows.length > 0 || vocabTerms.length > 0) && textValues === 0) {
-      unreadable.push(name);
-    } else if (isVirtual && !vocabReadable) {
-      // An index whose terms cannot be enumerated at all, which is stronger.
-      unreadable.push(name);
-    } else {
-      // **An orphan term is a second copy of the corpus disagreeing with the
-      // first.** An index does not have to match the table it was built from:
-      // measured, rewriting a note's source row without reindexing leaves the
-      // *old* terms in the index while `SELECT` returns the new body,
-      // `integrity-check` passes, and `VACUUM` plus prefix compression keeps
-      // them out of the file's bytes — `a here msw path secret` recoverable by
-      // any reader in one statement, from a note the build withdrew.
-      //
-      // So the terms are held back and checked against everything else the
-      // database yielded. A term no readable text accounts for is a payload no
-      // `SELECT` reaches and no byte read spells, which is the free-page case in
-      // a different store. A fresh index has no orphan — measured, zero for
-      // external-content, owned-content, and contentless alike — so this costs
-      // nothing on a database whose index agrees with its corpus.
-      orphanCandidates.push({ name, terms: vocabTerms });
-    }
-  }
-
-  // Checked after every table, because a term is only an orphan if *no* table
-  // accounts for it, and the table that does may come later in the schema.
-  //
-  // **Checked against the row text, not against `values`.** `values` carries the
-  // terms themselves — they are scanned as subjects like any other text — so
-  // every term would find itself and no index could ever have an orphan. The
-  // corpus here is what the *tables* yielded, which is the thing an index is
-  // supposed to agree with.
-  const corpus = rowText.join('\n').toLowerCase();
-  for (const { name, terms } of orphanCandidates) {
-    if (terms.some((term) => !corpus.includes(term.toLowerCase()))) unreadable.push(name);
-  }
-
-  return { values, corpusRows, unreadable };
-}
 
 /**
  * The forms of a Markdown body a *reader* resolves a marker out of.
@@ -1160,6 +803,9 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // through to the unclassified branch and fails the scan by name, which is
     // property 1 of this file's header.
     const inBundle = where.split(sep)[0] === THIRD_PARTY;
+    // The SQLite runtime is the other declared third-party root; see
+    // {@link WASM_RUNTIME}. Every member is bound by the output inventory.
+    if (posixWhere.split('/')[0] === WASM_RUNTIME) continue;
     const isFragment = inBundle && extension === FRAGMENT_EXTENSION;
     if (inBundle && !isFragment) continue;
     // Exact membership in build-minted provenance, never a basename or path
@@ -1179,7 +825,21 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // one search index, the fix is always in the note the marker came from, and
     // the exact fragment is in the report's `detailed` half where the person who
     // can act on it reads it.
-    const publicWhere = isFragment ? `the search index (${THIRD_PARTY}/)` : where;
+    // **A public snapshot's filename may not be printed either**, for the same
+    // reason as a fragment's: it is `site.<sha256>.sqlite`, and that digest is a
+    // function of the corpus. The rename differential caught this too — a note
+    // body carrying a planted home path lands in the snapshot's `excerpt`, and
+    // the finding named the content-addressed file. The public half names the
+    // surface instead; the digest is in the report's `detailed` half.
+    const isSnapshot =
+      posixWhere.split('/').length === 2 &&
+      posixWhere.split('/')[0] === SNAPSHOT_DIRECTORY &&
+      SNAPSHOT_FILE_PATTERN.test(name);
+    const publicWhere = isFragment
+      ? `the search index (${THIRD_PARTY}/)`
+      : isSnapshot
+        ? `the site snapshot (${SNAPSHOT_DIRECTORY}/)`
+        : where;
 
     // Read once, and classify on what the bytes are rather than on what the
     // name claims. A fragment keeps its own branch below because its *location*
@@ -1194,9 +854,8 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // ship behind a layer this scan structurally could not open. Keying on the
     // gzip magic covers the member that exists today and the one a future step
     // adds, which is the corollary about enumerations in `docs/gate-reading.md`.
-    const isGzip = bytes.length >= 2 && bytes[0] === GZIP_MAGIC[0] && bytes[1] === GZIP_MAGIC[1];
     let inflated: Uint8Array | undefined;
-    if (isGzip) {
+    if (isGzip(bytes)) {
       try {
         inflated = gunzipSync(bytes);
       } catch {
@@ -1212,10 +871,7 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
     // A database is recognised by its header, so `.sqlite3`, `.db` and a file
     // with no extension at all are one case — and so a gzipped one is the same
     // case, since the test runs on the inflated payload.
-    const isDatabase =
-      !isFragment &&
-      payload.length >= SQLITE_MAGIC.length &&
-      Buffer.from(payload.subarray(0, SQLITE_MAGIC.length)).toString('latin1') === SQLITE_MAGIC;
+    const isDatabase = !isFragment && isSqlite(payload);
 
     if (!isFragment && !isDatabase) {
       // A gzip member that is not a database is classified on the name it ships
@@ -1257,7 +913,7 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
       // that no `SELECT` can reach. Measured to cost nothing in false positives.
       let read: ReturnType<typeof databaseText>;
       try {
-        read = databaseText(payload, inflated === undefined ? path : undefined);
+        read = databaseText(payload);
       } catch {
         // A file wearing the SQLite magic that SQLite will not open is "could
         // not look". Reported, never skipped — measured, both a corrupt file and

@@ -2,18 +2,18 @@
  * Hover and focus link previews.
  *
  * A preview is a **projection lookup, not a page fetch**. The slug in the link's
- * path is looked up in `/content-index.json`, which the producer authored as an
- * exact `{slug, title, excerpt, aliases?}` projection of the published artifact.
- * `scripts/validate-content.ts` compares it against that artifact byte for byte. A
- * link whose target is not in the projection previews nothing, and there is no
- * code path that could read anything else: no page is fetched, no markup is
- * parsed, and no field outside the projection exists to show. That is the
+ * path is looked up in the page's bound SQLite snapshot through the shared lazy
+ * Worker, which returns the note's title, excerpt, author-ordered aliases, and
+ * effective language. A link whose target is not in the snapshot previews
+ * nothing, and there is no code path that could read anything else: no page is
+ * fetched, no markup is parsed, and no field outside the snapshot's
+ * `nodes`/`aliases` rows exists to show. That is the
  * property worth keeping — a scrape-the-target design previews whatever the
  * anchor happens to point at, which on a privacy projection is a hole rather
  * than an inconsistency.
  *
  * Everything the panel shows is already on the page it links to and in the
- * public preview projection, so a preview adds speed and never information (requirements
+ * public snapshot, so a preview adds speed and never information (requirements
  * section 14: it never replaces the underlying link). A reader with no pointer,
  * no scripting, or no interest loses nothing.
  *
@@ -27,13 +27,8 @@
  */
 
 import { noteSlugFromPath } from '../lib/route-path.ts';
-import {
-  placePreview,
-  previewFragment,
-  previewTitle,
-  readPreviewIndex,
-  type PreviewIndex,
-} from '../lib/preview-model.ts';
+import { placePreview, previewFragment, previewTitle } from '../lib/preview-model.ts';
+import { requestPreview } from './snapshot-client.ts';
 
 /* Astro concatenates these scripts into one bundle. `export {}` makes this file
    a module with its own top-level scope, so TK-06 and TK-07 can each declare
@@ -67,34 +62,6 @@ interface PreviewLink {
 }
 
 function install(panel: HTMLElement): void {
-  let indexPromise: Promise<PreviewIndex> | undefined;
-
-  /**
-   * Fetch the projection once, and let a failure be retried.
-   *
-   * The bug this replaces was the memoisation itself: `indexPromise ||= fetch(…)`
-   * with no `catch` stored the *rejected* promise, so one flaky request disabled
-   * previews for the page's lifetime and logged an unhandled rejection on a site
-   * whose gates require a clean console. Clearing the slot on failure means the
-   * next hover tries again, and resolving to an empty index means the caller's
-   * ordinary "no such slug" path handles the failure with no second branch.
-   */
-  function loadIndex(): Promise<PreviewIndex> {
-    indexPromise ??= fetch('/content-index.json')
-      .then((response) => {
-        // `fetch` rejects on a network fault only; a 404 or a 500 resolves, and
-        // `response.json()` would then either throw or hand back an error body.
-        if (!response.ok) throw new Error(`content index: HTTP ${response.status}`);
-        return response.json();
-      })
-      .then(readPreviewIndex)
-      .catch((): PreviewIndex => {
-        indexPromise = undefined;
-        return new Map();
-      });
-    return indexPromise;
-  }
-
   /** The link whose preview is showing or scheduled. Unset means nothing is pending. */
   let current: HTMLAnchorElement | undefined;
   let openTimer: ReturnType<typeof setTimeout> | undefined;
@@ -184,9 +151,17 @@ function install(panel: HTMLElement): void {
    * a rectangle that may have scrolled away in the meantime.
    */
   async function show({ link, slug }: PreviewLink): Promise<void> {
-    const entry = (await loadIndex()).get(slug);
+    let entry;
+    try {
+      entry = (await requestPreview(slug)).preview;
+    } catch {
+      // A failed Worker, fetch, digest, or schema falls back to the static page:
+      // the link stays usable and nothing stale is shown. The client clears its
+      // failed initialization so a later intent can retry.
+      entry = null;
+    }
     if (current !== link) return;
-    if (entry === undefined) {
+    if (entry === null) {
       // Nothing to show: a failed index load, or a slug the projection does not
       // carry. `current` is released because it means "the link whose preview is
       // showing or scheduled", and after a miss neither is true. Leaving it set
@@ -213,11 +188,17 @@ function install(panel: HTMLElement): void {
     }
 
     // Text nodes throughout — `textContent`, never `innerHTML` — so every string
-    // from the index stays data and is never parsed as markup.
+    // from the snapshot stays data and is never parsed as markup.
+    const pageLanguage = document.documentElement.lang || 'en';
+    const markLanguage = (element: HTMLElement, language: string): void => {
+      if (language.toLowerCase() !== pageLanguage.toLowerCase()) element.lang = language;
+    };
     const title = document.createElement('strong');
     title.textContent = previewTitle(entry);
+    markLanguage(title, entry.language);
     const excerpt = document.createElement('p');
     excerpt.textContent = entry.excerpt;
+    markLanguage(excerpt, entry.language);
     const fragment = previewFragment(link.hash);
     if (fragment === undefined) panel.replaceChildren(title, excerpt);
     else {

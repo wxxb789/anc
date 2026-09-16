@@ -35,7 +35,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { exclusionOptions, loadConfig } from '../scripts/load-config.ts';
-import { discover, resolveCorpusLinks } from '../scripts/markdown-to-artifact.ts';
+import { discover, resolveCorpusLinks, writeArtifact } from '../scripts/markdown-to-artifact.ts';
 import { FIELD_LIMITS } from '../src/lib/schema.ts';
 import { BuildFailure } from '../scripts/write-report.ts';
 
@@ -991,4 +991,33 @@ test('the producer imports no package absent from the manifest', () => {
       `${specifier} is imported but is not a direct dependency, so it resolves here and not in an install`,
     );
   }
+});
+
+test('the packaged artifact omits producer-resolved edges', async () => {
+  await scratch('artifact-edges-', async (directory) => {
+    put(directory, 'one.md', '# One\n\nSee [[two]].\n');
+    put(directory, 'two.md', '# Two\n');
+    const discovery = await discover(directory);
+    await resolveCorpusLinks(discovery);
+
+    const target = join(directory, 'content.json');
+    await writeArtifact(discovery, target, { includeEdges: false });
+    const stripped = JSON.parse(readFileSync(target, 'utf8')) as { entries: Record<string, unknown>[] };
+    assert.ok(stripped.entries.length > 0, 'the fixture produced no entries');
+    for (const entry of stripped.entries) {
+      assert.ok(!('outgoing' in entry), `${String(entry['slug'])} still serializes outgoing`);
+      assert.ok(!('backlinks' in entry), `${String(entry['slug'])} still serializes backlinks`);
+    }
+
+    // The in-memory producer result still carried the edge, and the default
+    // writer keeps it for this repository's committed/fixture path.
+    await writeArtifact(discovery, target);
+    const kept = JSON.parse(readFileSync(target, 'utf8')) as { entries: Record<string, unknown>[] };
+    assert.ok(
+      kept.entries.some(
+        (entry) => Array.isArray(entry['outgoing']) && (entry['outgoing'] as string[]).includes('two'),
+      ),
+      'the default writer no longer carries the producer edge',
+    );
+  });
 });

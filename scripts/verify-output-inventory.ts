@@ -8,13 +8,16 @@
  */
 
 import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
 import {
   lstatSync,
   readFileSync,
   readdirSync,
+  statSync,
 } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from '../src/lib/sqlite.ts';
 
 import { loadArtifact } from '../src/lib/artifact-source.ts';
 import { noteRoute, WITHHELD_ROUTE } from '../src/lib/route-path.ts';
@@ -25,13 +28,18 @@ import {
   collectionFacets,
   tagFacets,
 } from '../src/lib/routes.ts';
+import { snapshotFileName } from '../src/lib/snapshot.ts';
+import { readBuildBinding } from '../src/lib/snapshot-reader.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
+import { assertSnapshotRows } from '../src/lib/snapshot-contract.ts';
+import { isGzip } from './snapshot-rows.ts';
+import { readStagedWasm } from './copy-wasm.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
 const PUBLIC = fileURLToPath(new URL('../public', import.meta.url));
 
-const GENERATED_FILES = ['_redirects', 'content-index.json', 'robots.txt', 'rss.xml', 'sitemap.xml'] as const;
+const GENERATED_FILES = ['_redirects', 'robots.txt', 'rss.xml', 'sitemap.xml'] as const;
 const PAGEFIND_RUNTIME = [
   'pagefind/pagefind-entry.json',
   'pagefind/pagefind-highlight.js',
@@ -88,7 +96,102 @@ function expectedHtml(artifact: ContentArtifact): Set<string> {
 }
 
 function inflateIfGzip(bytes: Buffer): Buffer {
-  return bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes) : bytes;
+  return isGzip(bytes) ? gunzipSync(bytes) : bytes;
+}
+
+/**
+ * The bound snapshot member, validated against its own filename and schema.
+ *
+ * An empty set when this build has no binding — a synthetic inventory fixture,
+ * or a checkout that has not run the snapshot step. When a binding exists, the
+ * exact digest-named file must be present: a misnamed or second `site.*.sqlite`
+ * is an unexpected member, and a wrong digest or schema fails here rather than
+ * after copy-out.
+ */
+function snapshotOutput(root: string, workspace?: string): Set<string> {
+  const binding = readBuildBinding(workspace);
+  if (binding === undefined) return new Set();
+
+  const file = snapshotFileName(binding.digest);
+  const path = join(root, ...file.split('/'));
+  let bytes: Buffer;
+  try {
+    bytes = readFileSync(path);
+  } catch {
+    throw new BuildFailure(
+      'output-inventory-snapshot-missing',
+      'output inventory is missing its bound snapshot',
+      file,
+    );
+  }
+
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (digest !== binding.digest) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-digest',
+      'output inventory snapshot digest does not match its bound URL',
+      file + ': expected ' + binding.digest + ', got ' + digest,
+    );
+  }
+
+  let database: DatabaseSync;
+  try {
+    database = new DatabaseSync(path, { readOnly: true });
+  } catch (error) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-unreadable',
+      'output inventory could not open its snapshot',
+      file + ': ' + (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  try {
+    assertSnapshotRows(
+      (sql) => database.prepare(sql).all() as Record<string, unknown>[],
+    );
+  } catch (error) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-schema',
+      'output inventory snapshot does not carry the accepted schema',
+      file + ': ' + (error instanceof Error ? error.message : String(error)),
+    );
+  } finally {
+    database.close();
+  }
+  return new Set([file]);
+}
+
+/**
+ * The bound SQLite WASM member, validated against its own filename.
+ *
+ * An empty set when this build staged no WASM (synthetic inventories without a
+ * browser runtime). When a binding exists, exactly the digest-named member must
+ * be present; a second `sqlite3*.wasm` is unexpected.
+ */
+function wasmOutput(root: string, workspace?: string): Set<string> {
+  const binding = readStagedWasm(workspace);
+  if (binding === undefined) return new Set();
+  for (const member of binding.members) {
+    const path = join(root, ...member.split('/'));
+    if (member.endsWith('.wasm')) {
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(path);
+      } catch {
+        throw new BuildFailure('output-inventory-wasm-missing', 'output inventory is missing a bound wasm member', member);
+      }
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      if (digest !== binding.digest) {
+        throw new BuildFailure(
+          'output-inventory-wasm-digest',
+          'output inventory wasm digest does not match its bound URL',
+          member + ': expected ' + binding.digest + ', got ' + digest,
+        );
+      }
+    } else if (!statSync(path).isFile()) {
+      throw new BuildFailure('output-inventory-wasm-missing', 'output inventory is missing a bound wasm member', member);
+    }
+  }
+  return new Set(binding.members);
 }
 
 function pagefindFiles(root: string, actual: readonly string[]): Set<string> {
@@ -168,7 +271,7 @@ function pagefindFiles(root: string, actual: readonly string[]): Set<string> {
 }
 
 /** Assert every final file belongs to one public route or one generated namespace. */
-export function assertOutputInventory(root: string, artifact: ContentArtifact): number {
+export function assertOutputInventory(root: string, artifact: ContentArtifact, workspace?: string): number {
   let actual: string[];
   try {
     actual = filesUnder(root);
@@ -204,6 +307,8 @@ export function assertOutputInventory(root: string, artifact: ContentArtifact): 
     ...staticPublic,
     ...GENERATED_FILES,
     ...PAGEFIND_RUNTIME,
+    ...snapshotOutput(root, workspace),
+    ...wasmOutput(root, workspace),
   ]);
   const pagefind = pagefindFiles(root, actual);
   const unexpected: string[] = [];
@@ -215,7 +320,7 @@ export function assertOutputInventory(root: string, artifact: ContentArtifact): 
       unexpected.push(file);
       continue;
     }
-    if (exact.has(file) || pagefind.has(file) || /^_astro\/[A-Za-z0-9._-]+\.[A-Za-z0-9_-]{8,}\.(?:css|js)$/.test(file)) continue;
+    if (exact.has(file) || pagefind.has(file) || /^_astro\/[A-Za-z0-9._-]*[.-][A-Za-z0-9_-]{8,}\.(?:css|js)$/.test(file)) continue;
     unexpected.push(file);
   }
 

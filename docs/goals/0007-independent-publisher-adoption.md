@@ -1,6 +1,6 @@
 # 0007 — Independent publisher adoption
 
-Status: ready. Created: 2026-09-14. Replaces part of [0001](0001-unified-public-query-model.md).
+Status: in progress. Created: 2026-09-14. Replaces part of [0001](0001-unified-public-query-model.md).
 
 ## Desired outcome
 
@@ -50,6 +50,40 @@ Record whether each environment ran locally, in CI, or on another named supporte
 host. Do not claim an unexecuted platform matrix. A missing supported-runner or
 browser run is unresolved evidence, not a reason to claim this goal completed.
 Final mobile cost remains owned by 0008; this goal establishes usable distribution.
+
+## Implementation progress (2026-09-15)
+
+Branch `feat/public-sqlite-snapshot` (local; no remote PR). Commits, oldest first:
+`56d52b4` public SQLite projection and static relationships from it, `4c08dff`
+lazy read-only Worker powering previews, `f373b94` reconstructed-row scanning in
+both release scanners, `9630622` reader-facing tag browsing, `d28728f` one graph
+selection/layout authority, `7281ff6` interactive graph exploration.
+
+Commands and observed results:
+
+- `pnpm run verify` — 56 test files passed, **809 passed / 34 skipped**, exit 0.
+- `pnpm run build:fixture` — 56 files, **838 passed / 5 skipped**, secret scan
+  `227 files, 0 findings`, residue `33 files, 0 findings`, exit 0.
+- `pnpm run smoke:tarball` — `tarball adoption smoke ok: 1 published note, 2
+  withheld notes`; tarball `anc-0.1.0.tgz`, sha256
+  `17b7128c4b3f80c73d1cfdeb410de2d6b7019161fa4f847382e6d24839aecb1b`.
+- Published-corpus artifact identities: `dist/data/site.9fc2794f…sqlite`
+  (40,960 bytes, digest in the filename), `dist/wasm/sqlite3.2ee8f3da…wasm`
+  (868,907 bytes), pinned `@sqlite.org/sqlite-wasm@3.53.4-build1`.
+- Browser gates (real Chromium under the `public/_headers` CSP):
+  `tests/snapshot-runtime.test.ts`, `tests/tag-browser.test.ts`,
+  `tests/graph-runtime.test.ts`; read-only/WASM `tests/snapshot-wasm.test.ts`;
+  schema `tests/snapshot.test.ts` and `tests/snapshot-contract.test.ts`;
+  selection `tests/graph-selection.test.ts`; scanners
+  `tests/secret-scan-database.test.ts` and `tests/snapshot-rows.test.ts`.
+
+Nothing below is archived as completed, and no successor is claimed complete by
+this note.
+
+Remaining gaps found while implementing: `smoke:tarball` ran locally only; the
+shipped GitHub Action has not been run on its supported runner here, so Action
+parity is unresolved evidence. Registry publication and deployment remain
+external and separately approved.
 
 ## Completion record
 

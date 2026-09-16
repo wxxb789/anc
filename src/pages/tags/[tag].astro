@@ -9,9 +9,15 @@
  *
  * The tag itself is interpolated into the heading and the title as artifact
  * text, unchanged.
+ *
+ * The complete static `NoteList` is always rendered. The enhanced region below it
+ * is hidden until `tag-browser.ts` runs, so a reader with no scripting (or whose
+ * chunk failed) sees the whole tag through the static route. The region itself,
+ * with the browser's shared ids and status sentences, is `TagBrowser.astro`.
  */
 import Layout from '../../layouts/Layout.astro';
 import NoteList from '../../components/NoteList.astro';
+import TagBrowser from '../../components/TagBrowser.astro';
 import { entries } from '../../lib/content.ts';
 import { tagFacets } from '../../lib/routes.ts';
 import { TITLE_SUFFIX } from '../../lib/site.ts';
@@ -38,6 +44,14 @@ const t = translate(NAV_LANGUAGE);
       <span>{t.noteCount(facet.entries.length)}</span>
     </div>
     <p class="facet-note"><a href="/tags/">{t.allTags}</a></p>
-    <NoteList entries={facet.entries} level={2} lang={NAV_LANGUAGE} />
+
+    <div id="tag-static-list">
+      <NoteList entries={facet.entries} level={2} lang={NAV_LANGUAGE} />
+    </div>
+
+    {/* The complete static list above stays the no-JS route; the region below is
+        the enhanced browser, hidden until the script runs — which unhides the
+        static list on any failure. */}
+    <TagBrowser mode="fixed" tagKey={facet.key} />
   </section>
 </Layout>

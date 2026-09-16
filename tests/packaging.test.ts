@@ -359,8 +359,17 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
   const build = MANIFEST.scripts['build'];
   assert.ok(build, 'package.json declares no `build` script');
 
+  // Comments are stripped before matching: a doc comment that names a script
+  // (as `build-site.ts`'s does, to explain the lock) is prose about the chain,
+  // not a link in it, and matching it would both hide a real missing step behind
+  // an unrelated mention and flag a step that is not run.
+  const withoutComments = (text: string): string =>
+    text
+      .split('\n')
+      .map((line) => (/^\s*(?:\/\/|\/\*|\*)/.test(line) ? '' : line))
+      .join('\n');
   const scriptsIn = (text: string): Set<string> =>
-    new Set([...text.matchAll(/scripts\/([\w-]+)\.ts/g)].map((match) => match[1]!));
+    new Set([...withoutComments(text).matchAll(/scripts\/([\w-]+)\.ts/g)].map((match) => match[1]!));
 
   // `build` reaches its steps through the named scripts it chains, so resolve
   // one level: `pnpm run emit:redirects` is `node scripts/emit-redirects.ts`.
@@ -440,10 +449,10 @@ test('the tarball carries what the build reads and none of this owner\'s content
   }
 
   // And the inverse, which is a privacy property rather than a packaging one.
-  // `src/data/content.json` is this owner's corpus and `public/content-index.json`
-  // its public projection — Astro copies `public/` verbatim, so an index left in
-  // the tarball would be served from every site built with this tool.
-  for (const excluded of ['src/data/content.json', 'public/content-index.json']) {
+  // `src/data/content.json` is this owner's corpus — Astro reads it at build
+  // time, so a copy left in the tarball would let every site built with this
+  // tool start from this owner's notes.
+  for (const excluded of ['src/data/content.json']) {
     assert.ok(
       MANIFEST.files.includes(`!${excluded}`),
       `package.json "files" does not exclude ${excluded}, so this owner's content ships to every consumer`,
@@ -454,6 +463,7 @@ test('the tarball carries what the build reads and none of this owner\'s content
   // on this checkout. Shipping one gives a consumer dead commands at best and a
   // devDependency import failure at worst, so every exclusion is named here.
   for (const excluded of [
+    'scripts/benchmark-snapshot.ts',
     'scripts/build-fixture.ts',
     'scripts/build-site.ts',
     'scripts/compile-package.ts',

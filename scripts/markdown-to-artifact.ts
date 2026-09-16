@@ -379,7 +379,11 @@ function gitDatesFor(contentDirectory: string, paths: readonly string[]): Readon
   let commitDate: string | undefined;
   for (const raw of history.stdout.split('\0')) {
     if (raw.startsWith('\x1e')) {
-      const candidate = raw.slice(1).trim();
+      // `%cI` is strict ISO 8601, and git spells UTC as `+00:00` rather than
+      // `Z` — both are the same instant, but a canonical `Z` keeps the artifact
+      // byte-stable across the git versions that format it either way. The
+      // schema accepts both forms; this is determinism, not validation.
+      const candidate = raw.slice(1).trim().replace(/[+-]00:00$/, 'Z');
       commitDate = Number.isNaN(Date.parse(candidate)) ? undefined : candidate;
       continue;
     }
@@ -524,7 +528,7 @@ function publishFlag(data: Record<string, unknown> | undefined): boolean | undef
  * `title` and `excerpt` are derived from the *rewritten* Markdown, so every
  * internal link in them is already `[label](/route/)`. Neither field goes
  * through the Markdown pipeline: the excerpt lands verbatim in
- * `content-index.json`, in `rss.xml`, and in the `<meta name="description">` of
+ * the public snapshot, in `rss.xml`, and in the `<meta name="description">` of
  * every page showing the card, and the title lands in `<title>` and `og:title`.
  * Measured before this existed — a heading and a body each containing one
  * ordinary link:
@@ -742,7 +746,7 @@ function titleFor(markdown: string, fallback: string): string {
  *
  * **Inline code is stripped as well as fenced, and the reason is a build break
  * rather than tidiness.** An excerpt is not rendered through the Markdown
- * pipeline — it lands verbatim in `content-index.json`, in `rss.xml`, and in the
+ * pipeline — it lands verbatim in the public snapshot, in `rss.xml`, and in the
  * `<meta name="description">` of every page that shows the card. Those surfaces
  * carry no `<code>` element, so the residue scan's code-region exemption cannot
  * see them, and a note writing ``Inline `[[syntax]]` is how you write it.``
@@ -768,7 +772,7 @@ function titleFor(markdown: string, fallback: string): string {
  *
  * **And math, one ticket later again, found by measuring the three surfaces
  * rather than by a build break.** `The identity $$\frac{a}{b} = \sqrt{c}$$
- * holds.` shipped verbatim into `content-index.json`, `rss.xml`, and every meta
+ * holds.` shipped verbatim into the public snapshot, `rss.xml`, and every meta
  * description. See {@link withoutMath} for what an excerpt carries instead and
  * what that costs.
  *
@@ -1409,8 +1413,18 @@ export interface ContentEntryInput {
  * caller records the counts and the dropped rows, and only then asks for the
  * artifact. A callback would have hidden that ordering inside this module,
  * where nothing depends on it.
+ *
+ * @param options.includeEdges When false, `outgoing`/`backlinks` are validated
+ *   against the in-memory producer result but not written: the packaged target's
+ *   relation authority is the finalized snapshot, and the caller builds that
+ *   from this same in-memory `Discovery` before Astro runs. Default true, which
+ *   is the fixture/committed-corpus path.
  */
-export async function writeArtifact(discovery: Discovery, destination: string): Promise<void> {
+export async function writeArtifact(
+  discovery: Discovery,
+  destination: string,
+  options: { includeEdges?: boolean } = {},
+): Promise<void> {
   if (discovery.entries.length === 0) {
     // Thrown here rather than at the end of `discover`, and that ordering is
     // load-bearing: a directory holding only a `.pdf` and a filename that
@@ -1430,6 +1444,13 @@ export async function writeArtifact(discovery: Discovery, destination: string): 
   // A source literal, not the content directory: `ContentValidationError`
   // prefixes its message with this, and that message reaches a stream.
   const artifact = validateArtifact({ version: 1, entries: discovery.entries }, 'content directory');
+  const serialized =
+    options.includeEdges === false
+      ? {
+          version: artifact.version,
+          entries: artifact.entries.map(({ outgoing: _outgoing, backlinks: _backlinks, ...entry }) => entry),
+        }
+      : artifact;
   await mkdir(dirname(destination), { recursive: true });
-  await writeFile(destination, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
+  await writeFile(destination, `${JSON.stringify(serialized, null, 2)}\n`, 'utf8');
 }

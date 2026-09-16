@@ -22,12 +22,12 @@
     "src",
     "tsconfig.json",
     "!src/data/content.json",
-    "!public/content-index.json",
     "!scripts/build-fixture.ts",
     "!scripts/compile-package.ts",
     "!scripts/build-site.ts",
     "!scripts/dist-lock.ts",
     "!scripts/npm-command.ts",
+    "!scripts/benchmark-snapshot.ts",
     "!scripts/smoke-tarball.ts"
   ],
   "scripts": {
@@ -44,6 +44,7 @@
     "build:example": "node bin/anc.mjs build --content example --out .tmp/example-dist",
     "pack:tarball": "node scripts/compile-package.ts",
     "smoke:tarball": "node scripts/smoke-tarball.ts",
+    "benchmark:snapshot": "node scripts/benchmark-snapshot.ts",
     "prepack": "node -e \"throw new Error('run pnpm run pack:tarball -- a bare pack ships the .ts sources Node cannot strip under node_modules')\"",
     "scan:residue": "node scripts/scan-residue.ts",
     "verify": "pnpm run lint && pnpm run check && node scripts/build-site.ts --scan-secrets && pnpm run test",
@@ -53,6 +54,7 @@
   },
   "dependencies": {
     "@astrojs/prism": "^4.0.2",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "astro": "^7.1.6",
     "github-slugger": "^2.0.0",
     "happy-dom": "20.11.2",

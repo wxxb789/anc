@@ -115,7 +115,7 @@
  * and threat model that this Markdown-only release does not claim.
  */
 
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -468,7 +468,7 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
       const { assertPublishSetReviewed } = await import('../scripts/publish-set-review.ts');
       assertPublishSetReviewed(contentDirectory, discovery.entries.map((entry) => entry.slug));
     }
-    await writeArtifact(discovery, artifact);
+    await writeArtifact(discovery, artifact, { includeEdges: false });
 
     // From here on the process runs as if it had been started in the package, so
     // every consumer that resolves against cwd — `artifact-source.ts` first among
@@ -493,29 +493,32 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     }
 
     const { build: astroBuild } = await import('astro');
+
+    // The snapshot is built before the render, because the render reads its
+    // relationship surfaces from this exact file. It lives in the private
+    // workspace, never in `staging`: only the digest-named copy below is public.
+    const snapshotDirectory = join(workspace, 'snapshot');
+    process.env['SNAPSHOT_WORKSPACE'] = snapshotDirectory;
+    const { buildSnapshotFromEntries } = await import('../scripts/build-snapshot.ts');
+    buildSnapshotFromEntries(discovery.entries, snapshotDirectory);
+    const { buildWasm } = await import('../scripts/build-wasm.ts');
+    buildWasm(snapshotDirectory);
+
     await astroBuild({ outDir: staging, logLevel: 'error' });
+
+    const { copySnapshotToOutput } = await import('../scripts/copy-snapshot.ts');
+    copySnapshotToOutput(staging, snapshotDirectory);
+    const { copyWasmToOutput } = await import('../scripts/copy-wasm.ts');
+    copyWasmToOutput(staging, snapshotDirectory);
 
     const { emitRedirects } = await import('../scripts/emit-redirects.ts');
     emitRedirects(staging);
-
-    // `public/content-index.json` is the *owner's* index and is deliberately not
-    // in the published tarball, so nothing copies one here — the build must write
-    // its own projection of the corpus it just built. `build-fixture.ts` does the
-    // same thing for the same reason (`scripts/build-fixture.ts:70-86`); the
-    // projection comes from `validate-content.ts` so there is one definition of
-    // what the index is.
-    const { projectIndex } = await import('../scripts/validate-content.ts');
-    await writeFile(
-      join(staging, 'content-index.json'),
-      `${JSON.stringify(projectIndex(validated), null, 2)}\n`,
-      'utf8',
-    );
 
     const { indexWithPagefind } = await import('../scripts/run-pagefind.ts');
     await indexWithPagefind(staging);
 
     const { assertOutputInventory } = await import('../scripts/verify-output-inventory.ts');
-    assertOutputInventory(staging, validated);
+    assertOutputInventory(staging, validated, snapshotDirectory);
 
     if (release) {
       const { scanSecrets } = await import('../scripts/scan-secrets.ts');

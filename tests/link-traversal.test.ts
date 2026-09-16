@@ -927,7 +927,7 @@ test('a withheld link with no label of its own still has an accessible name', ()
 
 test('the title and the excerpt carry a link\'s text, never its syntax', async () => {
   // Both fields are read as **plain text** — the excerpt lands verbatim in
-  // `content-index.json`, `rss.xml`, and every `<meta name="description">`, and
+  // the snapshot, `rss.xml`, and every `<meta name="description">`, and
   // the title in `<title>` and `og:title`. Neither goes through the Markdown
   // pipeline, and both are derived from the *rewritten* body, where every
   // internal link is already `[label](/route/)`. Measured before the fix, on a
@@ -1492,7 +1492,7 @@ test('the walk itself loads without a parser, which the cross-platform gate need
 
 test('the title and the excerpt carry no TeX, on every surface that serves them', async () => {
   // **Three surfaces, and a gate on one of them would have passed.** An excerpt
-  // is plain text in `content-index.json`, in `rss.xml`, and in every page's
+  // is plain text in the snapshot, in `rss.xml`, and in every page's
   // `<meta name="description">`; a title reaches `<title>` and `og:title`.
   // Measured on `cabcc6a`, one note containing `$$\frac{a}{b} = \sqrt{c}$$`:
   // all three carried the TeX verbatim, and the heading form put it in the

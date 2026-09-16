@@ -30,7 +30,7 @@
  * So the corpus is written here, in Markdown, and the **real binary** builds it
  * — the same path a user takes. That is also the only way to reach the surfaces
  * increment 3 is about: `excerpt` becoming `<meta name="description">`, the
- * Pagefind index, `content-index.json`, and the graph SVG's labels exist only
+ * Pagefind index, the snapshot, and the graph SVG's labels exist only
  * after a full build, and a producer-level assertion cannot see any of them.
  *
  * Each build is 15-20 s here, so each gate carries an explicit timeout with
@@ -63,6 +63,7 @@ import { test } from 'vitest';
 
 import { WITHHELD_ROUTE, noteRoute } from '../src/lib/routes.ts';
 import { translate } from '../src/lib/translations.ts';
+import { snapshotSlugs } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'anc.mjs');
@@ -766,7 +767,7 @@ test('a withheld note ships its path in a live link and its body nowhere', () =>
  * **Mutation watched fail:** removing the `published === false` branch from
  * `scripts/markdown-to-artifact.ts` turned this red — the withheld note gained
  * the route `zzqclients-zzqacme-zzqrenewal`, and its title and excerpt entered
- * `content-index.json`.
+ * the snapshot.
  */
 test('a note withheld by frontmatter is absent as a route, an index entry, and a node', () => {
   scratch('tk28-absent-', (root) => {
@@ -802,17 +803,15 @@ test('a note withheld by frontmatter is absent as a route, an index entry, and a
     // filter rather than an empty directory.
     assert.ok(routes.length > 0, 'the build published no routes at all');
 
-    // Not in the index the browser fetches.
-    const index = JSON.parse(readFileSync(join(out, 'content-index.json'), 'utf8')) as {
-      entries: { slug: string }[];
-    };
+    // Not in the snapshot the browser fetches.
+    const slugs = snapshotSlugs(out);
     assert.ok(
-      !index.entries.some((entry) => entry.slug.includes('zzqrenewal')),
-      'the withheld note has an entry in content-index.json',
+      !slugs.some((slug) => slug.includes('zzqrenewal')),
+      'the withheld note has a row in the snapshot',
     );
-    // Non-vacuity: the index is populated, so the absence above is a real
-    // filter rather than an empty file.
-    assert.ok(index.entries.length > 0, 'content-index.json is empty, so its absence check is vacuous');
+    // Non-vacuity: the snapshot is populated, so the absence above is a real
+    // filter rather than an empty table.
+    assert.ok(slugs.length > 0, 'the snapshot stores no nodes, so its absence check is vacuous');
 
     // And no graph anywhere draws it. The node label is a *title*, so the
     // assertion is on the withheld note's title rather than on its stem: the

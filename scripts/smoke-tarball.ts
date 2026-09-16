@@ -23,6 +23,8 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
+import { DatabaseSync } from '../src/lib/sqlite.ts';
+import { SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { spawnNpm } from './npm-command.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -178,10 +180,19 @@ function main(): void {
       assert(!outputText.includes(forbidden), 'foreign artifact contains forbidden marker ' + forbidden);
     }
 
-    const index = JSON.parse(readFileSync(join(dist, 'content-index.json'), 'utf8')) as {
-      entries: { slug: string }[];
-    };
-    assert(index.entries.length === 1 && index.entries[0]?.slug === 'welcome', 'content index is not the reviewed public set');
+    const snapshotDirectory = join(dist, 'data');
+    const snapshots = readdirSync(snapshotDirectory).filter((name) => SNAPSHOT_FILE_PATTERN.test(name));
+    assert(snapshots.length === 1, 'foreign artifact does not carry exactly one snapshot');
+    const database = new DatabaseSync(join(snapshotDirectory, snapshots[0]!), { readOnly: true });
+    let publicSlugs: string[];
+    try {
+      publicSlugs = (
+        database.prepare('SELECT slug FROM nodes ORDER BY slug').all() as unknown as { slug: string }[]
+      ).map((row) => row.slug);
+    } finally {
+      database.close();
+    }
+    assert(publicSlugs.length === 1 && publicSlugs[0] === 'welcome', 'snapshot is not the reviewed public set');
 
     const reportPath = join(scratch, '.git', 'publish-report', 'content-report.json');
     const report = JSON.parse(

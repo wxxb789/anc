@@ -23,7 +23,7 @@
  * split-count and byte-absence checks below are for.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { gzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
@@ -755,23 +755,16 @@ test('a search index matching its corpus is not reported as unreadable', () => {
 });
 
 /**
- * A WAL-mode database is read rather than reported as broken.
+ * A WAL-mode database is refused, and the artifact is left untouched.
  *
- * `journal_mode=WAL` is a common setting, and a database written under it cannot
- * be served from a buffer: the format's shared-memory index has no in-memory
- * equivalent. Measured, and the shape of the failure is why the fallback is
- * keyed where it is — `deserialize` **succeeds** on such a file and the *first
- * query* then throws `unable to open database file`. A fallback guarding only
- * the open would never fire, which is what the first version of it did.
- *
- * This is a false result on the build rather than a disclosure — it fails closed
- * — but it fails closed with a message that sends the reader to a fix that is
- * not the problem, and it would make an ordinary build unshippable.
- *
- * **Mutation watched fail:** narrowing the `try` to the `deserialize` call alone
- * turns this red with `is a database that could not be opened`.
+ * The accepted public artifact is rollback-journal only
+ * (`docs/core-design/sqlite-contract.md`, `build-and-runtime.md`): a WAL database
+ * cannot be deserialized as a standalone snapshot without its shared-memory
+ * index. Goal 0006 requires WAL to be rejected rather than read, and the rejection
+ * must not create a `-wal`/`-shm` beside the artifact. This gate measures both:
+ * the scan reports it, and the directory membership and header are unchanged.
  */
-test('a WAL-mode database is read from its path', () => {
+test('a WAL-mode database is refused without creating a sidecar', () => {
   scratch('tk38-wal-', (directory) => {
     distWithIndex(directory);
     const path = join(directory, 'notes.sqlite3');
@@ -782,22 +775,19 @@ test('a WAL-mode database is read from its path', () => {
     database.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     database.close();
 
-    // The fixture is the case it is named for: the header declares WAL.
-    assert.equal(
-      readFileSync(path)[18],
-      2,
-      'the fixture is not in WAL mode, so it exercises the ordinary path',
+    assert.equal(readFileSync(path)[18], 2, 'the fixture is not in WAL mode');
+    const before = readdirSync(directory).sort();
+    assert.ok(
+      !before.some((name) => name.endsWith('-wal') || name.endsWith('-shm')),
+      'the fixture left a sidecar, so this gate would measure the fixture',
     );
 
-    const { findings, rowCount } = scanResidue(directory);
+    const { findings } = scanResidue(directory);
     assert.ok(
-      !findings.some((finding) => finding.includes('could not be opened')),
-      `a WAL-mode database was reported as unopenable rather than read: ${findings.join('; ')}`,
+      findings.some((finding) => finding.includes('could not be opened')),
+      `a WAL-format database was accepted: ${findings.join('; ')}`,
     );
-    assert.equal(rowCount, 1, 'the WAL database was opened but its rows were not counted');
-    assert.ok(
-      findings.some((finding) => finding.includes('msw/')),
-      `a marker in a WAL-mode database shipped past the scan: ${findings.join('; ')}`,
-    );
+    assert.deepEqual(readdirSync(directory).sort(), before, 'the scan created a sidecar');
+    assert.equal(readFileSync(path)[18], 2, 'the scan rewrote the artifact');
   });
 });

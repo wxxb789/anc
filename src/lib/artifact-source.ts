@@ -32,29 +32,10 @@ const DEFAULT_ARTIFACT = 'src/data/content.json';
  * Repository-relative path of the artifact, suitable for an error message.
  *
  * `||` rather than `??`: an empty `CONTENT_ARTIFACT` is a caller who meant to
- * pass a path and passed nothing. With `??` it would read as a fixture build,
- * silently skipping the index-projection gate before failing on a directory
- * read — a security gate turned off by an empty string.
+ * pass a path and passed nothing. With `??` it would resolve to the working
+ * directory and fail on a directory read, without naming the empty variable.
  */
 export const ARTIFACT_PATH: string = process.env['CONTENT_ARTIFACT'] || DEFAULT_ARTIFACT;
-
-/**
- * Whether a path names the published artifact rather than a substitute.
- *
- * Compared as resolved paths, not as strings: `./src/data/content.json` names
- * the published artifact while differing from the default spelling, and a
- * string comparison would call that a substitute — silently skipping the
- * index-projection gate on the real artifact. That gate is a privacy check, so
- * the failure mode is a disabled privacy check with a reassuring log line.
- *
- * Takes a path rather than reading {@link ARTIFACT_PATH} only, because a build
- * selects its artifact through the environment while `validate-content.ts` may
- * also be pointed at a candidate file by argument. Both are the same question,
- * and answering it in two places is how the two answers drift apart.
- */
-export function isPublishedArtifact(path: string = ARTIFACT_PATH): boolean {
-  return resolve(process.cwd(), path) === resolve(process.cwd(), DEFAULT_ARTIFACT);
-}
 
 /**
  * Absolute filesystem path to the artifact, anchored at the repository root.

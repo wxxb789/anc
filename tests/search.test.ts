@@ -26,6 +26,7 @@ import type { Browser, ConsoleMessage, Page } from 'playwright';
 
 import { otherLanguages } from '../src/scripts/search-dialog.ts';
 import { MESSAGE_DATASET, translate, type Translation } from '../src/lib/translations.ts';
+import { snapshotNotes } from './support/snapshot.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = fileURLToPath(new URL('dist/', ROOT));
@@ -73,18 +74,16 @@ function searchableTerms(text: string): string[] {
  *
  * A fixed English word made the gate vacuous for a Chinese-only repository.
  * Intl.Segmenter avoids turning an entire CJK title into one synthetic "word";
- * the content index, rendered note, and inflated Pagefind text independently
+ * the SQLite snapshot, rendered note, and inflated Pagefind text independently
  * prove the term exists before the browser asks Pagefind to find it.
  */
-const SEARCH_PROJECTION = JSON.parse(readFileSync(join(DIST, 'content-index.json'), 'utf8')) as {
-  entries: { slug: string; title: string; excerpt: string; aliases?: string[] }[];
-};
+const SEARCH_PROJECTION = snapshotNotes(DIST);
 const INDEXED_FRAGMENTS = indexedFragments();
 const INDEXED_FRAGMENT_TEXT = INDEXED_FRAGMENTS.map((fragment) => fragment.content).join('\n');
 
 function queryForLanguage(language?: string): string {
-  assert.ok(SEARCH_PROJECTION.entries.length > 0, 'the built corpus has no entry from which to derive a search query');
-  for (const entry of SEARCH_PROJECTION.entries) {
+  assert.ok(SEARCH_PROJECTION.length > 0, 'the built corpus has no entry from which to derive a search query');
+  for (const entry of SEARCH_PROJECTION) {
     const page = readFileSync(join(DIST, 'notes', entry.slug, 'index.html'), 'utf8');
     const pageLanguage = /<html lang="([^"]+)"/.exec(page)?.[1]?.toLowerCase();
     if (language !== undefined && pageLanguage !== language.toLowerCase()) continue;
@@ -574,11 +573,11 @@ test('a query returns a result under the shipped CSP, with a clean console', asy
   }
 }, 120_000);
 
-test.runIf(SEARCH_PROJECTION.entries.length > 1)(
+test.runIf(SEARCH_PROJECTION.length > 1)(
   'an alias that appears nowhere else finds its note',
   async (context) => {
     const alias = '别名笔记';
-    const expected = SEARCH_PROJECTION.entries.find((entry) => entry.aliases?.includes(alias));
+    const expected = SEARCH_PROJECTION.find((entry) => entry.aliases?.includes(alias));
     assert.equal(expected?.slug, 'alias-heavy', 'the fixture no longer carries the alias this gate measures');
     assert.ok(
       INDEXED_FRAGMENTS.some((fragment) => {

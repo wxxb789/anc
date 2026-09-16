@@ -22,6 +22,8 @@
  */
 
 import { createIndex, close } from 'pagefind';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BuildFailure } from './write-report.ts';
 
@@ -63,6 +65,29 @@ function pagefindFailed(what: string, errors: readonly unknown[]): BuildFailure 
   return new BuildFailure('pagefind-failed', `pagefind ${what}`, `pagefind ${what}: ${errors.join('; ')}`);
 }
 
+/**
+ * Wait for Pagefind's own manifest to be readable before the build proceeds.
+ *
+ * Under concurrent builds `writeFiles` has intermittently resolved before
+ * `pagefind-entry.json` is complete, and the output inventory — which reads that
+ * manifest to enumerate the content-addressed members — then failed with
+ * "could not read the Pagefind manifest". The success reply is not the same fact
+ * as a complete file, so the build confirms the file it is about to be judged on.
+ * The bound is finite and a genuinely absent or corrupt manifest still fails.
+ */
+async function confirmManifest(siteDirectory: string): Promise<void> {
+  const manifest = join(siteDirectory, 'pagefind', 'pagefind-entry.json');
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    try {
+      JSON.parse(readFileSync(manifest, 'utf8'));
+      return;
+    } catch {
+      await new Promise((resume) => setTimeout(resume, 25));
+    }
+  }
+  throw pagefindFailed('wrote no readable manifest', [manifest]);
+}
+
 export async function indexWithPagefind(siteDirectory: string): Promise<number> {
   const { index, errors } = await createIndex({ excludeSelectors: EXCLUDE_SELECTORS });
   if (errors.length > 0 || index === undefined) {
@@ -75,6 +100,7 @@ export async function indexWithPagefind(siteDirectory: string): Promise<number> 
 
     const written = await index.writeFiles({ outputPath: `${siteDirectory}/pagefind` });
     if (written.errors.length > 0) throw pagefindFailed('failed to write', written.errors);
+    await confirmManifest(siteDirectory);
 
     return added.page_count;
   } finally {

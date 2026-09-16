@@ -3,10 +3,10 @@
 You have a directory of notes under git. This turns it into a static site: every page
 rendered ahead of time, full-text search, backlinks, a graph, and no application server.
 
-This guide describes the current commands. The
-[long-term core design](core-design/README.md) includes a downloadable SQLite/WASM
-relationship and preview index; that capability is not yet implemented. Reading
-and navigation will continue to work without JavaScript.
+This guide describes the current commands. The relationship and preview index is a public
+[SQLite/WASM snapshot](core-design/sqlite-contract.md) at `/data/site.<sha256>.sqlite`,
+fetched lazily by the browser for hover previews, tag browsing, and graph exploration.
+Reading and navigation still work without JavaScript.
 
 **Everything publishes unless you exclude it.** That is the one thing to know before you
 start. There is no allowlist and no `publish: true` to opt in with — a file that is in the
@@ -218,9 +218,10 @@ ships. That report row is your exclusion seen from the other side.
 Aliases are **not** link targets. Obsidian desktop and Obsidian Publish genuinely disagree
 here and this follows desktop. A YAML `aliases:` list is still public metadata: the note shows
 it, search indexes it, and hover previews include it, but it creates no route and changes no
-link resolution. The public `content-index.json` downloaded for previews contains every alias
-of every published note. Duplicate aliases, or an alias colliding with another note's slug,
-stop the build; the private report names both sources.
+link resolution. The public `/data/site.<sha256>.sqlite` snapshot downloaded for previews
+contains every alias of every published note in its `aliases` table. Duplicate aliases, or an
+alias colliding with another note's slug, stop the build; the private report names both
+sources.
 
 ## Reading the report
 

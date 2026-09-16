@@ -460,6 +460,7 @@ const graph = localGraph(entry, getEntry);
       label: t.graphExpandLocalLabel,
     }}
     lang={lang}
+    explore={{ scope: 'local', centerSlug: entry.slug }}
   />
 
   {/* § 9.2.12 — collection navigation, "where meaningful": only inside a

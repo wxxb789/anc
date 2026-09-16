@@ -5,9 +5,16 @@
  * A corpus route, so the chrome is the navigation language. The tag labels
  * themselves are artifact text and are never translated: `security` stays
  * `security`, `笔记` stays `笔记`.
+ *
+ * `FacetIndex`'s anchors remain the complete no-JS route to each tag's page. The
+ * chooser below is an additive enhancement that enumerates a selected tag in
+ * place through the snapshot; switching tags resets the continuation. The chooser
+ * itself, with the browser's shared ids and status sentences, is
+ * `TagBrowser.astro`.
  */
 import Layout from '../../layouts/Layout.astro';
 import FacetIndex from '../../components/FacetIndex.astro';
+import TagBrowser from '../../components/TagBrowser.astro';
 import { entries } from '../../lib/content.ts';
 import { tagFacets, tagRoute } from '../../lib/routes.ts';
 import { TITLE_SUFFIX } from '../../lib/site.ts';
@@ -24,5 +31,7 @@ const facets = tagFacets(entries);
       <span>{t.tagCount(facets.length)}</span>
     </div>
     <FacetIndex facets={facets} route={tagRoute} empty={t.tagsEmpty} lang={NAV_LANGUAGE} />
+
+    {facets.length > 0 && <TagBrowser mode="switch" facets={facets} />}
   </section>
 </Layout>

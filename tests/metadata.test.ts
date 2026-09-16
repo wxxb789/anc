@@ -861,7 +861,7 @@ test('the built feed carries every published note, at its canonical URL', () => 
   );
 
   // Nothing outside the public projection: the feed's summaries are the same
-  // `excerpt` strings `public/content-index.json` already serves.
+  // `excerpt` strings the public snapshot already serves.
   //
   // Compared by *decoding the feed* rather than by escaping the artifact with
   // `escapeXml`. Computing the expected value with the function under test is

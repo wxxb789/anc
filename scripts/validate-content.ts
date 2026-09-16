@@ -1,69 +1,22 @@
 /**
- * Build gate for the generated content artifact pair.
+ * Build gate for the generated content artifact.
  *
  * Runs before `astro build` so an invalid or privacy-violating artifact fails
- * with a precise message instead of a bundler stack trace. Also proves that
- * `public/content-index.json` is still an exact public projection of
- * `src/data/content.json`, since the index ships to the browser on its own.
+ * with a precise message instead of a bundler stack trace.
  *
  * Everything downstream of `astro build` that can *throw* is exercised here
- * too. The build is a `&&` chain — validate, build, emit redirects, index with
- * Pagefind — so a throw in a later link leaves a `dist/` that is already
- * written and now permanently incomplete, which `pnpm run preview` serves
- * happily. Running those computations against the same artifact first means the
- * failure happens while `dist/` is still the last known good build.
- *
- * A fixture build (`CONTENT_ARTIFACT=…`, i.e. `pnpm run build:fixture`) reads
- * that artifact instead, as does a caller passing a candidate path. The
- * index-projection check is skipped there and only there:
- * `public/content-index.json` is the projection of the *published* artifact,
- * and comparing it against a fixture would fail for the one reason that is not
- * a defect. Every other gate still runs, and the skip is announced rather than
- * silent.
+ * too. The build is a `&&` chain — validate, snapshot, build, redirects, Pagefind
+ * — so a throw in a later link leaves a `dist/` that is already written and now
+ * permanently incomplete, which `pnpm run preview` serves happily. Running those
+ * computations against the same artifact first means the failure happens while
+ * `dist/` is still the last known good build.
  */
 
-import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { ContentValidationError, type ContentArtifact } from '../src/lib/schema.ts';
+import type { ContentArtifact } from '../src/lib/schema.ts';
 import { REDIRECT_RULES, collectionFacets, renderRedirects, tagFacets } from '../src/lib/routes.ts';
-import {
-  ARTIFACT_PATH,
-  isPublishedArtifact,
-  loadArtifact,
-  readArtifact,
-} from '../src/lib/artifact-source.ts';
-
-const INDEX = new URL('../public/content-index.json', import.meta.url);
-
-function readJson(url: URL): unknown {
-  return JSON.parse(readFileSync(url, 'utf8'));
-}
-
-/** The public preview index carries summary fields plus optional aliases. */
-export function projectIndex(artifact: ContentArtifact) {
-  return {
-    version: artifact.version,
-    entries: artifact.entries.map(({ slug, title, excerpt, aliases }) => ({
-      slug,
-      title,
-      excerpt,
-      ...(aliases === undefined ? {} : { aliases }),
-    })),
-  };
-}
-
-/**
- * The index ships to the browser on its own, so it must stay an exact projection
- * of the validated artifact rather than a separately generated file that could
- * drift. The comparison is key-order sensitive, which is the safe direction for
- * a privacy gate: a reordered index is a change in the producer worth reviewing.
- */
-export function checkIndexProjection(index: unknown, artifact: ContentArtifact): string[] {
-  return JSON.stringify(index) === JSON.stringify(projectIndex(artifact))
-    ? []
-    : ['public/content-index.json: is not the exact public preview projection of src/data/content.json'];
-}
+import { ARTIFACT_PATH, loadArtifact, readArtifact } from '../src/lib/artifact-source.ts';
 
 /**
  * The artifact's content version: a hash of its bytes, so anything generated
@@ -122,10 +75,6 @@ export function checkDerivedRoutes(artifact: ContentArtifact, version: string): 
  */
 export function validateBuildInputs(artifactPath: string = ARTIFACT_PATH): ContentArtifact {
   const artifact = loadArtifact(artifactPath);
-  if (isPublishedArtifact(artifactPath)) {
-    const issues = checkIndexProjection(readJson(INDEX), artifact);
-    if (issues.length > 0) throw new ContentValidationError('public/content-index.json', issues);
-  }
   checkDerivedRoutes(artifact, contentVersion(readArtifact(artifactPath)));
   return artifact;
 }
@@ -135,20 +84,12 @@ export function validateBuildInputs(artifactPath: string = ARTIFACT_PATH): Conte
  *   whichever one this build selected — `src/data/content.json` unless
  *   `CONTENT_ARTIFACT` names another. A caller passes a path so it can gate a
  *   candidate artifact without writing over `src/data/content.json`, which is
- *   producer-owned generated content. The index projection is compared only
- *   when the artifact under test *is* the published one, since the index is its
- *   projection and nothing else's.
+ *   producer-owned generated content.
  */
 function main(artifactPath: string = ARTIFACT_PATH): number {
   try {
     const artifact = validateBuildInputs(artifactPath);
-    const published = isPublishedArtifact(artifactPath);
-    console.log(
-      `content ok: version=${artifact.version} entries=${artifact.entries.length}` +
-        (published
-          ? ''
-          : ` source=${artifactPath} (not the published artifact; the content-index projection check does not apply)`),
-    );
+    console.log(`content ok: version=${artifact.version} entries=${artifact.entries.length}`);
     return 0;
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

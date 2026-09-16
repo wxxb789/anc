@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { afterAll, afterEach, beforeAll, test } from 'vitest';
+import { installSnapshotMarker } from './support/snapshot.ts';
 
 import {
   DEFAULT_PREVIEW_PORT,
@@ -77,7 +78,8 @@ function temporary(): string {
 /** A directory carrying the marker, and nothing else that makes it a real build. */
 function markedDirectory(): string {
   const directory = temporary();
-  writeFileSync(join(directory, 'content-index.json'), '{"entries":[]}\n', 'utf8');
+  writeFileSync(join(directory, 'index.html'), '<h1>built</h1>\n', 'utf8');
+  installSnapshotMarker(directory, DIST);
   return directory;
 }
 
@@ -267,7 +269,7 @@ test('the preview refuses a path that escapes the served directory', async () =>
   const parent = temporary();
   const served = join(parent, 'dist');
   mkdirSync(served);
-  writeFileSync(join(served, 'content-index.json'), '{"entries":[]}\n', 'utf8');
+  installSnapshotMarker(served, DIST);
   writeFileSync(join(served, 'index.html'), '<h1>built</h1>\n', 'utf8');
   writeFileSync(join(parent, 'secret.md'), 'zzqtraversalcanary\n', 'utf8');
 
@@ -322,7 +324,7 @@ test('preview refuses a directory this tool did not build', () => {
   // The control: this is a plausible notes directory, not an empty one, and it
   // does not carry the marker.
   assert.ok(existsSync(join(notes, '.env')), 'the fixture is empty, so the refusal below is not about a notes directory');
-  assert.ok(!existsSync(join(notes, 'content-index.json')), 'the fixture carries the marker, so it is not the case under test');
+  assert.ok(!existsSync(join(notes, 'data')), 'the fixture carries the marker, so it is not the case under test');
 
   assert.throws(
     () => resolveArtifactDirectory(notes, ROOT),
@@ -339,7 +341,8 @@ test('preview refuses a directory this tool did not build', () => {
 
   // And the same directory becomes acceptable once it carries the marker, which
   // is what makes the refusal about the marker rather than about the fixture.
-  writeFileSync(join(notes, 'content-index.json'), '{"entries":[]}\n', 'utf8');
+  writeFileSync(join(notes, 'index.html'), '<h1>built</h1>\n', 'utf8');
+  installSnapshotMarker(notes, DIST);
   assert.equal(resolveArtifactDirectory(notes, ROOT), notes, 'a marked directory was still refused');
 });
 

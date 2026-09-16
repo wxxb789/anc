@@ -408,7 +408,7 @@ function entryId(entry: ContentEntry, url: string): string {
  *
  * **`<summary>`, never `<content>`.** The summary is the artifact's `excerpt`,
  * which is the same public projection already served in
- * `public/content-index.json`. Putting the rendered body in a feed would publish
+ * the public snapshot. Putting the rendered body in a feed would publish
  * the article through a second channel with none of the page's sanitization
  * context, and the requirement is public-safe summaries only. An entry whose
  * excerpt is empty gets no `<summary>` at all rather than an empty one.

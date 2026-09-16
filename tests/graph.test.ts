@@ -27,7 +27,6 @@ import {
   LOCAL_NODE_LIMIT,
   boundCounts,
   drawnNeighbours,
-  edgeDirection,
   globalGraph,
   hasDrawableGraph,
   localGraph,
@@ -151,10 +150,6 @@ test('the three edge directions are read from the subject s own edge lists', () 
     entry('stranger'),
   ]);
   const subject = corpus[0]!;
-  assert.equal(edgeDirection(subject, 'out'), 'outgoing');
-  assert.equal(edgeDirection(subject, 'in'), 'incoming');
-  assert.equal(edgeDirection(subject, 'both'), 'mutual');
-  assert.equal(edgeDirection(subject, 'stranger'), undefined);
 
   // And every drawn neighbour carries one, so the shape a screen reader reads
   // is never absent on the page that has a subject.

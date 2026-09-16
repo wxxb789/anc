@@ -124,9 +124,9 @@ makes sense to this repository's owner is a defect — see
   is still a disclosure *on a stream* — that is what the bullet above holds, and
   `tests/disclosure.test.ts` still enforces it. It is no longer withheld from the rendered
   body. Both directions are deliberate.
-- `src/data/content.json` and `public/content-index.json` are the current synthetic
-  fixture inputs; never hand-edit them to bypass a gate. The target removes the public
-  index and preserves private IR only where the build boundary needs it.
+- `src/data/content.json` is the current synthetic fixture input; never hand-edit it
+  to bypass a gate. The build preserves private IR only where the build boundary
+  needs it.
 - Publication and deployment are external side effects requiring explicit approval. A
   successful local build is not deployment authorization.
 - Keep runtime static. D1, R2, Functions, analytics, comments, or other stateful services

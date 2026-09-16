@@ -21,12 +21,18 @@ the current secret projection copies raw/gzip-decoded files without reconstructi
 SQLite values. Those are implementation observations at the reviewed baseline,
 not designs to preserve or evidence that the new release checks already work.
 
-The reviewed implementation is `7579cc16a4320f7410b71e784587a01fdf14333d`; design
-baseline PR #1 starts at `e30ca971f21b5b7ed3373c3c65f7de8526aec5ec`. It still uses
-serialized outgoing/backlinks and a public content index, without browser SQLite.
-These observations should be refreshed when implementation begins. The previous
-full-suite result was 736 passed, 10 failed and 57 skipped; it is historical
-baseline evidence, not a current passing gate or an authorized permanent waiver.
+The reviewed baseline is `7579cc16a4320f7410b71e784587a01fdf14333d`; design
+baseline PR #1 starts at `e30ca971f21b5b7ed3373c3c65f7de8526aec5ec`. On
+2026-09-15 the SQLite initiative landed on local branch `feat/public-sqlite-snapshot`
+(see each goal's "Implementation progress" section): a public five-table snapshot
+replaces the public content index, static relationships render from it, a lazy
+read-only Worker/WASM powers previews, tag browsing, and graph exploration, and
+both release scanners reconstruct SQLite rows. The private IR still serializes
+producer-resolved edges, and no goal is archived as completed. On this host
+`pnpm run verify` reports 809 passed / 34 skipped (exit 0), `pnpm run
+build:fixture` 838 passed / 5 skipped (exit 0), and `pnpm run smoke:tarball`
+passes. The historical full-suite result was 736 passed, 10 failed and 57
+skipped; it is historical baseline evidence, not a current passing gate.
 
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that

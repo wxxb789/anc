@@ -98,6 +98,15 @@ export const MESSAGE_DATASET = {
   failed: 'messageFailed',
 } as const;
 
+/** The tag browser's live-status sentences, carried from the build as data attributes. */
+export const TAG_BROWSE_DATASET = {
+  loading: 'tagBrowseLoading',
+  empty: 'tagBrowseEmpty',
+  exhausted: 'tagBrowseExhausted',
+  unknown: 'tagBrowseUnknown',
+  failed: 'tagBrowseFailed',
+} as const;
+
 /**
  * The site navigation language: what a route that is not one document renders,
  * and what a document carrying no `language` falls back to.
@@ -222,6 +231,26 @@ export interface Translation {
   tagsDescription: string;
   tagCount: (count: number) => string;
   tagsEmpty: string;
+  /** Heading over the in-page tag browser. */
+  tagBrowseHeading: string;
+  /** Visible text of the control that starts an enumeration. */
+  tagBrowseStart: string;
+  /** Accessible label of the tag chooser. */
+  tagBrowseSelectLabel: string;
+  /** The chooser's placeholder option, before a tag is chosen. */
+  tagBrowsePrompt: string;
+  /** Visible text of the next-page control. */
+  tagBrowseMore: string;
+  /** Status while a page is in flight. */
+  tagBrowseLoading: string;
+  /** A canonical tag the snapshot carries but whose page is empty. */
+  tagBrowseEmpty: string;
+  /** Every result page has been delivered. */
+  tagBrowseExhausted: string;
+  /** The snapshot carries no such canonical tag. */
+  tagBrowseUnknown: string;
+  /** A page could not be delivered; the static list remains. */
+  tagBrowseFailed: string;
   collectionsTitle: string;
   collectionsDescription: string;
   collectionCount: (count: number) => string;
@@ -332,6 +361,33 @@ export interface Translation {
   graphMutualRelation: string;
   /** No direction at all: `/graph/` has no subject to be relative to. */
   graphLinkedRelation: string;
+  // --- Interactive graph explorer (goal 0005). Templates for the client. ---
+  /** Visible text of the control that starts live exploration. */
+  graphExplorerOpen: string;
+  /** Visible text of the reset control. */
+  graphExplorerReset: string;
+  /** Visible text of a re-center control. */
+  graphExplorerRecenter: string;
+  /** Accessible label of the tag filter chooser. */
+  graphExplorerFilterLabel: string;
+  /** The filter's "no filter" option. */
+  graphExplorerFilterAll: string;
+  /** Live status: local scope. `{shown}` and `{total}` are numbers. */
+  graphExplorerStatusLocal: string;
+  /** Live status: global scope. */
+  graphExplorerStatusGlobal: string;
+  /** Live status: tag-filtered global scope. `{tag}` is artifact text. */
+  graphExplorerStatusFiltered: string;
+  /** A live graph could not be produced; the static figure remains. */
+  graphExplorerFailed: string;
+  /** The requested center is not in the snapshot. */
+  graphExplorerUnknownCenter: string;
+  /** A tag filter matched nothing. */
+  graphExplorerEmptyFilter: string;
+  /** Enhanced node label, plural. `{title}`, `{relation}`, `{degree}`. */
+  graphExplorerNodeLabel: string;
+  /** Enhanced node label, singular (degree 1). */
+  graphExplorerNodeLabelOne: string;
   /** The equivalent table's caption and column headers. */
   graphTableCaption: string;
   graphColumnNote: string;
@@ -467,6 +523,16 @@ const EN = {
   tagsDescription: 'Every tag on a published note.',
   tagCount: (count) => `${count} ${count === 1 ? 'tag' : 'tags'}`,
   tagsEmpty: 'No published note carries a tag yet. This page lists every tag as soon as one does.',
+  tagBrowseHeading: 'Browse this tag here',
+  tagBrowseStart: 'Load notes from the live index',
+  tagBrowseSelectLabel: 'Tag to browse',
+  tagBrowsePrompt: 'Choose a tag\u2026',
+  tagBrowseMore: 'Load more',
+  tagBrowseLoading: 'Loading notes\u2026',
+  tagBrowseEmpty: 'No published note carries this tag in the live index.',
+  tagBrowseExhausted: 'All matching notes are shown.',
+  tagBrowseUnknown: 'That tag is not in the live index.',
+  tagBrowseFailed: 'The live index could not be loaded. The static list above is complete.',
   collectionsTitle: 'Collections',
   collectionsDescription: 'The collections published notes are grouped into.',
   collectionCount: (count) => `${count} ${count === 1 ? 'collection' : 'collections'}`,
@@ -534,6 +600,19 @@ const EN = {
   graphIncomingRelation: 'links to this note',
   graphMutualRelation: 'linked both ways',
   graphLinkedRelation: 'published note',
+  graphExplorerOpen: 'Explore interactively',
+  graphExplorerReset: 'Reset',
+  graphExplorerRecenter: 'Re-center',
+  graphExplorerFilterLabel: 'Tag',
+  graphExplorerFilterAll: 'All notes',
+  graphExplorerStatusLocal: 'Live graph: {shown} of {total} neighbouring notes drawn.',
+  graphExplorerStatusGlobal: 'Live graph: {shown} of {total} published notes drawn.',
+  graphExplorerStatusFiltered: 'Live graph for tag {tag}: {shown} of {total} matching notes drawn.',
+  graphExplorerFailed: 'The live graph could not be loaded. The static figure above is complete.',
+  graphExplorerUnknownCenter: 'That note is not in the live index.',
+  graphExplorerEmptyFilter: 'No published note carries that tag.',
+  graphExplorerNodeLabel: '{title} — {relation}, {degree} links drawn',
+  graphExplorerNodeLabelOne: '{title} — {relation}, {degree} link drawn',
   graphTableCaption: 'The same notes and links, as a table',
   graphColumnNote: 'Note',
   graphColumnRelation: 'Relationship',
@@ -656,6 +735,16 @@ const ZH_CN = {
   tagsDescription: '公开笔记上的全部标签。',
   tagCount: (count) => `${count} 个标签`,
   tagsEmpty: '目前还没有公开笔记带有标签。一旦有笔记带上标签，本页将逐个列出。',
+  tagBrowseHeading: '在此浏览这个标签',
+  tagBrowseStart: '从实时索引加载笔记',
+  tagBrowseSelectLabel: '要浏览的标签',
+  tagBrowsePrompt: '选择一个标签\u2026',
+  tagBrowseMore: '加载更多',
+  tagBrowseLoading: '正在加载笔记\u2026',
+  tagBrowseEmpty: '实时索引中没有公开笔记带有这个标签。',
+  tagBrowseExhausted: '已显示全部匹配的笔记。',
+  tagBrowseUnknown: '实时索引中没有这个标签。',
+  tagBrowseFailed: '实时索引加载失败；上方静态列表仍然完整。',
   collectionsTitle: '合集',
   collectionsDescription: '公开笔记所归入的合集。',
   collectionCount: (count) => `${count} 个合集`,
@@ -716,6 +805,19 @@ const ZH_CN = {
   graphIncomingRelation: '它链接到本篇',
   graphMutualRelation: '互相链接',
   graphLinkedRelation: '公开笔记',
+  graphExplorerOpen: '交互探索',
+  graphExplorerReset: '重置',
+  graphExplorerRecenter: '以此为中心',
+  graphExplorerFilterLabel: '标签',
+  graphExplorerFilterAll: '全部笔记',
+  graphExplorerStatusLocal: '实时图：已画出 {total} 篇相邻笔记中的 {shown} 篇。',
+  graphExplorerStatusGlobal: '实时图：已画出 {total} 篇公开笔记中的 {shown} 篇。',
+  graphExplorerStatusFiltered: '标签 {tag} 的实时图：已画出 {total} 篇匹配笔记中的 {shown} 篇。',
+  graphExplorerFailed: '实时图加载失败；上方静态图仍然完整。',
+  graphExplorerUnknownCenter: '实时索引中没有这篇笔记。',
+  graphExplorerEmptyFilter: '没有公开笔记带有这个标签。',
+  graphExplorerNodeLabel: '{title} — {relation}，已绘制 {degree} 条连线',
+  graphExplorerNodeLabelOne: '{title} — {relation}，已绘制 {degree} 条连线',
   graphTableCaption: '同样的笔记与链接，以表格呈现',
   graphColumnNote: '笔记',
   graphColumnRelation: '关系',

@@ -94,7 +94,6 @@ export function isSafeTagOrAlias(value: string): boolean {
 const STATUS_VALUES: ReadonlySet<string> = new Set(['published', 'tombstone']);
 
 const REQUIRED_STRINGS = ['slug', 'title', 'excerpt', 'markdown'] as const;
-const REQUIRED_ARRAYS = ['outgoing', 'backlinks'] as const;
 const OPTIONAL_FIELDS = [
   'public_id',
   'created',
@@ -105,11 +104,17 @@ const OPTIONAL_FIELDS = [
   'status',
   'aliases',
   'description',
+  // Relationship authorities are **not** serialized in the packaged artifact:
+  // the snapshot is the public relation model, and the renderer reads it. They
+  // remain accepted here because this repository's own producer handoff and its
+  // committed fixture corpora still carry them, and because a mixed artifact is
+  // a producer defect worth naming.
+  'outgoing',
+  'backlinks',
 ] as const;
 
 const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
   ...REQUIRED_STRINGS,
-  ...REQUIRED_ARRAYS,
   ...OPTIONAL_FIELDS,
 ]);
 
@@ -159,10 +164,11 @@ const ARRAY_LIMITS = {
   tags: { items: 50, itemChars: 128 },
   // Aliases are bounded public display/search/preview metadata.
   aliases: { items: 50, itemChars: 300 },
-  // Each member must already resolve to a published slug, so member length is
-  // bounded transitively by the slug ceiling; only the count needs one.
-  outgoing: { items: 500, itemChars: undefined },
-  backlinks: { items: 500, itemChars: undefined },
+  // `outgoing` and `backlinks` deliberately have no count ceiling. The old 500
+  // was a serialized-array limit, and the SQLite projection is the relationship
+  // authority now: a hub with thousands of backlinks must stay fully reachable,
+  // and a graph drawing bound must never reject a DB fact. A producer defect is
+  // caught by the edge's own resolution and foreign-key checks instead.
 } as const satisfies Partial<Record<keyof ContentEntry, { items: number; itemChars?: number }>>;
 
 /** Size ceilings for a field, exposed so a consumer can state the same number. */
@@ -477,9 +483,10 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
     }
   }
 
-  for (const field of REQUIRED_ARRAYS) {
-    if (!(field in value)) issues.push(`${label}.${field}: is required`);
-    else checkStringArray(value[field], `${label}.${field}`, issues, { sorted: true });
+  for (const field of ['outgoing', 'backlinks'] as const) {
+    const item = value[field];
+    if (item === undefined) continue;
+    checkStringArray(item, `${label}.${field}`, issues, { sorted: true });
   }
 
   for (const field of ['public_id', 'collection', 'description'] as const) {
@@ -568,7 +575,7 @@ export function aliasConflictsFor(entries: readonly ContentEntry[]): AliasConfli
   return conflicts;
 }
 
-function checkCorpus(entries: readonly ContentEntry[], issues: string[]): void {
+function checkCorpus(entries: readonly ContentEntry[], issues: string[], edges: boolean): void {
   const bySlug = new Map<string, ContentEntry>();
   for (const entry of entries) {
     if (bySlug.has(entry.slug)) issues.push(`entries: duplicate slug "${entry.slug}"`);
@@ -587,6 +594,8 @@ function checkCorpus(entries: readonly ContentEntry[], issues: string[]): void {
       );
     }
   }
+
+  if (!edges) return;
 
   const expectedBacklinks = new Map<string, string[]>(entries.map((entry) => [entry.slug, []]));
   for (const entry of entries) {
@@ -640,9 +649,25 @@ export function validateArtifact(data: unknown, source = 'content artifact'): Co
       const checked = checkEntry(entry, index, issues);
       if (checked) valid.push(checked);
     }
-    if (valid.length === rawEntries.length) checkCorpus(valid, issues);
+    const declared = rawEntries.map(
+      (entry) => isPlainObject(entry) && 'outgoing' in entry && 'backlinks' in entry,
+    );
+    const all = declared.every(Boolean);
+    const none = declared.every((value) => !value);
+    if (!all && !none) {
+      issues.push('entries: outgoing/backlinks must be declared on every entry or on none of them');
+    }
+    if (valid.length === rawEntries.length && (all || none)) checkCorpus(valid, issues, all);
   }
 
   if (issues.length > 0) throw new ContentValidationError(source, issues);
-  return data as unknown as ContentArtifact;
+  const artifact = data as unknown as ContentArtifact;
+  // An artifact with no serialized relation authorities is the packaged target:
+  // the snapshot is the public relation model, so the in-memory entries start
+  // with empty lists and the build hydrates them from the finalized DB.
+  for (const entry of artifact.entries) {
+    entry.outgoing ??= [];
+    entry.backlinks ??= [];
+  }
+  return artifact;
 }
