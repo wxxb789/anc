@@ -12,7 +12,7 @@ The original intent remains required for 0.1.0. Its complete replacement is:
 
 - [0002 — Consistent static relationships](archive/0002-consistent-static-relationships.md)
 - [0003 — Reliable lazy previews](archive/0003-reliable-lazy-previews.md)
-- [0004 — Complete tag browsing](0004-complete-tag-browsing.md)
+- [0004 — Complete tag browsing](archive/0004-complete-tag-browsing.md)
 - [0005 — Interactive graph exploration](0005-interactive-graph-exploration.md)
 - [0006 — Safe release output](0006-safe-release-output.md)
 - [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md)

@@ -14,7 +14,7 @@
 
 import { noteRoute } from '../lib/route-path.ts';
 import { classifyTagPage, TAG_PAGE_SIZE, type TagBrowseState } from '../lib/tag-browser-model.ts';
-import { TAG_BROWSE_DATASET } from '../lib/translations.ts';
+import { partLanguage, TAG_BROWSE_DATASET } from '../lib/translations.ts';
 import { requestByTag } from './snapshot-client.ts';
 
 export {};
@@ -48,8 +48,6 @@ function install(root: HTMLElement): void {
     current.hidden = true;
     status.textContent = '';
   };
-
-  const pageLanguage = (): string => (document.documentElement.lang || 'en').toLowerCase();
 
   async function load(after: string | null, forGeneration: number): Promise<void> {
     if (tagKey === '') {
@@ -92,13 +90,17 @@ function install(root: HTMLElement): void {
       return;
     }
 
-    const language = pageLanguage();
+    // `partLanguage` compares case-insensitively, so the page's raw tag is fine.
+    const language = document.documentElement.lang || 'en';
     for (const note of state.notes) {
       const item = document.createElement('li');
       const link = document.createElement('a');
       link.href = noteRoute(note.slug);
       link.textContent = note.title;
-      if (note.language.toLowerCase() !== language) link.lang = note.language;
+      // The static tag list marks a foreign title through `partLanguage`;
+      // calling it here keeps the enhanced list from drifting from it.
+      const lang = partLanguage(note.language, language);
+      if (lang !== undefined) link.lang = lang;
       item.append(link);
       results.append(item);
     }

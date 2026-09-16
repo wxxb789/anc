@@ -46,8 +46,14 @@ was completed the same day on branch `feat/0003-reliable-lazy-previews`
 (implementation commit `948696e`): every evaluation row now runs as a real
 Chromium gate against a generated site under the shipped CSP, the producer
 follows `content-semantics.md` for shared aliases, and the import boundary
-refuses truncated bytes. 0002 and 0003 are the first goals in the archive; five
-remain active.
+refuses truncated bytes. [0004](archive/0004-complete-tag-browsing.md) was
+completed the same day on branch `feat/0004-complete-tag-browsing`
+(implementation commit `718700e`, review fixes `c119678`/`c401315`, PR #5): the canonical tag query now has
+native snapshot gates for identity, a three-page enumeration, the lookahead-row
+control, NOCASE exactness and the duplicate-membership refusal, and the real
+Chromium gates add the failed-initialization fallback, keyboard operation,
+static parity, withheld-tag absence, and one shared runtime and download for
+previews and tag browsing. Three goals are archived; four remain active.
 
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
@@ -62,8 +68,7 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 
 | Goal | Single completion judgment | Material prerequisites |
 | --- | --- | --- |
-| [0004 — Complete tag browsing](0004-complete-tag-browsing.md) | A reader can enumerate all matching notes through the canonical tag query | 0002 (completed); shared runtime (0003, completed) |
-| [0005 — Interactive graph exploration](0005-interactive-graph-exploration.md) | A reader explores correct bounded local/global/filtered graphs with complete accessible relations | 0002 (completed); shared runtime (0003, completed); tag query from 0004 |
+| [0005 — Interactive graph exploration](0005-interactive-graph-exploration.md) | A reader explores correct bounded local/global/filtered graphs with complete accessible relations | 0002 (completed); shared runtime (0003, completed); tag query from [0004](archive/0004-complete-tag-browsing.md) (completed) |
 | [0006 — Safe release output](0006-safe-release-output.md) | Publication gates reject incomplete, inconsistent or disallowed output without damaging the previous build | 0002 (completed); 0003 (completed) assets for Worker/WASM inventory checks |
 | [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md) | The shipped package and Action work in a foreign notes repository | 0002–0006 |
 | [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md) | Measured packaged behavior meets the mobile target and accepted cold-preview/resource policies | 0007, including its functional prerequisites |
@@ -74,8 +79,9 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 | --- | --- | --- |
 | [0002 — Consistent static relationships](archive/0002-consistent-static-relationships.md) | 2026-09-16 | Implementation commit `24cea57`; the actual no-JS site and one reproducible SQLite snapshot agree on published relationships, with static tag surfaces read from the snapshot's own rows. |
 | [0003 — Reliable lazy previews](archive/0003-reliable-lazy-previews.md) | 2026-09-16 | Implementation commit `948696e`; all six evaluation rows executed as real Chromium gates against generated sites under the served CSP, with the read-only, failure/retry, race, and provisional-limit controls recorded in the file. |
+| [0004 — Complete tag browsing](archive/0004-complete-tag-browsing.md) | 2026-09-16 | Implementation commit `718700e`, review fixes `c119678`/`c401315`, PR #5; the reader's tag chooser and the static tag route enumerate one snapshot's membership across pages, with the lookahead-row control, NOCASE exactness, failed-initialization fallback, keyboard operation, withheld-tag absence, and shared-runtime measurements recorded in the file. |
 
-Five goals remain `ready` and active. Schema creation, query-module code,
+Four goals remain `ready` and active. Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
 separate judgments, with no circular dependency on final performance budgets.
@@ -91,8 +97,8 @@ integration evidence; they do not create competing schema or test implementation
 | Static backlinks/outgoing/tag routes, related suggestions, induced graph fallback | 0002 |
 | Private IR boundary; removal of serialized relation authorities and public JSON indexes | 0002; final output rejection in 0006 |
 | Exact DB URL/digest binding | Build output in 0002; browser validation in 0003; host/package validation in 0007 |
-| Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003; cross-consumer evidence in 0004/0005 |
-| Canonical runtime tag lookup and exhaustive pagination | 0004 |
+| Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003 (completed); cross-consumer evidence in 0004 (completed)/0005 |
+| Canonical runtime tag lookup and exhaustive pagination | 0004 (completed) |
 | Local/global/tag-filtered graph, ranking, re-centering, complete relation enumeration | 0005 |
 | Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 |
 | CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006; foreign installation/transport in 0007 |

@@ -249,6 +249,20 @@ export function workerScriptPath(dist: string): string {
   return `/_astro/${name}`;
 }
 
+/** Press Tab until `matches` accepts the focused element; report whether it did. */
+async function tabUntil(
+  page: Page,
+  matches: (expected: string) => boolean,
+  expected: string,
+  maxPresses: number,
+): Promise<boolean> {
+  for (let press = 0; press < maxPresses; press += 1) {
+    await page.keyboard.press('Tab');
+    if (await page.evaluate(matches, expected)) return true;
+  }
+  return false;
+}
+
 /**
  * Tab until the element with `href` holds focus, and report whether it was
  * reached.
@@ -258,13 +272,55 @@ export function workerScriptPath(dist: string): string {
  * focused directly would pass while every keyboard reader got nothing.
  */
 export async function focusByTab(page: Page, href: string, maxPresses = 80): Promise<boolean> {
-  for (let press = 0; press < maxPresses; press += 1) {
-    await page.keyboard.press('Tab');
-    if (await page.evaluate((expected) => document.activeElement?.getAttribute('href') === expected, href)) {
-      return true;
-    }
-  }
-  return false;
+  return tabUntil(
+    page,
+    (expected) => document.activeElement?.getAttribute('href') === expected,
+    href,
+    maxPresses,
+  );
+}
+
+/**
+ * Tab until the element matching `selector` holds focus, and report whether it
+ * was reached.
+ *
+ * A companion to `focusByTab` for controls addressed by selector rather than
+ * href — the tag chooser and its buttons. `focusByTab` cannot serve them: it
+ * compares `activeElement.href`, which a `<select>` or `<button>` does not
+ * have. Real presses either way, so a control is only reached if the page's
+ * own tab order exposes it.
+ */
+export async function tabTo(page: Page, selector: string, maxPresses = 80): Promise<boolean> {
+  return tabUntil(page, (expected) => document.activeElement?.matches(expected) ?? false, selector, maxPresses);
+}
+
+/**
+ * Record the Worker messages of one type the page posts.
+ *
+ * The tag browser's request identity is what a double-click or a tag switch
+ * turns on — a cursor resent, or a caller's continuation reused — so requests
+ * are recorded as posted and read back with `workerMessages`; callers narrow
+ * the recorded shape themselves.
+ */
+export async function recordWorkerMessages(page: Page, type: string): Promise<void> {
+  await page.addInitScript((messageType: string) => {
+    const state = window as unknown as { __workerMessages: unknown[] };
+    state.__workerMessages = [];
+    const original = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (
+      this: Worker,
+      message: unknown,
+      ...rest: unknown[]
+    ): void {
+      if ((message as { type?: string }).type === messageType) state.__workerMessages.push(message);
+      (original as (this: Worker, ...args: unknown[]) => void).call(this, message, ...rest);
+    };
+  }, type);
+}
+
+/** The messages `recordWorkerMessages` has recorded so far. */
+export async function workerMessages<T>(page: Page): Promise<T[]> {
+  return page.evaluate(() => (window as unknown as { __workerMessages: unknown[] }).__workerMessages) as Promise<T[]>;
 }
 
 /**

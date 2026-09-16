@@ -5,8 +5,8 @@
  * is. These gates first accept a snapshot the producer actually wrote, then
  * mutate one declaration in each direction the contract names — column type,
  * `NOT NULL`, a foreign key, `STRICT`, `WITHOUT ROWID`, the self-edge `CHECK`,
- * and the one explicit index — so the check is proven to read the schema
- * rather than the header alone.
+ * and the one explicit index (reshaped or joined by another) — so the check is
+ * proven to read the schema rather than the header alone.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -105,6 +105,48 @@ test('an extra table, a missing index, or a changed column is rejected', () => {
     database.exec('ALTER TABLE nodes ADD COLUMN extra TEXT');
     assert.throws(() => assertSnapshotRows(reader(database)), /table nodes has columns/);
   });
+});
+
+test('an additional explicit index is rejected beside the accepted one', () => {
+  withSchema((database) => {
+    database.exec('CREATE INDEX node_tags_by_node ON node_tags(node_id, tag_id)');
+    assert.throws(
+      () => assertSnapshotRows(reader(database)),
+      /explicit indexes are \[edges_by_target, node_tags_by_node\], expected \[edges_by_target\]/,
+    );
+  });
+  withSchema((database) => {
+    database.exec('CREATE INDEX nodes_title ON nodes(title)');
+    assert.throws(
+      () => assertSnapshotRows(reader(database)),
+      /explicit indexes are \[edges_by_target, nodes_title\], expected \[edges_by_target\]/,
+    );
+  });
+  // `sqliteX` is not a reserved name: SQLite accepts it, and only a literal
+  // `sqlite_` prefix filter keeps the exact-index comparison from hiding it.
+  withSchema((database) => {
+    database.exec('CREATE INDEX sqliteX ON node_tags(node_id)');
+    assert.throws(
+      () => assertSnapshotRows(reader(database)),
+      /explicit indexes are \[edges_by_target, sqliteX\], expected \[edges_by_target\]/,
+    );
+  });
+  // The same forbidden reverse index spelled as a constraint instead of an
+  // explicit index: SQLite backs it with `sqlite_autoindex_node_tags_2`, which
+  // the `sqlite_`-name filter hides, so only the implicit-index check can see
+  // it. Without that check this fixture is accepted.
+  withDdl(
+    mutatedSchema(
+      '    PRIMARY KEY (tag_id, node_id)\n) WITHOUT ROWID, STRICT;',
+      '    PRIMARY KEY (tag_id, node_id),\n    UNIQUE (node_id, tag_id)\n) WITHOUT ROWID, STRICT;',
+    ),
+    (database) => {
+      assert.throws(
+        () => assertSnapshotRows(reader(database)),
+        /table node_tags has implicit unique indexes on \[\(node_id,tag_id\)\], expected \[\]/,
+      );
+    },
+  );
 });
 
 test('a view is rejected even when the five tables are intact', () => {

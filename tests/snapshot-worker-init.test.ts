@@ -54,10 +54,10 @@ interface FailureModes {
   closeThrows?: boolean;
 }
 
-/** The stored DDL of one table, as the writer's `SNAPSHOT_SCHEMA_SQL` spells it. */
-function storedTableSql(table: string): string {
-  const start = SNAPSHOT_SCHEMA_SQL.indexOf(`CREATE TABLE ${table} (`);
-  if (start < 0) throw new Error(`SNAPSHOT_SCHEMA_SQL does not declare table ${table}`);
+/** The stored DDL of one declared object, as the writer spells it in `SNAPSHOT_SCHEMA_SQL`. */
+function storedDdl(declaration: string): string {
+  const start = SNAPSHOT_SCHEMA_SQL.indexOf(declaration);
+  if (start < 0) throw new Error(`SNAPSHOT_SCHEMA_SQL does not declare ${declaration}`);
   return SNAPSHOT_SCHEMA_SQL.slice(start, SNAPSHOT_SCHEMA_SQL.indexOf(';', start));
 }
 
@@ -70,7 +70,13 @@ function contractRows(sql: string): Record<string, unknown>[] {
   if (sql === 'PRAGMA application_id') return [{ application_id: SNAPSHOT_APPLICATION_ID }];
   if (sql === 'PRAGMA user_version') return [{ user_version: SNAPSHOT_USER_VERSION }];
   if (sql.startsWith('SELECT type, name')) {
-    return SNAPSHOT_TABLES.map((name) => ({ type: 'table', name, sql: storedTableSql(name) }));
+    // The writer creates the one explicit index, so `sqlite_schema` carries it
+    // beside the five tables; leaving it out would make the fake driver
+    // describe a schema the writer cannot produce.
+    return [
+      ...SNAPSHOT_TABLES.map((name) => ({ type: 'table', name, sql: storedDdl(`CREATE TABLE ${name} (`) })),
+      { type: 'index', name: SNAPSHOT_EXPLICIT_INDEX.name, sql: storedDdl(`CREATE INDEX ${SNAPSHOT_EXPLICIT_INDEX.name}`) },
+    ];
   }
   const table = /^PRAGMA table_info\(([^)]+)\)$/.exec(sql)?.[1];
   if (table !== undefined) {
@@ -109,20 +115,37 @@ function contractRows(sql: string): Record<string, unknown>[] {
   }
   const indexTable = /^PRAGMA index_list\(([^)]+)\)$/.exec(sql)?.[1];
   if (indexTable !== undefined) {
-    return indexTable === SNAPSHOT_EXPLICIT_INDEX.table
-      ? [
-          {
-            seq: 0,
-            name: SNAPSHOT_EXPLICIT_INDEX.name,
-            unique: SNAPSHOT_EXPLICIT_INDEX.unique ? 1 : 0,
-            origin: 'c',
-            partial: SNAPSHOT_EXPLICIT_INDEX.partial ? 1 : 0,
-          },
-        ]
-      : [];
+    // The writer's UNIQUE constraints each get an implicit index SQLite names
+    // `sqlite_autoindex_<table>_<n>`; the fake derives them from the same
+    // declaration the contract validates, so the two cannot drift.
+    const implicit = (SNAPSHOT_TABLE_SHAPES[indexTable]?.uniqueConstraints ?? []).map((columns, index) => ({
+      seq: index,
+      name: `sqlite_autoindex_${indexTable}_${index + 1}`,
+      unique: 1,
+      origin: 'u',
+      partial: 0,
+    }));
+    const explicit =
+      indexTable === SNAPSHOT_EXPLICIT_INDEX.table
+        ? [
+            {
+              seq: implicit.length,
+              name: SNAPSHOT_EXPLICIT_INDEX.name,
+              unique: SNAPSHOT_EXPLICIT_INDEX.unique ? 1 : 0,
+              origin: 'c',
+              partial: SNAPSHOT_EXPLICIT_INDEX.partial ? 1 : 0,
+            },
+          ]
+        : [];
+    return [...implicit, ...explicit];
   }
   if (sql === `PRAGMA index_info(${SNAPSHOT_EXPLICIT_INDEX.name})`) {
     return SNAPSHOT_EXPLICIT_INDEX.columns.map((name, seqno) => ({ seqno, cid: seqno, name }));
+  }
+  const implicitIndex = /^PRAGMA index_info\(sqlite_autoindex_([^)]+)_(\d+)\)$/.exec(sql);
+  if (implicitIndex !== null) {
+    const columns = SNAPSHOT_TABLE_SHAPES[implicitIndex[1]!]?.uniqueConstraints[Number(implicitIndex[2]) - 1];
+    return (columns === undefined ? [] : columns.split(',')).map((name, seqno) => ({ seqno, cid: seqno, name }));
   }
   throw new Error(`the fake driver was asked a statement it does not implement: ${sql}`);
 }
