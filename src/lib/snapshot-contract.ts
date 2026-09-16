@@ -174,7 +174,7 @@ export function assertSnapshotRows(read: SnapshotRowReader): void {
   }
 
   const objects = read(
-    "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+    "SELECT type, name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY type, name",
   );
   const tables = objects
     .filter((row) => row['type'] === 'table')
@@ -184,19 +184,23 @@ export function assertSnapshotRows(read: SnapshotRowReader): void {
   if (tables.join(',') !== expectedTables.join(',')) {
     throw new Error(`snapshot tables are [${tables.join(', ')}], expected [${SNAPSHOT_TABLES.join(', ')}]`);
   }
-  // `sqlite_schema` hides the UNIQUE constraints' implicit `sqlite_%` indexes
+  // `sqlite_schema` hides the UNIQUE constraints' implicit `sqlite_` indexes
   // behind the query's name filter, so the index rows that remain are exactly
-  // the explicitly created ones. This must equal the one accepted index: an
-  // added reverse membership index, a renamed accepted index, or a missing
-  // accepted index each change the storage contract. `assertExplicitIndex`
-  // below still checks that index's declared shape.
+  // the explicitly created ones. The filter matches `sqlite_` literally — the
+  // underscore is escaped, because an unescaped LIKE `_` is a wildcard and
+  // would also hide a user-creatable name such as `sqliteX`. This must equal
+  // the one accepted index: an added reverse membership index, a renamed
+  // accepted index, or a missing accepted index each change the storage
+  // contract. `assertExplicitIndex` below still checks that index's declared
+  // shape.
   const indexes = objects
     .filter((row) => row['type'] === 'index')
     .map((row) => String(row['name']))
     .sort();
-  if (indexes.join(',') !== SNAPSHOT_EXPLICIT_INDEX.name) {
+  const expectedIndexes = [SNAPSHOT_EXPLICIT_INDEX.name];
+  if (indexes.join(',') !== expectedIndexes.join(',')) {
     throw new Error(
-      `snapshot explicit indexes are [${indexes.join(', ')}], expected [${SNAPSHOT_EXPLICIT_INDEX.name}]`,
+      `snapshot explicit indexes are [${indexes.join(', ')}], expected [${expectedIndexes.join(', ')}]`,
     );
   }
   const otherObjects = objects.filter((row) => row['type'] !== 'table' && row['type'] !== 'index');

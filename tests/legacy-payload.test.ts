@@ -14,7 +14,7 @@
  *
  * **Measured over this repository's own `dist/` when this gate was added:**
  * 150 files inspected, exactly one `.json` (`pagefind/pagefind-entry.json`),
- * zero files with any of the eight legacy basenames at any depth, and exactly
+ * zero files with any legacy basename at any depth, and exactly
  * two files carrying the NUL-terminated SQLite header — the bound
  * `data/site.<64 hex>.sqlite` payload and `wasm/sqlite3.<64 hex>.wasm`, the
  * WASM build of SQLite itself. `sqlite-wasm.js` and `sqlite3-worker1.mjs` both
@@ -176,9 +176,9 @@ test('the built output ships no legacy public index, graph manifest, or adjacenc
   const files = filesUnder(DIST);
   assert.ok(files.length > 0, 'the output walk inspected no file');
 
-  // Named absence, at any depth. The eight names are the legacy public-index,
-  // manifest, adjacency, and tag-membership shapes; the probe recorded zero
-  // hits for each.
+  // Named absence, at any depth. The eight names are the public-index,
+  // manifest, adjacency, and tag-membership shapes a retired payload would
+  // return under; the planted-sample control below fires on each.
   assert.deepEqual(legacyNamed(files), [], 'a retired payload name reappeared in the output');
 
   // Serialized relation shape. Only `.json` files are parsed: Pagefind's

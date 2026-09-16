@@ -122,6 +122,15 @@ test('an additional explicit index is rejected beside the accepted one', () => {
       /explicit indexes are \[edges_by_target, nodes_title\], expected \[edges_by_target\]/,
     );
   });
+  // `sqliteX` is not a reserved name: SQLite accepts it, and only a literal
+  // `sqlite_` prefix filter keeps the exact-index comparison from hiding it.
+  withSchema((database) => {
+    database.exec('CREATE INDEX sqliteX ON node_tags(node_id)');
+    assert.throws(
+      () => assertSnapshotRows(reader(database)),
+      /explicit indexes are \[edges_by_target, sqliteX\], expected \[edges_by_target\]/,
+    );
+  });
 });
 
 test('a view is rejected even when the five tables are intact', () => {

@@ -18,8 +18,10 @@ import {
   countWorkerTerminations,
   focusByTab,
   removeWorkspace,
+  recordWorkerMessages,
   sqliteAssetRequests,
   tabTo,
+  workerMessages,
   workerTerminations,
   type RunningSite,
 } from './support/browser-site.ts';
@@ -41,6 +43,52 @@ async function seenSlugs(page: Page): Promise<string[]> {
       (link) => link.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
     ),
   );
+}
+
+/** The static route's note slugs, deduplicated, whether or not the list is hidden. */
+async function slugsInStaticList(page: Page): Promise<string[]> {
+  return page.evaluate(() => [
+    ...new Set(
+      [...document.querySelectorAll<HTMLAnchorElement>('#tag-static-list a[href^="/notes/"]')].map((link) =>
+        link.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
+      ),
+    ),
+  ]);
+}
+
+/** Click Load more and wait until the reply has appended at least one result. */
+async function loadMore(page: Page): Promise<string[]> {
+  const before = (await seenSlugs(page)).length;
+  await page.locator('#tag-browse-more').click();
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('#tag-browser-results a').length > count,
+    before,
+  );
+  return seenSlugs(page);
+}
+
+/** Click Load more and wait for the second page's end: 21 members at 10 a page. */
+async function loadSecondPage(page: Page): Promise<void> {
+  const before = (await seenSlugs(page)).length;
+  await page.locator('#tag-browse-more').click();
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('#tag-browser-results a').length >= count,
+    before + PAGE_SIZE,
+  );
+}
+
+/** The shared runtime must be downloaded once, however many pages are read. */
+function assertRuntimeFetchedOnce(requests: readonly string[]): void {
+  const count = (fragment: string): number => requests.filter((url) => url.includes(fragment)).length;
+  assert.equal(count('/data/site.'), 1, `the snapshot was downloaded ${count('/data/site.')} times`);
+  assert.equal(requests.filter((url) => url.endsWith('.wasm')).length, 1, 'a second WASM body was fetched');
+  assert.equal(count('/_astro/snapshot-worker-'), 1, 'a second Worker chunk was fetched');
+}
+
+/** A recorded `byTag` request, as the page posted it. */
+interface ByTagRequest {
+  tagKey: string;
+  cursor: string | null;
 }
 
 beforeAll(async () => {
@@ -76,15 +124,12 @@ test('the tag chooser enumerates every matching note across pages, in cursor ord
   await page.selectOption('#tag-browser-select', TAG_KEY);
   await page.waitForSelector('#tag-browser-results a');
 
-  const collected = await seenSlugs(page);
+  let collected = await seenSlugs(page);
   const pageSizes: number[] = [collected.length];
   while (await page.locator('#tag-browse-more').isVisible()) {
-    await page.locator('#tag-browse-more').click();
-    await page.waitForTimeout(150);
-    const next = await seenSlugs(page);
+    const next = await loadMore(page);
     pageSizes.push(next.length - collected.length);
-    collected.length = 0;
-    collected.push(...next);
+    collected = next;
   }
 
   assert.deepEqual(collected, EXPECTED, 'the browser did not enumerate the tag in cursor order');
@@ -143,21 +188,8 @@ test('two Load more clicks before the first reply cannot duplicate a page', asyn
   // Count the `byTag` messages the page actually dispatches. The snapshot is
   // fetched once and reused, so a delayed `**/data/site.*` route never holds a
   // continuation open — the Worker message is the boundary that matters.
-  await page.addInitScript(() => {
-    const state = window as unknown as { byTagDispatches: number };
-    state.byTagDispatches = 0;
-    const original = Worker.prototype.postMessage;
-    Worker.prototype.postMessage = function (
-      this: Worker,
-      message: unknown,
-      ...rest: unknown[]
-    ): void {
-      if ((message as { type?: string }).type === 'byTag') state.byTagDispatches += 1;
-      (original as (this: Worker, ...args: unknown[]) => void).call(this, message, ...rest);
-    };
-  });
-  const dispatches = (): Promise<number> =>
-    page.evaluate(() => (window as unknown as { byTagDispatches: number }).byTagDispatches);
+  await recordWorkerMessages(page, 'byTag');
+  const dispatches = async (): Promise<number> => (await workerMessages(page)).length;
 
   await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
   await page.click('#tag-browse-start');
@@ -221,16 +253,8 @@ test('the static tag route is complete and usable with scripting disabled', asyn
   const page = await context.newPage();
   await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
   assert.equal(await page.locator('#tag-browser').isVisible(), false, 'the enhanced region is visible without scripting');
-  const staticSlugs = await page.evaluate(() =>
-    [
-      ...new Set(
-        [...document.querySelectorAll<HTMLAnchorElement>('#tag-static-list a[href^="/notes/"]')].map((link) =>
-          link.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
-        ),
-      ),
-    ],
-  );
-  assert.deepEqual([...staticSlugs].sort(), [...EXPECTED].sort(), 'the static tag route is incomplete');
+  const staticSlugs = await slugsInStaticList(page);
+  assert.deepEqual(staticSlugs.sort(), [...EXPECTED].sort(), 'the static tag route is incomplete');
   const pageText = (await page.locator('body').textContent()) ?? '';
   assert.ok(!pageText.includes('withheld-only'), 'a withheld-only tag surfaced on the static page');
   await context.close();
@@ -251,13 +275,9 @@ test('a preview and a tag query share one Worker, one snapshot, and one WASM bod
 
   await page.click('#tag-browse-start');
   await page.waitForSelector('#tag-browser-results a');
-  await page.locator('#tag-browse-more').click();
-  await page.waitForFunction(() => document.querySelectorAll('#tag-browser-results a').length === 20);
+  await loadSecondPage(page);
 
-  const count = (fragment: string): number => requests.filter((url) => url.includes(fragment)).length;
-  assert.equal(count('/data/site.'), 1, 'the preview and the tag query downloaded the snapshot separately');
-  assert.equal(requests.filter((url) => url.endsWith('.wasm')).length, 1, 'the WASM body was downloaded twice');
-  assert.equal(count('/_astro/snapshot-worker-'), 1, 'a second Worker chunk was downloaded');
+  assertRuntimeFetchedOnce(requests);
   assert.equal(await workerTerminations(page), 0, 'the page replaced its Worker instead of sharing it');
   await page.close();
 }, 120_000);
@@ -305,15 +325,11 @@ test('tag browsing downloads the shared runtime once, and not before intent', as
 
   await page.click('#tag-browse-start');
   await page.waitForSelector('#tag-browser-results a');
-  await page.locator('#tag-browse-more').click();
-  await page.waitForFunction(() => document.querySelectorAll('#tag-browser-results a').length === 20);
+  await loadSecondPage(page);
   // 21 members at 10 a page: the second page is another Worker request over the
   // same document. The snapshot, the WASM body, and the Worker chunk are each
   // downloaded exactly once, and the continuation must not re-download any.
-  const count = (fragment: string): number => requests.filter((url) => url.includes(fragment)).length;
-  assert.equal(count('/data/site.'), 1, `the snapshot was downloaded ${count('/data/site.')} times`);
-  assert.equal(requests.filter((url) => url.endsWith('.wasm')).length, 1, 'a second WASM body was fetched');
-  assert.equal(count('/_astro/snapshot-worker-'), 1, 'a second Worker chunk was fetched');
+  assertRuntimeFetchedOnce(requests);
   await page.close();
 }, 120_000);
 
@@ -333,14 +349,8 @@ test('a failed snapshot leaves the complete static route on screen', async () =>
 
   const staticList = page.locator('#tag-static-list');
   assert.equal(await staticList.isVisible(), true, 'the static list stayed hidden after the runtime failed');
-  const staticSlugs = await page.evaluate(() => [
-    ...new Set(
-      [...document.querySelectorAll<HTMLAnchorElement>('#tag-static-list a[href^="/notes/"]')].map((link) =>
-        link.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
-      ),
-    ),
-  ]);
-  assert.deepEqual([...staticSlugs].sort(), [...EXPECTED].sort(), 'the fallback list is incomplete');
+  const staticSlugs = await slugsInStaticList(page);
+  assert.deepEqual(staticSlugs.sort(), [...EXPECTED].sort(), 'the fallback list is incomplete');
   assert.equal((await seenSlugs(page)).length, 0, 'a failed runtime rendered results');
   assert.deepEqual(errors, [], 'the failure path raised a page error');
   await page.close();
@@ -372,7 +382,10 @@ test('the first and next pages are operable from the keyboard alone', async () =
   await page.waitForSelector('#tag-browser-results a');
   assert.equal(await tabTo(page, '#tag-browse-more'), true, 'Load more was not reachable by Tab');
   await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.querySelectorAll('#tag-browser-results a').length === 20);
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('#tag-browser-results a').length === count,
+    PAGE_SIZE * 2,
+  );
   await page.close();
 }, 120_000);
 
@@ -381,57 +394,34 @@ test('the enhanced list and the static list agree on the same membership', async
   await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
   await page.click('#tag-browse-start');
   await page.waitForSelector('#tag-browser-results a');
-  const collected = await seenSlugs(page);
+  let collected = await seenSlugs(page);
   while (await page.locator('#tag-browse-more').isVisible()) {
-    await page.locator('#tag-browse-more').click();
-    await page.waitForTimeout(150);
-    const next = await seenSlugs(page);
-    collected.length = 0;
-    collected.push(...next);
+    collected = await loadMore(page);
   }
   // The static list stays in the DOM behind the enhanced region; reading it
   // here compares the two renderings of one snapshot in one document.
-  const staticSlugs = await page.evaluate(() => [
-    ...new Set(
-      [...document.querySelectorAll<HTMLAnchorElement>('#tag-static-list a[href^="/notes/"]')].map((link) =>
-        link.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
-      ),
-    ),
-  ]);
+  const staticSlugs = await slugsInStaticList(page);
   assert.deepEqual([...collected].sort(), [...EXPECTED].sort());
-  assert.deepEqual([...staticSlugs].sort(), [...collected].sort(), 'static and enhanced lists disagree');
+  assert.deepEqual(staticSlugs.sort(), [...collected].sort(), 'static and enhanced lists disagree');
   await page.close();
 }, 120_000);
 
 test('switching tags after a continuation starts the new tag at its first page', async () => {
   const page = await browser.newPage();
-  await page.addInitScript(() => {
-    const state = window as unknown as { byTagRequests: { tagKey: string; cursor: string | null }[] };
-    state.byTagRequests = [];
-    const original = Worker.prototype.postMessage;
-    Worker.prototype.postMessage = function (
-      this: Worker,
-      message: unknown,
-      ...rest: unknown[]
-    ): void {
-      const request = message as { type?: string; tagKey?: string; cursor?: string | null };
-      if (request.type === 'byTag') {
-        state.byTagRequests.push({ tagKey: request.tagKey ?? '', cursor: request.cursor ?? null });
-      }
-      (original as (this: Worker, ...args: unknown[]) => void).call(this, message, ...rest);
-    };
-  });
-  const requests = (): Promise<{ tagKey: string; cursor: string | null }[]> =>
-    page.evaluate(
-      () => (window as unknown as { byTagRequests: { tagKey: string; cursor: string | null }[] }).byTagRequests,
-    );
+  await recordWorkerMessages(page, 'byTag');
+  // The raw message carries an id, the operation, and the page size; the two
+  // fields this test is about are normalized out of it.
+  const requests = async (): Promise<ByTagRequest[]> =>
+    (await workerMessages<Partial<ByTagRequest>>(page)).map((request) => ({
+      tagKey: request.tagKey ?? '',
+      cursor: request.cursor ?? null,
+    }));
 
   await page.goto(`${site.origin}/tags/`, { waitUntil: 'load' });
   await page.selectOption('#tag-browser-select', TAG_KEY);
   await page.waitForSelector('#tag-browser-results a');
   // Advance the first tag to a real, non-null continuation...
-  await page.locator('#tag-browse-more').click();
-  await page.waitForFunction(() => document.querySelectorAll('#tag-browser-results a').length === 20);
+  await loadSecondPage(page);
   assert.deepEqual(
     (await requests()).map((request) => request.cursor),
     [null, 'tag-10'],
@@ -440,10 +430,13 @@ test('switching tags after a continuation starts the new tag at its first page',
 
   // ...then switch subjects. The new tag must start at page one rather than
   // inherit the old tag's cursor; the delayed-route test above owns the
-  // late-reply half of the same property.
+  // late-reply half of the same property. The label is written after the new
+  // reply's results are appended, so this waits for the state read below.
   await page.selectOption('#tag-browser-select', OTHER_TAG_KEY);
-  await page.waitForSelector('#tag-browser-results a');
-  await page.waitForTimeout(300);
+  await page.waitForFunction(
+    (expected) => document.querySelector('#tag-browser-current')?.textContent === expected,
+    OTHER_TAG_KEY,
+  );
   assert.deepEqual(await seenSlugs(page), NOTEBOOK, 'the new tag did not start from its first page');
   assert.deepEqual(
     (await requests()).at(-1),

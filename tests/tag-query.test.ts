@@ -16,11 +16,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-import { test } from 'vitest';
+import { afterAll, beforeAll, test } from 'vitest';
 
 import { validateArtifact, type ContentArtifact, type ContentEntry } from '../src/lib/schema.ts';
 import { tagPage, type SnapshotDb } from '../src/lib/snapshot-operations.ts';
-import type { NoteSummary } from '../src/lib/snapshot-queries.ts';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, type NoteSummary } from '../src/lib/snapshot-queries.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
 import { NAV_LANGUAGE } from '../src/lib/translations.ts';
 import { writeSnapshot } from '../scripts/write-snapshot.ts';
@@ -99,15 +99,26 @@ const entries: ContentEntry[] = [
 
 const artifact: ContentArtifact = validateArtifact({ version: 1, entries }, 'tag-query corpus');
 
+/**
+ * The snapshot is written once for the file. Every test below only reads it,
+ * and a fresh write per test (schema, integrity, contract check, digest) cost
+ * more than all the queries together. The one writable case opens its own
+ * handle to the same file and only attempts an insert the primary key refuses.
+ */
+let snapshotDirectory: string;
+let snapshotPath: string;
+
+beforeAll(() => {
+  snapshotDirectory = mkdtempSync(join(tmpdir(), 'anc-tag-query-'));
+  snapshotPath = join(snapshotDirectory, 'site.sqlite');
+  writeSnapshot(artifact, snapshotPath);
+});
+
+afterAll(() => rmSync(snapshotDirectory, { recursive: true, force: true }));
+
+/** Run against the suite's one snapshot; each caller opens its own handle. */
 function withSnapshot<T>(run: (path: string) => T): T {
-  const directory = mkdtempSync(join(tmpdir(), 'anc-tag-query-'));
-  const path = join(directory, 'site.sqlite');
-  try {
-    writeSnapshot(artifact, path);
-    return run(path);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
+  return run(snapshotPath);
 }
 
 /** A read-only handle running the fixed statements `tagPage` needs. */
@@ -115,6 +126,27 @@ function adapter(database: DatabaseSync): SnapshotDb {
   return {
     select: (sql, params) =>
       database.prepare(sql).all(...((params ?? []) as never[])) as Record<string, unknown>[],
+  };
+}
+
+/**
+ * The real adapter plus the parameters of every statement it was asked to run.
+ *
+ * Recording the bound values is what keeps the oversized-page control below
+ * non-vacuous: the corpus is smaller than either page-size bound, so the
+ * returned rows alone cannot tell a clamp at `MAX_PAGE_SIZE` from no clamp.
+ */
+function recordingAdapter(database: DatabaseSync): { db: SnapshotDb; boundParams: unknown[][] } {
+  const boundParams: unknown[][] = [];
+  const db = adapter(database);
+  return {
+    boundParams,
+    db: {
+      select: (sql, params) => {
+        boundParams.push([...(params ?? [])]);
+        return db.select(sql, params);
+      },
+    },
   };
 }
 
@@ -127,8 +159,10 @@ function adapter(database: DatabaseSync): SnapshotDb {
  */
 function assertEnumerates(actual: readonly NoteSummary[], expected: readonly string[]): void {
   const slugs = actual.map((note) => note.slug);
-  assert.deepEqual(slugs, expected, 'the enumerated membership is not the authored list in cursor order');
+  // Uniqueness first: it names the defect directly, while a duplicate would
+  // otherwise surface as an unexplained deep-equal mismatch.
   assert.equal(new Set(slugs).size, slugs.length, 'a slug was enumerated more than once');
+  assert.deepEqual(slugs, expected, 'the enumerated membership is not the authored list in cursor order');
 }
 
 /** The correct walker: continue from the last returned slug until exhaustion. */
@@ -361,15 +395,30 @@ test('page size normalizes to the bounded default instead of unbounded work', ()
   // Zero, a missing value, and an over-maximum value are all bounded by
   // `normalizePageSize`; argument *rejection* belongs to the Worker boundary
   // and is gated in `tests/worker-protocol.test.ts`.
+  //
+  // The corpus holds 18 gardening notes — fewer than either bound — so the
+  // returned rows would look identical if `10_000` reached the statement
+  // unclamped. The recorded bound is what makes that case fail here: the
+  // membership query must be handed the clamped size plus one lookahead row.
   withSnapshot((path) => {
     const database = new DatabaseSync(path, { readOnly: true });
     try {
-      const db = adapter(database);
-      for (const requested of [0, undefined, 10_000]) {
+      const cases: { requested: number | undefined; limit: number }[] = [
+        { requested: 0, limit: DEFAULT_PAGE_SIZE + 1 },
+        { requested: undefined, limit: DEFAULT_PAGE_SIZE + 1 },
+        { requested: 10_000, limit: MAX_PAGE_SIZE + 1 },
+      ];
+      for (const { requested, limit } of cases) {
+        const { db, boundParams } = recordingAdapter(database);
         const page = tagPage(db, 'gardening', null, requested);
         if (!page.known) assert.fail('gardening is a known tag in the authored corpus');
         assertEnumerates(page.notes, EXPECTED_GARDENING_SLUGS);
         assert.equal(page.nextCursor, null, `pageSize ${String(requested)} did not exhaust the tag`);
+        assert.equal(
+          boundParams.at(-1)?.[1],
+          limit,
+          `pageSize ${String(requested)} did not bind the clamped lookahead limit`,
+        );
       }
     } finally {
       database.close();

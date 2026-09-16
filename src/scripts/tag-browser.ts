@@ -49,8 +49,6 @@ function install(root: HTMLElement): void {
     status.textContent = '';
   };
 
-  const pageLanguage = (): string => (document.documentElement.lang || 'en').toLowerCase();
-
   async function load(after: string | null, forGeneration: number): Promise<void> {
     if (tagKey === '') {
       reset();
@@ -92,14 +90,15 @@ function install(root: HTMLElement): void {
       return;
     }
 
-    const language = pageLanguage();
+    // `partLanguage` compares case-insensitively, so the page's raw tag is fine.
+    const language = document.documentElement.lang || 'en';
     for (const note of state.notes) {
       const item = document.createElement('li');
       const link = document.createElement('a');
       link.href = noteRoute(note.slug);
       link.textContent = note.title;
-      // One rule owns "this title is foreign": `partLanguage` is what the
-      // static tag list applies, so the enhanced list cannot drift from it.
+      // The static tag list marks a foreign title through `partLanguage`;
+      // calling it here keeps the enhanced list from drifting from it.
       const lang = partLanguage(note.language, language);
       if (lang !== undefined) link.lang = lang;
       item.append(link);

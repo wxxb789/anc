@@ -54,17 +54,10 @@ interface FailureModes {
   closeThrows?: boolean;
 }
 
-/** The stored DDL of one table, as the writer's `SNAPSHOT_SCHEMA_SQL` spells it. */
-function storedTableSql(table: string): string {
-  const start = SNAPSHOT_SCHEMA_SQL.indexOf(`CREATE TABLE ${table} (`);
-  if (start < 0) throw new Error(`SNAPSHOT_SCHEMA_SQL does not declare table ${table}`);
-  return SNAPSHOT_SCHEMA_SQL.slice(start, SNAPSHOT_SCHEMA_SQL.indexOf(';', start));
-}
-
-/** The stored DDL of the one explicit index, as the writer spells it. */
-function storedIndexSql(): string {
-  const start = SNAPSHOT_SCHEMA_SQL.indexOf(`CREATE INDEX ${SNAPSHOT_EXPLICIT_INDEX.name}`);
-  if (start < 0) throw new Error(`SNAPSHOT_SCHEMA_SQL does not declare index ${SNAPSHOT_EXPLICIT_INDEX.name}`);
+/** The stored DDL of one declared object, as the writer spells it in `SNAPSHOT_SCHEMA_SQL`. */
+function storedDdl(declaration: string): string {
+  const start = SNAPSHOT_SCHEMA_SQL.indexOf(declaration);
+  if (start < 0) throw new Error(`SNAPSHOT_SCHEMA_SQL does not declare ${declaration}`);
   return SNAPSHOT_SCHEMA_SQL.slice(start, SNAPSHOT_SCHEMA_SQL.indexOf(';', start));
 }
 
@@ -81,8 +74,8 @@ function contractRows(sql: string): Record<string, unknown>[] {
     // beside the five tables; leaving it out would make the fake driver
     // describe a schema the writer cannot produce.
     return [
-      ...SNAPSHOT_TABLES.map((name) => ({ type: 'table', name, sql: storedTableSql(name) })),
-      { type: 'index', name: SNAPSHOT_EXPLICIT_INDEX.name, sql: storedIndexSql() },
+      ...SNAPSHOT_TABLES.map((name) => ({ type: 'table', name, sql: storedDdl(`CREATE TABLE ${name} (`) })),
+      { type: 'index', name: SNAPSHOT_EXPLICIT_INDEX.name, sql: storedDdl(`CREATE INDEX ${SNAPSHOT_EXPLICIT_INDEX.name}`) },
     ];
   }
   const table = /^PRAGMA table_info\(([^)]+)\)$/.exec(sql)?.[1];
