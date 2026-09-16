@@ -132,6 +132,17 @@ Published-corpus identities from the `verify` build:
 `dist/wasm/sqlite3.2ee8f3dab694532afc8840e07703127287662d08b74e6ff50491ce63f00d5752.wasm`
 (868,907 bytes), pinned `@sqlite.org/sqlite-wasm@3.53.4-build1`.
 
+### Simplification pass (2026-09-16)
+
+A behavior-preserving `ce-simplify-code` review pass followed in commit
+`3c7cb4f`: reuse `notesForSlugs` for snapshot facet members and `TagIdentity`
+for the facet row type, one local binding writer shared by the hydration gate's
+two callers, the scanners' `SQLITE_MAGIC` constant in the legacy-payload gate,
+a single hoisted facet index with a lazy `hasTagPeer` on the note page, and
+test-local statement/route hoists. No outputs changed: `pnpm run verify` was
+rerun on that commit — **64 files, 856 passed / 34 skipped**, exit 0, inventory
+150 files, secret scan 150 files / 0 findings, residue 33 files / 0 findings.
+
 ### Skips and conditional gates
 
 No relationship gate is skipped in both configurations. `pnpm run verify`
