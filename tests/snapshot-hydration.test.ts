@@ -14,6 +14,7 @@
  * content it is rendering.
  */
 
+import { createHash } from 'node:crypto';
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -25,6 +26,7 @@ import { test } from 'vitest';
 import { validateArtifact, type ContentArtifact, type ContentEntry } from '../src/lib/schema.ts';
 import { tagFacets } from '../src/lib/routes.ts';
 import { snapshotRoute } from '../src/lib/snapshot.ts';
+import { DatabaseSync } from '../src/lib/sqlite.ts';
 import {
   hydrateEntriesWithSnapshot,
   loadSnapshotRelations,
@@ -49,17 +51,37 @@ function withWorkspace<T>(body: (directory: string) => T): T {
   }
 }
 
+/** Write the binding file in the one shape `scripts/build-snapshot.ts` writes. */
+function writeBinding(directory: string, url: string, digest: string): void {
+  writeFileSync(
+    join(directory, 'binding.json'),
+    `${JSON.stringify({ url, digest }, null, 2)}\n`,
+    'utf8',
+  );
+}
+
 /**
  * Stage a workspace the way `scripts/build-snapshot.ts` does: the finalized
  * file and the binding that names the digest of its bytes.
  */
 function stage(directory: string, content: ContentArtifact): void {
   const written = writeSnapshot(content, join(directory, 'snapshot.sqlite'));
-  writeFileSync(
-    join(directory, 'binding.json'),
-    `${JSON.stringify({ url: written.url, digest: written.digest }, null, 2)}\n`,
-    'utf8',
-  );
+  writeBinding(directory, written.url, written.digest);
+}
+
+/**
+ * Re-hash a mutated snapshot and point its binding at the new bytes.
+ *
+ * The digest guard exists to refuse bytes the binding does not name — an
+ * interrupted write or an earlier build's file. A mutation this gate performs
+ * deliberately is a *new* finalized file, so it must be bound like one, or the
+ * reader would (correctly) refuse to look at it and the gate would measure the
+ * guard rather than the read.
+ */
+function rebind(directory: string): void {
+  const bytes = readFileSync(join(directory, 'snapshot.sqlite'));
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  writeBinding(directory, snapshotRoute(digest), digest);
 }
 
 test('the reader returns the digest-bound edges and tag labels', () => {
@@ -95,6 +117,18 @@ test('the reader returns the digest-bound edges and tag labels', () => {
         `tags for ${entry.slug} do not match the fixture projection`,
       );
     }
+
+    // The facets are the DB's own rows — key, label, and members — which is
+    // what the static tag routes render from.
+    assert.deepEqual(
+      relations.tagFacets.map((facet) => ({ key: facet.key, label: facet.label, slugs: facet.slugs })),
+      tagFacets(content.entries).map((facet) => ({
+        key: facet.key,
+        label: facet.label,
+        slugs: facet.entries.map((entry) => entry.slug).sort(),
+      })),
+      'the reader tag facets do not match the fixture projection',
+    );
   });
 });
 
@@ -241,10 +275,10 @@ test('tagFacets over hydrated entries is the snapshot projection', () => {
       }));
     assert.deepEqual(project(hydrated), project(content.entries));
 
-    // The label survives: the route key is `field-notes` while the page renders
-    // the author's `Field Notes`, exactly what the browser's `tags.label` row
-    // shows. Hydrating keys instead would put the two surfaces back in
-    // disagreement.
+    // The label survives hydration for note metadata, and the producer
+    // projection still groups the hydrated spellings under `field-notes`. The
+    // route key the tag pages render comes from the reader's facets, driven by
+    // `tags.key` itself in the next test.
     const fieldNotes = project(hydrated).find((facet) => facet.key === 'field-notes');
     assert.ok(fieldNotes !== undefined, 'the fixture no longer carries a field-notes tag');
     assert.equal(fieldNotes.label, 'Field Notes');
@@ -252,6 +286,7 @@ test('tagFacets over hydrated entries is the snapshot projection', () => {
 });
 
 const CONTENT_URL = new URL('../src/lib/content.ts', import.meta.url).href;
+const SITE_URL = new URL('../src/lib/site.ts', import.meta.url).href;
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 interface ObservedEntry {
@@ -325,6 +360,118 @@ test('content.ts hydrates only when the staged snapshot matches the artifact', (
       observed['deterministic-builds']?.tags,
       ['Ops & SRE', 'Node.js'],
       'tags came from a snapshot that does not match the artifact',
+    );
+  });
+});
+
+interface ObservedFacets {
+  facets: { key: string; label: string; members: string[] }[];
+  route: string;
+  tagRoutes: string[];
+}
+
+/**
+ * Read the tag facet index and the route model through `content.ts` in a
+ * child process.
+ *
+ * Same mechanism as {@link observeEntries}: the modules read their snapshot at
+ * evaluation, so the workspace and artifact must be in the environment before
+ * the import, which one process cannot change after the fact. `tagRoutes` is
+ * `publicRoutes(entries, tagFacets())` reduced to its tag paths — the same
+ * call the sitemap makes — so the probe covers the route surface and not only
+ * the accessors.
+ */
+function observeFacets(artifactPath: string, workspace: string): ObservedFacets {
+  const script = `Promise.all([
+  import(${JSON.stringify(CONTENT_URL)}),
+  import(${JSON.stringify(SITE_URL)}),
+]).then(([content, site]) => {
+  console.log(JSON.stringify({
+    facets: content.tagFacets().map((facet) => ({
+      key: facet.key,
+      label: facet.label,
+      members: facet.entries.map((entry) => entry.slug),
+    })),
+    route: content.tagRouteForLabel('Field Notes'),
+    tagRoutes: site
+      .publicRoutes(content.entries, content.tagFacets())
+      .map((route) => route.path)
+      .filter((path) => path.startsWith('/tags/')),
+  }));
+});`;
+  const child = spawnSync(process.execPath, ['--experimental-strip-types', '-e', script], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+    env: { ...process.env, CONTENT_ARTIFACT: artifactPath, SNAPSHOT_WORKSPACE: workspace },
+  });
+  assert.equal(child.status, 0, `reading content.ts facets failed:\n${child.stderr}`);
+  const line = child.stdout.trim().split('\n').at(-1) ?? '';
+  return JSON.parse(line) as ObservedFacets;
+}
+
+test("the static tag route key is the snapshot's tags.key, not a re-derivation", () => {
+  const content = artifact();
+  withWorkspace((staged) => {
+    stage(staged, content);
+
+    // A key no normalization of `Field Notes` can produce. If any static tag
+    // surface still derived the route from `tags.label`, this value could not
+    // appear; the DB row is the authority once its bytes match the binding.
+    const database = new DatabaseSync(join(staged, 'snapshot.sqlite'));
+    try {
+      const changed = database.prepare("UPDATE tags SET key = 'renamed-route' WHERE key = 'field-notes'").run();
+      assert.equal(Number(changed.changes), 1, 'the fixture no longer carries field-notes, so the mutation was inert');
+    } finally {
+      database.close();
+    }
+    rebind(staged);
+
+    const relations = loadSnapshotRelations(staged);
+    assert.ok(relations !== undefined, 'the rebound snapshot was refused');
+    const renamed = relations.tagFacets.find((facet) => facet.key === 'renamed-route');
+    assert.ok(renamed !== undefined, 'the reader did not carry the mutated key');
+    assert.equal(renamed.label, 'Field Notes', 'the mutated facet lost its display label');
+    assert.ok(renamed.slugs.length > 0, 'the mutated facet lost its members');
+    assert.equal(
+      relations.tagFacets.some((facet) => facet.key === 'field-notes'),
+      false,
+      'the reader kept the re-derived key beside the stored one',
+    );
+
+    // The negative control: the producer normalizer over the same artifact
+    // yields `field-notes`, so `renamed-route` can only have come from the row.
+    assert.equal(
+      tagFacets(content.entries).some((facet) => facet.key === 'renamed-route'),
+      false,
+      'normalization produced the mutated key, so the gate proves nothing',
+    );
+
+    // The page-facing accessor — what `tags/[tag].astro`, the tag index, the
+    // sitemap, and note metadata links call — reads the row, and the note's
+    // label link follows it.
+    const observed = observeFacets('tests/fixtures/valid-corpus.json', staged);
+    assert.equal(observed.route, '/tags/renamed-route/', 'the note tag link did not follow the stored key');
+    // The route surface the sitemap emits follows the row too, and the
+    // re-derived key is gone from it, so an emitted route cannot be predicted
+    // by the producer normalizer while the stored row says otherwise.
+    assert.ok(
+      observed.tagRoutes.includes('/tags/renamed-route/'),
+      'the route model did not carry the stored key',
+    );
+    assert.equal(
+      observed.tagRoutes.includes('/tags/field-notes/'),
+      false,
+      'the route model kept the re-derived key beside the stored one',
+    );
+    const rendered = observed.facets.find((facet) => facet.key === 'renamed-route');
+    assert.ok(rendered !== undefined, 'the build-facing facet index lost the stored key');
+    assert.equal(rendered.label, 'Field Notes', 'the build-facing facet index lost the display label');
+    // Membership is compared as a set: the reader stores canonical slug order
+    // while the facet the page renders sorts by title then slug.
+    assert.deepEqual(
+      [...rendered.members].sort(),
+      [...renamed.slugs].sort(),
+      'the build-facing facet index did not carry the stored members',
     );
   });
 });

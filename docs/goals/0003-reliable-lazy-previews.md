@@ -15,7 +15,7 @@ not a separate infrastructure goal. Other browser consumers reuse it when presen
 ## Material bounds and prerequisite
 
 Requires the valid snapshot and static reading outcome of
-[0002](0002-consistent-static-relationships.md). Follow the
+[0002](archive/0002-consistent-static-relationships.md). Follow the
 [Worker, integrity, CSP and lifecycle contract](../core-design/build-and-runtime.md)
 and [preview query semantics](../core-design/sqlite-contract.md).
 

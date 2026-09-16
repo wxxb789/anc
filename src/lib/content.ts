@@ -14,16 +14,27 @@
  */
 
 import { loadArtifact } from './artifact-source.ts';
+import { notesForSlugs } from './relations.ts';
+import { routeKey, tagFacets as producerTagFacets, tagRoute, type Facet } from './routes.ts';
+import type { ContentArtifact, ContentEntry } from './schema.ts';
 import {
   hydrateEntriesWithSnapshot,
   loadSnapshotRelations,
   snapshotMatchesEntries,
+  type SnapshotRelations,
 } from './snapshot-reader.ts';
-import type { ContentArtifact, ContentEntry } from './schema.ts';
 
 export type { ContentArtifact, ContentEntry };
 
 export const artifact: ContentArtifact = loadArtifact();
+
+export const entries: readonly ContentEntry[] = artifact.entries;
+
+const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+
+export function getEntry(slug: string): ContentEntry | undefined {
+  return bySlug.get(slug);
+}
 
 /**
  * Relationship and tag authority is the finalized snapshot, not the private IR.
@@ -37,16 +48,66 @@ export const artifact: ContentArtifact = loadArtifact();
  * earlier build, or one staged for a different `CONTENT_ARTIFACT`: hydrating
  * those would render relationships this corpus does not have, and the artifact's
  * own pairs are the only authority provably tied to what is being rendered.
+ *
+ * The tag routes follow the same switch. Their key is `tags.key` read from the
+ * snapshot rather than `routeKey(tags.label)` recomputed here, and their member
+ * list is the snapshot's `node_tags` projection, so a static tag page, its
+ * sitemap URL, its note metadata links, and the browser's `byTag` query all
+ * name the rows the producer wrote. Only the no-snapshot fallback normalizes
+ * from the entries, because there the producer is the authority.
  */
 const snapshot = loadSnapshotRelations();
-if (snapshot !== undefined && snapshotMatchesEntries(artifact.entries, snapshot)) {
-  hydrateEntriesWithSnapshot(artifact.entries, snapshot);
+const snapshotIsAuthority = snapshot !== undefined && snapshotMatchesEntries(entries, snapshot);
+if (snapshotIsAuthority) hydrateEntriesWithSnapshot(entries, snapshot);
+
+/**
+ * The snapshot's facets as the `Facet` shape the static surfaces render.
+ *
+ * `entries` are the artifact's own objects, resolved through the same map
+ * `getEntry` uses, so a tag page and a note page list the same instances.
+ * `notesForSlugs` owns the presentation order and the skip of a member the
+ * artifact does not carry; `snapshotMatchesEntries` already proves the node
+ * sets are equal, so the skip is unreachable through the validated loader.
+ */
+function facetsFromSnapshot(
+  relation: SnapshotRelations,
+  lookup: ReadonlyMap<string, ContentEntry>,
+): Facet[] {
+  return relation.tagFacets.map((facet) => ({
+    key: facet.key,
+    label: facet.label,
+    entries: notesForSlugs(facet.slugs, (slug) => lookup.get(slug)),
+  }));
 }
 
-export const entries: readonly ContentEntry[] = artifact.entries;
+const facets: readonly Facet[] = snapshotIsAuthority
+  ? facetsFromSnapshot(snapshot, bySlug)
+  : producerTagFacets(entries);
 
-const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
+/** Facet label to the key its own row carries, for note-page tag links. */
+const keyByLabel = new Map(facets.map((facet) => [facet.label, facet.key]));
 
-export function getEntry(slug: string): ContentEntry | undefined {
-  return bySlug.get(slug);
+/**
+ * The tag facets this build renders, in canonical key order.
+ *
+ * This is the accessor the static tag surfaces call; `routes.ts`'s
+ * `tagFacets(entries)` remains the producer's normalization and collision
+ * check, used by the writer and as the no-snapshot fallback here.
+ */
+export function tagFacets(): readonly Facet[] {
+  return facets;
+}
+
+/**
+ * The public route for one note's tag label, from the same facet index the tag
+ * pages render.
+ *
+ * A hydrated entry carries the snapshot's representative label, so every label
+ * on a note page resolves to the `tags.key` row it came from. The fallback is
+ * reachable only where the producer is already the authority — no snapshot, or
+ * a label the artifact spelled differently from the representative, which
+ * `producerTagFacets` groups under the same key.
+ */
+export function tagRouteForLabel(label: string): string {
+  return tagRoute(keyByLabel.get(label) ?? routeKey(label));
 }
