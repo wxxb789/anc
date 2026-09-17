@@ -134,17 +134,18 @@ parity, `33aa0ae` host snapshot policy and vanished-snapshot fallback,
 `12ff781` foreign browser and preview smoke, `ebd02f9` `AGENTS.md`,
 `c159802` Action-parity reviewed-ledger fix, `65f89d4` Pagefind bundle
 authorship. Branch `feat/0007-independent-publisher-adoption`, PR #10. CI verify
-run `35253591403` and Action-parity run `35253591383` are green on `65f89d4`,
-the last commit whose behavior those runs cover; the commits after it are a
-two-line comment clarification, this archive move, and index edits. An
+run `35256361248` and Action-parity run `35256361302` are green on `6590663`,
+which carries the complete docs state; `65f89d4` is the last commit whose
+behavior changed, and its runs (`35253591403`, `35253591383`) are green too. An
 intermediate commit (`04ad69d`) accidentally carried only the goal-file rename
 with the old relative links; CI's Markdown-link gate correctly failed it, and
-this docs completion commit fixes the links — no product behavior was involved.
+the docs completion commit fixes the links — no product behavior was involved.
+After that, two recorded numbers and the PR text are the only changes.
 
 ### Commands and observed results
 
-- Local `pnpm run verify` (Node v22.23.2, pnpm 11.18.0, Linux x64) —
-  PENDING-LOCAL-VERIFY, exit 0, with the build chain reporting
+- Local `pnpm run verify` (Node v22.23.2, pnpm 11.18.0, Linux x64) — **80 test
+  files, 952 passed / 34 skipped / 986**, exit 0, with the build chain reporting
   `output inventory ok: 150 files`, `secret scan ok: 150 files, 0 findings`,
   `residue scan ok: 33 files, 0 findings`.
 - CI `pnpm run verify` (`ubuntu-24.04`, Node from `.nvmrc` 24.18.1) — **80 test
@@ -153,12 +154,12 @@ this docs completion commit fixes the links — no product behavior was involved
 - `pnpm run pack:tarball` — `anc-0.1.0.tgz`, sha256
   `1025e0a54bd24fd864ab7d12ceefb90a0e59df8d8e962897f5baba659acedf7f`,
   393,306 bytes.
-- `pnpm run smoke:tarball` — PENDING-SMOKE. The run installs the tarball with
-  npm into a fresh synthetic git repository outside the producer's module
-  ancestry, runs the installed `init`/`review`/`build --release`, serves the
-  foreign output under its own `dist/_headers`, drives the five browser checks,
-  and fetches the note and `/private/` from the installed `preview`
-  subcommand.
+- `pnpm run smoke:tarball` — `tarball adoption smoke ok: 2 published notes, 2
+  withheld notes`, exit 0. The run installs the tarball with npm into a fresh
+  synthetic git repository outside the producer's module ancestry, runs the
+  installed `init`/`review`/`build --release`, serves the foreign output under
+  its own `dist/_headers`, drives the five browser checks, and fetches the note
+  and `/private/` from the installed `preview` subcommand.
 - Action parity (CI, `ubuntu-latest`) — run `35253591383`. `foreign-notes`
   built `284 discovered, 2 published, 282 dropped` with `secret scan ok: 154
   files, 0 findings`, `residue scan ok: 37 files, 0 findings`, `site written`,
