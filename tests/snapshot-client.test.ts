@@ -129,7 +129,7 @@ test('two concurrent requests construct one Worker and settle from their own rep
   assert.deepEqual(await second, secondResult, 'the second request did not settle from its own reply');
 });
 
-test('the armed measurement seam carries the result type, elapsed time, and SQL time', async () => {
+test('the armed measurement seam carries the result type, elapsed time, and the Worker operation span', async () => {
   const client = await loadClient();
   const dispatched: CustomEvent<{ type: string; ms: number; operationMs: number }>[] = [];
   (globalThis as Record<string, unknown>).document = {
@@ -147,8 +147,8 @@ test('the armed measurement seam carries the result type, elapsed time, and SQL 
   assert.equal(dispatched.length, 0, 'the measurement event fired without the explicit arming flag');
 
   // Armed, one event carries the reply's own type and the Worker's measured
-  // SQL span beside the client's dispatch-to-result span. Goal 0005 requires
-  // the two recorded separately for goal 0008.
+  // operation span beside the client's dispatch-to-result span. Goal 0005
+  // requires the two recorded separately for goal 0008.
   windowStub.__snapshotMeasurement = true;
   const armed = client.request({ id: 2, type: 'localGraph', slug: 'alpha' });
   worker.emit({ id: 2, ok: true, result: { type: 'localGraph', graph: null }, operationMs: 1.75 });
@@ -160,7 +160,7 @@ test('the armed measurement seam carries the result type, elapsed time, and SQL 
     Number.isFinite(detail.ms) && detail.ms >= 0,
     `the dispatch-to-result span was not a finite non-negative number: ${detail.ms}`,
   );
-  assert.equal(detail.operationMs, 1.75, 'the Worker SQL span did not reach the event unchanged');
+  assert.equal(detail.operationMs, 1.75, 'the Worker operation span did not reach the event unchanged');
 });
 
 test('the pending bound rejects past its finite limit instead of queueing', async () => {

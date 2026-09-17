@@ -67,21 +67,6 @@ function directedFromGraph(graph: Graph): SelectionEdge[] {
   return edges.sort((a, b) => (a.from !== b.from ? (a.from < b.from ? -1 : 1) : a.to < b.to ? -1 : 1));
 }
 
-/** A real snapshot of the fixture artifact, opened read-only through the adapter. */
-function workerDatabase(): { db: SnapshotDb; close: () => void } {
-  const directory = mkdtempSync(join(tmpdir(), 'anc-graph-'));
-  const path = join(directory, 'site.sqlite');
-  writeSnapshot(artifact, path);
-  const database = new DatabaseSync(path, { readOnly: true });
-  return {
-    db: { select: (sql, params) => database.prepare(sql).all(...((params ?? []) as never[])) as Record<string, unknown>[] },
-    close: () => {
-      database.close();
-      rmSync(directory, { recursive: true, force: true });
-    },
-  };
-}
-
 /** A minimal valid entry. The relation lists are completed by `withBacklinks`. */
 function entry(slug: string, overrides: Partial<ContentEntry> = {}): ContentEntry {
   return {
@@ -257,7 +242,7 @@ test('native and Worker selections agree in full identity, directed edges, and o
   // Every fixture note's local graph, full public identity included: a row that
   // carried another note's title or dropped the effective language would pass a
   // slug map but not this.
-  const fixture = workerDatabase();
+  const fixture = snapshotDatabase(artifact.entries);
   try {
     const lookup = new Map(artifact.entries.map((item) => [item.slug, item]));
     const bySlug = (slug: string) => lookup.get(slug);

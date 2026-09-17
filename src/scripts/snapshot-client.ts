@@ -67,9 +67,9 @@ function ensureWorker(): Worker {
       initialized = true;
       // Observability seam for the benchmark harness, armed explicitly by the
       // measurer: the operation, its dispatch-to-validated-result time, and the
-      // Worker's own SQL time. Goal 0005 requires the two recorded separately
-      // for goal 0008. No corpus data is carried, and an ordinary reader
-      // dispatches nothing.
+      // Worker's own operation time (its queries plus selection). Goal 0005
+      // requires the two recorded separately for goal 0008. No corpus data is
+      // carried, and an ordinary reader dispatches nothing.
       if (typeof window !== 'undefined' && (window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
         document.dispatchEvent(
           new CustomEvent('snapshot-result', {

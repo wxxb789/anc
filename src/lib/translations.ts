@@ -374,15 +374,12 @@ export interface Translation {
    * The visible text is identical on every row, so a table of these controls
    * gives a screen-reader user one "Re-center" after another with nothing to
    * choose between them; the note's own title is what distinguishes them.
-   *
-   * The title is a parameter rather than a `{title}` token inside a string
-   * because Chinese puts the note before the phrase and English after it.
-   * `NoteGraph.astro` carries the result of calling this with the token's own
-   * spelling, `{title}`, and the client substitutes each row's title — so the
-   * build resolves the word order and the browser bundle still ships no locale
-   * table.
+   * `{title}` is an ordinary interpolated token, like the status sentences:
+   * both locales place it among their own words, `NoteGraph.astro` emits the
+   * template, and the client fills each row's title — so the build resolves
+   * the word order and the browser bundle still ships no locale table.
    */
-  graphExplorerRecenterLabel: (title: string) => string;
+  graphExplorerRecenterLabel: string;
   /** Accessible label of the tag filter chooser. */
   graphExplorerFilterLabel: string;
   /** The filter's "no filter" option. */
@@ -618,7 +615,7 @@ const EN = {
   graphExplorerOpen: 'Explore interactively',
   graphExplorerReset: 'Reset',
   graphExplorerRecenter: 'Re-center',
-  graphExplorerRecenterLabel: (title) => `Re-center on ${title}`,
+  graphExplorerRecenterLabel: 'Re-center on {title}',
   graphExplorerFilterLabel: 'Tag',
   graphExplorerFilterAll: 'All notes',
   graphExplorerStatusLocal: 'Live graph: {shown} of {total} neighbouring notes drawn.',
@@ -824,7 +821,7 @@ const ZH_CN = {
   graphExplorerOpen: '交互探索',
   graphExplorerReset: '重置',
   graphExplorerRecenter: '以此为中心',
-  graphExplorerRecenterLabel: (title) => `${title}，以此为中心`,
+  graphExplorerRecenterLabel: '{title}，以此为中心',
   graphExplorerFilterLabel: '标签',
   graphExplorerFilterAll: '全部笔记',
   graphExplorerStatusLocal: '实时图：已画出 {total} 篇相邻笔记中的 {shown} 篇。',

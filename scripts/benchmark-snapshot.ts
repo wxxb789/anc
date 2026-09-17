@@ -256,10 +256,27 @@ async function measure(corpus: Corpus, size: number, topology: 'sparse' | 'hub',
           { timeout: 15_000 },
         );
       }
-      // The render event follows the reply it renders, so let an in-flight draw
-      // dispatch before reading; the read below takes whatever has arrived
-      // rather than waiting on another owner's dispatch.
-      await page.waitForTimeout(100);
+      // The render event follows the reply that produced the drawing, so wait,
+      // with a bound, for the render samples to catch up with the operation
+      // samples. A fixed sleep can read early and silently drop the slowest
+      // draw -- exactly the sample a p95 needs. If the catch-up never happens,
+      // the read below records the shorter series rather than failing the run.
+      await page
+        .waitForFunction(
+          () => {
+            const globals = window as unknown as {
+              __ancLocalGraphMs: number[];
+              __ancLocalGraphRenderMs: number[];
+            };
+            return (
+              (globals.__ancLocalGraphRenderMs ?? []).length >=
+              (globals.__ancLocalGraphMs ?? []).length
+            );
+          },
+          undefined,
+          { timeout: 5_000 },
+        )
+        .catch(() => {});
       const measured = await page.evaluate(() => {
         const globals = window as unknown as {
           __ancLocalGraphMs: number[];
@@ -339,13 +356,13 @@ async function main(): Promise<number> {
         const sample = await measure(corpus, size, topology, options, Number(((Date.now() - buildStarted) / 1000).toFixed(2)));
         samples.push(sample);
         const locals = sample.localGraphMs;
-        const localSqls = sample.localGraphOperationMs;
+        const localOperations = sample.localGraphOperationMs;
         const renders = sample.localGraphRenderMs;
         process.stdout.write(
           `${size}/${topology}: build=${sample.buildSeconds}s db=${sample.dbDecodedBytes}B gzip=${sample.dbGzipBytes}B ` +
             `coldPreview=${sample.coldPreviewMs}ms warmPreview=${sample.warmPreviewMs}ms ` +
             `localGraph p50=${percentile(locals, 0.5)}ms p95=${percentile(locals, 0.95)}ms n=${locals.length} ` +
-            `localGraphOp p50=${percentile(localSqls, 0.5)}ms p95=${percentile(localSqls, 0.95)}ms n=${localSqls.length} ` +
+            `localGraphOp p50=${percentile(localOperations, 0.5)}ms p95=${percentile(localOperations, 0.95)}ms n=${localOperations.length} ` +
             `graphRender p50=${percentile(renders, 0.5)}ms p95=${percentile(renders, 0.95)}ms n=${renders.length}\n`,
         );
       } finally {

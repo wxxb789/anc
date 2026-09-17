@@ -161,7 +161,7 @@ const exploreData = explore
       // The same visible text, but named for the note it re-centers on: a table
       // holds one of these per row, so twelve identical "Re-center" names say
       // nothing about which control does what.
-      ['data-graph-recenter-label', t.graphExplorerRecenterLabel('{title}')],
+      ['data-graph-recenter-label', t.graphExplorerRecenterLabel],
       ['data-graph-status-local', t.graphExplorerStatusLocal],
       ['data-graph-status-global', t.graphExplorerStatusGlobal],
       ['data-graph-status-filtered', t.graphExplorerStatusFiltered],
@@ -425,7 +425,7 @@ const exploreData = explore
           unconditional: "see the whole graph" is useful whether or not this one
           was truncated. */}
       <p class="graph-bound">
-        {graph.omitted > 0 && <span>{bounded(shown, total)} </span>}
+        {graph.omitted > 0 && <span data-graph-bound>{bounded(shown, total)} </span>}
         <a href={expand.href} aria-label={expand.label}>{expand.text}</a>
       </p>
     </>

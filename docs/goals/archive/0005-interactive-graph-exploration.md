@@ -101,9 +101,9 @@ Commands and observed results:
 - `pnpm run verify` — 76 test files, **916 passed / 34 skipped**, exit 0.
 - `pnpm run build:fixture` — 76 files, **945 passed / 5 skipped**, secret scan
   `227 files, 0 findings`, residue `33 files, 0 findings`, exit 0.
-- Test consolidation in the same change: node-layer graph tests 54 → 31
-  (`graph-selection` 15 → 7, `graph.test` 22 → 10, `graph-enumeration` 4 → 4,
-  `worker-protocol` 5 → 4, `snapshot-client` 8 → 6), the browser gate 17 → 12,
+- Test consolidation in the same change: node-layer graph tests 44 → 31
+  (`graph-selection` 10 → 7, `graph.test` 22 → 10, `graph-enumeration` new → 4,
+  `worker-protocol` 5 → 4, `snapshot-client` 7 → 6), the browser gate 4 → 12,
   and `snapshot.test.ts` 9 → 7, while adding live incoming-direction, live
   table relation/degree, stale-center, and live-keyboard coverage. Every removed
   assertion was checked against a stronger retained gate, and the retained gates
