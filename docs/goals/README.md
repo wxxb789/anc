@@ -76,6 +76,17 @@ preview now refuse a WAL header or journal sidecar before opening the artifact
 934 passed / 34 skipped and `pnpm run build:fixture` 54 built pages with the
 full record in the file. Five goals are archived; two remain active.
 
+On 2026-09-18, [0007](archive/0007-independent-publisher-adoption.md) was
+completed on branch `feat/0007-independent-publisher-adoption`, PR #10. The
+shipped Action was exercised against a synthetic notes repository on
+`ubuntu-latest` (CI run `35253591383`), the tarball smoke gained a real-Chromium
+phase over the foreign build and the shipped `preview` command, the served host
+policy and the vanished-snapshot fallback gained their own gates, and two CI
+release-test failures traced to Pagefind's `writeFiles` resolving before its
+members were on disk were fixed in `scripts/run-pagefind.ts`. CI verify run
+`35253591403` is green on the last code commit. Six goals are archived; one
+remains active.
+
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
 unrelated product requirements are complete. SQLite/WASM remains required for
@@ -89,7 +100,6 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 
 | Goal | Single completion judgment | Material prerequisites |
 | --- | --- | --- |
-| [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md) | The shipped package and Action work in a foreign notes repository | 0002–0006 (completed) |
 | [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md) | Measured packaged behavior meets the mobile target and accepted cold-preview/resource policies | 0007, including its functional prerequisites |
 
 ## Completed goals
@@ -101,8 +111,9 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 | [0004 — Complete tag browsing](archive/0004-complete-tag-browsing.md) | 2026-09-16 | Implementation commit `718700e`, review fixes `c119678`/`c401315`, PR #5; the reader's tag chooser and the static tag route enumerate one snapshot's membership across pages, with the lookahead-row control, NOCASE exactness, failed-initialization fallback, keyboard operation, withheld-tag absence, and shared-runtime measurements recorded in the file. |
 | [0005 — Interactive graph exploration](archive/0005-interactive-graph-exploration.md) | 2026-09-17 | Implementation commits `1d22934`, `610bb5f`, `38c9467`, PR #6; the live graph and its accessible representation agree on the bounded induced subgraph over a 65-note browser corpus, complete relations stay reachable beyond the drawing, the required mutation and failure controls were re-run, and SQL/Worker and render timings are recorded separately for 0008 — all in the file. |
 | [0006 — Safe release output](archive/0006-safe-release-output.md) | 2026-09-17 | Implementation commit `3e65a12`, PR #8, CI run `35231482566`; the reviewed-set failures, exact-output refusals, reconstructed-row scanner controls, withdrawal-after-rebuild, whole-tree failed-build preservation, and concurrent-build binding isolation are recorded in the file. |
+| [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md) | 2026-09-18 | Implementation commits `2c9772e`, `33aa0ae`, `12ff781`, `ebd02f9`, `c159802`, `65f89d4`, PR #10; local `pnpm run verify` and CI run `35253591403` (80 files / 952 passed / 34 skipped) green on `65f89d4`, Action-parity CI run `35253591383` green with the shallow-clone refusal, and the recorded `pack:tarball` digest plus `smoke:tarball` result — all six evaluation rows in the file. |
 
-Two goals remain `ready` and active. Schema creation, query-module code,
+One goal remains `ready` and active. Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
 separate judgments, with no circular dependency on final performance budgets.
@@ -117,13 +128,13 @@ integration evidence; they do not create competing schema or test implementation
 | Published node/link/tag/alias semantics; exact schema; deterministic fresh snapshots | 0002 |
 | Static backlinks/outgoing/tag routes, related suggestions, induced graph fallback | 0002 |
 | Private IR boundary; removal of serialized relation authorities and public JSON indexes | 0002; final output rejection in 0006 |
-| Exact DB URL/digest binding | Build output in 0002; browser validation in 0003; host/package validation in 0007 |
+| Exact DB URL/digest binding | Build output in 0002; browser validation in 0003; host/package validation in [0007](archive/0007-independent-publisher-adoption.md) (completed) |
 | Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003 (completed); cross-consumer evidence in [0004](archive/0004-complete-tag-browsing.md) (completed) and [0005](archive/0005-interactive-graph-exploration.md) (completed) |
 | Canonical runtime tag lookup and exhaustive pagination | 0004 (completed) |
 | Local/global/tag-filtered graph, ranking, re-centering, complete relation enumeration | [0005](archive/0005-interactive-graph-exploration.md) (completed) |
 | Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 (completed) |
-| CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006 (completed); foreign installation/transport in 0007 |
-| Snapshot caching, stale-page fallback, no substitution of a newer DB | 0007 |
+| CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006 (completed); foreign installation/transport in [0007](archive/0007-independent-publisher-adoption.md) (completed) |
+| Snapshot caching, stale-page fallback, no substitution of a newer DB | [0007](archive/0007-independent-publisher-adoption.md) (completed) |
 | 100/1,000/10,000-note measurements, physical mobile p95, cold preview, memory and finite policies | 0008 |
 | No backward compatibility; no body/FTS/manifest; evidence-based ablation | Every goal, governed by core design |
 
@@ -188,5 +199,6 @@ on 2026-09-14 into 0002–0008 without declaring completion. Its number is retai
 [0004](archive/0004-complete-tag-browsing.md) were completed and moved into the
 [archive](archive/README.md) on 2026-09-16,
 [0005](archive/0005-interactive-graph-exploration.md) and
-[0006](archive/0006-safe-release-output.md) on 2026-09-17; no other number has
-been completed.
+[0006](archive/0006-safe-release-output.md) on 2026-09-17, and
+[0007](archive/0007-independent-publisher-adoption.md) on 2026-09-18; 0008
+remains active and no other number has been completed.

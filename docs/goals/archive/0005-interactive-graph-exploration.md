@@ -208,6 +208,6 @@ carries no mutation and no `src/` file is modified by a test-only experiment.
   initialization settled; an inner SQL-only split remains goal 0008's to
   introduce if its report needs one.
 - [0006](0006-safe-release-output.md),
-  [0007](../0007-independent-publisher-adoption.md) and
+  [0007](0007-independent-publisher-adoption.md) and
   [0008](../0008-acceptable-browser-cost.md) remain active. Deployment and
   post-deploy smoke tests remain external, separately approved actions.

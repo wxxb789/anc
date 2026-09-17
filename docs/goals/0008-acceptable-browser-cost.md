@@ -17,7 +17,7 @@ evidence and leaves the goal open.
 ## Material bounds and prerequisite
 
 Requires the actual packaged feature outcome of
-[0007](0007-independent-publisher-adoption.md), including 0002–0006. Follow
+[0007](archive/0007-independent-publisher-adoption.md), including 0002–0006. Follow
 [runtime limits](../core-design/build-and-runtime.md) and
 [ablation/change rules](../core-design/verification-and-evolution.md).
 
