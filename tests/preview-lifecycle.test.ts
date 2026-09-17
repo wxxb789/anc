@@ -28,6 +28,7 @@ import type { Browser, BrowserContext, Page } from 'playwright';
 import {
   buildAndServe,
   buildIn,
+  buildSite,
   collectPageErrors,
   countWorkerTerminations,
   focusByTab,
@@ -35,6 +36,7 @@ import {
   serveDist,
   sqliteAssetRequests,
   workerTerminations,
+  workerScriptPath,
   type RunningSite,
 } from './support/browser-site.ts';
 import { snapshotPath } from './support/snapshot.ts';
@@ -497,5 +499,123 @@ test('a replaced served snapshot changes the bound digest and the previewed titl
     // The workspace belongs to `site` and its afterAll; `running` only owns the
     // server it opened over the same bytes.
     await running.close();
+  }
+}, 180_000);
+
+test('a page bound to a snapshot that vanished falls back without fetching the replacement', async () => {
+  // Two independent builds in their own workspaces: the page's compiled
+  // binding names A's digest, and the replacement deployment B has a different
+  // one. `serve` then swaps what the origin hands out, which is what a
+  // redeploy at a fixed origin is from the browser's side.
+  const siteA = buildSite({
+    'alpha.md': '---\ntitle: "Alpha One"\n---\n\n# Alpha One\n\nAlpha links to [[beta]].\n',
+    'beta.md': '---\ntitle: "Beta One"\n---\n\n# Beta One\n\nBeta body text for previews.\n',
+  });
+  const siteB = buildSite({
+    'alpha.md': '---\ntitle: "Alpha Two"\n---\n\n# Alpha Two\n\nAlpha Two links to [[beta]].\n',
+    'beta.md': '---\ntitle: "Beta Two"\n---\n\n# Beta Two\n\nDifferent bytes, so a different digest.\n',
+  });
+  const running = await serveDist(siteA.dist);
+  const digestA = basename(snapshotPath(siteA.dist));
+  const digestB = basename(snapshotPath(siteB.dist));
+  assert.notEqual(
+    digestB,
+    digestA,
+    'both builds produced the same snapshot digest, so replacing the output changed nothing',
+  );
+
+  const page = await browser.newPage();
+  const requests = sqliteAssetRequests(page);
+  // The runtime recorder only sees SQLite assets; the full stream makes "no
+  // request ever names digestB" literal across everything the page asks for.
+  const everyRequest: string[] = [];
+  page.on('request', (request) => everyRequest.push(request.url()));
+
+  try {
+    await page.goto(`${running.origin}/notes/alpha/`, { waitUntil: 'load' });
+    await installPanelTimeline(page);
+
+    // A returning reader's cache, made observable rather than assumed. The
+    // Worker chunk is content-hashed and served under `/_astro/*`'s immutable
+    // rule, so a reader who visited A before the redeploy still has it locally;
+    // its bytes embed A's snapshot URL, so B's rebuild gives it a different
+    // name and it 404s at the origin. Measured: without this warm-up the Worker
+    // never starts, the page issues zero `/data/site.` requests, and the
+    // "never substitute a different DB" rule below would be asserted against
+    // nothing. The warm GET's status is asserted so a cache state that was
+    // never established cannot pass as one.
+    const chunk = workerScriptPath(siteA.dist);
+    const warmStatus = await page.evaluate(async (url: string) => (await fetch(url)).status, chunk);
+    assert.equal(
+      warmStatus,
+      200,
+      `the Worker chunk warm-up for ${chunk} returned ${warmStatus}, so the cached-page premise is not established`,
+    );
+
+    // The redeploy. A's files are gone from the origin; B's are now served.
+    running.serve(siteB.dist);
+
+    // Environment controls from the test process, not the page: A's snapshot
+    // must actually 404 and B's must actually exist, or the scenario is not
+    // the one the assertions below describe. These probes are not page
+    // requests and cannot satisfy either recorder.
+    const gone = await fetch(`${running.origin}/data/${digestA}`);
+    assert.equal(gone.status, 404, `A's snapshot still answered ${gone.status} after the replacement`);
+    await gone.body?.cancel();
+    const present = await fetch(`${running.origin}/data/${digestB}`);
+    assert.equal(present.status, 200, `B's snapshot answered ${present.status}, so there was no replacement to find`);
+    await present.body?.cancel();
+
+    // One explicit intent after the redeploy. The page still binds A; a
+    // runtime that resolved "latest DB" or retried against a sibling URL would
+    // fetch B here.
+    const dbAnswer = page.waitForResponse((response) => response.url().includes('/data/site.'), {
+      timeout: 15_000,
+    });
+    await page.locator('a[href="/notes/beta/"]').first().hover();
+    const answer = await dbAnswer;
+    assert.equal(
+      answer.status(),
+      404,
+      `the page's bound snapshot answered ${answer.status()}, so failure fallback was not exercised`,
+    );
+
+    // Let the Worker's failure settle through the client before judging the UI.
+    await page.waitForTimeout(500);
+
+    const panel = page.locator('#link-preview');
+    assert.equal(await panel.isHidden(), true, 'the preview panel opened from a snapshot that no longer exists');
+    assert.deepEqual(
+      await panelTimeline(page),
+      [],
+      'the panel flickered visible at some point even though the bound snapshot was gone',
+    );
+    const article = (await page.locator('article').textContent()) ?? '';
+    assert.ok(article.includes('Alpha links to'), 'the static article text did not survive the failed preview');
+    assert.equal(
+      await page.locator('a[href="/notes/beta/"]').first().getAttribute('href'),
+      '/notes/beta/',
+      'the anchor stopped being a normal static link',
+    );
+
+    const dbRequests = requests.filter((url) => url.includes('/data/site.'));
+    assert.equal(
+      dbRequests.length,
+      1,
+      `expected exactly one snapshot request (the page's own binding), saw ${dbRequests.length}: ${dbRequests.join(', ')}`,
+    );
+    assert.ok(
+      dbRequests[0]!.endsWith(digestA),
+      `the page fetched ${dbRequests[0]!}, not its own binding ${digestA}`,
+    );
+    assert.ok(
+      !everyRequest.some((url) => url.includes(digestB)),
+      `a request named the replacement snapshot ${digestB}: ${everyRequest.filter((url) => url.includes(digestB)).join(', ')}`,
+    );
+  } finally {
+    await page.close();
+    await running.close();
+    removeWorkspace(siteA.workspace);
+    removeWorkspace(siteB.workspace);
   }
 }, 180_000);

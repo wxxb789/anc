@@ -384,11 +384,13 @@ test('the shipped CSP is served and enforced in the document', async () => {
 
     // Per-path rule fidelity, both directions: the document must not inherit
     // the `/_astro/*` immutable rule, and the hashed Worker chunk must still
-    // receive it. A flattened header map would fail one of these two.
+    // receive it. A flattened header map would fail one of these two. The
+    // document value is the platform's revalidating default that the harness
+    // stands in for; `public/_headers` itself names no rule for HTML.
     assert.equal(
       response.headers()['cache-control'],
-      undefined,
-      'the document response inherited a cache rule `public/_headers` does not grant it',
+      'public, max-age=0, must-revalidate',
+      'the document response does not revalidate under the per-path policy',
     );
     const chunk = await page.request.get(`${site.origin}${workerScriptPath(site.dist)}`);
     assert.match(
