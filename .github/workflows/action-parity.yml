@@ -1,0 +1,103 @@
+# Exercises the composite Action a stranger adds (`action.yml`) end to end.
+#
+# This is goal 0007's Action-parity evidence, not this repository's own verify
+# gate. It is deliberately outside `pnpm run verify`: it installs the
+# generator's production dependency tree from the registry and runs the shipped
+# adoption path, the same release-level cost class as `smoke:tarball`.
+#
+# The workspace root is a synthetic notes repository; the generator is checked
+# out underneath it, so `uses: ./generator` resolves the Action exactly the way
+# a stranger's `uses: <owner>/<repo>@<ref>` resolves it at that commit. The
+# build step is the Action and nothing else — no parallel command the Action
+# does not run. Nothing here deploys, pushes, or needs a secret; `permissions`
+# is narrowed so the token the job receives cannot write.
+
+name: action-parity
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foreign-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: generator
+
+      # The Action checks the Node floor from the generator's own manifest; this
+      # pins the same runtime the repository and the action's floor are written
+      # against. `node-version-file` rather than a literal keeps `.nvmrc` the
+      # one version pin, which is what `tests/deployment.test.ts` gates.
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: generator/.nvmrc
+
+      - name: Create the synthetic notes repository
+        run: node generator/.github/scripts/action-parity-fixture.mjs .
+
+      # The Action always builds in release mode, so the reviewed set has to be
+      # recorded and committed first, exactly as `docs/adoption.md` tells a
+      # stranger to do. `review` is the ordinary CLI command here because the
+      # Action intentionally exposes no path that could bypass the ledger.
+      - name: Review and commit the publish set
+        run: |
+          node generator/bin/anc.mjs review
+          git add -- .publish-set.json
+          git commit --quiet -m 'review publish set'
+
+      - name: Build with the shipped Action
+        uses: ./generator
+
+      # Reads the artifact the Action wrote. It re-derives the reviewed set,
+      # the snapshot's digest binding, the runtime assets, the private report,
+      # and the withheld-body absence rather than trusting the action's exit
+      # status.
+      - name: Check the artifact the Action produced
+        run: node generator/.github/scripts/assert-action-artifact.mjs .
+
+  # A negative control for the Action's first step. A shallow clone cannot
+  # prove `created`, so the Action must refuse one instead of publishing a
+  # valid-looking site with incomplete metadata. The workspace root itself is
+  # made the shallow clone, which is where the Action's guard reads.
+  shallow-clone-refusal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: generator
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: generator/.nvmrc
+
+      - name: Build a shallow notes clone at the workspace root
+        run: |
+          notes="$(mktemp -d)"
+          git init --quiet "$notes"
+          git -C "$notes" config user.name 'Action Parity'
+          git -C "$notes" config user.email 'action-parity@example.invalid'
+          printf 'title: Shallow\norigin: https://notes.example.org/\n' > "$notes/publish.config.yaml"
+          printf '# Shallow\n' > "$notes/shallow.md"
+          git -C "$notes" add -- .
+          git -C "$notes" commit --quiet -m notes
+          clone="$(mktemp -d)"
+          rmdir "$clone"
+          git clone --quiet --depth 1 "file://$notes" "$clone"
+          cp -a "$clone/." "$GITHUB_WORKSPACE/"
+
+      - name: The Action must refuse the shallow clone
+        id: shallow
+        continue-on-error: true
+        uses: ./generator
+
+      - name: Assert the refusal
+        run: |
+          if [ "${{ steps.shallow.outcome }}" != "failure" ]; then
+            echo "::error::the Action published a shallow clone instead of refusing it"
+            exit 1
+          fi
