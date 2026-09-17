@@ -127,6 +127,7 @@ import {
   SNAPSHOT_USER_VERSION,
 } from '../src/lib/snapshot.ts';
 import { BuildFailure } from './write-report.ts';
+import { declaresWal } from './snapshot-rows.ts';
 
 /** The SQLite file header every valid snapshot starts with. */
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'latin1');
@@ -195,6 +196,28 @@ function resolveSnapshot(directory: string): string {
       'the preview snapshot bytes do not match the digest in their filename.',
       path,
     );
+  }
+
+  // Opening is not free of side effects when SQLite sees journal work to do:
+  // measured, a `-wal` sibling makes the read-only open recover and write a
+  // `-shm` file into the directory being served. A built output carries none of
+  // these, so a WAL header or a sidecar is a wrong candidate and is refused
+  // before the driver touches it.
+  if (declaresWal(bytes)) {
+    throw new BuildFailure(
+      'preview-snapshot-format',
+      'the preview snapshot is not a snapshot this reader accepts.',
+      `${path}: WAL format`,
+    );
+  }
+  for (const suffix of ['-wal', '-shm', '-journal'] as const) {
+    if (existsSync(path + suffix)) {
+      throw new BuildFailure(
+        'preview-snapshot-format',
+        'the preview snapshot is not a snapshot this reader accepts.',
+        `${path}: journal sidecar ${suffix}`,
+      );
+    }
   }
 
   let database: DatabaseSync;

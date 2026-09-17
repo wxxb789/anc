@@ -25,15 +25,18 @@
  * `dist/ has no index.html, so this gate would measure nothing`.
  */
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { POLL_MS, lockDist } from '../scripts/dist-lock.ts';
+import { SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
+import { snapshotPath, snapshotText } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -262,17 +265,55 @@ test('every command that empties dist/ takes the lock', () => {
 });
 
 /**
- * Two concurrent binary builds both produce a correct site.
+ * The digest-named URL `vite.define` compiles into a build's client bundles.
  *
- * This is the property the ticket names, and it **passed before the lock too** —
- * recorded here rather than dropped, because the measurement is what corrects
- * the diagnosis this repository carried for three tickets. The binary stages
- * per-run and never touches `dist/`; nothing about it needed fixing.
+ * `astro.config.mjs` substitutes the binding from the run's private workspace,
+ * so the URL a built site carries is that run's snapshot or a mixed binding.
+ */
+const BINDING_URL = /\/data\/site\.([0-9a-f]{64})\.sqlite/g;
+
+/** Every regular file under a directory, in no particular order. */
+function outputFiles(directory: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) files.push(...outputFiles(path));
+    else if (entry.isFile()) files.push(path);
+  }
+  return files;
+}
+
+/**
+ * Two concurrent binary builds both produce their own site, snapshot, and binding.
+ *
+ * This is the property the ticket names, and the corpus half **passed before the
+ * lock too** — recorded here rather than dropped, because the measurement is what
+ * corrects the diagnosis this repository carried for three tickets. The binary
+ * stages per-run and never touches `dist/`; nothing about it needed fixing.
  *
  * Two rather than the twenty-four measured by hand: this runs in CI on every
  * suite, and two is enough to fail if a shared path is ever introduced.
+ *
+ * **The first version was not concurrent, and the gate now proves it is.**
+ * It called `spawnSync` inside `Promise.all`; a synchronous spawn blocks the
+ * event loop for the whole build, so the two runs were strictly sequential and
+ * the `Promise.all` over already-settled promises only made them *look*
+ * concurrent. `docs/gate-reading.md` case 5: the fixture encoded what the
+ * author believed the runner did. The builds are now `spawn`ed asynchronously
+ * and the test asserts the measured lifetimes overlapped — the later start is
+ * before the earlier exit — so the corpora/binding postconditions below are
+ * evidence about concurrent builds and not about two sequential ones. Measured
+ * on one developer-host run: the two processes were both alive for ~12.8 s
+ * (starts 4.4 s/4.4 s, exits 17.2 s/18.9 s on the same monotonic clock).
+ *
+ * **The binding half of the failed-build row.** Each output must hold exactly
+ * one snapshot whose file name is the SHA-256 of its own bytes, whose records
+ * name only its own corpus token, and whose compiled binding URL names that
+ * same digest; and no file in an output may carry the other corpus's token.
+ * A build that staged another run's workspace or artifact fails these even
+ * while exiting 0.
  */
-test('two concurrent binary builds each produce their own site', async () => {
+test('two concurrent binary builds each produce their own site, snapshot, and binding', async () => {
   const roots = [0, 1].map((index) => {
     const root = mkdtempSync(join(tmpdir(), `conc-${index}-`));
     mkdirSync(join(root, 'notes'), { recursive: true });
@@ -281,32 +322,108 @@ test('two concurrent binary builds each produce their own site', async () => {
   });
 
   const binary = join(ROOT, 'bin', 'anc.mjs');
-  const runs = await Promise.all(
-    roots.map(
-      (root) =>
-        new Promise<{ status: number | null; output: string }>((resolve) => {
-          const result = spawnSync(process.execPath, [binary, 'build', '--content', 'notes', '--out', 'out'], {
-            cwd: root,
-            encoding: 'utf8',
-          });
-          resolve({ status: result.status, output: `${result.stdout}${result.stderr}` });
-        }),
-    ),
-  );
+  interface Run {
+    status: number | null;
+    output: string;
+    startedAt: number;
+    finishedAt: number;
+  }
+  const run = (root: string) =>
+    new Promise<Run>((resolve) => {
+      // Monotonic, so the overlap comparison cannot be moved by a wall-clock
+      // jump; both readings come from this one process.
+      const startedAt = performance.now();
+      const child = spawn(process.execPath, [binary, 'build', '--content', 'notes', '--out', 'out'], {
+        cwd: root,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let output = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        output += chunk.toString('utf8');
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        output += chunk.toString('utf8');
+      });
+      child.on('close', (status) => resolve({ status, output, startedAt, finishedAt: performance.now() }));
+    });
+
+  const runs = await Promise.all(roots.map(run));
 
   try {
-    for (const [index, run] of runs.entries()) {
-      assert.equal(run.status, 0, `concurrent build ${index} failed:\n${run.output}`);
+    for (const [index, result] of runs.entries()) {
+      assert.equal(result.status, 0, `concurrent build ${index} failed:\n${result.output}`);
     }
+
+    // The concurrency signal, measured rather than assumed. Reverting to a
+    // synchronous spawn (or awaiting inside a loop) runs the builds one after
+    // the other and reds this line, which is exactly the state this gate exists
+    // to detect; the numbers go in the message so a red run shows the gap.
+    //
+    // **Harness mutation watched fail:** `await run(root)` in a sequential
+    // loop put the later start 1 ms *after* the earlier exit and this assertion
+    // is what failed, not a later one.
+    const latestStart = Math.max(...runs.map((result) => result.startedAt));
+    const earliestExit = Math.min(...runs.map((result) => result.finishedAt));
+    assert.ok(
+      latestStart < earliestExit,
+      `the two builds did not overlap: latest start ${latestStart} vs earliest exit ${earliestExit}`,
+    );
+
+    // Exactly one snapshot per output, its file name equal to the digest of its
+    // own bytes. `snapshotPath` throws unless `data/` holds exactly one
+    // digest-pattern candidate, so a missing or second snapshot fails here.
+    const snapshots = roots.map((root, index) => {
+      const out = join(root, 'out');
+      const file = snapshotPath(out);
+      const named = SNAPSHOT_FILE_PATTERN.exec(basename(file));
+      assert.ok(named, `build ${index}'s snapshot file is not digest-named: ${file}`);
+      const digest = createHash('sha256').update(readFileSync(file)).digest('hex');
+      assert.equal(named[1], digest, `build ${index}'s snapshot file name does not match its own bytes`);
+      return { out, digest, text: snapshotText(out) };
+    });
+    assert.notEqual(
+      snapshots[0]!.digest,
+      snapshots[1]!.digest,
+      'two distinct corpora produced the same snapshot digest',
+    );
+
     // Each site carries its own note and not its neighbour's — a build that
     // picked up the other's artifact would still exit 0.
-    for (const [index, root] of roots.entries()) {
-      const page = join(root, 'out', 'notes', 'note', 'index.html');
+    for (const [index, snapshot] of snapshots.entries()) {
+      const other = index === 0 ? 1 : 0;
+      const page = join(snapshot.out, 'notes', 'note', 'index.html');
       assert.ok(existsSync(page), `concurrent build ${index} produced no note page`);
       const html = readFileSync(page, 'utf8');
       assert.ok(html.includes(`zzqbody${index}`), `build ${index} does not carry its own note`);
-      const other = index === 0 ? 1 : 0;
       assert.ok(!html.includes(`zzqbody${other}`), `build ${index} carries build ${other}'s note`);
+
+      // The snapshot's own records, not the rendered page: its stored excerpt
+      // names the corpus it was built from.
+      assert.ok(snapshot.text.includes(`zzqbody${index}`), `build ${index}'s snapshot does not carry its own note`);
+      assert.ok(
+        !snapshot.text.includes(`zzqbody${other}`),
+        `build ${index}'s snapshot carries build ${other}'s note`,
+      );
+
+      // One raw pass over every published file: the other corpus's token must
+      // appear nowhere, this output must carry its own somewhere, and every
+      // compiled binding URL must name this output's own snapshot digest.
+      const bound = new Set<string>();
+      let ownToken = false;
+      for (const file of outputFiles(snapshot.out)) {
+        const bytes = readFileSync(file);
+        if (bytes.includes(`zzqbody${other}`)) {
+          assert.fail(`build ${index} carries build ${other}'s corpus token in ${file}`);
+        }
+        if (bytes.includes(`zzqbody${index}`)) ownToken = true;
+        for (const match of bytes.toString('latin1').matchAll(BINDING_URL)) bound.add(match[1]!);
+      }
+      assert.ok(ownToken, `build ${index}'s output does not carry its own corpus token`);
+      assert.deepEqual(
+        [...bound],
+        [snapshot.digest],
+        `build ${index} compiles a binding that does not name its own snapshot`,
+      );
     }
   } finally {
     for (const root of roots) rmSync(root, { recursive: true, force: true });

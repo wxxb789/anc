@@ -115,6 +115,42 @@ test('missing and mismatched scanner versions fail before scanning', () => {
   assert.match(mismatch.detail, /stdoutBytes/);
 });
 
+/**
+ * Extension or file kind is not a skip decision.
+ *
+ * The residue scanner has an explicit unclassified-file branch and reports such
+ * a file unscanned; the secret projection instead copies every regular file as
+ * bytes, so there is no classification step that could set an unknown binary
+ * aside. This fixture makes that a measured property: an extensionless member
+ * with a non-text prefix carries a credential, and the scan must find it. If
+ * the projection ever grows an extension or magic-number allowlist, this gate
+ * is the one that fails.
+ */
+test('a secret inside an extensionless binary member is scanned, not skipped', () => {
+  const root = scratch();
+  const planted = 'ghp_8nR2vD6yK1mQ5sT9xF4cH7bL0pW3aE6jU2zG';
+  try {
+    writeFileSync(join(root, 'index.html'), '<h1>clean</h1>\n', 'utf8');
+    writeFileSync(
+      join(root, 'opaque-member'),
+      Buffer.concat([
+        Buffer.from([0x00, 0xff, 0x10, 0x80]),
+        Buffer.from('token=' + planted),
+        Buffer.from([0x00, 0x1a]),
+      ]),
+    );
+    const error = failure(() => scanSecrets(root));
+    assert.equal(error.code, 'secret-scan-findings');
+    assert.match(error.message, /secret scan found 1 finding/);
+    assert.ok(!error.message.includes(planted), 'the public message carried the planted value');
+    assert.ok(!(error.detail ?? '').includes(planted), 'the private detail carried the planted value');
+    assert.match(error.detail ?? '', /opaque-member/, 'the finding did not name the binary member');
+    assert.match(error.detail ?? '', /github-pat/, 'the finding did not reach the PAT rule');
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
 test('empty and unreadable compressed output cannot pass as clean', () => {
   const empty = scratch();
   const broken = scratch();
