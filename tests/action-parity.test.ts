@@ -82,24 +82,25 @@ test('every job runs on the Action’s supported Linux runner', () => {
   }
 });
 
-test('the build step is the shipped Action, after a reviewed publish set', () => {
+test('the build step is the shipped Action, over a committed reviewed set', () => {
   const foreign = WORKFLOW.jobs?.['foreign-notes'];
   assert.ok(foreign, `${WORKFLOW_PATH}: the foreign-notes job is missing`);
   const steps = foreign.steps ?? [];
 
-  const reviewIndex = steps.findIndex((step) => step.run?.includes('anc.mjs review'));
-  assert.ok(reviewIndex >= 0, `${WORKFLOW_PATH}: the workflow never runs the ordinary review command`);
-  assert.match(
-    steps[reviewIndex]!.run ?? '',
-    /git commit[^\n]*\.publish-set\.json|git commit/,
-    `${WORKFLOW_PATH}: the reviewed set is never committed, so the release gate would refuse every build`,
-  );
-
+  // `anc review` itself needs the generator's dependencies, which only the
+  // Action installs; the ledger is committed by the fixture instead. What must
+  // remain true is that a reviewed set is committed *before* the Action runs,
+  // because the Action always builds `--release` and refuses an unreviewed
+  // set. `tests/action-parity.test.ts`'s sibling assertions hold the fixture to
+  // writing that ledger.
   const actionIndex = steps.findIndex((step) => step.uses === './generator');
   assert.ok(actionIndex >= 0, `${WORKFLOW_PATH}: the Action under test is never invoked`);
+
+  const createIndex = steps.findIndex((step) => step.run?.includes('action-parity-fixture.mjs'));
+  assert.ok(createIndex >= 0, `${WORKFLOW_PATH}: the fixture that commits the reviewed set never runs`);
   assert.ok(
-    actionIndex > reviewIndex,
-    `${WORKFLOW_PATH}: the Action must build only after the reviewed set is committed`,
+    createIndex < actionIndex,
+    `${WORKFLOW_PATH}: the reviewed set must be committed before the Action builds`,
   );
 
   const assertIndex = steps.findIndex((step) => step.run?.includes('assert-action-artifact.mjs'));
@@ -183,6 +184,12 @@ test('the assertion scripts exist and re-derive what they claim', () => {
   const assertion = readFileSync(join(ROOT, '.github/scripts/assert-action-artifact.mjs'), 'utf8');
   assert.match(fixture, /publish: false/, 'the fixture no longer withholds a note by frontmatter');
   assert.match(fixture, /exclude:/, 'the fixture no longer withholds a path by pattern');
+  assert.match(fixture, /\.publish-set\.json/, 'the fixture no longer commits a reviewed publish set');
+  assert.match(
+    fixture,
+    /slugs:\s*\['second',\s*'welcome'\]/,
+    'the fixture no longer records the exact public set, so the release gate would compare against nothing',
+  );
   for (const instrument of ['node:sqlite', 'createHash', 'gunzipSync']) {
     assert.ok(
       assertion.includes(instrument),

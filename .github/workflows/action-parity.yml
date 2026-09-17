@@ -40,16 +40,14 @@ jobs:
       - name: Create the synthetic notes repository
         run: node generator/.github/scripts/action-parity-fixture.mjs .
 
-      # The Action always builds in release mode, so the reviewed set has to be
-      # recorded and committed first, exactly as `docs/adoption.md` tells a
-      # stranger to do. `review` is the ordinary CLI command here because the
-      # Action intentionally exposes no path that could bypass the ledger.
-      - name: Review and commit the publish set
-        run: |
-          node generator/bin/anc.mjs review
-          git add -- .publish-set.json
-          git commit --quiet -m 'review publish set'
-
+      # The fixture commits the reviewed ledger itself. `anc review` cannot run
+      # here: it imports the generator's dependencies, which nothing installs
+      # until the Action step below — and installing them first would make the
+      # Action's own install untested. The ledger is still a release gate, not a
+      # fixture formality: the Action always builds `--release`, whose exact-set
+      # comparison refuses anything but the slugs the producer computes. The
+      # tarball smoke runs the real `init`/`review` commands against an npm
+      # install.
       - name: Build with the shipped Action
         uses: ./generator
 

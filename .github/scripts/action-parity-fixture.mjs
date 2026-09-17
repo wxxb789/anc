@@ -13,6 +13,16 @@
  * carry markers the assertion step scans the finished `dist/` for, raw and
  * gzip-inflated.
  *
+ * The reviewed ledger is written here rather than by `anc review`, and the
+ * reason is ordering rather than convenience: `review` imports the generator's
+ * dependencies, which nothing has installed when this fixture runs — the
+ * Action installs them in the step after this one, and pre-installing them
+ * would make the Action's own install step untested. The ledger is still a
+ * real gate: the Action always builds `--release`, whose exact-set comparison
+ * refuses a ledger that does not name precisely the slugs the producer
+ * computes. The tarball smoke (`scripts/smoke-tarball.ts`) installs the
+ * package with npm and runs the real `init`/`review` commands.
+ *
  * `git init` rather than a clone is what makes the shallow-clone refusal a
  * separate job: this repository has full history for the date derivation, and
  * the refusal control builds its own shallow clone on purpose.
@@ -79,13 +89,31 @@ write('drafts/roadmap.md', [
   'PARITY-DRAFT-BODY-MUST-NOT-SHIP',
 ]);
 
+// Sorted public slugs only, exactly what `anc review` writes: no source paths
+// and no withheld names. The release build recomputes the set and refuses any
+// difference, so a wrong entry here fails the workflow rather than passing it.
+writeFileSync(
+  join(root, '.publish-set.json'),
+  JSON.stringify({ version: 1, slugs: ['second', 'welcome'] }, null, 2) + '\n',
+  'utf8',
+);
+
 git('init', '--quiet');
 git('config', 'user.name', 'Action Parity');
 git('config', 'user.email', 'action-parity@example.invalid');
 // Explicit paths, not `git add -A`: the generator checkout beside this corpus
 // carries its own `.git`, and adding a gitlink here would make the fixture
 // repository depend on something the workflow does not publish.
-git('add', '--', 'welcome.md', 'second.md', 'private.md', 'drafts', 'publish.config.yaml');
+git(
+  'add',
+  '--',
+  'welcome.md',
+  'second.md',
+  'private.md',
+  'drafts',
+  'publish.config.yaml',
+  '.publish-set.json',
+);
 git('commit', '--quiet', '-m', 'notes: the synthetic notes repository');
 
 console.log('synthetic notes repository created: 2 published, 2 withheld');
