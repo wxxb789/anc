@@ -81,8 +81,10 @@ function pagefindFailed(what: string, errors: readonly unknown[]): BuildFailure 
  * writer runs. `getFiles()` is the indexer's authored copy of the complete
  * bundle, and writing it here makes completion structural: each member is
  * closed before this function returns, so no gate can read a tree the indexer
- * is still writing. Measured byte-for-byte equal to `writeFiles` output over
- * the probe corpora, including a 65-page one.
+ * is still writing. Measured byte-for-byte equal to `writeFiles` output in a
+ * direct author-vs-writer comparison on this host over a 12-page corpus with
+ * nested members and CJK text, and in an author-after-write comparison over a
+ * 65-page corpus.
  */
 export function writePagefindBundle(
   bundleDirectory: string,
