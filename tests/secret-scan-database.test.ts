@@ -7,6 +7,12 @@
  * shape and assert the scan fails for the right reason without printing the
  * secret, the digest, or a host path.
  *
+ * **Every fixture here is scanner-only.** They carry table and value shapes the
+ * accepted snapshot never emits — a 9,000-byte body, a BLOB table — and exist
+ * solely to prove the instrument reconstructs values the file's bytes do not
+ * spell. They are labelled here rather than in each test so the boundary is one
+ * sentence a reviewer can check against the shipped schema.
+ *
  * Requires the pinned Gitleaks on `PATH`, as `tests/secret-scan.test.ts` does.
  */
 
@@ -70,6 +76,67 @@ test('a credential compressed into a BLOB is found through the row projection', 
   }
 });
 
+/**
+ * A credential split across an overflow-page boundary is found through rows.
+ *
+ * **Scanner-only fixture.** A 9,000-byte row and a table named `notes` are
+ * shapes the accepted snapshot never emits — its values are short metadata
+ * strings — so this fixture exists only to make the reconstructed-row member
+ * the only surface that spells the credential. It is built by measurement, not
+ * arithmetic: each candidate offset is written, the file is read back, and the
+ * row is accepted only when no byte of the file spells the credential, so the
+ * gate asserts a measured shape rather than a believed one.
+ *
+ * **Mutation watched fail:** deleting the `.rows` write in `projection()`
+ * (`scripts/scan-secrets.ts`) leaves the raw copy as the only member; the
+ * credential is absent from it by construction, so the scan reports clean and
+ * this test fails on the expected `secret-scan-findings`.
+ */
+test('a credential split across an overflow-page boundary is found through the row projection', () => {
+  const total = 9_000;
+  const { directory, digest } = scratchWithSnapshot((path) => {
+    let accepted = false;
+    for (let at = 100; at < total - SECRET.length - 100 && !accepted; at += 1) {
+      rmSync(path, { force: true });
+      const database = new DatabaseSync(path);
+      database.exec('PRAGMA page_size=4096');
+      database.exec('CREATE TABLE notes(markdown TEXT)');
+      database
+        .prepare('INSERT INTO notes VALUES (?)')
+        .run(' '.repeat(at) + SECRET + ' '.repeat(total - at - SECRET.length));
+      database.close();
+      accepted = !readFileSync(path).includes(SECRET);
+    }
+    assert.ok(
+      accepted,
+      'no fixed-length row split the credential, so this fixture carries no case at all',
+    );
+  });
+  try {
+    const file = join(directory, 'data', `site.${digest}.sqlite`);
+    const reader = new DatabaseSync(file, { readOnly: true });
+    const stored = (
+      reader.prepare('SELECT count(*) AS found FROM notes WHERE markdown LIKE ?').get(`%${SECRET}%`) as {
+        found: number;
+      }
+    ).found;
+    reader.close();
+    assert.equal(stored, 1, 'the fixture kept no row carrying the credential, so the scan had nothing to find');
+    // The raw file must not spell it either, so the finding can only come from rows.
+    assert.ok(
+      !readFileSync(file).includes(SECRET),
+      'the fixture spells the credential in raw bytes, so a byte pass could have found it',
+    );
+    const error = failure(() => scanSecrets(directory));
+    assert.equal(error.code, 'secret-scan-findings');
+    assert.match(error.detail ?? '', /the site snapshot \(data\/\), reconstructed rows/);
+    assert.ok(!(error.message + (error.detail ?? '')).includes(SECRET), 'the scan printed the secret');
+    assert.ok(!(error.message + (error.detail ?? '')).includes(digest), 'the scan printed the content digest');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('a plain credential in a row is found and never printed', () => {
   const { directory, digest } = scratchWithSnapshot((path) => {
     const database = new DatabaseSync(path);
@@ -105,6 +172,46 @@ test('an unreadable snapshot fails closed without touching the artifact', () => 
     for (const suffix of ['-wal', '-shm', '-journal']) {
       assert.ok(!readdirSync(join(directory, 'data')).some((name) => name.endsWith(suffix)), `created ${suffix}`);
     }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A WAL-declaring snapshot fails closed without writable reopening or sidecars.
+ *
+ * The accepted artifact is rollback-journal format only, and the shared row
+ * enumerator refuses a WAL header before any open. Flipping the format bytes is
+ * the same measurement `tests/snapshot-rows.test.ts` uses, and the delivered
+ * bytes and directory membership must be identical afterwards: a refusal that
+ * repaired or reopened the file would pass a code assertion while changing the
+ * artifact under inspection.
+ */
+test('a WAL-declaring snapshot fails closed without touching the artifact', () => {
+  const { directory, digest } = scratchWithSnapshot((path) => {
+    const database = new DatabaseSync(path);
+    database.exec('CREATE TABLE notes(markdown TEXT)');
+    database.prepare('INSERT INTO notes VALUES (?)').run('plain value');
+    database.close();
+  });
+  const data = join(directory, 'data');
+  const file = join(data, `site.${digest}.sqlite`);
+  try {
+    const bytes = readFileSync(file);
+    bytes[18] = 2;
+    bytes[19] = 2;
+    writeFileSync(file, bytes);
+    const before = readdirSync(data).sort();
+    const size = statSync(file).size;
+    const error = failure(() => scanSecrets(directory));
+    assert.equal(error.code, 'secret-scan-input-unreadable');
+    assert.match(error.detail ?? '', /rollback-journal/);
+    assert.deepEqual(readdirSync(data).sort(), before, 'the scan created a sidecar');
+    assert.equal(statSync(file).size, size, 'the scan modified the artifact');
+    for (const suffix of ['-wal', '-shm', '-journal']) {
+      assert.ok(!readdirSync(data).some((name) => name.endsWith(suffix)), `created ${suffix}`);
+    }
+    assert.ok(!(error.message + (error.detail ?? '')).includes(directory), 'the scan printed a host path');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

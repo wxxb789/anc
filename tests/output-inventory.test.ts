@@ -1,13 +1,15 @@
-import { cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { loadArtifact } from '../src/lib/artifact-source.ts';
 import { readBuildBinding, snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
-import { snapshotFileName } from '../src/lib/snapshot.ts';
+import { snapshotFileName, snapshotRoute, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
+import { DatabaseSync } from '../src/lib/sqlite.ts';
 import { copySnapshotToOutput } from '../scripts/copy-snapshot.ts';
 import { readStagedWasm } from '../scripts/copy-wasm.ts';
 import { assertOutputInventory } from '../scripts/verify-output-inventory.ts';
@@ -49,6 +51,50 @@ function flipByte(path: string): void {
 
 function copyDist(): string {
   const root = mkdtempSync(join(tmpdir(), 'output-inventory-'));
+  cpSync(DIST, root, { recursive: true });
+  return root;
+}
+
+/** Every file under a root with its byte size, for artifact-unchanged checks. */
+function fileTree(root: string): string[] {
+  const entries: string[] = [];
+  const pending = [root];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      const name = relative(root, path).split(sep).join('/');
+      if (entry.isDirectory()) {
+        entries.push(name + '/');
+        pending.push(path);
+      } else {
+        entries.push(name + ' ' + statSync(path).size);
+      }
+    }
+  }
+  return entries.sort();
+}
+
+/**
+ * A dist copy whose root is deep enough that SQLite refuses to open the member.
+ *
+ * The inventory's unreadable branch wraps the driver open, and measured,
+ * `node:sqlite` does not reach it for non-database bytes: the constructor
+ * returns lazily and the first `PRAGMA` raises "file is not a database", which
+ * the inventory reports as the refused-schema code. A member path past
+ * SQLite's own pathname cap is a driver-level open failure a readable file
+ * tree can produce while `readFileSync` still reads the same path.
+ */
+function copyDistDeep(): string {
+  const base = mkdtempSync(join(tmpdir(), 'output-inventory-deep-'));
+  const segments: string[] = [];
+  // Comfortably past SQLite's 512-byte cap and comfortably under the host's
+  // PATH_MAX; the probe pattern only needs the same shape as the bound member.
+  while (join(base, ...segments, 'data', `site.${'0'.repeat(64)}.sqlite`).length <= 1024) {
+    segments.push('d'.repeat(200));
+  }
+  const root = join(base, ...segments);
+  mkdirSync(root, { recursive: true });
   cpSync(DIST, root, { recursive: true });
   return root;
 }
@@ -281,5 +327,232 @@ test('the copy step refuses staged bytes that do not hash to the bound digest', 
   } finally {
     for (const output of outputs) rmSync(output, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+/**
+ * A second snapshot member is unexpected, whatever its name looks like.
+ *
+ * The bound digest is the only `data/site.<digest>.sqlite` the output may
+ * carry; a differently named copy — still 64 lowercase hex, so nothing about
+ * its shape is invalid — is a second publication surface and fails by count.
+ * The name reaches the private detail only.
+ */
+test('a second digest-named snapshot member is unexpected and named only in the detail', () => {
+  const root = copyDist();
+  try {
+    const binding = readBuildBinding(snapshotWorkspace());
+    assert.ok(binding, 'the staged workspace has no snapshot binding, so this gate would measure nothing');
+    const bound = snapshotFileName(binding.digest);
+    // A real digest of different bytes: valid-looking and different from the
+    // bound one, so the refusal is membership rather than naming.
+    const planted = snapshotFileName(createHash('sha256').update(`second member of ${binding.digest}`).digest('hex'));
+    assert.notEqual(planted, bound, 'the second name must differ from the bound member');
+    copyFileSync(join(root, ...bound.split('/')), join(root, ...planted.split('/')));
+
+    const error = mismatch(root);
+    assert.match(error.message, /1 unexpected, 0 missing, 0 altered/);
+    assert.ok(!error.message.includes(planted), 'public inventory message disclosed a path');
+    assert.ok(error.detail.includes(planted), 'private inventory detail omitted the unexpected snapshot');
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+/**
+ * The inventory's snapshot-schema refusal, over bytes its binding names.
+ *
+ * The digest fixtures stop at the hash comparison above these branches; this
+ * fixture rebinds a staged workspace to mutated bytes so the digest check
+ * passes first and the row validator is what refuses. The mutation is
+ * `DROP INDEX edges_by_target`: SQLite still opens the file, so only the
+ * contract's explicit-index comparison can see it.
+ */
+test('a digest-consistent snapshot whose schema is refused fails by its own code', () => {
+  const workspace = stageBindings(mkdtempSync(join(tmpdir(), 'output-inventory-schema-')));
+  const roots: string[] = [];
+  try {
+    copyFileSync(join(snapshotWorkspace(), 'snapshot.sqlite'), join(workspace, 'snapshot.sqlite'));
+    const binding = readBuildBinding(workspace);
+    assert.ok(binding, 'the staged workspace has no snapshot binding, so this gate would measure nothing');
+    const bound = snapshotFileName(binding.digest);
+
+    // The control: the untouched staged workspace and an unmutated copy of the
+    // real output are accepted through the same call.
+    const control = copyDist();
+    roots.push(control);
+    assert.ok(assertOutputInventory(control, ARTIFACT, workspace) > 0, 'the fixture was refused before it was mutated');
+
+    const database = new DatabaseSync(join(workspace, 'snapshot.sqlite'));
+    try {
+      database.exec('DROP INDEX edges_by_target');
+    } finally {
+      database.close();
+    }
+    const mutated = readFileSync(join(workspace, 'snapshot.sqlite'));
+    const digest = createHash('sha256').update(mutated).digest('hex');
+    const member = snapshotFileName(digest);
+    writeFileSync(join(workspace, 'binding.json'), JSON.stringify({ url: snapshotRoute(digest), digest }), 'utf8');
+
+    const schemaRoot = copyDist();
+    roots.push(schemaRoot);
+    rmSync(join(schemaRoot, ...bound.split('/')));
+    writeFileSync(join(schemaRoot, ...member.split('/')), mutated);
+
+    const error = workspaceFailure(schemaRoot, workspace);
+    assert.equal(error.code, 'output-inventory-snapshot-schema');
+    assert.ok(error.detail.includes(member), 'the schema refusal did not name the member it inspected');
+    assert.match(error.detail, /edges_by_target/, 'the refusal came from a check other than the dropped index');
+    assert.ok(!error.message.includes(member), 'public schema message disclosed a path');
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+/**
+ * The inventory's snapshot-unreadable refusal and the artifact-unchanged
+ * invariant, measured around the failed call.
+ *
+ * The requested fixture — non-SQLite bytes under their own bound digest — does
+ * not reach the open refusal: measured, `node:sqlite` opens a non-database
+ * lazily, the constructor returns, and the first `PRAGMA` raises "file is not a
+ * database", which `snapshotOutput` reports as the refused-schema code. The
+ * open refusal needs a driver-level failure, so the fixture that reaches it is
+ * a copy of the real output under a root deep enough that SQLite's pathname cap
+ * refuses the member while `readFileSync` reads the same path. Both fixtures
+ * are kept, each asserted at the code it actually produces.
+ */
+test('an unopenable snapshot member fails unreadable without changing the artifact', () => {
+  const workspace = stageBindings(mkdtempSync(join(tmpdir(), 'output-inventory-unreadable-')));
+  const roots: string[] = [];
+  try {
+    copyFileSync(join(snapshotWorkspace(), 'snapshot.sqlite'), join(workspace, 'snapshot.sqlite'));
+    const binding = readBuildBinding(workspace);
+    assert.ok(binding, 'the staged workspace has no snapshot binding, so this gate would measure nothing');
+    const bound = snapshotFileName(binding.digest);
+
+    // The control: the untouched staged workspace against a normal-depth copy.
+    const control = copyDist();
+    roots.push(control);
+    assert.ok(assertOutputInventory(control, ARTIFACT, workspace) > 0, 'the fixture was refused before it was mutated');
+
+    const deepRoot = copyDistDeep();
+    roots.push(deepRoot);
+    assert.ok(
+      join(deepRoot, ...bound.split('/')).length > 512,
+      'the deep fixture did not exceed SQLite pathname cap, so this gate would measure nothing',
+    );
+    const before = fileTree(deepRoot);
+    const unreadable = workspaceFailure(deepRoot, workspace);
+    assert.equal(unreadable.code, 'output-inventory-snapshot-unreadable');
+    assert.match(unreadable.detail, /unable to open database file/, 'the refusal was not the driver open');
+    assert.ok(unreadable.detail.includes(bound), 'the open refusal did not name the member it inspected');
+    assert.ok(!unreadable.message.includes(bound), 'public open message disclosed a path');
+    assert.deepEqual(fileTree(deepRoot), before, 'the refused call changed the artifact or left a sidecar');
+
+    // Non-SQLite bytes, bound to their own digest: refused, but by the row
+    // reader rather than the constructor, so the code is the schema refusal.
+    const garbage = Buffer.from('not a sqlite database at all');
+    const garbageDigest = createHash('sha256').update(garbage).digest('hex');
+    const garbageMember = snapshotFileName(garbageDigest);
+    writeFileSync(join(workspace, 'snapshot.sqlite'), garbage);
+    writeFileSync(
+      join(workspace, 'binding.json'),
+      JSON.stringify({ url: snapshotRoute(garbageDigest), digest: garbageDigest }),
+      'utf8',
+    );
+    const garbageRoot = copyDist();
+    roots.push(garbageRoot);
+    rmSync(join(garbageRoot, ...bound.split('/')));
+    writeFileSync(join(garbageRoot, ...garbageMember.split('/')), garbage);
+    const garbageBefore = fileTree(garbageRoot);
+    const garbageError = workspaceFailure(garbageRoot, workspace);
+    assert.equal(garbageError.code, 'output-inventory-snapshot-schema');
+    assert.match(garbageError.detail, /file is not a database/, 'the garbage refusal was not the driver header read');
+    assert.deepEqual(fileTree(garbageRoot), garbageBefore, 'the refused call changed the artifact or left a sidecar');
+  } finally {
+    for (const root of roots) rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+/**
+ * Source maps, unbound wasm, and the private build files are refused even when
+ * their names look valid.
+ *
+ * Goal 0006's exact-output row names "unexpected JS/WASM, source map, private
+ * IR or legacy JSON" separately from routes and package assets, so each is
+ * planted one at a time over the real output: the hash-shaped map proves the
+ * `.map` refusal is not just a shape rejection, and the root-level
+ * `binding.json`, `content.json`, and `content-report.json` prove the private
+ * build surfaces never count as output members. Counts stay public; the member
+ * name reaches the private detail only.
+ */
+test('unexpected wasm, source maps, and private build files fail by count with the name only in the detail', () => {
+  const root = copyDist();
+  try {
+    const mutations: { path: string; bytes: string }[] = [
+      { path: 'wasm/sqlite3.unexpected.wasm', bytes: 'not a bound wasm member' },
+      { path: '_astro/unhashed.map', bytes: '{}' },
+      { path: '_astro/app.0123456789abcdef.map', bytes: '{}' },
+      { path: 'content.json', bytes: '{}' },
+      { path: 'binding.json', bytes: '{}' },
+      { path: 'content-report.json', bytes: '{}' },
+    ];
+    for (const mutation of mutations) {
+      const path = join(root, ...mutation.path.split('/'));
+      mkdirSync(join(path, '..'), { recursive: true });
+      writeFileSync(path, mutation.bytes, 'utf8');
+      const error = mismatch(root);
+      assert.match(error.message, /1 unexpected, 0 missing, 0 altered/);
+      assert.ok(!error.message.includes(mutation.path), 'public inventory message disclosed a path');
+      assert.ok(error.detail.includes(mutation.path), 'private inventory detail omitted the unexpected path');
+      rmSync(path, { force: true });
+    }
+
+    // Journal siblings of the bound snapshot are unexpected members in their
+    // own right: a `-wal`/`-shm` pair means a WAL database, and the accepted
+    // artifact is exactly one rollback-journal file. The scanners refuse a WAL
+    // header inside the database itself (`tests/snapshot-rows.test.ts` and
+    // `tests/secret-scan-database.test.ts`); this is the sibling-file half —
+    // output that carried the sidecars must fail inventory even when the main
+    // file still looks like a snapshot.
+    const snapshotName = readdirSync(join(root, 'data')).find((name) => SNAPSHOT_FILE_PATTERN.test(name));
+    assert.ok(snapshotName, 'the dist copy has no snapshot member, so the sibling gate would measure nothing');
+    const snapshotFile = join(root, 'data', snapshotName);
+    const snapshotBytes = readFileSync(snapshotFile);
+    const membersBefore = readdirSync(join(root, 'data')).sort();
+    for (const suffix of ['-wal', '-shm', '-journal']) {
+      const member = `data/${snapshotName}${suffix}`;
+      writeFileSync(join(root, ...member.split('/')), 'journal bytes', 'utf8');
+      let error: BuildFailure | undefined;
+      try {
+        assertOutputInventory(root, ARTIFACT);
+      } catch (thrown) {
+        assert.ok(thrown instanceof BuildFailure, 'inventory failure lost its disclosure-checked type');
+        error = thrown;
+      }
+      // A sidecar is refused by name before the driver opens the database.
+      // Measured before this check existed: a `-wal` sibling made the read-only
+      // open recover, fail with "attempt to write a readonly database", and
+      // leave a generated `-shm` file inside the directory being inspected.
+      assert.equal(
+        error?.code,
+        'output-inventory-snapshot-format',
+        `a ${suffix} sidecar was not refused as a format problem`,
+      );
+      assert.ok(!error!.message.includes(snapshotName), 'public inventory message disclosed the snapshot name');
+      assert.ok(error!.detail.includes(snapshotName + suffix), 'private inventory detail omitted the sidecar name');
+      assert.deepEqual(
+        readdirSync(join(root, 'data')).sort(),
+        [...membersBefore, snapshotName + suffix].sort(),
+        'the refusal generated or removed a file in the artifact directory',
+      );
+      assert.ok(snapshotBytes.equals(readFileSync(snapshotFile)), 'the refusal changed the snapshot bytes');
+      rmSync(join(root, ...member.split('/')));
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });

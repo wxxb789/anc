@@ -102,6 +102,12 @@ function distWithIndex(directory: string): void {
  * then a measurement rather than a belief, which is the mitigation lesson 5
  * asks for from a constructed fixture.
  *
+ * **Scanner-only fixture.** The table and the 9,000-byte values here exceed the
+ * shipped snapshot's metadata bounds — the accepted DB stores short strings —
+ * and exist only to prove the scan reassembles values split across pages. The
+ * fixture is not a claim about what the build emits; the shipping-schema gates
+ * are elsewhere.
+ *
  * **Mutation watched fail:** dropping `...read.values` from `subjects` in
  * `scripts/scan-residue.ts`, so the database is read only as bytes, turns this
  * red and reports the file clean.

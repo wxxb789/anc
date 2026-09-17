@@ -66,6 +66,16 @@ the last code commit. `pnpm run verify` reported 76 files / 916 passed /
 34 skipped and `pnpm run build:fixture` 76 files / 945 passed / 5 skipped, both
 exit 0. Four goals are archived; three remain active.
 
+On 2026-09-17, [0006](archive/0006-safe-release-output.md) was completed on
+branch `feat/0006-safe-release-output`: release qualification, failed-build
+preservation, and concurrent-build isolation gained their own end-to-end gates,
+both scanners gained a reconstructed-row overflow control, and inventory and
+preview now refuse a WAL header or journal sidecar before opening the artifact
+(measured: a `-wal` sibling had made the read-only open write a generated
+`-shm` into the inspected directory). `pnpm run verify` reported 77 files /
+934 passed / 34 skipped and `pnpm run build:fixture` 54 built pages with the
+full record in the file. Five goals are archived; two remain active.
+
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
 unrelated product requirements are complete. SQLite/WASM remains required for
@@ -79,8 +89,7 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 
 | Goal | Single completion judgment | Material prerequisites |
 | --- | --- | --- |
-| [0006 — Safe release output](0006-safe-release-output.md) | Publication gates reject incomplete, inconsistent or disallowed output without damaging the previous build | 0002 (completed); 0003 (completed) assets for Worker/WASM inventory checks |
-| [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md) | The shipped package and Action work in a foreign notes repository | 0002–0006 |
+| [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md) | The shipped package and Action work in a foreign notes repository | 0002–0006 (completed) |
 | [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md) | Measured packaged behavior meets the mobile target and accepted cold-preview/resource policies | 0007, including its functional prerequisites |
 
 ## Completed goals
@@ -91,8 +100,9 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 | [0003 — Reliable lazy previews](archive/0003-reliable-lazy-previews.md) | 2026-09-16 | Implementation commit `948696e`; all six evaluation rows executed as real Chromium gates against generated sites under the served CSP, with the read-only, failure/retry, race, and provisional-limit controls recorded in the file. |
 | [0004 — Complete tag browsing](archive/0004-complete-tag-browsing.md) | 2026-09-16 | Implementation commit `718700e`, review fixes `c119678`/`c401315`, PR #5; the reader's tag chooser and the static tag route enumerate one snapshot's membership across pages, with the lookahead-row control, NOCASE exactness, failed-initialization fallback, keyboard operation, withheld-tag absence, and shared-runtime measurements recorded in the file. |
 | [0005 — Interactive graph exploration](archive/0005-interactive-graph-exploration.md) | 2026-09-17 | Implementation commits `1d22934`, `610bb5f`, `38c9467`, PR #6; the live graph and its accessible representation agree on the bounded induced subgraph over a 65-note browser corpus, complete relations stay reachable beyond the drawing, the required mutation and failure controls were re-run, and SQL/Worker and render timings are recorded separately for 0008 — all in the file. |
+| [0006 — Safe release output](archive/0006-safe-release-output.md) | 2026-09-17 | Implementation commit `3e65a12`, PR #8, CI run `35231482566`; the reviewed-set failures, exact-output refusals, reconstructed-row scanner controls, withdrawal-after-rebuild, whole-tree failed-build preservation, and concurrent-build binding isolation are recorded in the file. |
 
-Three goals remain `ready` and active. Schema creation, query-module code,
+Two goals remain `ready` and active. Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
 separate judgments, with no circular dependency on final performance budgets.
@@ -111,8 +121,8 @@ integration evidence; they do not create competing schema or test implementation
 | Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003 (completed); cross-consumer evidence in [0004](archive/0004-complete-tag-browsing.md) (completed) and [0005](archive/0005-interactive-graph-exploration.md) (completed) |
 | Canonical runtime tag lookup and exhaustive pagination | 0004 (completed) |
 | Local/global/tag-filtered graph, ranking, re-centering, complete relation enumeration | [0005](archive/0005-interactive-graph-exploration.md) (completed) |
-| Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 |
-| CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006; foreign installation/transport in 0007 |
+| Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 (completed) |
+| CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006 (completed); foreign installation/transport in 0007 |
 | Snapshot caching, stale-page fallback, no substitution of a newer DB | 0007 |
 | 100/1,000/10,000-note measurements, physical mobile p95, cold preview, memory and finite policies | 0008 |
 | No backward compatibility; no body/FTS/manifest; evidence-based ablation | Every goal, governed by core design |
@@ -176,6 +186,7 @@ on 2026-09-14 into 0002–0008 without declaring completion. Its number is retai
 [0002](archive/0002-consistent-static-relationships.md),
 [0003](archive/0003-reliable-lazy-previews.md) and
 [0004](archive/0004-complete-tag-browsing.md) were completed and moved into the
-[archive](archive/README.md) on 2026-09-16, and
-[0005](archive/0005-interactive-graph-exploration.md) on 2026-09-17; no other
-number has been completed.
+[archive](archive/README.md) on 2026-09-16,
+[0005](archive/0005-interactive-graph-exploration.md) and
+[0006](archive/0006-safe-release-output.md) on 2026-09-17; no other number has
+been completed.

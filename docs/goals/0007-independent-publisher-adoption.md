@@ -16,7 +16,7 @@ Requires the functional outcomes [0002](archive/0002-consistent-static-relations
 [0003](archive/0003-reliable-lazy-previews.md),
 [0004](archive/0004-complete-tag-browsing.md),
 [0005](archive/0005-interactive-graph-exploration.md), and the release protection in
-[0006](0006-safe-release-output.md). Packaging must not declare those features
+[0006](archive/0006-safe-release-output.md). Packaging must not declare those features
 delivered when they work only in repository development mode.
 
 Follow [technology/ownership](../core-design/architecture.md),

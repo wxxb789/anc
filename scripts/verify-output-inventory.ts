@@ -10,6 +10,7 @@
 import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
   lstatSync,
   readFileSync,
   readdirSync,
@@ -33,7 +34,7 @@ import { readBuildBinding } from '../src/lib/snapshot-reader.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
 import { assertSnapshotRows } from '../src/lib/snapshot-contract.ts';
-import { isGzip } from './snapshot-rows.ts';
+import { isGzip, declaresWal } from './snapshot-rows.ts';
 import { readStagedWasm } from './copy-wasm.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
@@ -132,6 +133,31 @@ function snapshotOutput(root: string, workspace?: string): Set<string> {
       'output inventory snapshot digest does not match its bound URL',
       file + ': expected ' + binding.digest + ', got ' + digest,
     );
+  }
+
+  // The accepted artifact is one rollback-journal file, and opening is not a
+  // read-only operation when SQLite believes it has journal work to do: a
+  // `-wal` sibling makes the driver recover, which fails on the read-only
+  // connection and — measured — creates a `-shm` file inside the directory
+  // being inspected. Refusing before the open is what keeps "scan the
+  // immutable artifact" a statement about bytes rather than about the driver's
+  // side effects. The enumerator's own WAL refusal covers the scanners; this
+  // covers inventory, which reads the same bytes directly.
+  if (declaresWal(bytes)) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-format',
+      'output inventory snapshot is not in the accepted rollback-journal format',
+      file + ': WAL header',
+    );
+  }
+  for (const suffix of ['-wal', '-shm', '-journal'] as const) {
+    if (existsSync(path + suffix)) {
+      throw new BuildFailure(
+        'output-inventory-snapshot-format',
+        'output inventory snapshot carries a journal sidecar, which the accepted artifact does not',
+        file + ': found ' + file.split('/').at(-1) + suffix,
+      );
+    }
   }
 
   let database: DatabaseSync;

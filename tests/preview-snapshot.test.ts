@@ -20,6 +20,14 @@
  * each fixture reaches the branch it names; the digest mutation's four reds are
  * its own control working.
  *
+ * Two later gates extend the same guard in both directions: a directory holding
+ * two digest-named candidates is refused as a count — the count reaches
+ * `detail`, and the message a log inherits names no digest and no host directory
+ * — and the empty corpus, which `validateArtifact` admits as
+ * `{ version: 1, entries: [] }`, is accepted once the build's own
+ * `buildSnapshotFromEntries` and `copySnapshotToOutput` have put it at
+ * `data/site.<sha256>.sqlite`.
+ *
  * No server is started here. `resolveArtifactDirectory` is the guard the binary
  * calls before `startPreview` opens a socket, so the refusals are measured
  * without a Vite preview's cold start; `tests/preview-server.test.ts` keeps the
@@ -35,13 +43,14 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'vitest';
 
+import { validateArtifact } from '../src/lib/schema.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
 import {
   SNAPSHOT_APPLICATION_ID,
@@ -49,6 +58,8 @@ import {
   SNAPSHOT_USER_VERSION,
   snapshotFileName,
 } from '../src/lib/snapshot.ts';
+import { buildSnapshotFromEntries } from '../scripts/build-snapshot.ts';
+import { copySnapshotToOutput } from '../scripts/copy-snapshot.ts';
 import { resolveArtifactDirectory } from '../scripts/preview-site.ts';
 import { installSnapshotMarker, mutateSnapshotMarker, snapshotPath } from './support/snapshot.ts';
 
@@ -76,15 +87,20 @@ function markerDirectory(): string {
   return directory;
 }
 
-/** The code `resolveArtifactDirectory` refused with, or `undefined` if it accepted. */
-function refusedCode(directory: string): string | undefined {
+/** The error `resolveArtifactDirectory` refused with, or `undefined` if it accepted. */
+function refusal(directory: string): (Error & { code?: string; detail?: string }) | undefined {
   try {
     resolveArtifactDirectory(directory, ROOT);
     return undefined;
   } catch (error) {
     assert.ok(error instanceof Error, 'the refusal was not an Error');
-    return (error as Error & { code?: string }).code;
+    return error as Error & { code?: string; detail?: string };
   }
+}
+
+/** The code `resolveArtifactDirectory` refused with, or `undefined` if it accepted. */
+function refusedCode(directory: string): string | undefined {
+  return refusal(directory)?.code;
 }
 
 test('the marker is refused when its bytes are not SQLite, not only when its name is missing', () => {
@@ -164,4 +180,118 @@ test('the marker is refused when it opens but its pages cannot be read', () => {
   writeFileSync(marker, bytes);
 
   assert.equal(refusedCode(directory), 'preview-snapshot-unreadable');
+});
+
+test('a directory holding two snapshot candidates is refused as a count, and one candidate is accepted', () => {
+  const directory = markerDirectory();
+
+  // The control: one candidate, accepted, so the refusal below is about the
+  // second file rather than about the fixture.
+  assert.equal(resolveArtifactDirectory(directory, ROOT), directory, 'the fixture was refused before it was doubled');
+
+  const marker = snapshotPath(directory);
+  const match = SNAPSHOT_FILE_PATTERN.exec(marker.split('/').at(-1)!);
+  assert.ok(match, 'the built marker is not named site.<digest>.sqlite, so this gate measured nothing');
+  const digest = match[1]!;
+  // A second digest-shaped name, whichever bytes the first candidate holds.
+  // Recognition counts matching names before it reads any bytes, which is why
+  // this refusal is the count one: the count is checked first and the copied
+  // bytes never enter the decision.
+  const second = `${digest[0] === '0' ? '1' : '0'}${digest.slice(1)}`;
+  copyFileSync(marker, join(directory, ...snapshotFileName(second).split('/')));
+
+  const refused = refusal(directory);
+  assert.ok(refused !== undefined, 'a directory with two snapshot candidates was accepted');
+  assert.equal(refused.code, 'preview-directory-not-an-artifact');
+  assert.equal(
+    refused.message,
+    'not a built site: the directory named by --dist does not carry exactly one ' +
+      'data/site.<sha256>.sqlite snapshot, so it was not produced by this tool. ' +
+      'Refusing to serve it — a directory of notes served on a port publishes every ' +
+      'file in it. Name the build output directory instead; the default is `dist`.',
+    'the refusal was not the count message this branch declares',
+  );
+  // The count goes to `detail`, which nothing prints, and the two things the
+  // message may not carry — a digest and the directory the user named — stay off
+  // the surface a log inherits.
+  assert.ok(refused.detail?.endsWith('2 snapshot candidate(s)'), `the count did not reach the detail: ${refused.detail}`);
+  assert.doesNotMatch(refused.message, /[0-9a-f]{64}/, 'the refusal put a digest on the stream');
+  assert.ok(!refused.message.includes(directory), 'the refusal put the served directory on the stream');
+});
+
+test('a WAL header or a journal sidecar is refused before the driver can generate one', () => {
+  const directory = markerDirectory();
+  const marker = snapshotPath(directory);
+  const data = join(directory, 'data');
+
+  // The control: the untouched marker is accepted, so each refusal below is the
+  // format mutation rather than the fixture.
+  assert.equal(resolveArtifactDirectory(directory, ROOT), directory, 'the fixture was refused before it was mutated');
+
+  // A `-wal` sibling. Measured before this check existed: opening the database
+  // read-only made SQLite attempt recovery and create a `-shm` file inside the
+  // directory being served. The refusal must happen before the open — the
+  // membership assertion below is what makes "read-only" a property of the
+  // artifact rather than of the driver's intentions.
+  const sidecar = marker + '-wal';
+  writeFileSync(sidecar, 'journal bytes', 'utf8');
+  const membersBefore = readdirSync(data).sort();
+  assert.equal(refusal(directory)?.code, 'preview-snapshot-format', 'a WAL sidecar was accepted');
+  assert.deepEqual(
+    readdirSync(data).sort(),
+    membersBefore,
+    'serving recognition generated or removed a file beside the snapshot',
+  );
+  rmSync(sidecar);
+
+  // A WAL-declaring header. The filename is renamed to the mutated bytes'
+  // digest, so the refusal is the format check rather than the digest check.
+  mutateSnapshotMarker(directory, (path) => {
+    const bytes = readFileSync(path);
+    bytes[18] = 2;
+    bytes[19] = 2;
+    writeFileSync(path, bytes);
+  });
+  assert.equal(refusal(directory)?.code, 'preview-snapshot-format', 'a WAL-declaring header was accepted');
+});
+
+test('an empty corpus produces a snapshot the preview accepts', () => {
+  const directory = temporary();
+  writeFileSync(join(directory, 'index.html'), '<h1>built</h1>\n', 'utf8');
+
+  // The artifact through the contract's own validator: `{ version: 1, entries:
+  // [] }` is an accepted corpus, so the database below is a valid site of
+  // nothing rather than a fixture this test invented. Every other acceptance
+  // gate in this file installs a marker copied from `dist/`, so acceptance was
+  // only ever measured on a corpus that has notes in it.
+  const artifact = validateArtifact({ version: 1, entries: [] });
+
+  // The build's own path to a public snapshot: finalize it in a private
+  // workspace, then copy it into the output under its digest name.
+  const workspace = temporary();
+  const built = buildSnapshotFromEntries(artifact.entries, workspace);
+  assert.equal(built.nodes, 0, 'the empty corpus produced a snapshot with nodes in it');
+  copySnapshotToOutput(directory, workspace);
+
+  // Recognition: exactly one digest-named candidate, SQLite magic,
+  // application_id, user_version, a digest matching the bytes, readable pages,
+  // and index.html.
+  assert.equal(
+    resolveArtifactDirectory(directory, ROOT),
+    directory,
+    'the empty-corpus artifact was refused, so a user with no published notes has no preview',
+  );
+
+  // And the accepted file really is empty: recognition accepts any schema-valid
+  // snapshot, so the acceptance above would also pass for a corpus with rows.
+  const database = new DatabaseSync(snapshotPath(directory), { readOnly: true });
+  try {
+    assert.equal(
+      (database.prepare('SELECT count(*) AS count FROM nodes').get() as { count: number }).count,
+      0,
+      'the accepted snapshot is not empty',
+    );
+  } finally {
+    database.close();
+  }
 });

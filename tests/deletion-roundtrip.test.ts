@@ -11,6 +11,19 @@
  * the deleted note's incident edges and the tag only it used are rows of their
  * own, and a rebuild that dropped the node while keeping either would satisfy
  * every assertion the two-note fixture could make.
+ *
+ * The rebuild is also the combination goal 0006's "Withdrawal" row names, so it
+ * carries two claims a single-build gate cannot make. The old digest-named
+ * snapshot must be gone from `data/` — exactly one snapshot, named differently —
+ * because an output directory that was not replaced wholesale would leave the
+ * old database, and the deleted note's rows inside it, beside the new one. And a
+ * note withheld by `publish: false`, linked from the surviving hub, must still
+ * reach no reader surface: its body token is asserted absent from the raw bytes
+ * of every published file, from every gzip member inflated, and from the
+ * reconstructed snapshot text. The 2026-08-17 rule keeps the authored link
+ * *label* by design, and `tests/backlink-surfaces.test.ts` owns that
+ * label/anchor surface on a single build; this gate asserts the other half — the
+ * target's own body — after the rebuild.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -22,6 +35,7 @@ import { gunzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
+import { SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { snapshotEdges, snapshotSlugs, snapshotTags, snapshotText } from './support/snapshot.ts';
 
 const CLI = fileURLToPath(new URL('../bin/anc.mjs', import.meta.url));
@@ -34,6 +48,39 @@ function filesUnder(root: string): string[] {
     else files.push(path);
   }
   return files;
+}
+
+/** The digest-named snapshot members in a built output's `data/` directory. */
+function snapshotMembers(dist: string): string[] {
+  const directory = join(dist, 'data');
+  if (!existsSync(directory)) return [];
+  return readdirSync(directory).filter((name) => SNAPSHOT_FILE_PATTERN.test(name));
+}
+
+/** True when the bytes begin with the gzip magic number. */
+function isGzip(bytes: Buffer): boolean {
+  return bytes[0] === 0x1f && bytes[1] === 0x8b;
+}
+
+/**
+ * One published file as text, inflating it when its magic bytes say gzip.
+ *
+ * Mirrors `tests/backlink-surfaces.test.ts`'s `readable`, including the
+ * throw-on-failure branch: a gzip member scanned as undeflated bytes reports
+ * clean on content the scan never looked at, so "could not inflate" must fail
+ * rather than fall back to the raw bytes it could not read into.
+ */
+function readable(file: string, dist: string): string {
+  const bytes = readFileSync(file);
+  if (!isGzip(bytes)) return bytes.toString('utf8');
+  try {
+    return gunzipSync(bytes).toString('utf8');
+  } catch (error) {
+    return assert.fail(
+      `${file.slice(dist.length + 1)} is gzipped and could not be inflated, so this gate ` +
+        `cannot see whether withheld content is inside it: ${String(error)}`,
+    );
+  }
 }
 
 function build(root: string): void {
@@ -70,14 +117,22 @@ function assertProjection(text: string, slug: string, present: boolean, surface:
   );
 }
 
-test('deleting a note removes its route, feed, sitemap, snapshot, search record, edges, and unused metadata', () => {
+test('deleting a note removes its route, feed, sitemap, snapshot, search record, edges, and unused metadata, and the rebuild leaves no old snapshot or withheld body', () => {
   const root = mkdtempSync(join(tmpdir(), 'publish-deletion-'));
   const dist = join(root, 'dist');
   const deleted = join(root, 'deleted-nebula.md');
   const retained = join(root, 'retained-asterism.md');
   const hub = join(root, 'hub.md');
+  // A note withheld by `publish: false`, linked from the surviving hub so the
+  // rebuild has to make the accepted withheld-link decision rather than never
+  // meeting a withheld target. Nothing here asserts its label — the 2026-08-17
+  // rule keeps the authored label by design and `tests/backlink-surfaces.test.ts`
+  // owns that surface; what this fixture exists for is the body token below,
+  // which must reach no surface at all.
+  const withheld = join(root, 'withheld-note.md');
   const deletedToken = 'zzqdeletednebula';
   const retainedToken = 'zzqretainedasterism';
+  const withheldToken = 'zzqwithhelduniquebody';
   // The tag only the deleted note carries, so its row has no surviving member
   // and must be gone from the rebuilt snapshot rather than left empty.
   const deletedOnlyTag = 'deleted-only-tag';
@@ -93,8 +148,9 @@ test('deleting a note removes its route, feed, sitemap, snapshot, search record,
     assert.equal(git.status, 0, git.stderr);
     // The deleted note points at the retained hub, the retained note points at
     // both hub and the note that will be deleted, and the hub points back at the
-    // retained note. After the deletion only retained-asterism -> hub (and
-    // hub -> retained-asterism) may remain.
+    // retained note and at the withheld note. The withheld link is not an edge —
+    // a withheld target contributes none — so after the deletion only
+    // retained-asterism -> hub (and hub -> retained-asterism) may remain.
     writeFileSync(
       deleted,
       '---\ntags:\n  - ' + deletedOnlyTag + '\n  - ' + sharedTag +
@@ -108,11 +164,44 @@ test('deleting a note removes its route, feed, sitemap, snapshot, search record,
         retainedToken + ' [[hub]] and [[deleted-nebula]]\n',
       'utf8',
     );
-    writeFileSync(hub, '---\ntags:\n  - ' + sharedTag + '\n---\n\n# Hub\n\n[[retained-asterism]]\n', 'utf8');
+    writeFileSync(hub, '---\ntags:\n  - ' + sharedTag + '\n---\n\n# Hub\n\n[[retained-asterism]] and [[withheld-note]]\n', 'utf8');
+    writeFileSync(
+      withheld,
+      '---\npublish: false\n---\n\n# Withheld Relic\n\n' + withheldToken + ' prose that no reader may see.\n',
+      'utf8',
+    );
+
+    // The withheld note and the link to it are in the corpus on disk, so the
+    // build had to decide about both rather than never meeting them. Without
+    // this the absence checks below pass on a fixture that never contained the
+    // token, which is the "empty output is not green" case from
+    // `docs/gate-reading.md`.
+    assert.ok(
+      readFileSync(withheld, 'utf8').includes(withheldToken),
+      'the withheld fixture never carries its body token, so the absence checks below prove nothing',
+    );
+    assert.ok(
+      readFileSync(hub, 'utf8').includes('[[withheld-note]]'),
+      'no note links the withheld file, so no withheld link was ever at risk',
+    );
 
     build(root);
     assert.equal(existsSync(join(dist, 'notes', 'deleted-nebula', 'index.html')), true, 'first build never emitted the deleted route');
     assert.equal(existsSync(join(dist, 'notes', 'retained-asterism', 'index.html')), true, 'first build never emitted the retained control route');
+    // The snapshot this build published, by exact digest-named basename. The
+    // rebuild below must leave no copy of it anywhere in `dist/`: the build
+    // replaces the output directory wholesale, and one that instead merged into
+    // the existing output would leave this database beside the new one, still
+    // carrying the deleted note's rows. Capturing the name here is what makes
+    // "the old snapshot is gone" a statement about a specific file rather than
+    // about the count.
+    const firstSnapshots = snapshotMembers(dist);
+    assert.equal(
+      firstSnapshots.length,
+      1,
+      `the first build left ${firstSnapshots.length} digest-named snapshots in data/, expected exactly one`,
+    );
+    const oldSnapshot = firstSnapshots[0]!;
     const firstSlugs = snapshotSlugs(dist);
     assert.ok(firstSlugs.length > 0, 'first snapshot stores no nodes, so its absence checks would be vacuous');
     assertSurface(firstSlugs.join('\n'), 'deleted-nebula', true, 'first snapshot');
@@ -215,6 +304,88 @@ test('deleting a note removes its route, feed, sitemap, snapshot, search record,
     const secondSearch = searchText(dist);
     assertSurface(secondSearch, deletedToken, false, 'rebuilt search index');
     assertSurface(secondSearch, retainedToken, true, 'rebuilt search index');
+
+    // --- Goal 0006 "Withdrawal": the rebuild-after-removal combination -------
+    //
+    // Everything above is a claim about one projection of the rebuilt artifact.
+    // What this section adds is the combination the withdrawal row names: the
+    // surfaces below were produced by a *fresh rebuild after a removal*, not by
+    // a single build, and two claims live only in that combination.
+    //
+    // First, the old snapshot must be gone. An output directory that was not
+    // replaced wholesale would keep the previous digest-named database beside
+    // the new one; that file still carries the deleted note's rows, so "one
+    // snapshot, named differently" is the property, not a count of pages.
+    //
+    // Second, the withheld note linked from the surviving hub must still reach
+    // no reader surface. The 2026-08-17 rule keeps the authored link *label* by
+    // design and `tests/backlink-surfaces.test.ts` owns that label/anchor
+    // surface on a single build; this gate asserts the half a rebuild could
+    // regress differently — the target's own body — across raw bytes, gzip
+    // members inflated, and the reconstructed snapshot text.
+    const rebuiltSnapshots = snapshotMembers(dist);
+    assert.equal(
+      rebuiltSnapshots.length,
+      1,
+      `the rebuild left ${rebuiltSnapshots.length} digest-named snapshots in data/, expected exactly one`,
+    );
+    assert.notEqual(
+      rebuiltSnapshots[0],
+      oldSnapshot,
+      'the rebuild reused the old snapshot file name, so its bytes did not change with the corpus',
+    );
+    assert.equal(
+      existsSync(join(dist, 'data', oldSnapshot)),
+      false,
+      `the old digest-named snapshot survived the rebuild at data/${oldSnapshot}`,
+    );
+
+    // Every file the rebuild published, once, so the three surface checks
+    // below all describe the same artifact.
+    const outputFiles = filesUnder(dist);
+    assert.ok(outputFiles.length > 0, 'the rebuilt output is empty, so the absence checks below are vacuous');
+
+    // Surface one: the raw bytes of every published file. This is the scan that
+    // sees an uncompressed page or a database page without decoding it.
+    const rawLeaks = outputFiles.filter((file) => readFileSync(file).includes(withheldToken));
+    assert.deepEqual(
+      rawLeaks.map((file) => file.slice(dist.length + 1)),
+      [],
+      "the withheld body token is in the raw bytes of the rebuilt output",
+    );
+    // Positive control: a published note's own token really is in those bytes,
+    // so the filter above is reading the artifact rather than comparing nothing.
+    assert.ok(
+      outputFiles.some((file) => readFileSync(file).includes(retainedToken)),
+      "no raw file carries a published note's token, so the raw scan is not reading the artifact",
+    );
+
+    // Surface two: every gzip member, inflated or failed. Inflating rather than
+    // skipping is what reaches the Pagefind index; `readable` throws on a member
+    // it cannot open, so "could not look" fails instead of reading as clean.
+    const gzipped = outputFiles.filter((file) => isGzip(readFileSync(file)));
+    assert.ok(
+      gzipped.length > 0,
+      'no rebuilt file is gzipped, so the inflate half never ran and this is a plain text scan ' +
+        'claiming to be more',
+    );
+    const inflatedLeaks = gzipped.filter((file) => readable(file, dist).includes(withheldToken));
+    assert.deepEqual(
+      inflatedLeaks.map((file) => file.slice(dist.length + 1)),
+      [],
+      'the withheld body token is inside a gzip member of the rebuilt output',
+    );
+    assert.ok(
+      gzipped.some((file) => readable(file, dist).includes(retainedToken)),
+      "no inflated gzip member carries a published note's token, so the inflate half is not " +
+        'reaching the search index',
+    );
+
+    // Surface three: the reconstructed snapshot text, which decodes every stored
+    // value in `nodes`, `aliases`, and `tags`. `secondText` is
+    // `snapshotText(dist)` over the rebuilt database, and the published control
+    // token asserted present in it above keeps this absence non-vacuous.
+    assertSurface(secondText, withheldToken, false, 'rebuilt snapshot');
   } finally {
     rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
