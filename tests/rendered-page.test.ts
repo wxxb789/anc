@@ -2002,7 +2002,6 @@ test('the graph is drawn, linked, and operable with scripting disabled', async (
               hasFigure: false,
               emptyVisible: emptyState !== null && box(emptyState).height > 0,
               nodes: [],
-              rows: 0,
               tableOpens: false,
               svgWidth: 0,
               svgHeight: 0,
@@ -2029,7 +2028,6 @@ test('the graph is drawn, linked, and operable with scripting disabled', async (
                 height: rect.height,
               };
             }),
-            rows: region.querySelectorAll('details.graph-table tbody tr').length,
             tableOpens:
               details !== null &&
               [...details.querySelectorAll<HTMLElement>('tbody tr')].every(

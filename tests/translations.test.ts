@@ -63,7 +63,6 @@ const TEXT_KEYS = [
   'feedTitle',
   'socialCardAlt',
   'footnoteBackLabel',
-  'graphExplorerRecenterLabel',
 ] as const;
 const THEME_KEYS = ['themeLabel'] as const;
 /**
@@ -215,6 +214,7 @@ test('an accessible name contains the visible text of its own control', () => {
     ['graphExpand', 'graphExpandLabel'],
     ['graphExpandLocal', 'graphExpandLocalLabel'],
     ['explorerExpand', 'explorerExpandLabel'],
+    ['graphExplorerRecenter', 'graphExplorerRecenterLabel'],
   ] as const;
 
   for (const language of LANGUAGES) {

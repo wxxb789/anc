@@ -142,6 +142,11 @@ function install(region: HTMLElement, controls: HTMLElement): void {
       return;
     }
     const drawingStarted = performance.now();
+    // The button that started this redraw is about to be replaced with the
+    // table's new rows; remember which note it named so focus can follow it to
+    // the fresh control, and a keyboard re-center stays one Tab away from the
+    // next one instead of falling back to the document.
+    const focused = focusedRecenter();
     const graph =
       scope === 'local' && answer.center !== null
         ? layoutLocal({ center: answer.center, drawn: answer.nodes, edges: answer.edges, omitted: answer.omitted })
@@ -149,16 +154,18 @@ function install(region: HTMLElement, controls: HTMLElement): void {
 
     if (canvas) drawFigure(canvas, graph);
     if (tableBody) drawTable(tableBody, graph);
+    if (focused !== null) {
+      tableBody?.querySelector<HTMLElement>(`[data-graph-recenter="${CSS.escape(focused)}"]`)?.focus();
+    }
     // Layout and drawing only: the Worker wait that produced `answer` is not
     // part of what this render costs the main thread. Goal 0008 consumes the
     // event below beside the snapshot timing it does not replace.
     const drawingMs = performance.now() - drawingStarted;
     live = true;
-    // The heading's count span describes the static figure. A live redraw makes
-    // it a second, stale total for the same picture, so it goes and the status
-    // sentence below is the live home for counts.
-    const figureLabel = region.querySelector<HTMLElement>('[data-graph-figure-label]');
-    if (figureLabel) figureLabel.hidden = true;
+    // Both static count sentences describe the build-time figure. A live redraw
+    // makes them second, stale totals for the same picture, so they go and the
+    // status sentence below is the live home for counts.
+    hideStaticCounts();
     if (status) {
       const counts = boundCounts(graph);
       const templateName = scope === 'local' ? 'graphStatusLocal' : tag ? 'graphStatusFiltered' : 'graphStatusGlobal';
@@ -184,13 +191,39 @@ function install(region: HTMLElement, controls: HTMLElement): void {
    * picture and an empty equivalent table are the depiction of an empty result,
    * and the static baseline cannot be restored — the client replaced it in
    * place. Leaving the previous selection on screen would state two different
-   * sets at once, which is the contradiction this removes.
+   * sets at once, which is the contradiction this removes. The static count
+   * sentences and the count-bearing group name go with it; the status sentence
+   * is the live home for counts.
    */
   function clearLiveDrawing(): void {
     const svg = canvas?.querySelector('svg');
     svg?.querySelector('.graph-edges')?.replaceChildren();
     svg?.querySelector('.graph-nodes')?.replaceChildren();
     tableBody?.replaceChildren();
+    hideStaticCounts();
+    const figureName = template('graphFigureName');
+    if (svg && figureName !== '') svg.setAttribute('aria-label', figureName);
+  }
+
+  /**
+   * Hide the static count sentences.
+   *
+   * Both describe the build-time figure and neither can be updated by a live
+   * query, so once the picture is redrawn or cleared they would state a second
+   * total beside the live status sentence. The bound element's expansion link
+   * stays: "see the whole graph" is useful whatever this figure holds.
+   */
+  function hideStaticCounts(): void {
+    const figureLabel = region.querySelector<HTMLElement>('[data-graph-figure-label]');
+    if (figureLabel) figureLabel.hidden = true;
+    const bound = region.querySelector<HTMLElement>('[data-graph-bound]');
+    if (bound) bound.hidden = true;
+  }
+
+  /** The note slug of the re-center control that currently holds focus, if any. */
+  function focusedRecenter(): string | null {
+    const active = document.activeElement;
+    return active instanceof HTMLElement ? active.getAttribute('data-graph-recenter') : null;
   }
 
   function drawFigure(target: HTMLElement, graph: Graph<SelectionNode>): void {
@@ -326,13 +359,10 @@ function install(region: HTMLElement, controls: HTMLElement): void {
           control.setAttribute('data-graph-recenter', node.entry.slug);
           control.textContent = template('graphRecenter');
           // The visible text is the same on every row, so the accessible name
-          // carries the note this control acts on. `{title}` is the token the
-          // build substituted into `graphExplorerRecenterLabel`; the client
-          // fills it per row, which keeps the bundle free of a locale table.
-          // Guarded like `graphFigureName` above: an absent template would
-          // otherwise replace the visible text as the name with an empty one.
-          const recenterLabel = fill(template('graphRecenterLabel'), { title: node.entry.title });
-          if (recenterLabel !== '') control.setAttribute('aria-label', recenterLabel);
+          // carries the note this control acts on: the page emits the
+          // `{title}` template and the client fills it, as it does for the node
+          // labels, which keeps the bundle free of a locale table.
+          control.setAttribute('aria-label', fill(template('graphRecenterLabel'), { title: node.entry.title }));
           head.append(control);
           control.addEventListener('click', () => {
             center = node.entry.slug;

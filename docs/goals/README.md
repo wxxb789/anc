@@ -108,7 +108,7 @@ integration evidence; they do not create competing schema or test implementation
 | Static backlinks/outgoing/tag routes, related suggestions, induced graph fallback | 0002 |
 | Private IR boundary; removal of serialized relation authorities and public JSON indexes | 0002; final output rejection in 0006 |
 | Exact DB URL/digest binding | Build output in 0002; browser validation in 0003; host/package validation in 0007 |
-| Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003 (completed); cross-consumer evidence in 0004 (completed)/0005 |
+| Lazy shared Worker, real read-only WASM, CSP, retry, stale preview suppression | 0003 (completed); cross-consumer evidence in [0004](archive/0004-complete-tag-browsing.md) (completed) and [0005](archive/0005-interactive-graph-exploration.md) (completed) |
 | Canonical runtime tag lookup and exhaustive pagination | 0004 (completed) |
 | Local/global/tag-filtered graph, ranking, re-centering, complete relation enumeration | [0005](archive/0005-interactive-graph-exploration.md) (completed) |
 | Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 |

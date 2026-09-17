@@ -110,6 +110,8 @@ interface GraphReply {
   id: number;
   ok: boolean;
   code?: string;
+  /** The Worker's own operation span on a successful reply. */
+  operationMs?: number;
   result?: {
     type: string;
     graph?: {
@@ -377,6 +379,11 @@ test('hub: static 12 of 17, exact live edges, keyboard open/reset/re-centre, and
     HUB_STATIC.tableRows,
     'the static table is not 13 rows',
   );
+  assert.equal(
+    await region.locator('[data-graph-figure-label]').isVisible(),
+    true,
+    'the static figure label is not shown before any intent',
+  );
 
   const bound = ((await region.locator('.graph-bound span').textContent()) ?? '').trim();
   assert.equal(
@@ -417,6 +424,40 @@ test('hub: static 12 of 17, exact live edges, keyboard open/reset/re-centre, and
     await region.locator('.graph-table tbody tr').count(),
     HUB_STATIC.tableRows,
     'the live table does not match the live figure',
+  );
+
+  // The static count sentences are retired with the drawing they described: the
+  // bound paragraph still states "12 of 17" for the build-time figure, and the
+  // empty-filter and stale-name variants are gated below.
+  assert.equal(
+    await region.locator('[data-graph-figure-label]').isVisible(),
+    false,
+    'the stale static count label is still shown beside the live graph',
+  );
+  assert.equal(
+    await region.locator('.graph-bound span').isVisible(),
+    false,
+    'the static bound sentence still states a count beside the live status',
+  );
+  const liveName = await page.locator('svg.graph-svg').getAttribute('aria-label');
+  assert.ok(liveName && !/\d/.test(liveName), `the live figure name still carries counts: ${liveName}`);
+
+  // --- Every row's re-center control names its note ---------------------------
+  // The visible text is one word on every row, so the accessible name is the
+  // only per-row label; it is read against the page's own emitted template and
+  // the hand-written title, and the control count has to follow the drawn rows
+  // (the subject included) while `/graph/` offers none at all.
+  const recenterTemplate = await page.locator('[data-graph-controls]').getAttribute('data-graph-recenter-label');
+  assert.ok(recenterTemplate, 'the page does not emit the re-center label template');
+  assert.equal(
+    await region.locator('[data-graph-recenter="peer-01"]').getAttribute('aria-label'),
+    filled(recenterTemplate!, { title: peerTitle('peer-01') }),
+    'a re-center control does not name the note it acts on',
+  );
+  assert.equal(
+    await region.locator('button[data-graph-recenter]').count(),
+    HUB_STATIC.tableRows,
+    'the live table does not offer one re-center control per drawn row',
   );
 
   // --- The live table's cells against hand values -----------------------------
@@ -547,6 +588,17 @@ test('hub: static 12 of 17, exact live edges, keyboard open/reset/re-centre, and
     }
     await waitForCenter(page, step.center!);
 
+    if (index === 0) {
+      // The activated button is gone with the rows it lived in, so the client
+      // has to move focus to the same note's new control; otherwise a keyboard
+      // reader lands back at the top of the document after one re-center.
+      assert.equal(
+        await page.evaluate(() => document.activeElement?.getAttribute('data-graph-recenter')),
+        step.center,
+        'focus did not follow the re-center control that was activated',
+      );
+    }
+
     if (!frameChecked && step.center === 'peer-02') {
       // A re-center replaces the figure's contents, so the SVG's own frame and
       // accessible name have to move with them: peer-02 has fewer neighbours than
@@ -646,6 +698,11 @@ test('the global graph ranks 60 of 65, filters team and garden exactly, depicts 
   const unfiltered = await drawnSlugs(page);
   assert.deepEqual(unfiltered, [...GLOBAL_DRAWN], 'the unfiltered ranking or the drawn set is wrong');
   assert.equal(unfiltered[0], 'hub', 'the unfiltered graph does not start at the most linked note');
+  assert.equal(
+    await region.locator('button[data-graph-recenter]').count(),
+    0,
+    'the global graph offers a re-center control that would center on nothing',
+  );
   assert.equal(
     (await page.locator('[data-graph-status]').textContent()) ?? '',
     filled(translate('en').graphExplorerStatusGlobal, { shown: GLOBAL_DRAWN.length, total: CORPUS_SIZE }),
@@ -784,6 +841,20 @@ test('a first-load empty filter depicts emptiness, not the unfiltered baseline',
     0,
     'the unfiltered static table still stands under an empty-filter status',
   );
+  // The static count surfaces belong to the drawing that was cleared, so the
+  // empty result cannot carry the unfiltered totals beside it.
+  assert.equal(
+    await region.locator('[data-graph-figure-label]').isVisible(),
+    false,
+    'the static count label survives under an empty-filter status',
+  );
+  assert.equal(
+    await region.locator('.graph-bound span').isVisible(),
+    false,
+    'the static bound sentence survives under an empty-filter status',
+  );
+  const emptyName = await page.locator('svg.graph-svg').getAttribute('aria-label');
+  assert.ok(emptyName && !/\d/.test(emptyName), `the emptied figure keeps a count-bearing name: ${emptyName}`);
   await page.close();
 }, 120_000);
 
@@ -816,6 +887,13 @@ test("an unknown center is a no-match, not a failure, and keeps the stale page's
     'the unknown center blanked the baseline it never replaced',
   );
   assert.equal(await region.locator('.graph-table tbody tr').count(), HUB_STATIC.tableRows);
+  // The baseline was never replaced, so its count sentences are still the truth
+  // about what is on screen and must not have been hidden with a live drawing.
+  assert.equal(
+    await region.locator('[data-graph-figure-label]').isVisible(),
+    true,
+    'the unknown-center no-match hid the baseline counts it preserved',
+  );
 
   // The distinct no-match answer really crossed the Worker boundary: an ok reply
   // whose localGraph result is null, not a rejected request.
@@ -827,6 +905,7 @@ test("an unknown center is a no-match, not a failure, and keeps the stale page's
 
 test('the armed render instrument reports the live drawing with its scope', async () => {
   const armed = await browser.newPage();
+  await recordWorkerActivity(armed);
   await armed.addInitScript(() => {
     (window as unknown as { __snapshotMeasurement?: boolean }).__snapshotMeasurement = true;
     (window as unknown as { __graphRenderEvents: { scope: string; ms: number }[] }).__graphRenderEvents = [];
@@ -848,8 +927,20 @@ test('the armed render instrument reports the live drawing with its scope', asyn
   assert.equal(events.length, 1, 'one drawing did not produce exactly one render measurement');
   assert.equal(events[0]!.scope, 'local', 'the render measurement named the wrong scope');
   assert.ok(
-    Number.isFinite(events[0]!.ms) && events[0]!.ms >= 0,
-    `the render duration is not a finite measurement: ${events[0]!.ms}`,
+    Number.isFinite(events[0]!.ms) && events[0]!.ms > 0,
+    `the render duration is not a positive finite measurement: ${events[0]!.ms}`,
+  );
+
+  // The same drawing crossed the shipped Worker, so the reply's own span is a
+  // real measurement rather than a stub: a regression that drops, zeroes, or
+  // mis-scopes `operationMs` would leave goal 0008 with a fabricated number.
+  const measured = (await graphReplies(armed)).filter((reply) => reply.ok && reply.result?.type === 'localGraph');
+  assert.equal(measured.length, 1, 'the armed drawing has no real Worker reply to measure');
+  assert.ok(
+    typeof measured[0]!.operationMs === 'number' &&
+      Number.isFinite(measured[0]!.operationMs) &&
+      measured[0]!.operationMs > 0,
+    `the Worker operation span is not a positive finite measurement: ${String(measured[0]!.operationMs)}`,
   );
   await armed.close();
 }, 120_000);

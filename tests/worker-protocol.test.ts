@@ -86,8 +86,8 @@ test('a reply is narrowed to the result type the caller asked for', () => {
     id: 1,
     ok: true,
     result: { type: 'preview', preview: { slug: 'a', title: 'A', excerpt: '', language: 'en', aliases: [] } },
-    // The success branch carries the Worker's own measured SQL span beside the
-    // result; narrowing must not depend on it.
+    // The success branch carries the Worker's own measured operation span
+    // beside the result; narrowing must not depend on it.
     operationMs: 0.5,
   };
   assert.ok(isResultOf(reply, 'preview'));
