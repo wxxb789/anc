@@ -1,20 +1,20 @@
 import { createHash } from 'node:crypto';
 import { cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, relative, sep } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { loadArtifact } from '../src/lib/artifact-source.ts';
 import { readBuildBinding, snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
-import { snapshotFileName, snapshotRoute, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
+import { snapshotFileName, snapshotRoute } from '../src/lib/snapshot.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
 import { copySnapshotToOutput } from '../scripts/copy-snapshot.ts';
 import { readStagedWasm } from '../scripts/copy-wasm.ts';
 import { assertOutputInventory } from '../scripts/verify-output-inventory.ts';
 import { BuildFailure } from '../scripts/write-report.ts';
-import { stageBindings } from './support/snapshot.ts';
+import { stageBindings, snapshotPath } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const DIST = join(ROOT, 'dist');
@@ -90,7 +90,7 @@ function copyDistDeep(): string {
   const segments: string[] = [];
   // Comfortably past SQLite's 512-byte cap and comfortably under the host's
   // PATH_MAX; the probe pattern only needs the same shape as the bound member.
-  while (join(base, ...segments, 'data', `site.${'0'.repeat(64)}.sqlite`).length <= 1024) {
+  while (join(base, ...segments, ...snapshotFileName('0'.repeat(64)).split('/')).length <= 1024) {
     segments.push('d'.repeat(200));
   }
   const root = join(base, ...segments);
@@ -377,11 +377,12 @@ test('a digest-consistent snapshot whose schema is refused fails by its own code
     assert.ok(binding, 'the staged workspace has no snapshot binding, so this gate would measure nothing');
     const bound = snapshotFileName(binding.digest);
 
-    // The control: the untouched staged workspace and an unmutated copy of the
-    // real output are accepted through the same call.
-    const control = copyDist();
-    roots.push(control);
-    assert.ok(assertOutputInventory(control, ARTIFACT, workspace) > 0, 'the fixture was refused before it was mutated');
+    // The control and the refused fixture are one copy: the untouched output is
+    // accepted through the same call before the workspace is mutated, so the
+    // refusal below is the mutation rather than the fixture.
+    const root = copyDist();
+    roots.push(root);
+    assert.ok(assertOutputInventory(root, ARTIFACT, workspace) > 0, 'the fixture was refused before it was mutated');
 
     const database = new DatabaseSync(join(workspace, 'snapshot.sqlite'));
     try {
@@ -394,12 +395,10 @@ test('a digest-consistent snapshot whose schema is refused fails by its own code
     const member = snapshotFileName(digest);
     writeFileSync(join(workspace, 'binding.json'), JSON.stringify({ url: snapshotRoute(digest), digest }), 'utf8');
 
-    const schemaRoot = copyDist();
-    roots.push(schemaRoot);
-    rmSync(join(schemaRoot, ...bound.split('/')));
-    writeFileSync(join(schemaRoot, ...member.split('/')), mutated);
+    rmSync(join(root, ...bound.split('/')));
+    writeFileSync(join(root, ...member.split('/')), mutated);
 
-    const error = workspaceFailure(schemaRoot, workspace);
+    const error = workspaceFailure(root, workspace);
     assert.equal(error.code, 'output-inventory-snapshot-schema');
     assert.ok(error.detail.includes(member), 'the schema refusal did not name the member it inspected');
     assert.match(error.detail, /edges_by_target/, 'the refusal came from a check other than the dropped index');
@@ -518,11 +517,11 @@ test('unexpected wasm, source maps, and private build files fail by count with t
     // `tests/secret-scan-database.test.ts`); this is the sibling-file half —
     // output that carried the sidecars must fail inventory even when the main
     // file still looks like a snapshot.
-    const snapshotName = readdirSync(join(root, 'data')).find((name) => SNAPSHOT_FILE_PATTERN.test(name));
-    assert.ok(snapshotName, 'the dist copy has no snapshot member, so the sibling gate would measure nothing');
+    const snapshotName = basename(snapshotPath(root));
     const snapshotFile = join(root, 'data', snapshotName);
     const snapshotBytes = readFileSync(snapshotFile);
-    const membersBefore = readdirSync(join(root, 'data')).sort();
+    const dataMembers = join(root, 'data');
+    const membersBefore = readdirSync(dataMembers).sort();
     for (const suffix of ['-wal', '-shm', '-journal']) {
       const member = `data/${snapshotName}${suffix}`;
       writeFileSync(join(root, ...member.split('/')), 'journal bytes', 'utf8');

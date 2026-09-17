@@ -71,7 +71,7 @@ import { afterAll, beforeAll, test } from 'vitest';
 
 import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { resolveArtifactDirectory } from '../scripts/preview-site.ts';
-import { snapshotPath } from './support/snapshot.ts';
+import { snapshotMembers, snapshotPath } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin/anc.mjs');
@@ -197,12 +197,6 @@ function treeHash(directory: string): Tree {
     digest: createHash('sha256').update(JSON.stringify(files)).digest('hex'),
     files,
   };
-}
-
-/** The digest-named snapshots a directory carries, if it carries any. */
-function snapshotCandidates(directory: string): string[] {
-  const data = join(directory, SNAPSHOT_DIRECTORY);
-  return existsSync(data) ? readdirSync(data).filter((name) => SNAPSHOT_FILE_PATTERN.test(name)) : [];
 }
 
 /**
@@ -378,7 +372,7 @@ test('a first failed build leaves no preview-acceptable output', () => {
   assert.match(failed.stdout, /\d+ discovered, \d+ published/, 'discovery did not finish');
 
   assert.deepEqual(
-    snapshotCandidates(out),
+    snapshotMembers(out),
     [],
     'a first failed build left a preview-acceptable snapshot',
   );

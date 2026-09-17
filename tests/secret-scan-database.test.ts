@@ -100,6 +100,14 @@ test('a credential split across an overflow-page boundary is found through the r
       rmSync(path, { force: true });
       const database = new DatabaseSync(path);
       database.exec('PRAGMA page_size=4096');
+      // The sweep creates and deletes one database per offset; with the default
+      // journal and fsync it spends ~24 s on 678 attempts and approaches the
+      // test timeout on a slow host. Journal and sync do not enter the accepted
+      // bytes — the assertion below reads the final file and requires it not to
+      // spell the credential — and measured, the accepted database is
+      // byte-identical with them off at ~86x the speed.
+      database.exec('PRAGMA journal_mode=OFF');
+      database.exec('PRAGMA synchronous=OFF');
       database.exec('CREATE TABLE notes(markdown TEXT)');
       database
         .prepare('INSERT INTO notes VALUES (?)')

@@ -35,7 +35,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { POLL_MS, lockDist } from '../scripts/dist-lock.ts';
-import { SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
+import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { snapshotPath, snapshotText } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -270,7 +270,12 @@ test('every command that empties dist/ takes the lock', () => {
  * `astro.config.mjs` substitutes the binding from the run's private workspace,
  * so the URL a built site carries is that run's snapshot or a mixed binding.
  */
-const BINDING_URL = /\/data\/site\.([0-9a-f]{64})\.sqlite/g;
+// Derived from the snapshot module's own path shape, so a route or name change
+// cannot leave this gate searching for a URL the build no longer emits.
+const BINDING_URL = new RegExp(
+  `/${SNAPSHOT_DIRECTORY}/${SNAPSHOT_FILE_PATTERN.source.slice(1, -1)}`,
+  'g',
+);
 
 /** Every regular file under a directory, in no particular order. */
 function outputFiles(directory: string): string[] {
