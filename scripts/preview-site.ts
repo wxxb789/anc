@@ -127,7 +127,7 @@ import {
   SNAPSHOT_USER_VERSION,
 } from '../src/lib/snapshot.ts';
 import { BuildFailure } from './write-report.ts';
-import { declaresWal } from './snapshot-rows.ts';
+import { declaresWal, journalSidecar } from './snapshot-rows.ts';
 
 /** The SQLite file header every valid snapshot starts with. */
 const SQLITE_MAGIC = Buffer.from('SQLite format 3\0', 'latin1');
@@ -210,14 +210,13 @@ function resolveSnapshot(directory: string): string {
       `${path}: WAL format`,
     );
   }
-  for (const suffix of ['-wal', '-shm', '-journal'] as const) {
-    if (existsSync(path + suffix)) {
-      throw new BuildFailure(
-        'preview-snapshot-format',
-        'the preview snapshot is not a snapshot this reader accepts.',
-        `${path}: journal sidecar ${suffix}`,
-      );
-    }
+  const sidecar = journalSidecar(path);
+  if (sidecar !== undefined) {
+    throw new BuildFailure(
+      'preview-snapshot-format',
+      'the preview snapshot is not a snapshot this reader accepts.',
+      `${path}: journal sidecar ${sidecar}`,
+    );
   }
 
   let database: DatabaseSync;

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { snapshotPath } from './support/snapshot.ts';
+import { GITLEAKS_VERSION } from '../scripts/scan-secrets.ts';
 
 const CLI = fileURLToPath(new URL('../bin/anc.mjs', import.meta.url));
 
@@ -152,12 +153,14 @@ test('release refuses a missing pinned scanner without naming a path or a secret
     git(root, ['commit', '--quiet', '-m', 'review publish set']);
 
     // Observed 2026-09-17 with the pinned scanner absent from PATH: exit 1 and
-    // stderr exactly "secret scan requires Gitleaks 8.30.1". This process's node
-    // is invoked by absolute path, so /usr/bin:/bin keeps node and git reachable
+    // stderr exactly "secret scan requires Gitleaks 8.30.1". The version comes
+    // from the one pinned constant rather than a third literal, so a version
+    // bump cannot red this test as a message change. This process's node is
+    // invoked by absolute path, so /usr/bin:/bin keeps node and git reachable
     // while leaving the scanner's own directory off PATH.
     const missing = run(root, ['build', '--release'], { ...process.env, PATH: '/usr/bin:/bin' });
     assert.equal(missing.status, 1);
-    assert.equal(missing.stderr, 'secret scan requires Gitleaks 8.30.1\n');
+    assert.equal(missing.stderr, `secret scan requires Gitleaks ${GITLEAKS_VERSION}\n`);
     const streams = missing.stdout + missing.stderr;
     assert.ok(!streams.includes(root), 'stream named the host directory');
     assert.ok(!streams.includes('alpha'), 'stream named the note');

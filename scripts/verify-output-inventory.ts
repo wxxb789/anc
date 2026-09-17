@@ -10,7 +10,6 @@
 import { gunzipSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import {
-  existsSync,
   lstatSync,
   readFileSync,
   readdirSync,
@@ -34,7 +33,7 @@ import { readBuildBinding } from '../src/lib/snapshot-reader.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
 import { assertSnapshotRows } from '../src/lib/snapshot-contract.ts';
-import { isGzip, declaresWal } from './snapshot-rows.ts';
+import { isGzip, declaresWal, journalSidecar } from './snapshot-rows.ts';
 import { readStagedWasm } from './copy-wasm.ts';
 
 const DIST = fileURLToPath(new URL('../dist', import.meta.url));
@@ -150,14 +149,13 @@ function snapshotOutput(root: string, workspace?: string): Set<string> {
       file + ': WAL header',
     );
   }
-  for (const suffix of ['-wal', '-shm', '-journal'] as const) {
-    if (existsSync(path + suffix)) {
-      throw new BuildFailure(
-        'output-inventory-snapshot-format',
-        'output inventory snapshot carries a journal sidecar, which the accepted artifact does not',
-        file + ': found ' + file.split('/').at(-1) + suffix,
-      );
-    }
+  const sidecar = journalSidecar(path);
+  if (sidecar !== undefined) {
+    throw new BuildFailure(
+      'output-inventory-snapshot-format',
+      'output inventory snapshot carries a journal sidecar, which the accepted artifact does not',
+      file + ': found ' + file.split('/').at(-1) + sidecar,
+    );
   }
 
   let database: DatabaseSync;

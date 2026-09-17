@@ -19,7 +19,7 @@
 
 import { gunzipSync } from 'node:zlib';
 import { createRequire } from 'node:module';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { suppressSqliteWarning } from '../src/lib/sqlite-warning.ts';
@@ -38,6 +38,22 @@ export function isGzip(bytes: Uint8Array): boolean {
 /** A database declared as WAL cannot be deserialized as a standalone snapshot. */
 export function declaresWal(bytes: Uint8Array): boolean {
   return bytes.length > 19 && (bytes[18] === 2 || bytes[19] === 2);
+}
+
+/**
+ * The journal siblings of an accepted artifact.
+ *
+ * A built output is exactly one rollback-journal database; `-wal`/`-shm` mean a
+ * WAL database and `-journal` means a hot journal. Opening the database while
+ * one is present is not read-only: SQLite attempts recovery and, measured, can
+ * write a generated `-shm` into the directory being inspected. Both recognition
+ * boundaries refuse on this list before opening.
+ */
+export const JOURNAL_SIDECAR_SUFFIXES = ['-wal', '-shm', '-journal'] as const;
+
+/** The journal suffix beside `path`, or `undefined` when the directory is clean. */
+export function journalSidecar(path: string): string | undefined {
+  return JOURNAL_SIDECAR_SUFFIXES.find((suffix) => existsSync(path + suffix));
 }
 
 /** Whether the bytes carry SQLite's file header. */

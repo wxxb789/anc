@@ -14,12 +14,18 @@ import { DatabaseSync } from '../../src/lib/sqlite.ts';
 import { snapshotWorkspace } from '../../src/lib/snapshot-reader.ts';
 import { SNAPSHOT_FILE_PATTERN, snapshotFileName } from '../../src/lib/snapshot.ts';
 
+/** The digest-named snapshot members in a built output's `data/` directory. */
+export function snapshotMembers(dist: string): string[] {
+  const directory = join(dist, 'data');
+  return existsSync(directory)
+    ? readdirSync(directory).filter((name) => SNAPSHOT_FILE_PATTERN.test(name))
+    : [];
+}
+
 /** The one snapshot file in a built output. */
 export function snapshotPath(dist: string): string {
   const directory = join(dist, 'data');
-  const candidates = existsSync(directory)
-    ? readdirSync(directory).filter((name) => SNAPSHOT_FILE_PATTERN.test(name))
-    : [];
+  const candidates = snapshotMembers(dist);
   if (candidates.length !== 1) {
     throw new Error(`expected one snapshot in ${directory}, found ${candidates.length}`);
   }

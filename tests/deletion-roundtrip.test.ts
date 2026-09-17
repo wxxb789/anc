@@ -35,8 +35,8 @@ import { gunzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import { SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
-import { snapshotEdges, snapshotSlugs, snapshotTags, snapshotText } from './support/snapshot.ts';
+import { isGzip } from '../scripts/snapshot-rows.ts';
+import { snapshotEdges, snapshotMembers, snapshotSlugs, snapshotTags, snapshotText } from './support/snapshot.ts';
 
 const CLI = fileURLToPath(new URL('../bin/anc.mjs', import.meta.url));
 
@@ -50,29 +50,15 @@ function filesUnder(root: string): string[] {
   return files;
 }
 
-/** The digest-named snapshot members in a built output's `data/` directory. */
-function snapshotMembers(dist: string): string[] {
-  const directory = join(dist, 'data');
-  if (!existsSync(directory)) return [];
-  return readdirSync(directory).filter((name) => SNAPSHOT_FILE_PATTERN.test(name));
-}
-
-/** True when the bytes begin with the gzip magic number. */
-function isGzip(bytes: Buffer): boolean {
-  return bytes[0] === 0x1f && bytes[1] === 0x8b;
-}
-
 /**
- * One published file as text, inflating it when its magic bytes say gzip.
+ * One gzip member's inflated text, or a failed assertion.
  *
- * Mirrors `tests/backlink-surfaces.test.ts`'s `readable`, including the
- * throw-on-failure branch: a gzip member scanned as undeflated bytes reports
- * clean on content the scan never looked at, so "could not inflate" must fail
- * rather than fall back to the raw bytes it could not read into.
+ * `tests/backlink-surfaces.test.ts` owns the same inflate-or-fail rule on a
+ * single build: a gzip member scanned as undeflated bytes reports clean on
+ * content the scan never looked at, so "could not inflate" must fail rather
+ * than fall back to the raw bytes it could not read into.
  */
-function readable(file: string, dist: string): string {
-  const bytes = readFileSync(file);
-  if (!isGzip(bytes)) return bytes.toString('utf8');
+function inflated(file: string, bytes: Buffer, dist: string): string {
   try {
     return gunzipSync(bytes).toString('utf8');
   } catch (error) {
@@ -340,43 +326,50 @@ test('deleting a note removes its route, feed, sitemap, snapshot, search record,
       `the old digest-named snapshot survived the rebuild at data/${oldSnapshot}`,
     );
 
-    // Every file the rebuild published, once, so the three surface checks
-    // below all describe the same artifact.
-    const outputFiles = filesUnder(dist);
-    assert.ok(outputFiles.length > 0, 'the rebuilt output is empty, so the absence checks below are vacuous');
+    // Every file the rebuild published, read once, so the raw and inflated
+    // checks below all describe the same bytes.
+    const published = filesUnder(dist).map((file) => {
+      const bytes = readFileSync(file);
+      return { name: file.slice(dist.length + 1), file, bytes, gzipped: isGzip(bytes) };
+    });
+    assert.ok(published.length > 0, 'the rebuilt output is empty, so the absence checks below are vacuous');
 
     // Surface one: the raw bytes of every published file. This is the scan that
     // sees an uncompressed page or a database page without decoding it.
-    const rawLeaks = outputFiles.filter((file) => readFileSync(file).includes(withheldToken));
+    const rawLeaks = published.filter((entry) => entry.bytes.includes(withheldToken));
     assert.deepEqual(
-      rawLeaks.map((file) => file.slice(dist.length + 1)),
+      rawLeaks.map((entry) => entry.name),
       [],
-      "the withheld body token is in the raw bytes of the rebuilt output",
+      'the withheld body token is in the raw bytes of the rebuilt output',
     );
     // Positive control: a published note's own token really is in those bytes,
     // so the filter above is reading the artifact rather than comparing nothing.
     assert.ok(
-      outputFiles.some((file) => readFileSync(file).includes(retainedToken)),
+      published.some((entry) => entry.bytes.includes(retainedToken)),
       "no raw file carries a published note's token, so the raw scan is not reading the artifact",
     );
 
     // Surface two: every gzip member, inflated or failed. Inflating rather than
-    // skipping is what reaches the Pagefind index; `readable` throws on a member
+    // skipping is what reaches the Pagefind index; `inflated` fails on a member
     // it cannot open, so "could not look" fails instead of reading as clean.
-    const gzipped = outputFiles.filter((file) => isGzip(readFileSync(file)));
+    const gzipped = published.filter((entry) => entry.gzipped);
     assert.ok(
       gzipped.length > 0,
       'no rebuilt file is gzipped, so the inflate half never ran and this is a plain text scan ' +
         'claiming to be more',
     );
-    const inflatedLeaks = gzipped.filter((file) => readable(file, dist).includes(withheldToken));
+    const inflatedEntries = gzipped.map((entry) => ({
+      ...entry,
+      text: inflated(entry.file, entry.bytes, dist),
+    }));
+    const inflatedLeaks = inflatedEntries.filter((entry) => entry.text.includes(withheldToken));
     assert.deepEqual(
-      inflatedLeaks.map((file) => file.slice(dist.length + 1)),
+      inflatedLeaks.map((entry) => entry.name),
       [],
       'the withheld body token is inside a gzip member of the rebuilt output',
     );
     assert.ok(
-      gzipped.some((file) => readable(file, dist).includes(retainedToken)),
+      inflatedEntries.some((entry) => entry.text.includes(retainedToken)),
       "no inflated gzip member carries a published note's token, so the inflate half is not " +
         'reaching the search index',
     );
