@@ -142,6 +142,18 @@ with the old relative links; CI's Markdown-link gate correctly failed it, and
 the docs completion commit fixes the links — no product behavior was involved.
 After that, two recorded numbers and the PR text are the only changes.
 
+Post-completion simplification (2026-09-18): commit `eaf6887` applied the
+`ce-simplify-code` review findings — the Action-parity fixture now writes its
+ledger through `scripts/publish-set-review.ts`, the artifact check and the
+tarball smoke reuse the snapshot/WASM/sqlite constants and helpers, the preview
+child's dead-exit wait and unread stderr are fixed, the dist absence scan works
+at byte level, the host-header rules parse once per server, and unconsumed
+response bodies are cancelled. `pnpm run verify` and `pnpm run smoke:tarball`
+reported the same results as above (80 files / 952 passed / 34 skipped; 2
+published notes / 2 withheld notes) and CI verify run `35303613876` and
+Action-parity run `35303613868` are green on it; the tarball digest is unchanged
+because no packed source changed.
+
 ### Commands and observed results
 
 - Local `pnpm run verify` (Node v22.23.2, pnpm 11.18.0, Linux x64) — **80 test
