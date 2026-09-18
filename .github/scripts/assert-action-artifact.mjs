@@ -10,8 +10,8 @@
  * private report recorded both exclusion kinds, and no withheld body reached
  * any published file in raw or gzip-inflated form.
  *
- * It prints a failure count and exits non-zero on the first class of mismatch
- * it finds; every check runs so one run reports every failure, not just one.
+ * It runs every check and exits non-zero if any failed, printing every failure,
+ * so one run reports all of them rather than only the first.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -19,7 +19,10 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { gunzipSync } from 'node:zlib';
-import { DatabaseSync } from 'node:sqlite';
+import { SNAPSHOT_FILE_PATTERN } from '../../src/lib/snapshot.ts';
+import { DatabaseSync } from '../../src/lib/sqlite.ts';
+import { WASM_MODULE_NAME, wasmMemberName } from '../../src/lib/wasm-asset.ts';
+import { isGzip } from '../../scripts/snapshot-rows.ts';
 
 const root = resolve(process.argv[2] ?? process.cwd());
 const dist = join(root, 'dist');
@@ -95,13 +98,13 @@ check(
 
 // --- The snapshot is the reviewed set, bound by its own bytes ------------
 
-const snapshotNames = entries('data').filter((name) => /^site\.[0-9a-f]{64}\.sqlite$/.test(name));
+const snapshotNames = entries('data').filter((name) => SNAPSHOT_FILE_PATTERN.test(name));
 check(snapshotNames.length === 1, `dist/data carries ${snapshotNames.length} snapshots, not exactly one`);
 if (snapshotNames.length === 1) {
   const name = snapshotNames[0];
   const bytes = readFileSync(join(dist, 'data', name));
   const digest = createHash('sha256').update(bytes).digest('hex');
-  check(name === `site.${digest}.sqlite`, 'the snapshot filename is not the digest of its bytes');
+  check(SNAPSHOT_FILE_PATTERN.exec(name)?.[1] === digest, 'the snapshot filename is not the digest of its bytes');
   const database = new DatabaseSync(join(dist, 'data', name), { readOnly: true });
   try {
     const slugs = database
@@ -120,12 +123,12 @@ if (snapshotNames.length === 1) {
 // --- The runtime assets the browser binds to ------------------------------
 
 const wasmNames = entries('wasm');
-check(wasmNames.includes('sqlite-wasm.js'), 'dist/wasm carries no stable SQLite browser entry');
+check(wasmNames.includes(WASM_MODULE_NAME), 'dist/wasm carries no stable SQLite browser entry');
 const wasmMember = wasmNames.find((name) => /^sqlite3\.[0-9a-f]{64}\.wasm$/.test(name));
 check(wasmMember !== undefined, 'dist/wasm carries no digest-named WASM member');
 if (wasmMember !== undefined) {
   const digest = createHash('sha256').update(readFileSync(join(dist, 'wasm', wasmMember))).digest('hex');
-  check(wasmMember === `sqlite3.${digest}.wasm`, 'the WASM member name is not the digest of its bytes');
+  check(wasmMember === wasmMemberName(digest), 'the WASM member name is not the digest of its bytes');
 }
 check(
   entries('_astro').some((name) => /^snapshot-worker-[\w-]+\.js$/.test(name)),
@@ -157,7 +160,7 @@ check(dropped.get('drafts/roadmap.md') === 'excluded-by-pattern', 'the report lo
 // --- No withheld body reached any published file, raw or inflated ---------
 
 const forbidden = ['PARITY-PRIVATE-BODY-MUST-NOT-SHIP', 'PARITY-DRAFT-BODY-MUST-NOT-SHIP'];
-let publishedSeen = welcome.includes('PARITY-PUBLISHED-WELCOME-BODY') || second.includes('PARITY-PUBLISHED-SECOND-BODY');
+let publishedSeen = false;
 let distFiles = [];
 try {
   distFiles = filesUnder(dist);
@@ -171,18 +174,20 @@ for (const file of distFiles) {
   } catch {
     continue;
   }
-  let text = bytes.toString('utf8');
-  if (text.includes('PARITY-PUBLISHED-')) publishedSeen = true;
-  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+  // Byte-level, not decoded text: the markers are ASCII, and the WASM and
+  // SQLite members are not UTF-8; decoding them first only made large copies.
+  if (bytes.includes('PARITY-PUBLISHED-')) publishedSeen = true;
+  const payloads = [bytes];
+  if (isGzip(bytes)) {
     try {
-      text += '\n' + gunzipSync(bytes).toString('utf8');
+      payloads.push(gunzipSync(bytes));
     } catch {
       // An unreadable gzip member with no forbidden marker in its raw bytes is
       // not a disclosure; the release gate owns corrupt-member refusal.
     }
   }
   for (const marker of forbidden) {
-    check(!text.includes(marker), `${file.slice(root.length + 1)} carries ${marker}`);
+    check(!payloads.some((payload) => payload.includes(marker)), `${file.slice(root.length + 1)} carries ${marker}`);
   }
 }
 check(publishedSeen, 'the published-body positive control is absent, so the absence checks prove nothing');

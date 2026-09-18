@@ -503,14 +503,11 @@ test('a replaced served snapshot changes the bound digest and the previewed titl
 }, 180_000);
 
 test('a page bound to a snapshot that vanished falls back without fetching the replacement', async () => {
-  // Two independent builds in their own workspaces: the page's compiled
-  // binding names A's digest, and the replacement deployment B has a different
-  // one. `serve` then swaps what the origin hands out, which is what a
-  // redeploy at a fixed origin is from the browser's side.
-  const siteA = buildSite({
-    'alpha.md': '---\ntitle: "Alpha One"\n---\n\n# Alpha One\n\nAlpha links to [[beta]].\n',
-    'beta.md': '---\ntitle: "Beta One"\n---\n\n# Beta One\n\nBeta body text for previews.\n',
-  });
+  // Deployment A is the file's shared build (its compiled binding names A's
+  // digest); B is one fresh build with different bytes, so a different digest.
+  // `serve` then swaps what the origin hands out, which is what a redeploy at a
+  // fixed origin is from the browser's side.
+  const siteA = site;
   const siteB = buildSite({
     'alpha.md': '---\ntitle: "Alpha Two"\n---\n\n# Alpha Two\n\nAlpha Two links to [[beta]].\n',
     'beta.md': '---\ntitle: "Beta Two"\n---\n\n# Beta Two\n\nDifferent bytes, so a different digest.\n',
@@ -615,7 +612,6 @@ test('a page bound to a snapshot that vanished falls back without fetching the r
   } finally {
     await page.close();
     await running.close();
-    removeWorkspace(siteA.workspace);
     removeWorkspace(siteB.workspace);
   }
 }, 180_000);

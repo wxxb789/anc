@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { test } from 'vitest';
 import { indexWithPagefind, writePagefindBundle } from '../scripts/run-pagefind.ts';
+import { isGzip } from '../scripts/snapshot-rows.ts';
 
 function scratch(): string {
   return mkdtempSync(join(tmpdir(), 'pagefind-bundle-'));
@@ -108,13 +109,13 @@ test('indexWithPagefind leaves a complete, decodable bundle', async () => {
       'the manifest does not describe any indexed language',
     );
 
-    const gzipMembers = members.filter((path) => {
+    const gzipMembers = members.flatMap((path) => {
       const bytes = readFileSync(path);
-      return bytes[0] === 0x1f && bytes[1] === 0x8b;
+      return isGzip(bytes) ? [bytes] : [];
     });
     assert.ok(gzipMembers.length > 0, 'no gzip member was written, so the decode check would be vacuous');
-    for (const path of gzipMembers) {
-      gunzipSync(readFileSync(path));
+    for (const bytes of gzipMembers) {
+      gunzipSync(bytes);
     }
   } finally {
     rmSync(root, { recursive: true, force: true });

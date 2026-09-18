@@ -171,6 +171,7 @@ test('the hashed Worker chunk is cached immutably', async () => {
     IMMUTABLE,
     `${path}: the content-hashed Worker chunk did not receive the immutable rule public/_headers grants /_astro/*`,
   );
+  await response.body?.cancel();
 });
 
 test('the digest-named snapshot revalidates and is never immutable', async () => {
@@ -199,11 +200,13 @@ test('the runtime asset classes carry the MIME types the host documents', async 
     'text/javascript',
     'the Worker chunk was not served as text/javascript',
   );
+  await worker.body?.cancel();
 
   const wasmNames = readdirSync(join(site.dist, 'wasm')).filter((name) => name.endsWith('.wasm')).sort();
   assert.ok(wasmNames.length > 0, `no .wasm under ${join(site.dist, 'wasm')}, so the WASM MIME claim is untested`);
   const wasm = await get(`/wasm/${wasmNames[0]!}`);
   assert.equal(wasm.headers.get('content-type'), 'application/wasm', `the WASM binary ${wasmNames[0]} was mistyped`);
+  await wasm.body?.cancel();
 
   const dbName = basename(snapshotPath(site.dist));
   const database = await get(`/data/${dbName}`);
@@ -212,6 +215,7 @@ test('the runtime asset classes carry the MIME types the host documents', async 
     'application/octet-stream',
     `the snapshot ${dbName} was not served as application/octet-stream`,
   );
+  await database.body?.cancel();
 });
 
 /**

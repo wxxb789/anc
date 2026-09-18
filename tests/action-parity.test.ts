@@ -187,10 +187,10 @@ test('the assertion scripts exist and re-derive what they claim', () => {
   assert.match(fixture, /\.publish-set\.json/, 'the fixture no longer commits a reviewed publish set');
   assert.match(
     fixture,
-    /slugs:\s*\['second',\s*'welcome'\]/,
-    'the fixture no longer records the exact public set, so the release gate would compare against nothing',
+    /writePublishSetReview\(root,\s*\['second',\s*'welcome'\]\)/,
+    'the fixture no longer records the exact public set through the reviewed-ledger writer',
   );
-  for (const instrument of ['node:sqlite', 'createHash', 'gunzipSync']) {
+  for (const instrument of ['DatabaseSync', 'createHash', 'gunzipSync']) {
     assert.ok(
       assertion.includes(instrument),
       `the artifact check no longer re-derives via ${instrument}, so it could pass on a wrong artifact`,

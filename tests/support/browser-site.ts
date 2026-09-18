@@ -92,21 +92,31 @@ function headerRules(text: string): HeaderRule[] {
 }
 
 /**
- * The headers one `_headers` document declares for one request path.
+ * Apply already-parsed rules to one request path.
  *
  * Cloudflare joins same-named headers from every matching rule with a comma;
  * `tests/deployment.test.ts` forbids the shipped file from relying on that, so
- * this merge is indistinguishable for the file actually served. The default
- * document is the repository's `public/_headers`; a caller serving some other
- * built output passes that output's own generated `_headers` instead.
+ * this merge is indistinguishable for the file actually served.
  */
-export function headersFor(pathname: string, text = readFileSync(SOURCE_HEADERS, 'utf8')): Record<string, string> {
+function applyRules(rules: readonly HeaderRule[], pathname: string): Record<string, string> {
   const headers: Record<string, string> = {};
-  for (const rule of headerRules(text)) {
+  for (const rule of rules) {
     if (!rule.matcher.test(pathname)) continue;
     Object.assign(headers, rule.headers);
   }
   return headers;
+}
+
+/**
+ * The headers one `_headers` document declares for one request path.
+ *
+ * The default document is the repository's `public/_headers`; a caller serving
+ * some other built output passes that output's own generated `_headers`
+ * instead. A server that answers many requests should parse once and call
+ * `applyRules`, as `serveDist` does.
+ */
+export function headersFor(pathname: string, text = readFileSync(SOURCE_HEADERS, 'utf8')): Record<string, string> {
+  return applyRules(headerRules(text), pathname);
 }
 
 /** The site-wide headers (the `/*` rule) `public/_headers` declares. */
@@ -171,20 +181,21 @@ export async function serveDist(
   initial: string,
   options: { headersFile?: string } = {},
 ): Promise<ServedSite> {
-  const headersText = readFileSync(options.headersFile ?? SOURCE_HEADERS, 'utf8');
-  const siteWide = (): Record<string, string> => headersFor('/', headersText);
+  // Parsed once per server: every request applies the same rules, and a browser
+  // gate makes hundreds of them.
+  const rules = headerRules(readFileSync(options.headersFile ?? SOURCE_HEADERS, 'utf8'));
   let current = initial;
   const running = createServer((request, response) => {
     let pathname: string;
     try {
       pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
     } catch {
-      response.writeHead(400, siteWide());
+      response.writeHead(400, applyRules(rules, '/'));
       response.end('bad request');
       return;
     }
     if (pathname.endsWith('/')) pathname += 'index.html';
-    const headers = headersFor(pathname, headersText);
+    const headers = applyRules(rules, pathname);
     const root = resolve(current);
     const file = resolve(root, `.${pathname}`);
     // Directory boundary, not a string prefix: `/tmp/x/dist2/...` starts with

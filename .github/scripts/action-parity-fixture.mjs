@@ -13,15 +13,16 @@
  * carry markers the assertion step scans the finished `dist/` for, raw and
  * gzip-inflated.
  *
- * The reviewed ledger is written here rather than by `anc review`, and the
- * reason is ordering rather than convenience: `review` imports the generator's
- * dependencies, which nothing has installed when this fixture runs — the
- * Action installs them in the step after this one, and pre-installing them
- * would make the Action's own install step untested. The ledger is still a
- * real gate: the Action always builds `--release`, whose exact-set comparison
- * refuses a ledger that does not name precisely the slugs the producer
- * computes. The tarball smoke (`scripts/smoke-tarball.ts`) installs the
- * package with npm and runs the real `init`/`review` commands.
+ * The reviewed ledger is written through the producer's own
+ * `scripts/publish-set-review.ts`, not by hand: its schema, version, sorting,
+ * and serialization get one home, and its dependency chain is Node builtins, so
+ * importing it here does not need the install the Action performs later. The
+ * `anc review` command itself is still not run here, because that CLI imports
+ * the generator's dependencies; the tarball smoke (`scripts/smoke-tarball.ts`)
+ * installs the package with npm and runs the real `init`/`review` commands. The
+ * ledger remains a real gate: the Action always builds `--release`, whose
+ * exact-set comparison refuses a ledger that does not name precisely the slugs
+ * the producer computes.
  *
  * `git init` rather than a clone is what makes the shallow-clone refusal a
  * separate job: this repository has full history for the date derivation, and
@@ -31,6 +32,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writePublishSetReview } from '../../scripts/publish-set-review.ts';
 
 /** The repository root the workflow runs this against. */
 const root = process.argv[2] ?? process.cwd();
@@ -89,18 +91,15 @@ write('drafts/roadmap.md', [
   'PARITY-DRAFT-BODY-MUST-NOT-SHIP',
 ]);
 
-// Sorted public slugs only, exactly what `anc review` writes: no source paths
-// and no withheld names. The release build recomputes the set and refuses any
-// difference, so a wrong entry here fails the workflow rather than passing it.
-writeFileSync(
-  join(root, '.publish-set.json'),
-  JSON.stringify({ version: 1, slugs: ['second', 'welcome'] }, null, 2) + '\n',
-  'utf8',
-);
-
 git('init', '--quiet');
 git('config', 'user.name', 'Action Parity');
 git('config', 'user.email', 'action-parity@example.invalid');
+
+// Sorted public slugs only, exactly what `anc review` writes: no source paths
+// and no withheld names. The release build recomputes the set and refuses any
+// difference, so a wrong entry here fails the workflow rather than passing it.
+const reviewed = writePublishSetReview(root, ['second', 'welcome']);
+
 // Explicit paths, not `git add -A`: the generator checkout beside this corpus
 // carries its own `.git`, and adding a gitlink here would make the fixture
 // repository depend on something the workflow does not publish.
@@ -116,4 +115,4 @@ git(
 );
 git('commit', '--quiet', '-m', 'notes: the synthetic notes repository');
 
-console.log('synthetic notes repository created: 2 published, 2 withheld');
+console.log(`synthetic notes repository created: ${reviewed} published, 2 withheld`);

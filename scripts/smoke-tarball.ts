@@ -32,9 +32,8 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { chromium, type Browser } from 'playwright';
-import { DatabaseSync } from '../src/lib/sqlite.ts';
-import { SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { serveDist, sqliteAssetRequests, tabTo, workerScriptPath } from '../tests/support/browser-site.ts';
+import { openSnapshot, snapshotMembers } from '../tests/support/snapshot.ts';
 import { spawnNpm } from './npm-command.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -216,10 +215,9 @@ async function main(): Promise<number> {
       assert(!outputText.includes(forbidden), 'foreign artifact contains forbidden marker ' + forbidden);
     }
 
-    const snapshotDirectory = join(dist, 'data');
-    const snapshots = readdirSync(snapshotDirectory).filter((name) => SNAPSHOT_FILE_PATTERN.test(name));
+    const snapshots = snapshotMembers(dist);
     assert(snapshots.length === 1, 'foreign artifact does not carry exactly one snapshot');
-    const database = new DatabaseSync(join(snapshotDirectory, snapshots[0]!), { readOnly: true });
+    const database = openSnapshot(dist);
     let publicNotes: { slug: string; title: string }[];
     try {
       publicNotes = database
@@ -261,6 +259,9 @@ async function main(): Promise<number> {
     // not the producer's `public/_headers` — so the runtime checks below only
     // pass if this artifact's own JS, WASM, and DB work under the deployed CSP.
     const server = await serveDist(dist, { headersFile: join(dist, '_headers') });
+    // Resolved once: `workerScriptPath` reads the built `_astro/` directory, and
+    // the assertion below would otherwise rescan it for every request recorded.
+    const workerChunk = workerScriptPath(dist);
     let browser: Browser | undefined;
     try {
       try {
@@ -321,7 +322,7 @@ async function main(): Promise<number> {
         // fetched this build's Worker chunk, WASM, and snapshot: the chunk path
         // comes from the built directory, not from the page's own markup.
         assert(
-          runtimeRequests.some((url) => url.endsWith(workerScriptPath(dist))),
+          runtimeRequests.some((url) => url.endsWith(workerChunk)),
           'the preview did not request the built Worker chunk at its own path: ' + runtimeRequests.join(', '),
         );
         assert(
@@ -484,6 +485,12 @@ async function main(): Promise<number> {
             resolvePromise(Number(match[1]));
           }
         });
+        // Read from the start: a crash before the announcement is exactly the
+        // case whose diagnosis needs it, and an unread pipe can block the child.
+        preview.stderr.setEncoding('utf8');
+        preview.stderr.on('data', (chunk: string) => {
+          streams += chunk;
+        });
         preview.once('exit', (code) => {
           clearTimeout(timer);
           rejectPromise(new Error('preview exited before announcing a URL (status ' + String(code) + '): ' + streams));
@@ -498,9 +505,14 @@ async function main(): Promise<number> {
       );
       const withheld = await fetch(`http://127.0.0.1:${port}/private/`);
       assert(withheld.status === 200, 'the shipped preview did not serve the withheld-note page');
+      await withheld.body?.cancel();
     } finally {
-      preview.kill('SIGINT');
-      await once(preview, 'exit');
+      // `once` does not replay an already-emitted event, so a preview that died
+      // before announcing would otherwise hang this release smoke forever.
+      if (preview.exitCode === null && preview.signalCode === null) {
+        preview.kill('SIGINT');
+        await once(preview, 'exit');
+      }
     }
 
     const planted = 'ghp_4fJ9xQ2mN7vL5sT8yR1cW6kP3dH0bA9eZ7uC';
