@@ -1,6 +1,6 @@
 # 0008 — Acceptable browser cost
 
-Status: ready. Created: 2026-09-14. Replaces part of [0001](0001-unified-public-query-model.md).
+Status: in progress. Created: 2026-09-14. Replaces part of [0001](0001-unified-public-query-model.md).
 
 ## Desired outcome
 
@@ -67,34 +67,112 @@ comparison, finite policies and material UX trade-off. Lack of access to a suita
 device or acceptance authority leaves this goal open; it does not reopen settled
 architecture choices or postpone SQLite beyond 0.1.0.
 
-## Implementation progress (2026-09-15)
+## Implementation progress (2026-09-18)
 
-The functional prerequisites (0002–0007) are implemented and their gates pass on
-this host, but **this goal's own measurement and acceptance cannot be produced
-here**: it requires a named physical mid-range mobile device for the p95 target
-and a recorded maintainer decision accepting the cold-preview/resource policies.
-Neither the device nor the acceptance authority is available in this
-environment, so no number is invented and the goal stays open. A benchmark
-harness and desktop-throttled numbers can be added, but they are labeled
-simulation and do not satisfy the mobile judgment.
+The instrument now covers every completion-evidence row and the delivered
+runtime's finite policies were exceeded on this host. The physical mobile
+judgment and the recorded maintainer acceptance below are still missing, so the
+goal remains open.
 
-**Measured 2026-09-15** with `pnpm run benchmark:snapshot --sizes
-100,1000,10000 --topologies sparse,hub --samples 30 --throttle 4` (desktop
-Chromium, CDP `Emulation.setCPUThrottlingRate=4`, nearest-rank p95, JS-heap-only
-memory). Warm local-neighbourhood p95, after the 10,000-note local query was
-changed from a whole-corpus edge scan to a query over the selected endpoints:
-100 sparse 12.7 ms / hub 17.4 ms; 1,000 sparse 13.5 ms / hub 17.5 ms; 10,000
-sparse 12.7 ms / hub 20.8 ms. Cold preview ~370-394 ms, warm ~226-253 ms;
-decoded DB 48 KiB/200 KiB/1.6 MiB and gzip 6.5/54/371 KiB. This holds under a
-**simulation** on this host; the physical mid-range mobile device and the
-recorded maintainer acceptance below are still required and are not satisfied by
-these numbers. The pre-optimization run measured 82 ms / 162 ms at 10,000, so the
-ablation of the endpoint-restricted query is the difference between failing and
-holding at the largest workload.
+### Instrument
+
+- `scripts/benchmark-snapshot.ts` generates seeded 100/1,000/10,000-note corpora
+  with `topology: sparse|skewed` and `metadata: true` (tags including `笔记`,
+  per-note aliases, mixed-script headings), records generator/seed/fixture
+  sha256 with DB row counts and degree/length distributions, serves `dist/`
+  under per-path `_headers` with gzip negotiation, records page and Worker
+  resource timing plus the decoded, gzip and wire cost of the DB, WASM binary,
+  WASM glue and Worker chunk, reports `sqlMs` and load `phases` from the opt-in
+  measurement seam, separates the observed hover delay from intent-to-visible,
+  measures preview, backlinks, outgoing, byTag, local and global/filtered graph
+  through UI flows and an armed driver Worker, verifies answers against the
+  finalized DB, asserts zero SQLite requests before intent, compares the initial
+  render with JavaScript disabled, and writes a partial report with preserved
+  failures on any error.
+- `scripts/benchmark-limits.ts` exceeds each configured boundary on the real
+  build: 64 MiB+1 DB and 8 MiB+4 KiB WASM fail `integrity` with zero WASM
+  instantiation, the static page stays usable and a later retry succeeds; the
+  20 s startup and 8 s query deadlines terminate the Worker once, with no
+  automatic retry, and a later intent rebuilds; the 17th concurrent request is
+  rejected `busy` without dispatch while a shared instance stays shared; page
+  size 10,000 clamps to 200 and a saturated CJK tag enumerates 200+85; the local
+  bound draws 11/11 and the global bound 60/285.
+- `src/lib/worker-protocol.ts`, `src/scripts/snapshot-worker.ts` and
+  `src/scripts/snapshot-client.ts` carry the opt-in seam: an armed request sets
+  `measure: true`; a measured reply adds numeric `sqlMs` and `phases
+  {totalMs, fetchMs, digestMs, wasmInitMs, importMs, wasmMemoryBytes}`.
+  Ordinary readers send and receive exactly what they did before.
+- `scripts/generate-corpus.ts` gained `topology` and `metadata` options without
+  changing default output; a golden digest test pins that.
+
+### Measured 2026-09-18
+
+Candidate: commit `2f7fa2d` (the measurement instruments were run from the same
+tree before it was committed; the private reports record parent `66769ae4` plus
+the CLI sha256). `pnpm run verify` was green before the run (81 files / 959
+passed / 34 skipped).
+Throttled simulation: CDP `Emulation.setCPUThrottlingRate = 4` on the page
+target only, nearest-rank p95, 30 samples per query operation, six workloads,
+none failed. Report `benchmark-snapshot-2026-09-18T09-11-04-644Z.json`
+(sha256 `22fcf2c718e8…`) in the private report directory.
+
+| workload | UI local p95 | driver local p95 | cold preview | warm preview |
+| --- | --- | --- | --- | --- |
+| 100 sparse | 16.5 ms | 6.0 ms | 968 ms | 238 ms |
+| 100 hub | 12.3 ms | 4.5 ms | 977 ms | 237 ms |
+| 1,000 sparse | 17.4 ms | 3.7 ms | 967 ms | 226 ms |
+| 1,000 hub | 13.9 ms | 4.3 ms | 950 ms | 235 ms |
+| 10,000 sparse | 14.6 ms | 3.9 ms | 1152 ms | 235 ms |
+| 10,000 hub | 13.4 ms | 4.7 ms | 1167 ms | 237 ms |
+
+Preview is one cold plus one warm sample per workload, not a p95. At 10,000 hub:
+DB 3.72 MiB decoded / 1.04 MiB gzip wire, WASM 848.5 KiB, glue 627.7 KiB,
+Worker chunk 17.6 KiB; warm startup phases fetch 41.1 / digest 6.0 / wasmInit
+59.9 / import 13.2 ms with 8 MiB WASM memory; zero SQLite requests before
+intent; JS-disabled versus active FCP 284 versus 188 ms with a +10,160 B
+enhancement bundle. Program queries are reported separately and one is
+materially slower than the local target: global graph p50 173 / p95 258.5 ms at
+10,000 notes under the ×4 simulation (driver byTag p95 13.8 ms; UI byTag p95
+34.2 ms). No failure was removed from any p95.
+
+An unthrottled hub pass matches the baseline's conditions (30 samples, report
+`benchmark-snapshot-2026-09-18T09-29-07-150Z.json`, sha256 `d49dddc14650…`):
+page-observed warm hover-to-visible 121.5–122.4 ms versus the baseline's
+123.2–124.7 ms; cold 357.8–506.9 ms versus 156.3–353.2 ms; FCP 92–248 ms versus
+88–256 ms.
+
+### Pre-SQLite baseline
+
+Commit `7579cc16` installed and built all three sizes in a worktree (100: 8.2 s,
+1,000: 20.5 s, 10,000: 327.2 s), so no build limitation is claimed. Its preview
+is one `/content-index.json` fetch (2.83 MB decoded / 517 KB gzip at 10,000)
+plus an in-memory lookup; it has no Worker or per-link query, so its warm figure
+is the same hover-intent-to-visible total, not a dispatch-equivalent. On that
+like-for-like page-observer basis, candidate warm preview is on par while cold
+pays the Worker/WASM startup the baseline does not have. The worktree was
+removed and the raw baseline observations are retained outside this repository.
+
+### Packaged candidate
+
+`pnpm run pack:tarball` produced `anc-0.1.0.tgz` (413,493 bytes, sha256
+`edbf5c028a7d…`), installed with npm. The installed CLI measured 1,000/hub under
+the ×4 simulation with 10 samples and no failures: UI local p95 16.1 ms, driver
+local p95 8.4 ms, cold 982 ms, warm 239 ms; report
+`benchmark-snapshot-candidate-1000-hub.json` (sha256 `618853ae4618…`).
+
+### Still required
+
+The named physical mid-range mobile device and the dated maintainer acceptance
+of the finite policies and the cold-preview UX trade-off do not exist in this
+environment, so the goal stays open. Known instrument limitations: cold/warm
+preview is a single sample per workload; throttling is page-target simulation;
+`ArrayBufferBytes` and process RSS are unavailable, so total peak memory is not
+measured; the global graph at 10,000 notes is a quarter-second under the ×4
+simulation.
 
 ## Completion record
 
-Not completed. Record reproducible benchmark command/tool, candidate identity, raw
-artifact links, per-workload results, mobile evidence, overload-control outcomes,
-and dated maintainer acceptance. Any added optimization must also record what its
-ablation loses; measurements alone do not authorize a new public index.
+Not completed. Recorded here: the reproducible commands and report identities
+above, per-workload results, the baseline and packaged-candidate comparisons,
+and the overload-control outcomes. Missing: physical mobile evidence and the
+dated maintainer acceptance.
