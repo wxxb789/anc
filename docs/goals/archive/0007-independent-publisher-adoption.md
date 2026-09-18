@@ -167,8 +167,10 @@ artifacts; both gate scripts are TypeScript inside `astro check` with the
 workflow and gate-test paths updated; and the unused `headersFor` parameter is
 removed. `pnpm run verify` reported 80 files / 953 passed / 34 skipped, exit 0,
 with the 150-file inventory and both scans clean, and `pnpm run smoke:tarball`
-reported 2 published / 2 withheld; the commit is local and unpushed at the time
-of this note.
+reported 2 published / 2 withheld. Both workflows are green on `b0aad3b`:
+CI verify run `35317922105` (80 files, 953 passed / 34 skipped) and
+Action-parity run `35317922078`, whose shallow job builds the release-ready
+workspace and whose new "Prove the artifact check can fail" step ran.
 
 ### Commands and observed results
 
