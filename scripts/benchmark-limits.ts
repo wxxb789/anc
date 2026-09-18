@@ -716,6 +716,14 @@ interface ControlOutcome {
   notImplemented?: string;
 }
 
+interface ClientBoundTest {
+  status: 'pass' | 'fail';
+  total: number | null;
+  passed: number | null;
+  failed: number | null;
+  detail: string;
+}
+
 async function runControl(
   id: string,
   name: string,
@@ -1538,7 +1546,7 @@ async function controlPendingBound(harness: Harness): Promise<ControlOutcome> {
  * Node gate is the one that can see a promise that never settles, so its
  * result is recorded beside the browser's rather than replaced by it.
  */
-function runClientBoundTest(): { status: string; total: number | null; passed: number | null; failed: number | null; detail: string } {
+function runClientBoundTest(): ClientBoundTest {
   const run = spawnSync('pnpm', ['exec', 'vitest', 'run', 'tests/snapshot-client.test.ts', '--reporter=json'], {
     cwd: ROOT,
     encoding: 'utf8',
@@ -1567,6 +1575,13 @@ function runClientBoundTest(): { status: string; total: number | null; passed: n
     }
   }
   return { status: run.status === 0 ? 'pass' : 'fail', total: null, passed: null, failed: null, detail: `exit=${run.status}` };
+}
+
+export function benchmarkExitCode(
+  controls: readonly Pick<ControlRecord, 'status'>[],
+  clientBoundTest: Pick<ClientBoundTest, 'status'>,
+): 0 | 1 {
+  return controls.every((control) => control.status === 'pass') && clientBoundTest.status === 'pass' ? 0 : 1;
 }
 
 /**
@@ -1770,7 +1785,7 @@ async function main(): Promise<number> {
     }
     console.log(`client-bound-test: ${clientBoundTest.status} (${clientBoundTest.detail})`);
     console.log(`report sha256: ${digest}`);
-    return failed === 0 ? 0 : 1;
+    return benchmarkExitCode(controls, clientBoundTest);
   } finally {
     await browser?.close();
     await site?.close();
@@ -1805,12 +1820,14 @@ function summarize(control: ControlRecord): string {
 
 // `process.exitCode` rather than `process.exit`: the latter can truncate a
 // piped stdout, and this runner's stream is the compact record a caller reads.
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error: unknown) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exitCode = 1;
-  },
-);
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error: unknown) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    },
+  );
+}

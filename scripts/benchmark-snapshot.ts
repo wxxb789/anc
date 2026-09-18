@@ -224,21 +224,117 @@ interface FixtureIdentity {
   method: string;
 }
 
-/** SHA-256 over every corpus file: relative path bytes then file bytes, sorted. */
+/** SHA-256 over every regular file with length-framed paths and contents. */
 function fixtureIdentity(directory: string): FixtureIdentity {
   const relativePaths = walkFiles(directory)
     .map((file) => relative(directory, file).split(sep).join('/'))
     .sort();
   const hash = createHash('sha256');
   for (const path of relativePaths) {
+    const contents = readFileSync(join(directory, path));
+    hash.update(`${Buffer.byteLength(path, 'utf8')}:`, 'utf8');
     hash.update(path, 'utf8');
-    hash.update(readFileSync(join(directory, path)));
+    hash.update(`${contents.byteLength}:`, 'utf8');
+    hash.update(contents);
   }
   return {
     sha256: hash.digest('hex'),
     files: relativePaths.length,
-    method: 'sha256(relative path bytes + file bytes), files sorted by relative path',
+    method: 'sha256(path byte length + path bytes + file byte length + file bytes), regular files sorted by relative path',
   };
+}
+
+/** Keep a small withheld slice while making `size` mean published DB nodes. */
+function generatorNotesForPublishedSize(size: number): number {
+  return size + Math.max(1, Math.ceil(size * 0.04));
+}
+
+function generatorRequest(options: Options, size: number, topology: Topology): GeneratorRequest {
+  return {
+    notes: generatorNotesForPublishedSize(size),
+    seed: options.seed,
+    topology: generatorTopology(topology),
+    metadata: true,
+  };
+}
+
+interface CorpusFinalization {
+  result: GeneratedCorpus;
+  promoted: number;
+  demoted: number;
+}
+
+function markdownFiles(directory: string): { file: string; relativePath: string }[] {
+  return walkFiles(directory)
+    .filter((file) => file.endsWith('.md'))
+    .map((file) => ({ file, relativePath: relative(directory, file).split(sep).join('/') }))
+    .sort((a, b) => (a.relativePath < b.relativePath ? -1 : a.relativePath > b.relativePath ? 1 : 0));
+}
+
+function hasPublishFalse(text: string): boolean {
+  const frontmatter = /^(?:---\r?\n)([\s\S]*?)(?:\r?\n---\r?\n?)/.exec(text);
+  return frontmatter !== null && /^publish:\s*false\s*$/m.test(frontmatter[1]!);
+}
+
+/** Toggle only the generator's publication flag, preserving authored content. */
+function setPublishFalse(file: string, withheld: boolean): number {
+  const before = readFileSync(file, 'utf8');
+  const newline = before.includes('\r\n') ? '\r\n' : '\n';
+  const lines = before.split(/\r?\n/);
+  const end = lines.indexOf('---', 1);
+  if (end < 0) {
+    if (!withheld) throw new Error(`cannot publish a Markdown file without frontmatter: ${basename(file)}`);
+    lines.unshift('---', 'publish: false', '---', '');
+  } else {
+    const flag = lines.findIndex((line, index) => index > 0 && index < end && /^publish:\s*false\s*$/.test(line));
+    if (withheld && flag < 0) lines.splice(1, 0, 'publish: false');
+    if (!withheld && flag >= 0) lines.splice(flag, 1);
+  }
+  const after = lines.join(newline);
+  if (after !== before) writeFileSync(file, after, 'utf8');
+  return Buffer.byteLength(after, 'utf8') - Buffer.byteLength(before, 'utf8');
+}
+
+/**
+ * The generator's random withholding is useful coverage, but its count is not
+ * a workload size contract. Normalize the publication flags after generation
+ * so the finalized DB has exactly the requested published-node count while the
+ * raw generator request and return value remain visible in the report.
+ */
+function finalizeCorpus(
+  directory: string,
+  requestedPublished: number,
+  generated: GeneratedCorpus,
+): CorpusFinalization {
+  const files = markdownFiles(directory);
+  if (requestedPublished < 1 || requestedPublished >= files.length) {
+    throw new Error(`requested ${requestedPublished} published notes from ${files.length} generated Markdown files`);
+  }
+  const classified = files.map((entry) => ({ ...entry, withheld: hasPublishFalse(readFileSync(entry.file, 'utf8')) }));
+  const withheld = classified.filter((entry) => entry.withheld);
+  const published = classified.filter((entry) => !entry.withheld);
+  if (published.length !== generated.published || withheld.length !== generated.withheld) {
+    throw new Error(
+      `generator result ${generated.published}/${generated.withheld} disagrees with generated Markdown ${published.length}/${withheld.length}`,
+    );
+  }
+  const promoted = Math.max(0, requestedPublished - generated.published);
+  const demoted = Math.max(0, generated.published - requestedPublished);
+  if (promoted > withheld.length || demoted > published.length) {
+    throw new Error(
+      `cannot finalize ${requestedPublished} published notes from generator result ${generated.published}/${generated.withheld}`,
+    );
+  }
+  let bytes = generated.bytes;
+  for (const { file } of withheld.slice(0, promoted)) bytes += setPublishFalse(file, false);
+  for (const { file } of published.slice(0, demoted)) bytes += setPublishFalse(file, true);
+  const result: GeneratedCorpus = {
+    ...generated,
+    published: requestedPublished,
+    withheld: files.length - requestedPublished,
+    bytes,
+  };
+  return { result, promoted, demoted };
 }
 
 /**
@@ -478,7 +574,7 @@ interface DatabaseIdentity {
   digestMatchesFileName: boolean;
   rows: { nodes: number; edges: number; aliases: number; tags: number; nodeTags: number };
   notesPublished: number;
-  notesWithheldFromGenerator: number | null;
+  notesWithheld: number | null;
   inDegree: { distribution: NumericDistribution; top: DegreeRow[] };
   outDegree: { distribution: NumericDistribution; top: DegreeRow[] };
   corpus: ReturnType<typeof corpusTextStats>;
@@ -530,7 +626,7 @@ function analyseDatabase(
   fileName: string,
   fileDigest: string,
   corpus: ReturnType<typeof corpusTextStats>,
-  generated: GeneratedCorpus | null,
+  finalized: GeneratedCorpus | null,
 ): DatabaseAnalysis {
   const rows = {
     nodes: Number(queryValue(db, 'SELECT COUNT(*) FROM nodes') ?? 0),
@@ -540,8 +636,10 @@ function analyseDatabase(
     nodeTags: Number(queryValue(db, 'SELECT COUNT(*) FROM node_tags') ?? 0),
   };
   const nodes = queryRows<{ slug: string }>(db, 'SELECT slug FROM nodes').map((row) => row.slug);
-  const inDegree = new Map<string, number>();
-  const outDegree = new Map<string, number>();
+  // Seed every published node so isolated nodes contribute zero to the
+  // distribution, not only to the top-list fallback.
+  const inDegree = new Map<string, number>(nodes.map((slug): [string, number] => [slug, 0]));
+  const outDegree = new Map<string, number>(nodes.map((slug): [string, number] => [slug, 0]));
   for (const row of queryRows<{ slug: string; degree: number }>(
     db,
     `SELECT n.slug AS slug, COUNT(*) AS degree
@@ -587,7 +685,7 @@ function analyseDatabase(
       digestMatchesFileName: digestMatch?.[1] === fileDigest,
       rows,
       notesPublished: rows.nodes,
-      notesWithheldFromGenerator: generated === null ? null : generated.withheld,
+      notesWithheld: finalized === null ? null : finalized.withheld,
       inDegree: { distribution: distributionOf([...inDegree.values()]), top: topDegrees(inDegree, nodes) },
       outDegree: { distribution: distributionOf([...outDegree.values()]), top: topDegrees(outDegree, nodes) },
       corpus,
@@ -1136,6 +1234,7 @@ interface GeneratorIdentity {
   seed: number;
   options: GeneratorRequest;
   result: GeneratedCorpus | null;
+  finalized: CorpusFinalization | null;
 }
 
 interface BuildIdentity {
@@ -1358,6 +1457,7 @@ async function measureWorkload(
 ): Promise<WorkloadReport> {
   const startedAt = Date.now();
   const id = `${size}-${topology}`;
+  const request = generatorRequest(options, size, topology);
   const workload: WorkloadReport = {
     id,
     size,
@@ -1365,8 +1465,9 @@ async function measureWorkload(
     generator: {
       name: 'scripts/generate-corpus.ts#generateCorpus',
       seed: options.seed,
-      options: { notes: size, seed: options.seed, topology: generatorTopology(topology), metadata: true },
+      options: request,
       result: null,
+      finalized: null,
     },
     fixture: null,
     build: null,
@@ -1396,6 +1497,8 @@ async function measureWorkload(
       assets: generated.assets,
       bytes: generated.bytes,
     };
+    const corpusFinalization = finalizeCorpus(contentDirectory, size, workload.generator.result);
+    workload.generator.finalized = corpusFinalization;
     workload.fixture = fixtureIdentity(contentDirectory);
     const corpusText = corpusTextStats(contentDirectory);
 
@@ -1423,15 +1526,22 @@ async function measureWorkload(
     const fileName = snapshots[0]!;
     const fileDigest = sha256File(join(dataDirectory, fileName));
     db = new DatabaseSync(join(dataDirectory, fileName), { readOnly: true });
-    const analysis = analyseDatabase(db, fileName, fileDigest, corpusText, workload.generator.result);
+    const finalized = corpusFinalization.result;
+    const analysis = analyseDatabase(db, fileName, fileDigest, corpusText, finalized);
     workload.database = analysis.identity;
     if (!analysis.identity.digestMatchesFileName) {
       workload.failures.push({ phase: 'database', message: 'snapshot file name digest does not match its bytes' });
     }
-    if (workload.generator.result.published !== analysis.identity.rows.nodes) {
+    if (finalized.published !== analysis.identity.rows.nodes) {
       workload.failures.push({
         phase: 'database',
-        message: `generator published ${workload.generator.result.published}, DB nodes ${analysis.identity.rows.nodes}`,
+        message: `finalized corpus published ${finalized.published}, DB nodes ${analysis.identity.rows.nodes}`,
+      });
+    }
+    if (size !== analysis.identity.rows.nodes) {
+      workload.failures.push({
+        phase: 'database',
+        message: `requested ${size} published notes, DB nodes ${analysis.identity.rows.nodes}`,
       });
     }
     const plan = analysis.plan;
@@ -2193,28 +2303,42 @@ async function measureWorkload(
 // --- Report and entry point -------------------------------------------------------
 
 interface CandidateIdentity {
-  commit: string | null;
-  cli: { basename: string; sha256: string };
+  repositoryHead: { commit: string | null; scope: string };
+  cli: { basename: string; sha256: string; scope: string };
   installedPackage: { name: string; version: string } | null;
-  tarballDigest: string | null;
-  tarballDigestNote: string;
+  installedPackageTree: {
+    sha256: string;
+    files: number;
+    scope: string;
+    method: string;
+  } | null;
 }
 
 function candidateIdentity(cliPath: string): CandidateIdentity {
   const probe = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' });
   let installedPackage: { name: string; version: string } | null = null;
+  let installedPackageTree: CandidateIdentity['installedPackageTree'] = null;
   if (cliPath.includes(`${sep}node_modules${sep}`)) {
     let directory = dirname(cliPath);
     for (let depth = 0; depth < 6; depth += 1) {
       const manifest = join(directory, 'package.json');
       if (existsSync(manifest)) {
+        let parsed: { name?: unknown; version?: unknown };
         try {
-          const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; version?: unknown };
-          if (typeof parsed.name === 'string' && typeof parsed.version === 'string') {
-            installedPackage = { name: parsed.name, version: parsed.version };
-          }
+          parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { name?: unknown; version?: unknown };
         } catch {
           // A manifest that cannot be read leaves the version unknown.
+          break;
+        }
+        if (typeof parsed.name === 'string' && typeof parsed.version === 'string') {
+          installedPackage = { name: parsed.name, version: parsed.version };
+          const tree = fixtureIdentity(directory);
+          installedPackageTree = {
+            sha256: tree.sha256,
+            files: tree.files,
+            scope: 'installed package directory only, recursively hashed regular files; parent node_modules excluded',
+            method: tree.method,
+          };
         }
         break;
       }
@@ -2224,12 +2348,17 @@ function candidateIdentity(cliPath: string): CandidateIdentity {
     }
   }
   return {
-    commit: probe.status === 0 ? probe.stdout.trim() || null : null,
-    cli: { basename: basename(cliPath), sha256: sha256File(cliPath) },
+    repositoryHead: {
+      commit: probe.status === 0 ? probe.stdout.trim() || null : null,
+      scope: 'benchmark harness repository HEAD; identifies the candidate only when --cli belongs to this repository',
+    },
+    cli: {
+      basename: basename(cliPath),
+      sha256: sha256File(cliPath),
+      scope: 'sha256 of the --cli executable file bytes only',
+    },
     installedPackage,
-    tarballDigest: cliPath.endsWith('.tgz') ? sha256File(cliPath) : null,
-    tarballDigestNote:
-      'an installed package tree does not retain the .tgz bytes; pass a .tgz path as --cli to hash the tarball itself',
+    installedPackageTree,
   };
 }
 
@@ -2279,7 +2408,7 @@ function printWorkload(workload: WorkloadReport): void {
   const readingDelta = workload.reading?.delta.transferredBytes ?? null;
   process.stdout.write(
     `${workload.id}: published=${workload.database?.notesPublished ?? 'n/a'} ` +
-      `withheld=${workload.database?.notesWithheldFromGenerator ?? 'n/a'} ` +
+      `withheld=${workload.database?.notesWithheld ?? 'n/a'} ` +
       `nodes=${workload.database?.rows.nodes ?? 'n/a'} edges=${workload.database?.rows.edges ?? 'n/a'} ` +
       `db=${kib(snapshot?.decodedBytes)} gzip=${kib(snapshot?.gzipBytes)} ` +
       `build=${workload.build?.seconds ?? 'n/a'}s coldPreview=${cold ?? 'n/a'}ms warmPreview=${warm ?? 'n/a'}ms ` +
@@ -2337,6 +2466,9 @@ async function main(): Promise<number> {
   try {
     const cliPath = options.cli === undefined ? join(ROOT, 'bin', 'anc.mjs') : isAbsolute(options.cli) ? options.cli : resolve(process.cwd(), options.cli);
     if (!existsSync(cliPath)) throw new Error(`--cli does not exist: ${basename(cliPath)}`);
+    if (extname(cliPath).toLowerCase() === '.tgz') {
+      throw new Error('--cli must point to an executable CLI, not a .tgz package archive');
+    }
     report.candidate = candidateIdentity(cliPath);
     for (const size of options.sizes) {
       for (const topology of options.topologies) {
@@ -2354,8 +2486,9 @@ async function main(): Promise<number> {
             generator: {
               name: 'scripts/generate-corpus.ts#generateCorpus',
               seed: options.seed,
-              options: { notes: size, seed: options.seed, topology: generatorTopology(topology), metadata: true },
+              options: generatorRequest(options, size, topology),
               result: null,
+              finalized: null,
             },
             fixture: null,
             build: null,
