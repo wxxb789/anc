@@ -22,7 +22,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test, vi } from 'vitest';
 
-import { WORKER_LIMITS, type SnapshotReply, type SnapshotResult } from '../src/lib/worker-protocol.ts';
+import { WORKER_LIMITS, type LoadPhases, type SnapshotReply, type SnapshotResult } from '../src/lib/worker-protocol.ts';
 
 /** The client module under test, as re-imported after each reset. */
 type SnapshotClient = typeof import('../src/scripts/snapshot-client.ts');
@@ -139,9 +139,15 @@ test('the armed measurement seam carries the result type, elapsed time, and the 
     },
   };
 
-  // Unarmed, the seam stays silent: an ordinary reader dispatches nothing.
+  // Unarmed, the seam stays silent: an ordinary reader dispatches nothing, and
+  // the request posted is exactly the message the caller passed.
   const unarmed = client.request({ id: 1, type: 'preview', slug: 'alpha' });
   const worker = FakeWorker.instances[0]!;
+  assert.deepEqual(
+    worker.posted,
+    [{ id: 1, type: 'preview', slug: 'alpha' }],
+    'an unarmed dispatch did not post exactly the caller message',
+  );
   worker.emit({ id: 1, ok: true, result: { type: 'preview', preview: null }, operationMs: 0.5 });
   await unarmed;
   assert.equal(dispatched.length, 0, 'the measurement event fired without the explicit arming flag');
@@ -151,6 +157,11 @@ test('the armed measurement seam carries the result type, elapsed time, and the 
   // requires the two recorded separately for goal 0008.
   windowStub.__snapshotMeasurement = true;
   const armed = client.request({ id: 2, type: 'localGraph', slug: 'alpha' });
+  assert.deepEqual(
+    worker.posted.at(-1),
+    { id: 2, type: 'localGraph', slug: 'alpha', measure: true },
+    'the armed dispatch did not add the measurement flag',
+  );
   worker.emit({ id: 2, ok: true, result: { type: 'localGraph', graph: null }, operationMs: 1.75 });
   assert.equal((await armed).type, 'localGraph', 'the emitted reply did not settle the armed request');
   assert.equal(dispatched.length, 1, 'the armed measurement event did not fire exactly once');
@@ -161,6 +172,62 @@ test('the armed measurement seam carries the result type, elapsed time, and the 
     `the dispatch-to-result span was not a finite non-negative number: ${detail.ms}`,
   );
   assert.equal(detail.operationMs, 1.75, 'the Worker operation span did not reach the event unchanged');
+  // A reply without the measurement-only fields leaves the detail with exactly
+  // the keys this seam always carried; the new fields are not `undefined` holes.
+  assert.deepEqual(
+    Object.keys(detail).sort(),
+    ['ms', 'operationMs', 'type'],
+    'an unmeasured reply changed the measurement event shape',
+  );
+});
+
+test('an armed measured reply reaches the event with its inner-SQL figure and phases, on a copy of the caller message', async () => {
+  const client = await loadClient();
+  const dispatched: CustomEvent<{
+    type: string;
+    ms: number;
+    operationMs: number;
+    sqlMs?: number;
+    phases?: LoadPhases;
+  }>[] = [];
+  (globalThis as Record<string, unknown>).document = {
+    dispatchEvent: (event: Event): boolean => {
+      dispatched.push(event as CustomEvent<{ type: string; ms: number; operationMs: number; sqlMs?: number; phases?: LoadPhases }>);
+      return true;
+    },
+  };
+
+  windowStub.__snapshotMeasurement = true;
+  // The caller's object is held on purpose: only a copy may carry the flag.
+  const message = { id: 4, type: 'localGraph', slug: 'alpha' } as const;
+  const pending = client.request(message);
+  const worker = FakeWorker.instances[0]!;
+  assert.deepEqual(
+    worker.posted,
+    [{ id: 4, type: 'localGraph', slug: 'alpha', measure: true }],
+    'the armed dispatch did not post a copy carrying the measurement flag',
+  );
+  assert.deepEqual(
+    message,
+    { id: 4, type: 'localGraph', slug: 'alpha' },
+    'the armed dispatch mutated the caller message',
+  );
+
+  const phases: LoadPhases = {
+    totalMs: 21,
+    fetchMs: 9,
+    digestMs: 3,
+    wasmInitMs: 6,
+    importMs: 3,
+    wasmMemoryBytes: 16 * 1024 * 1024,
+  };
+  worker.emit({ id: 4, ok: true, result: { type: 'localGraph', graph: null }, operationMs: 1.5, sqlMs: 0.75, phases });
+  assert.equal((await pending).type, 'localGraph', 'the measured reply did not settle its request');
+  assert.equal(dispatched.length, 1, 'the measured reply did not produce exactly one event');
+  const detail = dispatched[0]!.detail;
+  assert.equal(detail.type, 'localGraph', 'the event named a different operation than the measured reply');
+  assert.equal(detail.sqlMs, 0.75, 'the inner-SQL figure did not reach the event unchanged');
+  assert.deepEqual(detail.phases, phases, 'the phase decomposition did not reach the event unchanged');
 });
 
 test('the pending bound rejects past its finite limit instead of queueing', async () => {

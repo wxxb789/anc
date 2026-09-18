@@ -10,6 +10,7 @@
 
 import {
   WORKER_LIMITS,
+  type LoadPhases,
   type SnapshotErrorCode,
   type SnapshotMessage,
   type SnapshotReply,
@@ -69,13 +70,19 @@ function ensureWorker(): Worker {
       // measurer: the operation, its dispatch-to-validated-result time, and the
       // Worker's own operation time (its queries plus selection). Goal 0005
       // requires the two recorded separately for goal 0008. No corpus data is
-      // carried, and an ordinary reader dispatches nothing.
+      // carried, and an ordinary reader dispatches nothing. An armed request
+      // also gets the reply's measurement-only fields when a measured Worker
+      // sent them; they are added to the detail only when present, so a reply
+      // without them keeps the shape this seam always had.
       if (typeof window !== 'undefined' && (window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true) {
-        document.dispatchEvent(
-          new CustomEvent('snapshot-result', {
-            detail: { type: reply.result.type, ms: elapsed, operationMs: reply.operationMs },
-          }),
-        );
+        const detail: { type: string; ms: number; operationMs: number; sqlMs?: number; phases?: LoadPhases } = {
+          type: reply.result.type,
+          ms: elapsed,
+          operationMs: reply.operationMs,
+        };
+        if (reply.sqlMs !== undefined) detail.sqlMs = reply.sqlMs;
+        if (reply.phases !== undefined) detail.phases = reply.phases;
+        document.dispatchEvent(new CustomEvent('snapshot-result', { detail }));
       }
       entry.resolve(reply.result);
     } else {
@@ -137,7 +144,13 @@ export function request(message: SnapshotMessage): Promise<SnapshotResult> {
       reset('timeout');
     }, deadline);
     pending.set(id, { resolve, reject, timer, started: performance.now() });
-    instance.postMessage(message);
+    // Arming is read at dispatch, and the added flag is written on a copy: the
+    // function's callers construct their message inline, but a caller that
+    // holds its object must get it back unmutated. Unarmed, the identical
+    // object posted before this seam existed is what goes out.
+    const armed =
+      typeof window !== 'undefined' && (window as { __snapshotMeasurement?: boolean }).__snapshotMeasurement === true;
+    instance.postMessage(armed ? { ...message, measure: true } : message);
   });
 }
 

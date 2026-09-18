@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test } from 'vitest';
 import type { Browser, Page } from 'playwright';
 import { translate } from '../src/lib/translations.ts';
+import type { LoadPhases } from '../src/lib/worker-protocol.ts';
 import {
   CORPUS_SIZE,
   CORPUS_SLUGS,
@@ -112,6 +113,10 @@ interface GraphReply {
   code?: string;
   /** The Worker's own operation span on a successful reply. */
   operationMs?: number;
+  /** Measurement-only inner-SQL sum, present only on a measured reply. */
+  sqlMs?: number;
+  /** Measurement-only startup decomposition, present only on a measured reply. */
+  phases?: LoadPhases;
   result?: {
     type: string;
     graph?: {
@@ -682,6 +687,18 @@ test('hub: static 12 of 17, exact live edges, keyboard open/reset/re-centre, and
     [],
     'an unarmed page dispatched the render measurement',
   );
+
+  // No request on this page asked to measure, so no reply may carry the
+  // measurement-only fields. `recordWorkerActivity` captures the raw reply
+  // rather than the client's filtered view, so this is the Worker's own answer:
+  // adding measured fields to an ordinary request would be the behavior change
+  // this instrumentation must not make.
+  const unmeasured = await graphReplies(page);
+  assert.ok(unmeasured.length > 0, 'the unarmed page produced no Worker replies to inspect');
+  for (const reply of unmeasured) {
+    assert.equal('sqlMs' in reply, false, `an unmeasured reply carried sqlMs: ${JSON.stringify(reply)}`);
+    assert.equal('phases' in reply, false, `an unmeasured reply carried phases: ${JSON.stringify(reply)}`);
+  }
   await page.close();
 }, 120_000);
 
@@ -936,12 +953,45 @@ test('the armed render instrument reports the live drawing with its scope', asyn
   // mis-scopes `operationMs` would leave goal 0008 with a fabricated number.
   const measured = (await graphReplies(armed)).filter((reply) => reply.ok && reply.result?.type === 'localGraph');
   assert.equal(measured.length, 1, 'the armed drawing has no real Worker reply to measure');
+  const reply = measured[0]!;
   assert.ok(
-    typeof measured[0]!.operationMs === 'number' &&
-      Number.isFinite(measured[0]!.operationMs) &&
-      measured[0]!.operationMs > 0,
-    `the Worker operation span is not a positive finite measurement: ${String(measured[0]!.operationMs)}`,
+    typeof reply.operationMs === 'number' && Number.isFinite(reply.operationMs) && reply.operationMs > 0,
+    `the Worker operation span is not a positive finite measurement: ${String(reply.operationMs)}`,
   );
+
+  // The measured request additionally gets the inner-SQL sum and the startup
+  // decomposition from the real shipped Worker. `sqlMs` is a subset of the
+  // `operationMs` span that contains it, and the phases cannot exceed their own
+  // total; both cross the boundary as plain numbers.
+  assert.ok(
+    typeof reply.sqlMs === 'number' && Number.isFinite(reply.sqlMs) && reply.sqlMs >= 0,
+    `the inner-SQL figure is not a finite non-negative measurement: ${String(reply.sqlMs)}`,
+  );
+  assert.ok(
+    reply.sqlMs <= reply.operationMs,
+    `the inner-SQL sum (${reply.sqlMs}) exceeds the operation span (${reply.operationMs}) that contains it`,
+  );
+  const phases = reply.phases;
+  assert.ok(phases !== undefined, 'the measured reply carried no startup phase decomposition');
+  for (const field of ['totalMs', 'fetchMs', 'digestMs', 'wasmInitMs', 'importMs'] as const) {
+    assert.ok(
+      typeof phases[field] === 'number' && Number.isFinite(phases[field]) && phases[field] >= 0,
+      `startup phase ${field} is not a finite non-negative measurement: ${String(phases[field])}`,
+    );
+  }
+  assert.ok(
+    phases.totalMs >= Math.max(phases.fetchMs, phases.digestMs, phases.wasmInitMs, phases.importMs),
+    `a phase outran the total that contains it: ${JSON.stringify(phases)}`,
+  );
+  // The pinned WASM module exposes `config.memory` (a `WebAssembly.Memory`), so
+  // the capacity is a real positive byte count here. A future pin that stops
+  // exposing it makes the Worker report the documented `null`; this gate then
+  // fails, so that change has to be recorded rather than silently degrading.
+  assert.ok(
+    typeof phases.wasmMemoryBytes === 'number' && phases.wasmMemoryBytes > 0,
+    `wasmMemoryBytes is not a positive byte count: ${String(phases.wasmMemoryBytes)}`,
+  );
+  assert.ok(Number.isInteger(phases.wasmMemoryBytes), 'wasmMemoryBytes is not an integral byte capacity');
   await armed.close();
 }, 120_000);
 
