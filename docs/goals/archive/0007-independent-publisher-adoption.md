@@ -154,6 +154,22 @@ published notes / 2 withheld notes) and CI verify run `35303613876` and
 Action-parity run `35303613868` are green on it; the tarball digest is unchanged
 because no packed source changed.
 
+Post-review fixes (2026-09-18): commit `2d12337` applied the `ce-code-review`
+findings: the shallow-clone control now builds its workspace from the
+release-ready fixture and asserts the clone is shallow, so a removed or
+neutered guard turns the job red instead of passing on the unrelated
+missing-ledger failure; a post-check control proves the artifact checker can
+fail; an unreadable dist file is a recorded failure rather than a silent drop
+from the withheld-body scan; `scripts/smoke-tarball.ts` `main()` is decomposed
+into the four browser phase checkers and the shipped-preview check; the two
+marker scans are recorded as deliberate independent oracles over different
+artifacts; both gate scripts are TypeScript inside `astro check` with the
+workflow and gate-test paths updated; and the unused `headersFor` parameter is
+removed. `pnpm run verify` reported 80 files / 953 passed / 34 skipped, exit 0,
+with the 150-file inventory and both scans clean, and `pnpm run smoke:tarball`
+reported 2 published / 2 withheld; the commit is local and unpushed at the time
+of this note.
+
 ### Commands and observed results
 
 - Local `pnpm run verify` (Node v22.23.2, pnpm 11.18.0, Linux x64) — **80 test
