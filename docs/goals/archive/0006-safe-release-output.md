@@ -229,7 +229,7 @@ the file restored to its byte-identical pre-mutation content (sha256 checked).
   depth is pinned at 1.
 - The goal's completion is not release authorization, and no claim is made about
   data already downloaded by visitors or crawlers.
-- [0007](../0007-independent-publisher-adoption.md) and
+- [0007](0007-independent-publisher-adoption.md) and
   [0008](../0008-acceptable-browser-cost.md) remain active. Deployment, registry
   publication, and post-deploy smoke tests remain external, separately approved
   actions.

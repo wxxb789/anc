@@ -13,6 +13,13 @@
     // the published package by being merely compilable.
     "erasableSyntaxOnly": true
   },
-  "include": [".astro/types.d.ts", "**/*"],
+  // The dot-directory pattern is explicit: TypeScript's `**/*` glob does not
+  // match dot-directories, so the Action-parity gate scripts under
+  // `.github/scripts/` would otherwise never be part of `astro check` even
+  // though the workflow runs them with the same pinned Node. The pattern ends
+  // without a file extension so TypeScript resolves the supported extensions
+  // itself; a literal `.ts` here would be a specifier the tarball does not
+  // carry, which `tests/packaging.test.ts` refuses.
+  "include": [".astro/types.d.ts", "**/*", ".github/scripts/*"],
   "exclude": ["dist"]
 }

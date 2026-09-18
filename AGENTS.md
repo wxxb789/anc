@@ -205,6 +205,13 @@ workflow instead.
 The repository is hosted on GitHub. The workflow declares push and pull-request
 verification; inspect the actual run rather than assuming that its presence proves CI passed.
 
+A second workflow, `action-parity.yml`, is the one thing CI can do that
+`pnpm run verify` cannot: it builds a synthetic notes repository with the shipped
+composite Action on its supported runner, then re-derives the artifact from the
+outside. It is adoption evidence, not another copy of this repository's gates;
+`tests/action-parity.test.ts` holds it to the Action and to no secret or
+deployment step. Read its run for 0007, not as a substitute for `verify`.
+
 ### Still manual
 
 - Deployment. Requirements section 21.1 stage 13 makes it a separately approved action; CI

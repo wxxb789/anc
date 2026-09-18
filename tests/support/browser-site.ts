@@ -26,6 +26,19 @@ import type { Page } from 'playwright';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'anc.mjs');
+const SOURCE_HEADERS = join(ROOT, 'public', '_headers');
+
+/**
+ * What Cloudflare Pages serves on a 200 whose path no `_headers` rule names.
+ *
+ * `public/_headers` deliberately does not restate it: a rule there would be one
+ * more thing to keep in sync with the platform, and the shipped comments say
+ * so. The harness has to stand in for the platform to demonstrate what that
+ * default *is* — revalidation rather than the immutable caching only `/_astro/*`
+ * grants — so it is written down once, here, with the conditional-request
+ * behavior a real host gives it.
+ */
+const PLATFORM_REVALIDATION = 'public, max-age=0, must-revalidate';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -56,8 +69,7 @@ interface HeaderRule {
  * response would make the harness stricter about caching than the deployment it
  * stands in for.
  */
-function headerRules(): HeaderRule[] {
-  const text = readFileSync(join(ROOT, 'public', '_headers'), 'utf8');
+function headerRules(text: string): HeaderRule[] {
   const rules: HeaderRule[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
@@ -80,19 +92,24 @@ function headerRules(): HeaderRule[] {
 }
 
 /**
- * The headers `public/_headers` declares for one request path.
+ * Apply already-parsed rules to one request path.
  *
  * Cloudflare joins same-named headers from every matching rule with a comma;
  * `tests/deployment.test.ts` forbids the shipped file from relying on that, so
  * this merge is indistinguishable for the file actually served.
  */
-export function headersFor(pathname: string): Record<string, string> {
+function applyRules(rules: readonly HeaderRule[], pathname: string): Record<string, string> {
   const headers: Record<string, string> = {};
-  for (const rule of headerRules()) {
+  for (const rule of rules) {
     if (!rule.matcher.test(pathname)) continue;
     Object.assign(headers, rule.headers);
   }
   return headers;
+}
+
+/** The headers `public/_headers` declares for one request path. */
+export function headersFor(pathname: string): Record<string, string> {
+  return applyRules(headerRules(readFileSync(SOURCE_HEADERS, 'utf8')), pathname);
 }
 
 /** The site-wide headers (the `/*` rule) `public/_headers` declares. */
@@ -143,20 +160,35 @@ export function buildSite(files: Record<string, string>, out = 'dist'): BuiltSit
   return buildIn(mkdtempSync(join(tmpdir(), 'anc-site-')), files, out);
 }
 
-/** Serve a built output on loopback with the shipped policy on every response. */
-export async function serveDist(initial: string): Promise<ServedSite> {
+/**
+ * Serve a built output on loopback with a `_headers` policy applied per path.
+ *
+ * The document defaults to the repository's `public/_headers`; `headersFile`
+ * points the same server at another built output's generated `_headers`, which
+ * is what serving a foreign or otherwise separately built artifact needs.
+ * Responses whose path no rule names still carry the platform's revalidating
+ * default and a validator, so a caller can demonstrate that HTML and stable
+ * Pagefind metadata revalidate rather than inheriting `immutable`.
+ */
+export async function serveDist(
+  initial: string,
+  options: { headersFile?: string } = {},
+): Promise<ServedSite> {
+  // Parsed once per server: every request applies the same rules, and a browser
+  // gate makes hundreds of them.
+  const rules = headerRules(readFileSync(options.headersFile ?? SOURCE_HEADERS, 'utf8'));
   let current = initial;
   const running = createServer((request, response) => {
     let pathname: string;
     try {
       pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
     } catch {
-      response.writeHead(400, shippedHeaders());
+      response.writeHead(400, applyRules(rules, '/'));
       response.end('bad request');
       return;
     }
     if (pathname.endsWith('/')) pathname += 'index.html';
-    const headers = headersFor(pathname);
+    const headers = applyRules(rules, pathname);
     const root = resolve(current);
     const file = resolve(root, `.${pathname}`);
     // Directory boundary, not a string prefix: `/tmp/x/dist2/...` starts with
@@ -173,11 +205,19 @@ export async function serveDist(initial: string): Promise<ServedSite> {
       // block the server's event loop for the duration of every such request.
       // The catch swallows the client's cap-abort, which is the expected
       // premature close in those gates.
-      const size = statSync(file).size;
+      const stat = statSync(file);
+      if (headers['Cache-Control'] === undefined) headers['Cache-Control'] = PLATFORM_REVALIDATION;
+      const etag = `W/"${stat.size}-${Math.trunc(stat.mtimeMs)}"`;
+      if (request.headers['if-none-match'] === etag) {
+        response.writeHead(304, { ...headers, ETag: etag });
+        response.end();
+        return;
+      }
       response.writeHead(200, {
         ...headers,
         'Content-Type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream',
-        'Content-Length': String(size),
+        'Content-Length': String(stat.size),
+        ETag: etag,
       });
       void pipeline(createReadStream(file), response).catch(() => {
         // The client aborted, or the file vanished after the stat; either way

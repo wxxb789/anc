@@ -1,0 +1,112 @@
+# Exercises the composite Action a stranger adds (`action.yml`) end to end.
+#
+# This is goal 0007's Action-parity evidence, not this repository's own verify
+# gate. It is deliberately outside `pnpm run verify`: it installs the
+# generator's production dependency tree from the registry and runs the shipped
+# adoption path, the same release-level cost class as `smoke:tarball`.
+#
+# The workspace root is a synthetic notes repository; the generator is checked
+# out underneath it, so `uses: ./generator` resolves the Action exactly the way
+# a stranger's `uses: <owner>/<repo>@<ref>` resolves it at that commit. The
+# build step is the Action and nothing else — no parallel command the Action
+# does not run. Nothing here deploys, pushes, or needs a secret; `permissions`
+# is narrowed so the token the job receives cannot write.
+
+name: action-parity
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  foreign-notes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: generator
+
+      # The Action checks the Node floor from the generator's own manifest; this
+      # pins the same runtime the repository and the action's floor are written
+      # against. `node-version-file` rather than a literal keeps `.nvmrc` the
+      # one version pin, which is what `tests/deployment.test.ts` gates.
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: generator/.nvmrc
+
+      - name: Create the synthetic notes repository
+        run: node generator/.github/scripts/action-parity-fixture.ts .
+
+      # The fixture commits the reviewed ledger itself. `anc review` cannot run
+      # here: it imports the generator's dependencies, which nothing installs
+      # until the Action step below — and installing them first would make the
+      # Action's own install untested. The ledger is still a release gate, not a
+      # fixture formality: the Action always builds `--release`, whose exact-set
+      # comparison refuses anything but the slugs the producer computes. The
+      # tarball smoke runs the real `init`/`review` commands against an npm
+      # install.
+      - name: Build with the shipped Action
+        uses: ./generator
+
+      # Reads the artifact the Action wrote. It re-derives the reviewed set,
+      # the snapshot's digest binding, the runtime assets, the private report,
+      # and the withheld-body absence rather than trusting the action's exit
+      # status.
+      - name: Check the artifact the Action produced
+        run: node generator/.github/scripts/assert-action-artifact.ts .
+
+      # The check above proves a correct artifact passes; this proves the check
+      # itself can fail. It plants the withheld marker in a published page and
+      # requires a non-zero exit, so a deleted or neutered check turns this step
+      # red instead of leaving the parity job green.
+      - name: Prove the artifact check can fail
+        run: |
+          printf '\nPARITY-PRIVATE-BODY-MUST-NOT-SHIP\n' >> dist/notes/welcome/index.html
+          if node generator/.github/scripts/assert-action-artifact.ts .; then
+            echo "::error::the artifact check passed a planted withheld marker"
+            exit 1
+          fi
+
+  # A negative control for the Action's first step. A shallow clone cannot
+  # prove `created`, so the Action must refuse one instead of publishing a
+  # valid-looking site with incomplete metadata. The workspace root itself is
+  # made the shallow clone, which is where the Action's guard reads. It is
+  # otherwise release-ready (same fixture, committed ledger, real origin), so a
+  # guarded step that failed would have to have failed on the refusal itself —
+  # if the guard is removed or neutered, the build succeeds and this job turns
+  # red instead of passing for the wrong reason.
+  shallow-clone-refusal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: generator
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: generator/.nvmrc
+
+      - name: Build a shallow clone of a release-ready notes repository
+        run: |
+          notes="$(mktemp -d)"
+          node generator/.github/scripts/action-parity-fixture.ts "$notes"
+          clone="$(mktemp -d)"
+          rmdir "$clone"
+          git clone --quiet --depth 1 "file://$notes" "$clone"
+          cp -a "$clone/." "$GITHUB_WORKSPACE/"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse --is-shallow-repository)" = "true"
+
+      - name: The Action must refuse the shallow clone
+        id: shallow
+        continue-on-error: true
+        uses: ./generator
+
+      - name: Assert the refusal
+        run: |
+          if [ "${{ steps.shallow.outcome }}" != "failure" ]; then
+            echo "::error::the Action published a shallow clone instead of refusing it"
+            exit 1
+          fi

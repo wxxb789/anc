@@ -15,7 +15,7 @@ The original intent remains required for 0.1.0. Its complete replacement is:
 - [0004 — Complete tag browsing](archive/0004-complete-tag-browsing.md)
 - [0005 — Interactive graph exploration](archive/0005-interactive-graph-exploration.md)
 - [0006 — Safe release output](archive/0006-safe-release-output.md)
-- [0007 — Independent publisher adoption](0007-independent-publisher-adoption.md)
+- [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md)
 - [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md)
 
 The [goal index](README.md) maps the original scope to these outcomes. The original
