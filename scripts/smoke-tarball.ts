@@ -32,7 +32,7 @@ import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { chromium, type Browser } from 'playwright';
-import { serveDist, sqliteAssetRequests, tabTo, workerScriptPath } from '../tests/support/browser-site.ts';
+import { serveDist, sqliteAssetRequests, tabTo, workerScriptPath, type ServedSite } from '../tests/support/browser-site.ts';
 import { openSnapshot, snapshotMembers } from '../tests/support/snapshot.ts';
 import { spawnNpm } from './npm-command.ts';
 
@@ -86,6 +86,267 @@ function artifactText(path: string): { text: string; inflated: boolean } {
     text: inflated ? gunzipSync(bytes).toString('utf8') : bytes.toString('utf8'),
     inflated,
   };
+}
+
+/** Launch Chromium, naming the install command when it is missing. */
+async function launchSmokeBrowser(): Promise<Browser> {
+  try {
+    return await chromium.launch();
+  } catch (error) {
+    throw new Error(
+      'the smoke browser phase needs Chromium; install it with `pnpm exec playwright install chromium` ' +
+        '(chromium.launch failed: ' + (error instanceof Error ? error.message : String(error)) + ')',
+    );
+  }
+}
+
+// The browser phases below read the foreign artifact as a reader would. 1 and 2
+// share one page so the lazy reading and the preview are one session's evidence,
+// the way `tests/snapshot-runtime.test.ts` runs them. The recorder is attached
+// before navigation: a zero collected after the runtime had already started
+// would prove nothing.
+async function checkReadingAndPreview(
+  browser: Browser,
+  server: ServedSite,
+  workerChunk: string,
+  secondTitle: string,
+): Promise<void> {
+  const readingPage = await browser.newPage();
+  try {
+    const runtimeRequests = sqliteAssetRequests(readingPage);
+    const response = await readingPage.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
+    const servedPolicy = response?.headers()['content-security-policy'] ?? '';
+    assert(
+      servedPolicy.includes("worker-src 'self'") && servedPolicy.includes("connect-src 'self'"),
+      'the foreign build was not served under its generated CSP: ' + JSON.stringify(servedPolicy),
+    );
+    assert(
+      runtimeRequests.length === 0,
+      'ordinary reading fetched SQLite assets before any intent: ' + runtimeRequests.join(', '),
+    );
+    await readingPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await readingPage.waitForTimeout(300);
+    assert(
+      runtimeRequests.length === 0,
+      'scrolling the article fetched SQLite assets before any intent: ' + runtimeRequests.join(', '),
+    );
+
+    // Preview through the foreign artifact's own Worker/WASM/DB. The expected
+    // title is the snapshot's own row (`secondTitle`), so the panel is compared
+    // against the bytes the browser fetched rather than against the fixture
+    // that asked for them.
+    const link = readingPage.locator('article a[href="/notes/second/"]').first();
+    assert(
+      (await link.count()) === 1,
+      'the welcome article has no link to the second note, so its preview was not measured',
+    );
+    await link.hover();
+    const panel = readingPage.locator('#link-preview');
+    await panel.waitFor({ state: 'visible', timeout: 15_000 });
+    const preview = (await panel.textContent()) ?? '';
+    assert(
+      preview.includes(secondTitle),
+      'the preview did not carry the snapshot title ' + JSON.stringify(secondTitle) + ': ' + JSON.stringify(preview),
+    );
+    assert(
+      preview.includes('SECOND-NOTE-BODY-MARKER'),
+      'the preview excerpt did not carry the second note body marker: ' + JSON.stringify(preview),
+    );
+    // The panel is evidence of this artifact's runtime only if this page fetched
+    // this build's Worker chunk, WASM, and snapshot: the chunk path comes from
+    // the built directory, not from the page's own markup.
+    assert(
+      runtimeRequests.some((url) => url.endsWith(workerChunk)),
+      'the preview did not request the built Worker chunk at its own path: ' + runtimeRequests.join(', '),
+    );
+    assert(
+      runtimeRequests.some((url) => url.endsWith('.wasm')),
+      'the preview did not request the built WASM body: ' + runtimeRequests.join(', '),
+    );
+    assert(
+      runtimeRequests.some((url) => url.includes('/data/site.')),
+      'the preview did not request the built snapshot: ' + runtimeRequests.join(', '),
+    );
+  } finally {
+    await readingPage.close();
+  }
+}
+
+// The chooser and trigger are exactly `tests/tag-browser.test.ts`'s. The
+// membership asserted is the note titles from the snapshot, so a list that
+// renders slugs, or a chooser that merely offers the tag name, fails here.
+async function checkTagEnumeration(
+  browser: Browser,
+  server: ServedSite,
+  publicNotes: readonly { slug: string; title: string }[],
+): Promise<void> {
+  const tagPage = await browser.newPage();
+  try {
+    await tagPage.goto(`${server.origin}/tags/`, { waitUntil: 'load' });
+    await tagPage.selectOption('#tag-browser-select', 'garden');
+    await tagPage.waitForSelector('#tag-browser-results a');
+    const members = await tagPage.evaluate(() =>
+      [...document.querySelectorAll<HTMLAnchorElement>('#tag-browser-results a[href^="/notes/"]')].map((anchor) => ({
+        slug: anchor.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
+        title: anchor.textContent ?? '',
+      })),
+    );
+    assert(
+      members.length === publicNotes.length &&
+        publicNotes.every((note) => members.some((member) => member.slug === note.slug && member.title === note.title)),
+      'the garden chooser did not enumerate both published note titles: ' + JSON.stringify(members),
+    );
+  } finally {
+    await tagPage.close();
+  }
+}
+
+// The local graph on the note page is driven exactly as the local half of
+// `tests/graph-runtime.test.ts` drives it — Tab to the activation control,
+// Enter — and the oracle is the one edge the fixture authored
+// (welcome <-> second). The equivalent table is checked beside the figure,
+// because that is the representation a non-visual reader gets.
+async function checkGraph(browser: Browser, server: ServedSite): Promise<void> {
+  const graphPage = await browser.newPage();
+  try {
+    await graphPage.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
+    assert(
+      (await tabTo(graphPage, '[data-graph-activate]')) === true,
+      'the local graph activation control was not reachable by Tab',
+    );
+    await graphPage.keyboard.press('Enter');
+    await graphPage.waitForFunction(
+      () => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0,
+    );
+    const region = graphPage.locator('[data-graph-region="note-graph"]');
+    // A two-note corpus draws the same figure and table before activation as
+    // after it, so the counts below cannot distinguish a live redraw from the
+    // build-time baseline. Re-center controls exist only in the client's own
+    // table rows, so their count is the proof the live render ran.
+    assert(
+      (await region.locator('button[data-graph-recenter]').count()) === 2,
+      'no live re-center controls, so the graph may still be the static baseline',
+    );
+    const drawn = await graphPage.evaluate(() =>
+      [...document.querySelectorAll<Element>('[data-graph-region="note-graph"] .graph-nodes a.graph-node')].map(
+        (anchor) => anchor.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
+      ),
+    );
+    assert(
+      drawn.length === 2 && drawn[0] === 'welcome' && drawn[1] === 'second',
+      'the local graph did not draw the centre and its one neighbour in order: ' + JSON.stringify(drawn),
+    );
+    assert(
+      (await region.locator('.graph-edges line').count()) === 1,
+      'the local graph did not draw the single merged welcome <-> second edge',
+    );
+    assert(
+      (await region.locator('.graph-table tbody tr').count()) === 2,
+      'the equivalent graph table does not hold one row per drawn note',
+    );
+    assert(
+      (await region.locator('.graph-table tbody th a[href="/notes/second/"]').count()) === 1,
+      'the equivalent graph table has no row for the second note',
+    );
+  } finally {
+    await graphPage.close();
+  }
+}
+
+// The snapshot is aborted before any intent, so the hover cannot start the
+// runtime. The model is `tests/snapshot-runtime.test.ts`'s blocked-fetch case:
+// the panel stays hidden while the article and its anchor remain readable and
+// followable.
+async function checkStaticFallback(browser: Browser, server: ServedSite): Promise<void> {
+  const fallbackPage = await browser.newPage();
+  try {
+    await fallbackPage.route('**/data/site.*', (route) => route.abort());
+    await fallbackPage.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
+    const link = fallbackPage.locator('article a[href="/notes/second/"]').first();
+    assert(
+      (await link.count()) === 1,
+      'the welcome article has no link to the second note, so the fallback check is vacuous',
+    );
+    await link.hover();
+    await fallbackPage.waitForTimeout(1_500);
+    assert(
+      await fallbackPage.locator('#link-preview').isHidden(),
+      'a blocked snapshot still produced a preview panel',
+    );
+    assert(
+      (await link.getAttribute('href')) === '/notes/second/',
+      'static navigation was not intact after the blocked snapshot',
+    );
+    assert(
+      ((await fallbackPage.locator('article').textContent()) ?? '').includes('A public note linking'),
+      'the static article text did not survive the blocked snapshot',
+    );
+  } finally {
+    await fallbackPage.close();
+  }
+}
+
+// The shipped preview accepts this exact output, and only on loopback. The
+// recognition cases (missing, multiple, wrong digest, path escape) have their
+// own gates; this is the positive half the foreign-repository row asks for, run
+// through the installed binary rather than through the test helpers. `--port 0`
+// lets the server pick, and the announced line carries the port it actually
+// bound — a taken port moves, so trusting the request instead of the
+// announcement would fetch from nothing. The refused cases stay in
+// `tests/preview-server.test.ts` and `tests/preview-snapshot.test.ts`; what
+// cannot be tested there is whether *this installed package* can serve *this
+// built output* from a foreign directory, which is what runs here.
+async function checkShippedPreview(binary: string, scratch: string): Promise<void> {
+  const preview = spawn(
+    process.execPath,
+    [binary, 'preview', '--dist', 'dist', '--port', '0'],
+    { cwd: scratch, stdio: ['ignore', 'pipe', 'pipe'] },
+  );
+  try {
+    let streams = '';
+    const port = await new Promise<number>((resolvePromise, rejectPromise) => {
+      const timer = setTimeout(
+        () => rejectPromise(new Error('preview did not announce a URL within 30s: ' + streams)),
+        30_000,
+      );
+      preview.stdout.setEncoding('utf8');
+      preview.stdout.on('data', (chunk: string) => {
+        streams += chunk;
+        const match = /^preview: http:\/\/localhost:(\d+)\/$/m.exec(streams);
+        if (match) {
+          clearTimeout(timer);
+          resolvePromise(Number(match[1]));
+        }
+      });
+      // Read from the start: a crash before the announcement is exactly the
+      // case whose diagnosis needs it, and an unread pipe can block the child.
+      preview.stderr.setEncoding('utf8');
+      preview.stderr.on('data', (chunk: string) => {
+        streams += chunk;
+      });
+      preview.once('exit', (code) => {
+        clearTimeout(timer);
+        rejectPromise(new Error('preview exited before announcing a URL (status ' + String(code) + '): ' + streams));
+      });
+    });
+
+    const previewed = await fetch(`http://127.0.0.1:${port}/notes/welcome/`);
+    assert(previewed.status === 200, 'the shipped preview did not serve the foreign note route');
+    assert(
+      (await previewed.text()).includes('A public note linking'),
+      'the shipped preview served a page without the foreign note body',
+    );
+    const withheld = await fetch(`http://127.0.0.1:${port}/private/`);
+    assert(withheld.status === 200, 'the shipped preview did not serve the withheld-note page');
+    await withheld.body?.cancel();
+  } finally {
+    // `once` does not replay an already-emitted event, so a preview that died
+    // before announcing would otherwise hang this release smoke forever.
+    if (preview.exitCode === null && preview.signalCode === null) {
+      preview.kill('SIGINT');
+      await once(preview, 'exit');
+    }
+  }
 }
 
 async function main(): Promise<number> {
@@ -198,6 +459,13 @@ async function main(): Promise<number> {
       !welcome.includes('INDEX-CONTROL-JOINED-TEXT'),
       'the Pagefind control degraded into a raw HTML substring',
     );
+    // Deliberately an independent oracle from the Action-parity check
+    // (`.github/scripts/assert-action-artifact.ts`): the two gates examine
+    // different artifacts built by different paths, so a bug in one instrument
+    // cannot hide a real disclosure from the other. The rule both implement is
+    // the same — every file under `dist/` carries no forbidden marker in its
+    // raw bytes or an inflated gzip member, with a positive control proving the
+    // scan ran — so a change to it must be applied to both.
     let inflatedText = '';
     const outputText = filesUnder(dist)
       .filter((file) => !/\.(?:avif|ico|jpe?g|png|webp|woff2?)$/i.test(file))
@@ -262,258 +530,22 @@ async function main(): Promise<number> {
     // Resolved once: `workerScriptPath` reads the built `_astro/` directory, and
     // the assertion below would otherwise rescan it for every request recorded.
     const workerChunk = workerScriptPath(dist);
-    let browser: Browser | undefined;
+    const browser = await launchSmokeBrowser();
     try {
-      try {
-        browser = await chromium.launch();
-      } catch (error) {
-        throw new Error(
-          'the smoke browser phase needs Chromium; install it with `pnpm exec playwright install chromium` ' +
-            '(chromium.launch failed: ' + (error instanceof Error ? error.message : String(error)) + ')',
-        );
-      }
+      await checkReadingAndPreview(browser, server, workerChunk, secondTitle);
 
-      // 1 and 2 share one page so the lazy reading and the preview are one
-      // session's evidence, the way `tests/snapshot-runtime.test.ts` runs them.
-      // The recorder is attached before navigation: a zero collected after the
-      // runtime had already started would prove nothing.
-      const readingPage = await browser.newPage();
-      try {
-        const runtimeRequests = sqliteAssetRequests(readingPage);
-        const response = await readingPage.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
-        const servedPolicy = response?.headers()['content-security-policy'] ?? '';
-        assert(
-          servedPolicy.includes("worker-src 'self'") && servedPolicy.includes("connect-src 'self'"),
-          'the foreign build was not served under its generated CSP: ' + JSON.stringify(servedPolicy),
-        );
-        assert(
-          runtimeRequests.length === 0,
-          'ordinary reading fetched SQLite assets before any intent: ' + runtimeRequests.join(', '),
-        );
-        await readingPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await readingPage.waitForTimeout(300);
-        assert(
-          runtimeRequests.length === 0,
-          'scrolling the article fetched SQLite assets before any intent: ' + runtimeRequests.join(', '),
-        );
+      await checkTagEnumeration(browser, server, publicNotes);
 
-        // Preview through the foreign artifact's own Worker/WASM/DB. The
-        // expected title is the snapshot's own row (`secondTitle`), so the
-        // panel is compared against the bytes the browser fetched rather than
-        // against the fixture that asked for them.
-        const link = readingPage.locator('article a[href="/notes/second/"]').first();
-        assert(
-          (await link.count()) === 1,
-          'the welcome article has no link to the second note, so its preview was not measured',
-        );
-        await link.hover();
-        const panel = readingPage.locator('#link-preview');
-        await panel.waitFor({ state: 'visible', timeout: 15_000 });
-        const preview = (await panel.textContent()) ?? '';
-        assert(
-          preview.includes(secondTitle),
-          'the preview did not carry the snapshot title ' + JSON.stringify(secondTitle) + ': ' + JSON.stringify(preview),
-        );
-        assert(
-          preview.includes('SECOND-NOTE-BODY-MARKER'),
-          'the preview excerpt did not carry the second note body marker: ' + JSON.stringify(preview),
-        );
-        // The panel is evidence of this artifact's runtime only if this page
-        // fetched this build's Worker chunk, WASM, and snapshot: the chunk path
-        // comes from the built directory, not from the page's own markup.
-        assert(
-          runtimeRequests.some((url) => url.endsWith(workerChunk)),
-          'the preview did not request the built Worker chunk at its own path: ' + runtimeRequests.join(', '),
-        );
-        assert(
-          runtimeRequests.some((url) => url.endsWith('.wasm')),
-          'the preview did not request the built WASM body: ' + runtimeRequests.join(', '),
-        );
-        assert(
-          runtimeRequests.some((url) => url.includes('/data/site.')),
-          'the preview did not request the built snapshot: ' + runtimeRequests.join(', '),
-        );
-      } finally {
-        await readingPage.close();
-      }
+      await checkGraph(browser, server);
 
-      // 3. Tag enumeration: the chooser and trigger are exactly
-      // `tests/tag-browser.test.ts`'s. The membership asserted is the note
-      // titles from the snapshot, so a list that renders slugs, or a chooser
-      // that merely offers the tag name, fails here.
-      const tagPage = await browser.newPage();
-      try {
-        await tagPage.goto(`${server.origin}/tags/`, { waitUntil: 'load' });
-        await tagPage.selectOption('#tag-browser-select', 'garden');
-        await tagPage.waitForSelector('#tag-browser-results a');
-        const members = await tagPage.evaluate(() =>
-          [...document.querySelectorAll<HTMLAnchorElement>('#tag-browser-results a[href^="/notes/"]')].map(
-            (anchor) => ({
-              slug: anchor.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
-              title: anchor.textContent ?? '',
-            }),
-          ),
-        );
-        assert(
-          members.length === publicNotes.length &&
-            publicNotes.every((note) =>
-              members.some((member) => member.slug === note.slug && member.title === note.title),
-            ),
-          'the garden chooser did not enumerate both published note titles: ' + JSON.stringify(members),
-        );
-      } finally {
-        await tagPage.close();
-      }
-
-      // 4. Graph exploration: the local graph on the note page is driven exactly
-      // as the local half of `tests/graph-runtime.test.ts` drives it — Tab to
-      // the activation control, Enter — and the oracle is the one edge the
-      // fixture authored (welcome <-> second). The equivalent table is checked
-      // beside the figure, because that is the representation a non-visual
-      // reader gets.
-      const graphPage = await browser.newPage();
-      try {
-        await graphPage.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
-        assert(
-          (await tabTo(graphPage, '[data-graph-activate]')) === true,
-          'the local graph activation control was not reachable by Tab',
-        );
-        await graphPage.keyboard.press('Enter');
-        await graphPage.waitForFunction(
-          () => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0,
-        );
-        const region = graphPage.locator('[data-graph-region="note-graph"]');
-        // A two-note corpus draws the same figure and table before activation as
-        // after it, so the counts below cannot distinguish a live redraw from
-        // the build-time baseline. Re-center controls exist only in the client's
-        // own table rows, so their count is the proof the live render ran.
-        assert(
-          (await region.locator('button[data-graph-recenter]').count()) === 2,
-          'no live re-center controls, so the graph may still be the static baseline',
-        );
-        const drawn = await graphPage.evaluate(() =>
-          [...document.querySelectorAll<Element>('[data-graph-region="note-graph"] .graph-nodes a.graph-node')].map(
-            (anchor) => anchor.getAttribute('href')!.replace(/^\/notes\/|\/$/g, ''),
-          ),
-        );
-        assert(
-          drawn.length === 2 && drawn[0] === 'welcome' && drawn[1] === 'second',
-          'the local graph did not draw the centre and its one neighbour in order: ' + JSON.stringify(drawn),
-        );
-        assert(
-          (await region.locator('.graph-edges line').count()) === 1,
-          'the local graph did not draw the single merged welcome <-> second edge',
-        );
-        assert(
-          (await region.locator('.graph-table tbody tr').count()) === 2,
-          'the equivalent graph table does not hold one row per drawn note',
-        );
-        assert(
-          (await region.locator('.graph-table tbody th a[href="/notes/second/"]').count()) === 1,
-          'the equivalent graph table has no row for the second note',
-        );
-      } finally {
-        await graphPage.close();
-      }
-
-      // 5. Static fallback: the snapshot is aborted before any intent, so the
-      // hover cannot start the runtime. The model is
-      // `tests/snapshot-runtime.test.ts`'s blocked-fetch case: the panel stays
-      // hidden while the article and its anchor remain readable and followable.
-      const fallbackPage = await browser.newPage();
-      try {
-        await fallbackPage.route('**/data/site.*', (route) => route.abort());
-        await fallbackPage.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
-        const link = fallbackPage.locator('article a[href="/notes/second/"]').first();
-        assert(
-          (await link.count()) === 1,
-          'the welcome article has no link to the second note, so the fallback check is vacuous',
-        );
-        await link.hover();
-        await fallbackPage.waitForTimeout(1_500);
-        assert(
-          await fallbackPage.locator('#link-preview').isHidden(),
-          'a blocked snapshot still produced a preview panel',
-        );
-        assert(
-          (await link.getAttribute('href')) === '/notes/second/',
-          'static navigation was not intact after the blocked snapshot',
-        );
-        assert(
-          ((await fallbackPage.locator('article').textContent()) ?? '').includes('A public note linking'),
-          'the static article text did not survive the blocked snapshot',
-        );
-      } finally {
-        await fallbackPage.close();
-      }
+      await checkStaticFallback(browser, server);
     } finally {
-      await browser?.close();
+      await browser.close();
       await server.close();
     }
 
     // --- The shipped preview accepts this exact output, and only on loopback ---
-    //
-    // The recognition cases (missing, multiple, wrong digest, path escape) have
-    // their own gates; this is the positive half the foreign-repository row
-    // asks for, run through the installed binary rather than through the test
-    // helpers. `--port 0` lets the server pick, and the announced line carries
-    // the port it actually bound — a taken port moves, so trusting the request
-    // instead of the announcement would fetch from nothing.
-    //
-    // The refused cases stay in `tests/preview-server.test.ts` and
-    // `tests/preview-snapshot.test.ts`; what cannot be tested there is whether
-    // *this installed package* can serve *this built output* from a foreign
-    // directory, which is what runs here.
-    const preview = spawn(
-      process.execPath,
-      [binary, 'preview', '--dist', 'dist', '--port', '0'],
-      { cwd: scratch, stdio: ['ignore', 'pipe', 'pipe'] },
-    );
-    try {
-      let streams = '';
-      const port = await new Promise<number>((resolvePromise, rejectPromise) => {
-        const timer = setTimeout(
-          () => rejectPromise(new Error('preview did not announce a URL within 30s: ' + streams)),
-          30_000,
-        );
-        preview.stdout.setEncoding('utf8');
-        preview.stdout.on('data', (chunk: string) => {
-          streams += chunk;
-          const match = /^preview: http:\/\/localhost:(\d+)\/$/m.exec(streams);
-          if (match) {
-            clearTimeout(timer);
-            resolvePromise(Number(match[1]));
-          }
-        });
-        // Read from the start: a crash before the announcement is exactly the
-        // case whose diagnosis needs it, and an unread pipe can block the child.
-        preview.stderr.setEncoding('utf8');
-        preview.stderr.on('data', (chunk: string) => {
-          streams += chunk;
-        });
-        preview.once('exit', (code) => {
-          clearTimeout(timer);
-          rejectPromise(new Error('preview exited before announcing a URL (status ' + String(code) + '): ' + streams));
-        });
-      });
-
-      const previewed = await fetch(`http://127.0.0.1:${port}/notes/welcome/`);
-      assert(previewed.status === 200, 'the shipped preview did not serve the foreign note route');
-      assert(
-        (await previewed.text()).includes('A public note linking'),
-        'the shipped preview served a page without the foreign note body',
-      );
-      const withheld = await fetch(`http://127.0.0.1:${port}/private/`);
-      assert(withheld.status === 200, 'the shipped preview did not serve the withheld-note page');
-      await withheld.body?.cancel();
-    } finally {
-      // `once` does not replay an already-emitted event, so a preview that died
-      // before announcing would otherwise hang this release smoke forever.
-      if (preview.exitCode === null && preview.signalCode === null) {
-        preview.kill('SIGINT');
-        await once(preview, 'exit');
-      }
-    }
+    await checkShippedPreview(binary, scratch);
 
     const planted = 'ghp_4fJ9xQ2mN7vL5sT8yR1cW6kP3dH0bA9eZ7uC';
     const sourcePath = join(scratch, 'welcome.md');

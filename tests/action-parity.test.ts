@@ -96,14 +96,14 @@ test('the build step is the shipped Action, over a committed reviewed set', () =
   const actionIndex = steps.findIndex((step) => step.uses === './generator');
   assert.ok(actionIndex >= 0, `${WORKFLOW_PATH}: the Action under test is never invoked`);
 
-  const createIndex = steps.findIndex((step) => step.run?.includes('action-parity-fixture.mjs'));
+  const createIndex = steps.findIndex((step) => step.run?.includes('action-parity-fixture.ts'));
   assert.ok(createIndex >= 0, `${WORKFLOW_PATH}: the fixture that commits the reviewed set never runs`);
   assert.ok(
     createIndex < actionIndex,
     `${WORKFLOW_PATH}: the reviewed set must be committed before the Action builds`,
   );
 
-  const assertIndex = steps.findIndex((step) => step.run?.includes('assert-action-artifact.mjs'));
+  const assertIndex = steps.findIndex((step) => step.run?.includes('assert-action-artifact.ts'));
   assert.ok(
     assertIndex > actionIndex,
     `${WORKFLOW_PATH}: the produced artifact must be asserted after the Action runs`,
@@ -177,11 +177,50 @@ test('the shallow-clone control proves the Action’s first step can fail', () =
     /failure/,
     `${WORKFLOW_PATH}: the control must require the outcome to be a failure, not merely record it`,
   );
+
+  // The fixture makes the shallow workspace release-ready and the step asserts
+  // its own premise, so `outcome == failure` can only mean the shallow guard
+  // fired. A removed or neutered guard would let the release build succeed and
+  // this control would turn the job red instead of passing for the wrong cause.
+  const fixture = steps.find((step) => step.run?.includes('action-parity-fixture.ts'));
+  assert.ok(fixture, `${WORKFLOW_PATH}: the shallow workspace is not built from the release-ready fixture`);
+  assert.match(
+    fixture.run ?? '',
+    /rev-parse --is-shallow-repository/,
+    `${WORKFLOW_PATH}: the control never asserts its workspace is actually a shallow clone`,
+  );
+});
+
+test('the parity job proves its artifact check can fail', () => {
+  const foreign = WORKFLOW.jobs?.['foreign-notes'];
+  const steps = foreign?.steps ?? [];
+  const checkIndex = steps.findIndex((step) => step.run?.includes('assert-action-artifact.ts .'));
+  const controlIndex = steps.findIndex((step) => step.name === 'Prove the artifact check can fail');
+  assert.ok(
+    checkIndex >= 0 && controlIndex > checkIndex,
+    `${WORKFLOW_PATH}: no step proves the artifact check can fail after it passes`,
+  );
+  const control = steps[controlIndex]!.run ?? '';
+  assert.match(
+    control,
+    /PARITY-PRIVATE-BODY-MUST-NOT-SHIP/,
+    `${WORKFLOW_PATH}: the control plants no withheld marker for the check to find`,
+  );
+  assert.match(
+    control,
+    /if node generator\/\.github\/scripts\/assert-action-artifact\.ts \./,
+    `${WORKFLOW_PATH}: the control does not rerun the artifact check`,
+  );
+  assert.match(
+    control,
+    /exit 1/,
+    `${WORKFLOW_PATH}: the control cannot fail the job when the check wrongly passes`,
+  );
 });
 
 test('the assertion scripts exist and re-derive what they claim', () => {
-  const fixture = readFileSync(join(ROOT, '.github/scripts/action-parity-fixture.mjs'), 'utf8');
-  const assertion = readFileSync(join(ROOT, '.github/scripts/assert-action-artifact.mjs'), 'utf8');
+  const fixture = readFileSync(join(ROOT, '.github/scripts/action-parity-fixture.ts'), 'utf8');
+  const assertion = readFileSync(join(ROOT, '.github/scripts/assert-action-artifact.ts'), 'utf8');
   assert.match(fixture, /publish: false/, 'the fixture no longer withholds a note by frontmatter');
   assert.match(fixture, /exclude:/, 'the fixture no longer withholds a path by pattern');
   assert.match(fixture, /\.publish-set\.json/, 'the fixture no longer commits a reviewed publish set');
@@ -198,7 +237,7 @@ test('the assertion scripts exist and re-derive what they claim', () => {
   }
   assert.match(
     CODE,
-    /node generator\/\.github\/scripts\/assert-action-artifact\.mjs/,
+    /node generator\/\.github\/scripts\/assert-action-artifact\.ts/,
     `${WORKFLOW_PATH}: the artifact check is never run`,
   );
 });

@@ -96,8 +96,8 @@ unresolved evidence and the adoption-path gates.
   on `ubuntu-latest` against a synthetic notes repository: the workspace root is
   the notes repository, the generator is checked out under `generator/`, and the
   build step is `uses: ./generator` and nothing else. A second job proves the
-  Action refuses a shallow clone. `.github/scripts/action-parity-fixture.mjs`
-  writes the corpus and commits the reviewed ledger; `.github/scripts/assert-action-artifact.mjs`
+  Action refuses a shallow clone. `.github/scripts/action-parity-fixture.ts`
+  writes the corpus and commits the reviewed ledger; `.github/scripts/assert-action-artifact.ts`
   re-derives the reviewed set, the snapshot digest binding, the runtime assets,
   the private report, and withheld-body absence from the artifact.
   `tests/action-parity.test.ts` holds the workflow to the Action, the read-only
@@ -173,7 +173,7 @@ because no packed source changed.
   its own `dist/_headers`, drives the five browser checks, and fetches the note
   and `/private/` from the installed `preview` subcommand.
 - Action parity (CI, `ubuntu-latest`) — run `35253591383`. `foreign-notes`
-  built `284 discovered, 2 published, 282 dropped` with `secret scan ok: 154
+  built `285 discovered, 2 published, 283 dropped` with `secret scan ok: 154
   files, 0 findings`, `residue scan ok: 37 files, 0 findings`, `site written`,
   and `action-parity artifact ok`; `shallow-clone-refusal` exited 1 as
   required.
@@ -188,12 +188,12 @@ because no packed source changed.
 
 | Evaluation | Gate | Expected vs observed |
 | --- | --- | --- |
-| Foreign repository | `pnpm run smoke:tarball` (local); Action-parity `foreign-notes` (CI) | Tarball installed by npm into a fresh git repository outside the checkout; `init` wrote the config, `review` recorded `2 notes`, the committed ledger produced `build --release` with `2 published`, the private report carried both exclusion kinds, and the installed `preview --port 0` served `/notes/welcome/` and `/private/` 200. In CI the Action produced the same artifact kind for a different synthetic corpus (2 published, 282 dropped generated from the 284-file tree). |
+| Foreign repository | `pnpm run smoke:tarball` (local); Action-parity `foreign-notes` (CI) | Tarball installed by npm into a fresh git repository outside the checkout; `init` wrote the config, `review` recorded `2 notes`, the committed ledger produced `build --release` with `2 published`, the private report carried both exclusion kinds, and the installed `preview --port 0` served `/notes/welcome/` and `/private/` 200. In CI the Action produced the same artifact kind for a different synthetic corpus (2 published, 283 dropped generated from the 285-file tree). |
 | Self-contained package | `tests/packaging.test.ts`, smoke residue/absence checks, `tests/site-identity.test.ts`, CI Action job | The tarball carries compiled JavaScript with no `.ts`, `.map`, or `.d.ts`, declares its dependencies, and contains none of this repository's content; the numbered `.github/scripts` files are not packed. The foreign site contains neither withheld marker, raw or gzip-inflated. |
 | Real browser | Smoke browser phase over the tarball-built foreign `dist`; `pnpm run verify` browser suite | Under the foreign build's own generated CSP and cache rules: zero SQLite asset requests on load and scroll; preview panel carried the second note's snapshot title and body marker through the artifact's own Worker/WASM/DB; the tag chooser enumerated both published titles; the local graph drew centre plus neighbour with the merged edge, a two-row accessible table, and live re-center controls; aborting `/data/site.*` left the panel hidden and the article and anchor intact. |
 | Recognition and transport | Smoke `preview` phase; `tests/preview-server.test.ts`, `tests/preview-snapshot.test.ts`, `tests/preview-integrity.test.ts`, `tests/host-snapshot-policy.test.ts`, `tests/preview-lifecycle.test.ts` | The installed binary accepts the completed foreign output and serves it on loopback; the existing gates reject bad, wrong-digest, wrong-format, unreadable, multiple, missing, WAL/sidecar candidates and refuse path escape and foreign `Host`; Worker chunk `text/javascript`, WASM `application/wasm`, snapshot `application/octet-stream`; digest mismatch falls back and retries; a cached page whose snapshot vanished requests only its own binding (404) and never the replacement. |
 | Host snapshot policy | `tests/host-snapshot-policy.test.ts`, `tests/deployment.test.ts`, `tests/preview-limits.test.ts` | HTTP: unconditional 200 with the revalidating default and a validator, matching conditional 304 with empty body, stale validator returns the bytes, no HTML/Pagefind/DB response is immutable, only `/_astro/*` is, and the validator changes when the file changes. `preview-limits` proves actual CSP enforcement with an injected inline script and records no runtime violation. The harness models the host's documented default rather than running Cloudflare Pages, and the MIME assertions are the host's documented extension mappings; real consumption is gated in the browser suite. |
-| Action parity | `.github/workflows/action-parity.yml`, `.github/scripts/assert-action-artifact.mjs`, `tests/action-parity.test.ts`; CI run `35253591383` | On `ubuntu-latest` the shipped composite Action built a synthetic notes repository through `uses: ./generator` only, after a committed reviewed ledger; the external check re-derived exactly the reviewed set, the snapshot filename digest, the runtime assets, both report exclusions, and withheld-body absence. The shallow-clone refusal job failed as required. The workflow installs no toolchain itself, so the Action's own Node check, pinned pnpm install, checksum-pinned scanner, and `build --release` are the exercised path. No deployment step and no secret. |
+| Action parity | `.github/workflows/action-parity.yml`, `.github/scripts/assert-action-artifact.ts`, `tests/action-parity.test.ts`; CI run `35253591383` | On `ubuntu-latest` the shipped composite Action built a synthetic notes repository through `uses: ./generator` only, after a committed reviewed ledger; the external check re-derived exactly the reviewed set, the snapshot filename digest, the runtime assets, both report exclusions, and withheld-body absence. The shallow-clone refusal job failed as required. The workflow installs no toolchain itself, so the Action's own Node check, pinned pnpm install, checksum-pinned scanner, and `build --release` are the exercised path. No deployment step and no secret. |
 
 ### Controls (mutation and ablation evidence)
 

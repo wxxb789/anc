@@ -38,7 +38,7 @@ jobs:
           node-version-file: generator/.nvmrc
 
       - name: Create the synthetic notes repository
-        run: node generator/.github/scripts/action-parity-fixture.mjs .
+        run: node generator/.github/scripts/action-parity-fixture.ts .
 
       # The fixture commits the reviewed ledger itself. `anc review` cannot run
       # here: it imports the generator's dependencies, which nothing installs
@@ -56,12 +56,28 @@ jobs:
       # and the withheld-body absence rather than trusting the action's exit
       # status.
       - name: Check the artifact the Action produced
-        run: node generator/.github/scripts/assert-action-artifact.mjs .
+        run: node generator/.github/scripts/assert-action-artifact.ts .
+
+      # The check above proves a correct artifact passes; this proves the check
+      # itself can fail. It plants the withheld marker in a published page and
+      # requires a non-zero exit, so a deleted or neutered check turns this step
+      # red instead of leaving the parity job green.
+      - name: Prove the artifact check can fail
+        run: |
+          printf '\nPARITY-PRIVATE-BODY-MUST-NOT-SHIP\n' >> dist/notes/welcome/index.html
+          if node generator/.github/scripts/assert-action-artifact.ts .; then
+            echo "::error::the artifact check passed a planted withheld marker"
+            exit 1
+          fi
 
   # A negative control for the Action's first step. A shallow clone cannot
   # prove `created`, so the Action must refuse one instead of publishing a
   # valid-looking site with incomplete metadata. The workspace root itself is
-  # made the shallow clone, which is where the Action's guard reads.
+  # made the shallow clone, which is where the Action's guard reads. It is
+  # otherwise release-ready (same fixture, committed ledger, real origin), so a
+  # guarded step that failed would have to have failed on the refusal itself —
+  # if the guard is removed or neutered, the build succeeds and this job turns
+  # red instead of passing for the wrong reason.
   shallow-clone-refusal:
     runs-on: ubuntu-latest
     steps:
@@ -73,20 +89,15 @@ jobs:
         with:
           node-version-file: generator/.nvmrc
 
-      - name: Build a shallow notes clone at the workspace root
+      - name: Build a shallow clone of a release-ready notes repository
         run: |
           notes="$(mktemp -d)"
-          git init --quiet "$notes"
-          git -C "$notes" config user.name 'Action Parity'
-          git -C "$notes" config user.email 'action-parity@example.invalid'
-          printf 'title: Shallow\norigin: https://notes.example.org/\n' > "$notes/publish.config.yaml"
-          printf '# Shallow\n' > "$notes/shallow.md"
-          git -C "$notes" add -- .
-          git -C "$notes" commit --quiet -m notes
+          node generator/.github/scripts/action-parity-fixture.ts "$notes"
           clone="$(mktemp -d)"
           rmdir "$clone"
           git clone --quiet --depth 1 "file://$notes" "$clone"
           cp -a "$clone/." "$GITHUB_WORKSPACE/"
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse --is-shallow-repository)" = "true"
 
       - name: The Action must refuse the shallow clone
         id: shallow

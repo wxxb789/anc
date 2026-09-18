@@ -12,6 +12,15 @@
  *
  * It runs every check and exits non-zero if any failed, printing every failure,
  * so one run reports all of them rather than only the first.
+ *
+ * **The withheld-body scan is deliberately an independent oracle from
+ * `scripts/smoke-tarball.ts`'s scan, not a second copy to be deduplicated.**
+ * The two gates inspect different artifacts built by different paths — this
+ * one an Action-built tree, the other an npm-installed tarball's tree — so a
+ * bug in one instrument cannot hide a real disclosure from the other. The rule
+ * both implement is the same, though, and a change to it must be applied to
+ * both: every file under `dist/` carries no forbidden marker in its raw bytes
+ * or in an inflated gzip member, with a positive control proving the scan ran.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -24,15 +33,15 @@ import { DatabaseSync } from '../../src/lib/sqlite.ts';
 import { WASM_MODULE_NAME, wasmMemberName } from '../../src/lib/wasm-asset.ts';
 import { isGzip } from '../../scripts/snapshot-rows.ts';
 
-const root = resolve(process.argv[2] ?? process.cwd());
-const dist = join(root, 'dist');
-const failures = [];
+const root: string = resolve(process.argv[2] ?? process.cwd());
+const dist: string = join(root, 'dist');
+const failures: string[] = [];
 
-function check(condition, message) {
+function check(condition: unknown, message: string): void {
   if (!condition) failures.push(message);
 }
 
-function read(relative) {
+function read(relative: string): string {
   try {
     return readFileSync(join(dist, relative), 'utf8');
   } catch {
@@ -41,7 +50,7 @@ function read(relative) {
   }
 }
 
-function entries(relative) {
+function entries(relative: string): string[] {
   try {
     return readdirSync(join(dist, relative));
   } catch {
@@ -50,8 +59,8 @@ function entries(relative) {
   }
 }
 
-function filesUnder(directory) {
-  const found = [];
+function filesUnder(directory: string): string[] {
+  const found: string[] = [];
   for (const name of readdirSync(directory)) {
     const path = join(directory, name);
     if (statSync(path).isDirectory()) found.push(...filesUnder(path));
@@ -61,36 +70,36 @@ function filesUnder(directory) {
 }
 
 /** One `_headers` document's `Content-Security-Policy` value. */
-function cspOf(text) {
+function cspOf(text: string): string {
   return /^\s*Content-Security-Policy:\s*(.+)$/m.exec(text)?.[1] ?? '';
 }
 
 // --- The reviewed set and the routes it produced -------------------------
 
-const ledgerPath = join(root, '.publish-set.json');
-let ledger = { version: 1, slugs: [] };
+const ledgerPath: string = join(root, '.publish-set.json');
+let ledger: { version?: number; slugs?: string[] } = { version: 1, slugs: [] };
 try {
-  ledger = JSON.parse(readFileSync(ledgerPath, 'utf8'));
+  ledger = JSON.parse(readFileSync(ledgerPath, 'utf8')) as { version?: number; slugs?: string[] };
 } catch (error) {
   failures.push('.publish-set.json is missing or unreadable: ' + String(error));
 }
 check(ledger.version === 1, '.publish-set.json is not version 1');
 check(Array.isArray(ledger.slugs), '.publish-set.json carries no slug array');
-const reviewed = [...(ledger.slugs ?? [])].sort();
+const reviewed: string[] = [...(ledger.slugs ?? [])].sort();
 check(
   JSON.stringify(reviewed) === JSON.stringify(['second', 'welcome']),
   `the reviewed set is not the two published notes: ${JSON.stringify(reviewed)}`,
 );
 
-const welcome = read('notes/welcome/index.html');
-const second = read('notes/second/index.html');
+const welcome: string = read('notes/welcome/index.html');
+const second: string = read('notes/second/index.html');
 check(welcome.includes('PARITY-PUBLISHED-WELCOME-BODY'), 'the welcome note body did not reach its page');
 check(second.includes('PARITY-PUBLISHED-SECOND-BODY'), 'the second note body did not reach its page');
 check(welcome.includes('href="/notes/second/"'), 'the published wikilink did not become a route');
 check(welcome.includes('href="/private/"'), 'the withheld wikilink is not the live /private/ anchor');
 check(welcome.includes('href="/tags/garden/"'), 'the note did not link its tag route');
 
-const headers = read('_headers');
+const headers: string = read('_headers');
 check(
   cspOf(headers).includes("script-src 'self' 'wasm-unsafe-eval'"),
   'dist/_headers does not carry the shipped CSP with its WASM allowance',
@@ -98,19 +107,20 @@ check(
 
 // --- The snapshot is the reviewed set, bound by its own bytes ------------
 
-const snapshotNames = entries('data').filter((name) => SNAPSHOT_FILE_PATTERN.test(name));
+const snapshotNames: string[] = entries('data').filter((name) => SNAPSHOT_FILE_PATTERN.test(name));
 check(snapshotNames.length === 1, `dist/data carries ${snapshotNames.length} snapshots, not exactly one`);
 if (snapshotNames.length === 1) {
-  const name = snapshotNames[0];
-  const bytes = readFileSync(join(dist, 'data', name));
-  const digest = createHash('sha256').update(bytes).digest('hex');
+  const name: string = snapshotNames[0]!;
+  const bytes: Buffer = readFileSync(join(dist, 'data', name));
+  const digest: string = createHash('sha256').update(bytes).digest('hex');
   check(SNAPSHOT_FILE_PATTERN.exec(name)?.[1] === digest, 'the snapshot filename is not the digest of its bytes');
   const database = new DatabaseSync(join(dist, 'data', name), { readOnly: true });
   try {
-    const slugs = database
-      .prepare('SELECT slug FROM nodes ORDER BY slug')
-      .all()
-      .map((row) => row.slug);
+    const slugs: string[] = (
+      database
+        .prepare('SELECT slug FROM nodes ORDER BY slug')
+        .all() as unknown as { slug: string }[]
+    ).map((row) => row.slug);
     check(
       JSON.stringify(slugs) === JSON.stringify(reviewed),
       `the snapshot nodes are not the reviewed set: ${JSON.stringify(slugs)}`,
@@ -122,12 +132,12 @@ if (snapshotNames.length === 1) {
 
 // --- The runtime assets the browser binds to ------------------------------
 
-const wasmNames = entries('wasm');
+const wasmNames: string[] = entries('wasm');
 check(wasmNames.includes(WASM_MODULE_NAME), 'dist/wasm carries no stable SQLite browser entry');
-const wasmMember = wasmNames.find((name) => /^sqlite3\.[0-9a-f]{64}\.wasm$/.test(name));
+const wasmMember: string | undefined = wasmNames.find((name) => /^sqlite3\.[0-9a-f]{64}\.wasm$/.test(name));
 check(wasmMember !== undefined, 'dist/wasm carries no digest-named WASM member');
 if (wasmMember !== undefined) {
-  const digest = createHash('sha256').update(readFileSync(join(dist, 'wasm', wasmMember))).digest('hex');
+  const digest: string = createHash('sha256').update(readFileSync(join(dist, 'wasm', wasmMember))).digest('hex');
   check(wasmMember === wasmMemberName(digest), 'the WASM member name is not the digest of its bytes');
 }
 check(
@@ -137,7 +147,7 @@ check(
 
 // --- The private report recorded both exclusion kinds ---------------------
 
-let reportPath = '.git/publish-report/content-report.json';
+let reportPath: string = '.git/publish-report/content-report.json';
 try {
   reportPath = execFileSync('git', ['rev-parse', '--git-path', 'publish-report/content-report.json'], {
     cwd: root,
@@ -146,9 +156,15 @@ try {
 } catch (error) {
   failures.push('the workspace is not a git repository: ' + String(error));
 }
-let report = { status: 'missing', dropped: [] };
+let report: { status?: string; dropped?: { path?: string; reason?: string }[] } = {
+  status: 'missing',
+  dropped: [],
+};
 try {
-  report = JSON.parse(readFileSync(resolve(root, reportPath), 'utf8'));
+  report = JSON.parse(readFileSync(resolve(root, reportPath), 'utf8')) as {
+    status?: string;
+    dropped?: { path?: string; reason?: string }[];
+  };
 } catch (error) {
   failures.push('the private report is missing or unreadable: ' + String(error));
 }
@@ -159,25 +175,29 @@ check(dropped.get('drafts/roadmap.md') === 'excluded-by-pattern', 'the report lo
 
 // --- No withheld body reached any published file, raw or inflated ---------
 
-const forbidden = ['PARITY-PRIVATE-BODY-MUST-NOT-SHIP', 'PARITY-DRAFT-BODY-MUST-NOT-SHIP'];
-let publishedSeen = false;
-let distFiles = [];
+const forbidden: string[] = ['PARITY-PRIVATE-BODY-MUST-NOT-SHIP', 'PARITY-DRAFT-BODY-MUST-NOT-SHIP'];
+let publishedSeen: boolean = false;
+let distFiles: string[] = [];
 try {
   distFiles = filesUnder(dist);
 } catch {
   failures.push('dist/ is missing');
 }
 for (const file of distFiles) {
-  let bytes;
+  let bytes: Buffer;
   try {
     bytes = readFileSync(file);
-  } catch {
+  } catch (error) {
+    // The walk already proved the file exists; a read failure here is an
+    // artifact/IO defect this check exists to surface, not a reason to drop
+    // the file from the scanned set while reporting a clean result.
+    failures.push(`${file.slice(root.length + 1)} could not be read: ${String(error)}`);
     continue;
   }
   // Byte-level, not decoded text: the markers are ASCII, and the WASM and
   // SQLite members are not UTF-8; decoding them first only made large copies.
   if (bytes.includes('PARITY-PUBLISHED-')) publishedSeen = true;
-  const payloads = [bytes];
+  const payloads: Buffer[] = [bytes];
   if (isGzip(bytes)) {
     try {
       payloads.push(gunzipSync(bytes));

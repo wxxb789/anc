@@ -2,7 +2,7 @@
 /**
  * Build the synthetic notes repository the Action-parity workflow publishes.
  *
- * This script and its sibling `assert-action-artifact.mjs` live in the
+ * This script and its sibling `assert-action-artifact.ts` live in the
  * generator's own repository; the workflow checks that repository out under
  * `generator/` and runs them with `node` beside the notes it wrote. Everything
  * here is a literal, and it writes only inside the directory it is given.
@@ -26,7 +26,9 @@
  *
  * `git init` rather than a clone is what makes the shallow-clone refusal a
  * separate job: this repository has full history for the date derivation, and
- * the refusal control builds its own shallow clone on purpose.
+ * the refusal control builds its own shallow clone on purpose — from this same
+ * fixture, so the shallow workspace is otherwise release-ready and the guarded
+ * step can only fail for the shallow-clone refusal it exists to prove.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -35,13 +37,13 @@ import { join } from 'node:path';
 import { writePublishSetReview } from '../../scripts/publish-set-review.ts';
 
 /** The repository root the workflow runs this against. */
-const root = process.argv[2] ?? process.cwd();
+const root: string = process.argv[2] ?? process.cwd();
 
-function git(...args) {
+function git(...args: string[]): void {
   execFileSync('git', args, { cwd: root, stdio: 'inherit' });
 }
 
-function write(relative, lines) {
+function write(relative: string, lines: readonly string[]): void {
   writeFileSync(join(root, relative), lines.join('\n') + '\n', 'utf8');
 }
 
@@ -98,7 +100,7 @@ git('config', 'user.email', 'action-parity@example.invalid');
 // Sorted public slugs only, exactly what `anc review` writes: no source paths
 // and no withheld names. The release build recomputes the set and refuses any
 // difference, so a wrong entry here fails the workflow rather than passing it.
-const reviewed = writePublishSetReview(root, ['second', 'welcome']);
+const reviewed: number = writePublishSetReview(root, ['second', 'welcome']);
 
 // Explicit paths, not `git add -A`: the generator checkout beside this corpus
 // carries its own `.git`, and adding a gitlink here would make the fixture

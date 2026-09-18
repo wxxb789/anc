@@ -107,16 +107,9 @@ function applyRules(rules: readonly HeaderRule[], pathname: string): Record<stri
   return headers;
 }
 
-/**
- * The headers one `_headers` document declares for one request path.
- *
- * The default document is the repository's `public/_headers`; a caller serving
- * some other built output passes that output's own generated `_headers`
- * instead. A server that answers many requests should parse once and call
- * `applyRules`, as `serveDist` does.
- */
-export function headersFor(pathname: string, text = readFileSync(SOURCE_HEADERS, 'utf8')): Record<string, string> {
-  return applyRules(headerRules(text), pathname);
+/** The headers `public/_headers` declares for one request path. */
+export function headersFor(pathname: string): Record<string, string> {
+  return applyRules(headerRules(readFileSync(SOURCE_HEADERS, 'utf8')), pathname);
 }
 
 /** The site-wide headers (the `/*` rule) `public/_headers` declares. */
