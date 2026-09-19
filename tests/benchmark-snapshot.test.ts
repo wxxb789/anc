@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { request } from 'node:http';
 import {
@@ -48,6 +47,7 @@ import {
   type WorkloadReport,
 } from '../scripts/benchmark-snapshot.ts';
 import { repositoryIdentity, type RepositoryIdentity } from '../scripts/benchmark-identity.ts';
+import { spawnNpm } from '../scripts/npm-command.ts';
 import { GLOBAL_NODE_LIMIT } from '../src/lib/graph-selection.ts';
 
 const scratchDirectories: string[] = [];
@@ -81,12 +81,7 @@ function fakeRepositoryIdentity(): RepositoryIdentity {
 }
 
 function packCandidate(packageDirectory: string, destination: string): string {
-  const npmCli = join(process.execPath, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js');
-  const result = spawnSync(process.execPath, [npmCli, 'pack', '--ignore-scripts', '--pack-destination', destination], {
-    cwd: packageDirectory,
-    encoding: 'utf8',
-    maxBuffer: 8 * 1024 * 1024,
-  });
+  const result = spawnNpm(['pack', '--ignore-scripts', '--pack-destination', destination], packageDirectory);
   if (result.status !== 0 || result.error !== undefined) {
     throw new Error(`npm pack failed: ${result.stderr || result.stdout || String(result.error)}`);
   }
