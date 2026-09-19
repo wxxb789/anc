@@ -26,9 +26,9 @@ hub-heavy topology with real edges, tags, aliases and varied text, including CJK
 Record counts, degree distribution, field lengths, generator/seed and fixture
 identity. These are evaluation workloads, not a new maximum corpus size.
 
-The inherited warm local-neighborhood target is p95 **below 50 ms** on a named
-representative mid-range mobile device after Worker readiness. Interpret it as
-request dispatch to validated Worker result, including messaging, selection and
+The inherited warm local-neighborhood target is p95 **below 50 ms** under a named
+Chrome-family mobile device-emulation profile after Worker readiness. Interpret it
+as request dispatch to validated Worker result, including messaging, selection and
 induced-edge extraction; report inner SQL separately and graph drawing separately.
 The target must hold on each stated topology/size for the declared supported mobile
 workload. Do not average away a failing large or hub-heavy case.
@@ -49,130 +49,97 @@ limits until that decision. No JSON fast path or body-in-DB exception is implied
 | Ordinary reading | Network evidence of zero SQLite assets before intent and initial-render comparison with enhancements inactive under the same environment. Report meaningful observed regressions. |
 | Limits and overload | Recorded finite decoded-byte, pending-request, page-size, startup/query deadline and rendering policies are enforced. Exceed each configured boundary and verify bounded failure, cleanup, static usability and successful later retry. |
 
-Record commit/tarball hash, browser/version, OS, physical device/CPU/RAM, network,
-cache definitions, sample counts, repetitions, quantile method, raw observations
-and summaries. Cold means no ready Worker/DB and empty relevant HTTP cache; warm
-means the same ready snapshot. Preserve failures, timeouts and OOMs in results;
-do not calculate an apparently passing p95 after silently removing them.
+Record commit/tarball hash, instrument source hashes, browser channel/version, OS,
+host CPU/RAM, the named emulation profile and its user agent, viewport, screen,
+device scale factor, mobile/touch flags, network, cache definitions, sample counts,
+repetitions, quantile method, raw observations and summaries. Cold means no ready
+Worker/DB and empty relevant HTTP cache; warm means the same ready snapshot.
+Preserve failures, timeouts and OOMs in results; do not calculate an apparently
+passing p95 after silently removing them.
 
-Use a real named mobile device for the mobile judgment. CPU/network throttling
-may supplement it but must be labeled simulation. Use the same corpus/device for
-comparison with the pre-SQLite preview at commit
+The maintainer accepted Chrome or Edge mobile device emulation as the supported
+mobile judgment on 2026-09-18; a physical Android device and `adb` are not required.
+State CPU and network throttling separately and do not describe emulation as
+physical hardware. Use the same exact fixture identity and emulation configuration
+for comparison with the pre-SQLite preview at commit
 `7579cc16a4320f7410b71e784587a01fdf14333d`; this does not require shipping that code.
 If the baseline cannot build a workload, record that limitation rather than
 silently simplifying the corpus or fabricating a comparative latency.
 
 The maintainer's recorded acceptance must identify the measured candidate,
 comparison, finite policies and material UX trade-off. Lack of access to a suitable
-device or acceptance authority leaves this goal open; it does not reopen settled
-architecture choices or postpone SQLite beyond 0.1.0.
+supported browser or acceptance authority leaves this goal open; it does not reopen
+settled architecture choices or postpone SQLite beyond 0.1.0.
 
-## Implementation progress (2026-09-18)
+## Implementation progress (2026-09-19)
 
-The instrument now covers every completion-evidence row and the delivered
-runtime's finite policies were exceeded on this host. The physical mobile
-judgment and the recorded maintainer acceptance below are still missing, so the
-goal remains open.
+The measurement and overload instruments are implemented, but no current report is
+completion evidence yet. Review found several ways the earlier instruments could
+pass without observing the required result. Those paths have been hardened, and
+the pre-fix reports are retained only as diagnostic history until the finalized
+instrument is committed and rerun from a clean tree.
 
 ### Instrument
 
-- `scripts/benchmark-snapshot.ts` generates seeded 100/1,000/10,000-note corpora
-  with `topology: sparse|skewed` and `metadata: true` (tags including `笔记`,
-  per-note aliases, mixed-script headings), records generator/seed/fixture
-  sha256 with DB row counts and degree/length distributions, serves `dist/`
-  under per-path `_headers` with gzip negotiation, records page and Worker
-  resource timing plus the decoded, gzip and wire cost of the DB, WASM binary,
-  WASM glue and Worker chunk, reports `sqlMs` and load `phases` from the opt-in
-  measurement seam, separates the observed hover delay from intent-to-visible,
-  measures preview, backlinks, outgoing, byTag, local and global/filtered graph
-  through UI flows and an armed driver Worker, verifies answers against the
-  finalized DB, asserts zero SQLite requests before intent, compares the initial
-  render with JavaScript disabled, and writes a partial report with preserved
-  failures on any error.
-- `scripts/benchmark-limits.ts` exceeds each configured boundary on the real
-  build: 64 MiB+1 DB and 8 MiB+4 KiB WASM fail `integrity` with zero WASM
-  instantiation, the static page stays usable and a later retry succeeds; the
-  20 s startup and 8 s query deadlines terminate the Worker once, with no
-  automatic retry, and a later intent rebuilds; the 17th concurrent request is
-  rejected `busy` without dispatch while a shared instance stays shared; page
-  size 10,000 clamps to 200 and a saturated CJK tag enumerates 200+85; the local
-  bound draws 11/11 and the global bound 60/285.
+- `scripts/benchmark-snapshot.ts` generates exact published-node workloads while
+  retaining withheld notes and records the generator, seed, fixture identity,
+  degree distributions and material SQLite field-length distributions. Preview
+  measurement requires a confirmed hidden transition and a newly appended result
+  for the requested slug. Render series require one finite event per activation;
+  tag walks must enumerate the exact DB membership and exhaust their continuation;
+  local, global and tag-filtered graph replies are compared with an independently
+  derived DB-row oracle, including exact ranked nodes, directed induced edges and
+  omitted counts.
+- The snapshot server precomputes encoded bodies before browser intent, preserves
+  actual request start and end offsets, and rejects listen failures into the
+  partial-report path. Candidate identity covers repository and CLI bytes, the
+  installed package, its complete runtime dependency tree, the lockfile, a bound
+  tarball when supplied, Node and package-manager versions, and is rechecked at
+  material boundaries.
+- `scripts/benchmark-limits.ts` accepts the same strict `--cli`, browser and device
+  selection as the snapshot runner. Its page-size control refuses an unsaturated
+  corpus; the pending-request control waits for all held requests to settle and
+  proves a fresh request succeeds through the same client and Worker; unreadable
+  child-test output fails closed; listen failures still produce a private partial
+  report. The local rendering fixture must exceed `LOCAL_NODE_LIMIT` before that
+  control can pass.
 - `src/lib/worker-protocol.ts`, `src/scripts/snapshot-worker.ts` and
-  `src/scripts/snapshot-client.ts` carry the opt-in seam: an armed request sets
-  `measure: true`; a measured reply adds numeric `sqlMs` and `phases
-  {totalMs, fetchMs, digestMs, wasmInitMs, importMs, wasmMemoryBytes}`.
-  Ordinary readers send and receive exactly what they did before.
-- `scripts/generate-corpus.ts` gained `topology` and `metadata` options without
-  changing default output; a golden digest test pins that.
+  `src/scripts/snapshot-client.ts` carry the opt-in measurement seam. The owning
+  Worker protocol design records its literal boolean opt-in, numeric-only result
+  fields, Goal 0008 consumer and ablation result. Ordinary readers remain on the
+  unchanged request/reply path.
+- Repository-only benchmark runners and helpers are excluded from the installable
+  tarball, whose production dependency set does not include Playwright.
 
-### Measured 2026-09-18
+### Invalidated diagnostic runs
 
-Candidate: commit `2f7fa2d` (the measurement instruments were run from the same
-tree before it was committed; the private reports record parent `66769ae4` plus
-the CLI sha256). `pnpm run verify` was green before the run (81 files / 959
-passed / 34 skipped).
-Throttled simulation: CDP `Emulation.setCPUThrottlingRate = 4` on the page
-target only, nearest-rank p95, 30 samples per query operation, six workloads,
-none failed. Report `benchmark-snapshot-2026-09-18T09-11-04-644Z.json`
-(sha256 `22fcf2c718e8…`) in the private report directory.
+The 2026-09-18 six-workload Edge/Pixel 7 run, paired pre-SQLite comparison, limits
+run and npm-installed-package run all preceded the finalized instrument and used a
+dirty candidate. In addition, the cited limits report recorded 11 local neighbours
+against a limit of 12, so it did not exercise local truncation even though it was
+described as a passing overload control. Their latencies, hashes and 7/7 claim are
+not completion evidence and must not be used for acceptance.
 
-| workload | UI local p95 | driver local p95 | cold preview | warm preview |
-| --- | --- | --- | --- | --- |
-| 100 sparse | 16.5 ms | 6.0 ms | 968 ms | 238 ms |
-| 100 hub | 12.3 ms | 4.5 ms | 977 ms | 237 ms |
-| 1,000 sparse | 17.4 ms | 3.7 ms | 967 ms | 226 ms |
-| 1,000 hub | 13.9 ms | 4.3 ms | 950 ms | 235 ms |
-| 10,000 sparse | 14.6 ms | 3.9 ms | 1152 ms | 235 ms |
-| 10,000 hub | 13.4 ms | 4.7 ms | 1167 ms | 237 ms |
+### Verification before the qualified rerun
 
-Preview is one cold plus one warm sample per workload, not a p95. At 10,000 hub:
-DB 3.72 MiB decoded / 1.04 MiB gzip wire, WASM 848.5 KiB, glue 627.7 KiB,
-Worker chunk 17.6 KiB; warm startup phases fetch 41.1 / digest 6.0 / wasmInit
-59.9 / import 13.2 ms with 8 MiB WASM memory; zero SQLite requests before
-intent; JS-disabled versus active FCP 284 versus 188 ms with a +10,160 B
-enhancement bundle. Program queries are reported separately and one is
-materially slower than the local target: global graph p50 173 / p95 258.5 ms at
-10,000 notes under the ×4 simulation (driver byTag p95 13.8 ms; UI byTag p95
-34.2 ms). No failure was removed from any p95.
-
-An unthrottled hub pass matches the baseline's conditions (30 samples, report
-`benchmark-snapshot-2026-09-18T09-29-07-150Z.json`, sha256 `d49dddc14650…`):
-page-observed warm hover-to-visible 121.5–122.4 ms versus the baseline's
-123.2–124.7 ms; cold 357.8–506.9 ms versus 156.3–353.2 ms; FCP 92–248 ms versus
-88–256 ms.
-
-### Pre-SQLite baseline
-
-Commit `7579cc16` installed and built all three sizes in a worktree (100: 8.2 s,
-1,000: 20.5 s, 10,000: 327.2 s), so no build limitation is claimed. Its preview
-is one `/content-index.json` fetch (2.83 MB decoded / 517 KB gzip at 10,000)
-plus an in-memory lookup; it has no Worker or per-link query, so its warm figure
-is the same hover-intent-to-visible total, not a dispatch-equivalent. On that
-like-for-like page-observer basis, candidate warm preview is on par while cold
-pays the Worker/WASM startup the baseline does not have. The worktree was
-removed and the raw baseline observations are retained outside this repository.
-
-### Packaged candidate
-
-`pnpm run pack:tarball` produced `anc-0.1.0.tgz` (413,493 bytes, sha256
-`edbf5c028a7d…`), installed with npm. The installed CLI measured 1,000/hub under
-the ×4 simulation with 10 samples and no failures: UI local p95 16.1 ms, driver
-local p95 8.4 ms, cold 982 ms, warm 239 ms; report
-`benchmark-snapshot-candidate-1000-hub.json` (sha256 `618853ae4618…`).
+On the working tree, lint, type checking, focused benchmark and packaging tests,
+the normal build, tarball compilation and diff checks pass. These checks establish
+the implementation shape; they do not replace the clean-tree browser measurements.
 
 ### Still required
 
-The named physical mid-range mobile device and the dated maintainer acceptance
-of the finite policies and the cold-preview UX trade-off do not exist in this
-environment, so the goal stays open. Known instrument limitations: cold/warm
-preview is a single sample per workload; throttling is page-target simulation;
-`ArrayBufferBytes` and process RSS are unavailable, so total peak memory is not
-measured; the global graph at 10,000 notes is a quarter-second under the ×4
-simulation.
+Commit the finalized instrument, then rerun the six 100/1,000/10,000-note sparse
+and hub-heavy workloads under the accepted Edge/Pixel 7 profile, the paired
+pre-SQLite baseline, every overload control against both the checkout and the
+npm-installed tarball, and the full release gates. Record only reports whose
+candidate/instrument identity stays stable and whose failure arrays are empty.
+Then record the maintainer's dated acceptance of the exact candidate, finite
+policies, cold-preview cost and material limitations. Mobile evidence remains
+browser emulation; CPU throttling applies to the page target rather than the
+Worker; loopback network is not a physical mobile network; and Worker heap,
+process RSS and total peak memory remain unavailable.
 
 ## Completion record
 
-Not completed. Recorded here: the reproducible commands and report identities
-above, per-workload results, the baseline and packaged-candidate comparisons,
-and the overload-control outcomes. Missing: physical mobile evidence and the
-dated maintainer acceptance.
+Not completed. The implementation is awaiting clean-tree qualified measurements
+and the maintainer acceptance named above.

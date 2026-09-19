@@ -463,6 +463,9 @@ test('the tarball carries what the build reads and none of this owner\'s content
   // on this checkout. Shipping one gives a consumer dead commands at best and a
   // devDependency import failure at worst, so every exclusion is named here.
   for (const excluded of [
+    'scripts/benchmark-limits.ts',
+    'scripts/benchmark-browser.ts',
+    'scripts/benchmark-identity.ts',
     'scripts/benchmark-snapshot.ts',
     'scripts/build-fixture.ts',
     'scripts/build-site.ts',

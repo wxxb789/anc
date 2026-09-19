@@ -135,7 +135,7 @@ integration evidence; they do not create competing schema or test implementation
 | Publication ledger, binary-aware residue/secrets, output inventory, withdrawal and failed-build preservation | 0006 (completed) |
 | CLI preview recognition, tarball adoption, runtime minimum, JS/WASM provenance, GitHub Action | Recognition protection in 0006 (completed); foreign installation/transport in [0007](archive/0007-independent-publisher-adoption.md) (completed) |
 | Snapshot caching, stale-page fallback, no substitution of a newer DB | [0007](archive/0007-independent-publisher-adoption.md) (completed) |
-| 100/1,000/10,000-note measurements, physical mobile p95, cold preview, memory and finite policies | 0008 |
+| 100/1,000/10,000-note measurements, Chrome-family mobile-emulation p95, cold preview, memory and finite policies | 0008 |
 | No backward compatibility; no body/FTS/manifest; evidence-based ablation | Every goal, governed by core design |
 
 ## Reading completion evidence

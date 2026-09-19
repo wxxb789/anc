@@ -4,21 +4,24 @@
  *
  * This is goal 0008's **instrument**, not its acceptance. It measures a real
  * built candidate in a real browser and writes a private JSON report under
- * `<git-dir>/publish-report/`, but the named physical mobile device and the
- * maintainer's policy decision are external and are not invented here. Every
+ * `<git-dir>/publish-report/`, but the maintainer's policy decision is external
+ * and is not invented here. Every
  * report states its candidate identity, host, browser version, OS, throttling
  * (labeled simulation when used), cache definitions, sample counts, quantile
  * method, corpus generator seed, and fixture identity.
- * Where the runtime measurement seam did not supply `sqlMs` or `phases`, the
- * field is `null` with a note; no value is interpolated.
+ * Every successful measured reply must supply finite `dispatchMs`, `operationMs`,
+ * and `sqlMs`; cold measured success must also supply complete `phases`. Missing
+ * telemetry is a workload failure, never an interpolated value.
  *
  * Each workload is one (size, topology) pair: a seeded corpus from
  * `scripts/generate-corpus.ts`, built by the CLI named on the command line
  * (`--cli`, default `bin/anc.mjs`; pass the installed package's bin to measure
  * the packaged-tarball candidate), served over loopback under the output's own
- * `_headers` with gzip negotiation, and driven in Chromium through hover
- * preview, the local-graph control, the tag browser, the site graph, and a
- * driver Worker constructed from the built chunk.
+ * `_headers` with gzip negotiation, and driven in Chromium, Chrome, or Edge
+ * through hover preview, the local-graph control, the tag browser, the site
+ * graph, and a driver Worker constructed from the built chunk. A named
+ * Playwright device profile applies the browser's mobile emulation settings to
+ * every measured context.
  *
  * The SQLite-asset definition in section F is imported from
  * `tests/support/browser-site.ts` (`sqliteAssetRequests`,
@@ -27,7 +30,8 @@
  *
  * Usage: `node scripts/benchmark-snapshot.ts [--sizes 100,1000,10000]
  * [--topologies sparse,hub] [--samples 30] [--throttle 4] [--cli bin/anc.mjs]
- * [--seed 7] [--out <report.json>]`
+ * [--seed 7] [--browser chromium|chrome|edge] [--device "Pixel 7"]
+ * [--out <report.json>]`
  *
  * `hub` names this harness's workload and maps to the generator's `skewed`
  * topology; `sparse` is the generator's `sparse`.
@@ -41,20 +45,29 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { arch, cpus, release as osRelease, tmpdir, totalmem, type as osType } from 'node:os';
-import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import type { Browser, BrowserContext, CDPSession, Page } from 'playwright';
-import { GLOBAL_NODE_LIMIT, LOCAL_NODE_LIMIT } from '../src/lib/graph-selection.ts';
+import {
+  GLOBAL_NODE_LIMIT,
+  LOCAL_NODE_LIMIT,
+  type SelectionEdge,
+  type SelectionNode,
+} from '../src/lib/graph-selection.ts';
 import { MAX_PAGE_SIZE } from '../src/lib/snapshot-queries.ts';
+import { TAG_PAGE_SIZE } from '../src/lib/tag-browser-model.ts';
 import { SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
+import { previewFragment, previewTitle } from '../src/lib/preview-model.ts';
+import type { LoadPhases } from '../src/lib/worker-protocol.ts';
 import { sqliteAssetRequests, WORKER_CHUNK_PATTERN, workerScriptPath } from '../tests/support/browser-site.ts';
 import {
   generateCorpus,
@@ -62,10 +75,25 @@ import {
   type CorpusTopology,
   type GeneratedCorpus,
 } from './generate-corpus.ts';
+import {
+  benchmarkBrowserOptionsFromValues,
+  parseBenchmarkOptions,
+  resolveBenchmarkBrowser,
+  type BenchmarkBrowser,
+  type ResolvedBenchmarkBrowser,
+} from './benchmark-browser.ts';
+import {
+  assertRepositoryIdentityStable,
+  assertRepositoryIdentityClean,
+  benchmarkReportDirectory,
+  BenchmarkIdentityDriftError,
+  repositoryIdentity,
+  sha256File,
+  type RepositoryIdentity,
+} from './benchmark-identity.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BUILD_TIMEOUT_MS = 20 * 60_000;
-const VIEWPORT = { width: 1280, height: 800 } as const;
 const HOVER_TIMEOUT_MS = 30_000;
 const WARM_PREVIEW_TIMEOUT_MS = 15_000;
 const DRIVER_COLD_TIMEOUT_MS = 60_000;
@@ -77,6 +105,17 @@ const MAX_WALK_PAGES = 500;
 const WALK_REQUEST_BUDGET = 400;
 /** Cloudflare Pages' default for a 200 no `_headers` rule names. */
 const PLATFORM_REVALIDATION = 'public, max-age=0, must-revalidate';
+const BENCHMARK_SNAPSHOT_OPTIONS = [
+  'sizes',
+  'topologies',
+  'samples',
+  'throttle',
+  'cli',
+  'seed',
+  'browser',
+  'device',
+  'out',
+] as const;
 
 type Topology = 'sparse' | 'hub';
 
@@ -87,6 +126,8 @@ interface Options {
   throttle: number;
   cli: string | undefined;
   seed: number;
+  browser: BenchmarkBrowser;
+  device: string | undefined;
   out: string | undefined;
 }
 
@@ -97,19 +138,14 @@ interface Options {
  */
 type GeneratorRequest = Required<Pick<CorpusOptions, 'notes' | 'seed' | 'topology' | 'metadata'>>;
 
-function parseOptions(argv: readonly string[]): Options {
-  const option = (name: string): string | undefined => {
-    const index = argv.indexOf(`--${name}`);
-    if (index < 0) return undefined;
-    const value = argv[index + 1];
-    if (value === undefined || value.startsWith('--')) throw new Error(`--${name} needs a value`);
-    return value;
-  };
-  const sizes = (option('sizes') ?? '100,1000,10000')
-    .split(',')
-    .map((value) => Number(value.trim()))
-    .filter((value) => Number.isInteger(value) && value > 0);
-  if (sizes.length === 0) throw new Error('--sizes needs at least one positive integer');
+export function parseSnapshotOptions(argv: readonly string[]): Options {
+  const values = parseBenchmarkOptions(argv, BENCHMARK_SNAPSHOT_OPTIONS);
+  const option = (name: string): string | undefined => values.get(name);
+  const sizeTokens = (option('sizes') ?? '100,1000,10000').split(',').map((value) => value.trim());
+  const sizes = sizeTokens.map(Number);
+  if (sizeTokens.some((value) => value === '') || sizes.some((value) => !Number.isInteger(value) || value <= 0)) {
+    throw new Error('--sizes accepts only positive integers');
+  }
   const requestedTopologies = (option('topologies') ?? 'sparse,hub').split(',').map((value) => value.trim());
   const topologies = requestedTopologies.filter(
     (value): value is Topology => value === 'sparse' || value === 'hub',
@@ -123,7 +159,17 @@ function parseOptions(argv: readonly string[]): Options {
   if (!Number.isFinite(throttle) || throttle < 1) throw new Error('--throttle needs a number >= 1');
   const seed = Number(option('seed') ?? '7');
   if (!Number.isInteger(seed)) throw new Error('--seed needs an integer');
-  return { sizes, topologies, samples, throttle, cli: option('cli'), seed, out: option('out') };
+  const browserOptions = benchmarkBrowserOptionsFromValues(values);
+  return {
+    sizes,
+    topologies,
+    samples,
+    throttle,
+    cli: option('cli'),
+    seed,
+    ...browserOptions,
+    out: option('out'),
+  };
 }
 
 function generatorTopology(topology: Topology): CorpusTopology {
@@ -173,7 +219,7 @@ function seriesOf(values: readonly number[]): Series {
   };
 }
 
-interface NumericDistribution {
+export interface NumericDistribution {
   n: number;
   min: number | null;
   p50: number | null;
@@ -197,12 +243,72 @@ function distributionOf(values: readonly number[]): NumericDistribution {
   };
 }
 
-function numberOrNull(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+export interface FieldLengthDistribution extends NumericDistribution {
+  /** Values absent from their owning row or collection (not a zero-length value). */
+  absent: number;
+  /** Present values whose length is exactly zero. */
+  empty: number;
 }
 
-function sha256File(path: string): string {
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
+/** Summarize string lengths while keeping missing and empty values distinct. */
+export function fieldLengthDistribution(
+  values: readonly (string | null | undefined)[],
+  additionalAbsent = 0,
+): FieldLengthDistribution {
+  const present = values.filter((value): value is string => typeof value === 'string');
+  return {
+    ...distributionOf(present.map((value) => value.length)),
+    absent: values.filter((value) => value === null || value === undefined).length + additionalAbsent,
+    empty: present.filter((value) => value.length === 0).length,
+  };
+}
+
+/** Fail closed when a UI operation did not produce exactly its expected events. */
+export function assertExactEventCount(label: string, observed: number, expected: number): void {
+  if (observed !== expected) throw new Error(`${label}: expected ${expected} events, observed ${observed}`);
+}
+
+export function assertExactSampleCount(label: string, observed: number, expected: number): void {
+  if (observed !== expected) throw new Error(`${label}: expected ${expected} successful samples, observed ${observed}`);
+}
+
+export function assertExactlyOneControl(label: string, observed: number): void {
+  if (observed !== 1) throw new Error(`${label}: expected exactly one control, observed ${observed}`);
+}
+
+/** The page count implied by the finalized tag membership, never a fixed cap. */
+export function tagWalkPageBound(tagMembers: number, pageSize: number): number {
+  if (!Number.isInteger(tagMembers) || tagMembers < 0) throw new Error('tag member count must be a non-negative integer');
+  if (!Number.isInteger(pageSize) || pageSize <= 0) throw new Error('tag page size must be a positive integer');
+  return Math.max(1, Math.ceil(tagMembers / pageSize));
+}
+
+export interface GraphSelectionShape {
+  nodes: { slug: string; title: string; language: string }[];
+  edges: { from: string; to: string }[];
+  omitted: number;
+}
+
+/** Compare every public graph field, including directed edge identity and order. */
+export function compareGraphSelection(
+  actual: GraphSelectionShape,
+  expected: GraphSelectionShape,
+  label: string,
+): string | null {
+  if (JSON.stringify(actual.nodes) !== JSON.stringify(expected.nodes)) {
+    return `${label}: nodes differ (actual ${JSON.stringify(actual.nodes)}, expected ${JSON.stringify(expected.nodes)})`;
+  }
+  if (JSON.stringify(actual.edges) !== JSON.stringify(expected.edges)) {
+    return `${label}: edges differ (actual ${JSON.stringify(actual.edges)}, expected ${JSON.stringify(expected.edges)})`;
+  }
+  if (actual.omitted !== expected.omitted) {
+    return `${label}: omitted differs (actual ${actual.omitted}, expected ${expected.omitted})`;
+  }
+  return null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
 function walkFiles(root: string): string[] {
@@ -224,10 +330,18 @@ interface FixtureIdentity {
   method: string;
 }
 
+interface FixtureStateIdentity {
+  stateSha256: string;
+  files: number;
+  stateScope: string;
+  stateMethod: string;
+}
+
 /** SHA-256 over every regular file with length-framed paths and contents. */
-function fixtureIdentity(directory: string): FixtureIdentity {
+function fixtureIdentity(directory: string, ignore: (relativePath: string) => boolean = () => false): FixtureIdentity {
   const relativePaths = walkFiles(directory)
     .map((file) => relative(directory, file).split(sep).join('/'))
+    .filter((path) => !ignore(path))
     .sort();
   const hash = createHash('sha256');
   for (const path of relativePaths) {
@@ -241,6 +355,255 @@ function fixtureIdentity(directory: string): FixtureIdentity {
     sha256: hash.digest('hex'),
     files: relativePaths.length,
     method: 'sha256(path byte length + path bytes + file byte length + file bytes), regular files sorted by relative path',
+  };
+}
+
+const FIXTURE_STATE_SCOPE =
+  'the same regular-file tree and exclusions as the content digest; state covers each relative path, byte size, and high-resolution mtimeNs, but not file bytes';
+const FIXTURE_STATE_METHOD =
+  'sha256(fixture-state-v1 + regular file relative path byte length + file byte size + high-resolution mtimeNs), files sorted by UTF-8 path bytes; a same-size content mutation whose mtime is restored may evade this change detector, so the final content SHA-256 remains authoritative';
+
+/** Read only directory entries and metadata for an intermediate identity check. */
+function fixtureStateIdentity(directory: string, ignore: (relativePath: string) => boolean = () => false): FixtureStateIdentity {
+  const relativePaths = walkFiles(directory)
+    .map((file) => relative(directory, file).split(sep).join('/'))
+    .filter((path) => !ignore(path))
+    .sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')));
+  const hash = createHash('sha256');
+  hashPart(hash, 'fixture-state-v1');
+  for (const path of relativePaths) {
+    const fileState = statSync(join(directory, path), { bigint: true });
+    hashPart(hash, path);
+    hashPart(hash, fileState.size.toString());
+    hashPart(hash, fileState.mtimeNs.toString());
+  }
+  return {
+    stateSha256: hash.digest('hex'),
+    files: relativePaths.length,
+    stateScope: FIXTURE_STATE_SCOPE,
+    stateMethod: FIXTURE_STATE_METHOD,
+  };
+}
+
+interface RuntimePackageManifest {
+  name: string;
+  version: string;
+  dependencies: Record<string, string>;
+  optionalDependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
+  bundledDependencies: string[];
+}
+
+interface RuntimePackageRecord {
+  name: string;
+  version: string;
+  logicalPath: string;
+  realPath: string;
+}
+
+interface RuntimeDependencyClosureIdentity {
+  sha256: string;
+  stateSha256: string;
+  files: number;
+  scope: string;
+  method: string;
+  stateScope: string;
+  stateMethod: string;
+}
+
+const RUNTIME_DEPENDENCY_SCOPE =
+  'installed runtime dependency closure rooted at the candidate package manifest; dependencies, optionalDependencies, and resolvable peerDependencies recursively included; distinct real package roots identified by package name/version/logical path; devDependencies excluded; node_modules and top-level .vite/.cache package paths excluded from file contents';
+const RUNTIME_DEPENDENCY_METHOD =
+  'sha256(runtime-dependency-closure-v1 + package name/version/logical path + regular package file relative path byte length + file byte length + file bytes), packages and files sorted by UTF-8 path bytes';
+const RUNTIME_DEPENDENCY_STATE_SCOPE =
+  'the same installed runtime dependency closure and package/file exclusions as the content digest; state covers package name/version/logical path plus every regular package file relative path, byte size, and high-resolution mtimeNs, but not file bytes';
+const RUNTIME_DEPENDENCY_STATE_METHOD =
+  'sha256(runtime-dependency-closure-state-v1 + package name/version/logical path + regular package file relative path byte length + file byte size + high-resolution mtimeNs), packages and files sorted by UTF-8 path bytes; a same-size content mutation whose mtime is restored may evade this change detector, so the final content SHA-256 remains authoritative';
+
+function stringMap(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  const result: Record<string, string> = {};
+  for (const [name, version] of Object.entries(value)) {
+    if (typeof version === 'string') result[name] = version;
+  }
+  return result;
+}
+
+function runtimePackageManifest(directory: string, fallbackName?: string): RuntimePackageManifest | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as Record<string, unknown>;
+    const name = typeof parsed['name'] === 'string' ? parsed['name'] : fallbackName;
+    if (name === undefined) return null;
+    return {
+      name,
+      version: typeof parsed['version'] === 'string' ? parsed['version'] : 'unknown',
+      dependencies: stringMap(parsed['dependencies']),
+      optionalDependencies: stringMap(parsed['optionalDependencies']),
+      peerDependencies: stringMap(parsed['peerDependencies']),
+      bundledDependencies: Array.isArray(parsed['bundledDependencies'])
+        ? parsed['bundledDependencies'].filter((dependency): dependency is string => typeof dependency === 'string')
+        : Array.isArray(parsed['bundleDependencies'])
+          ? parsed['bundleDependencies'].filter((dependency): dependency is string => typeof dependency === 'string')
+          : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function runtimeDependencyNames(manifest: RuntimePackageManifest): { name: string; required: boolean }[] {
+  const required = new Set([...Object.keys(manifest.dependencies), ...manifest.bundledDependencies]);
+  const names = new Set([...required, ...Object.keys(manifest.optionalDependencies), ...Object.keys(manifest.peerDependencies)]);
+  return [...names]
+    .sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')))
+    .map((name) => ({ name, required: required.has(name) }));
+}
+
+/** Resolve one package name using Node's nearest-node_modules lookup. */
+function resolveRuntimePackage(directory: string, name: string): string | null {
+  let current = directory;
+  while (true) {
+    const candidate = join(current, 'node_modules', name);
+    try {
+      if (statSync(candidate).isDirectory() && existsSync(join(candidate, 'package.json'))) return candidate;
+    } catch {
+      // A broken optional link is treated as an absent package.
+    }
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+
+function packageFiles(directory: string): string[] {
+  const found: string[] = [];
+  const visit = (current: string, prefix: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      const relativePath = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || (prefix === '' && (entry.name === '.vite' || entry.name === '.cache'))) {
+          continue;
+        }
+        visit(path, relativePath);
+      } else if (entry.isFile()) {
+        found.push(relativePath);
+      }
+    }
+  };
+  visit(directory, '');
+  return found.sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')));
+}
+
+function hashPart(hash: ReturnType<typeof createHash>, value: string | Buffer): void {
+  const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : value;
+  hash.update(`${bytes.byteLength}:`, 'utf8');
+  hash.update(bytes);
+}
+
+function runtimePackagePath(installationRoot: string, directory: string): string {
+  const path = relative(installationRoot, directory).split(sep).join('/');
+  return path === '' ? '.' : path;
+}
+
+/** Hash only the installed runtime closure, without recursively hashing node_modules as package data. */
+function runtimeDependencyClosure(
+  candidateDirectory: string,
+  installationRoot: string,
+  includeContent = true,
+): RuntimeDependencyClosureIdentity {
+  const rootManifest = runtimePackageManifest(candidateDirectory);
+  if (rootManifest === null) throw new Error(`candidate package manifest is unreadable: ${basename(candidateDirectory)}`);
+
+  const rootRealPath = realpathSync(candidateDirectory);
+  const packages = new Map<string, RuntimePackageRecord>();
+  const visited = new Set<string>();
+  const visit = (directory: string): void => {
+    let realPath: string;
+    try {
+      realPath = realpathSync(directory);
+    } catch {
+      return;
+    }
+    const realKey = process.platform === 'win32' ? realPath.toLowerCase() : realPath;
+    if (visited.has(realKey)) return;
+    visited.add(realKey);
+    const manifest = runtimePackageManifest(realPath);
+    if (manifest === null) return;
+
+    for (const { name: dependencyName, required } of runtimeDependencyNames(manifest)) {
+      const logicalDirectory = resolveRuntimePackage(realPath, dependencyName);
+      if (logicalDirectory === null) {
+        if (required) throw new Error(`required runtime dependency is missing: ${dependencyName}`);
+        continue;
+      }
+      let dependencyRealPath: string;
+      try {
+        dependencyRealPath = realpathSync(logicalDirectory);
+      } catch {
+        if (required) throw new Error(`required runtime dependency cannot be resolved: ${dependencyName}`);
+        continue;
+      }
+      const dependencyRealKey = process.platform === 'win32' ? dependencyRealPath.toLowerCase() : dependencyRealPath;
+      if (dependencyRealKey === (process.platform === 'win32' ? rootRealPath.toLowerCase() : rootRealPath)) continue;
+      const dependencyManifest = runtimePackageManifest(dependencyRealPath, dependencyName);
+      if (dependencyManifest === null) throw new Error(`runtime dependency manifest is unreadable: ${dependencyName}`);
+      const logicalPath = runtimePackagePath(installationRoot, logicalDirectory);
+      const existing = packages.get(dependencyRealKey);
+      if (existing === undefined || logicalPath < existing.logicalPath) {
+        packages.set(dependencyRealKey, {
+          name: dependencyManifest.name,
+          version: dependencyManifest.version,
+          logicalPath,
+          realPath: dependencyRealPath,
+        });
+      }
+      visit(dependencyRealPath);
+    }
+  };
+  visit(candidateDirectory);
+
+  const orderedPackages = [...packages.values()].sort((left, right) => {
+    const leftKey = `${left.name}\0${left.version}\0${left.logicalPath}`;
+    const rightKey = `${right.name}\0${right.version}\0${right.logicalPath}`;
+    return Buffer.compare(Buffer.from(leftKey, 'utf8'), Buffer.from(rightKey, 'utf8'));
+  });
+  const contentHash = includeContent ? createHash('sha256') : null;
+  if (contentHash !== null) hashPart(contentHash, 'runtime-dependency-closure-v1');
+  const stateHash = createHash('sha256');
+  hashPart(stateHash, 'runtime-dependency-closure-state-v1');
+  let files = 0;
+  for (const packageRecord of orderedPackages) {
+    if (contentHash !== null) {
+      hashPart(contentHash, packageRecord.name);
+      hashPart(contentHash, packageRecord.version);
+      hashPart(contentHash, packageRecord.logicalPath);
+    }
+    hashPart(stateHash, packageRecord.name);
+    hashPart(stateHash, packageRecord.version);
+    hashPart(stateHash, packageRecord.logicalPath);
+    for (const relativePath of packageFiles(packageRecord.realPath)) {
+      const file = join(packageRecord.realPath, relativePath);
+      const fileState = statSync(file, { bigint: true });
+      hashPart(stateHash, relativePath);
+      hashPart(stateHash, fileState.size.toString());
+      hashPart(stateHash, fileState.mtimeNs.toString());
+      if (contentHash !== null) {
+        const contents = readFileSync(file);
+        hashPart(contentHash, relativePath);
+        hashPart(contentHash, contents);
+      }
+      files += 1;
+    }
+  }
+  return {
+    sha256: contentHash === null ? '' : contentHash.digest('hex'),
+    stateSha256: stateHash.digest('hex'),
+    files,
+    scope: RUNTIME_DEPENDENCY_SCOPE,
+    method: RUNTIME_DEPENDENCY_METHOD,
+    stateScope: RUNTIME_DEPENDENCY_STATE_SCOPE,
+    stateMethod: RUNTIME_DEPENDENCY_STATE_METHOD,
   };
 }
 
@@ -429,116 +792,191 @@ const CONTENT_TYPES: Record<string, string> = {
   '.woff2': 'font/woff2',
 };
 
-interface ServerRecord {
+export interface ServerRecord {
   path: string;
   method: string;
-  status: number;
+  status: number | null;
+  completion: 'finished' | 'aborted';
   cacheControl: string;
   contentEncoding: string | null;
   contentLength: string | null;
-  bytesServed: number;
+  bytesServed: number | null;
   startedAtMs: number;
   endedAtMs: number;
 }
 
-interface StaticServer {
+export interface StaticServer {
   origin: string;
   headersSource: string;
   records: ServerRecord[];
   close(): Promise<void>;
 }
 
+export interface StaticServerOptions {
+  /** Use a fixed port in focused tests; production keeps the ephemeral default. */
+  port?: number;
+  /** Test-only delay that makes a non-zero request duration observable. */
+  responseDelayMs?: number;
+}
+
+/** Record exactly one terminal server-response event. */
+export function recordResponseCompletion(
+  response: Pick<ServerResponse, 'once'>,
+  record: (completion: ServerRecord['completion']) => void,
+): void {
+  let completed = false;
+  const finish = (completion: ServerRecord['completion']): void => {
+    if (completed) return;
+    completed = true;
+    record(completion);
+  };
+  response.once('finish', () => finish('finished'));
+  response.once('close', () => finish('aborted'));
+}
+
+interface PreparedAsset {
+  body: Buffer;
+  gzip: Buffer;
+}
+
+function preparedAssets(root: string): Map<string, PreparedAsset> {
+  const assets = new Map<string, PreparedAsset>();
+  for (const file of walkFiles(root)) {
+    const body = readFileSync(file);
+    assets.set(file, { body, gzip: gzipSync(body) });
+  }
+  return assets;
+}
+
+function closeServer(server: Server): Promise<void> {
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
+function listenServer(server: Server, port: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onListening = (): void => {
+      server.off('error', onError);
+      resolve();
+    };
+    const onError = (error: Error): void => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    try {
+      server.listen(port, '127.0.0.1');
+    } catch (error) {
+      onError(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
 /**
  * Serve `dist/` on loopback with per-path `_headers`, gzip negotiation, and a
  * response log.
  *
- * gzip is applied whenever the request's `Accept-Encoding` names it, and the
- * same `gzipSync` result is reused for the dependency table, so the wire bytes
- * the server reports and the compressed bytes the report classifies are one
- * computation rather than two that can disagree. `Content-Length` is always
+ * gzip is applied whenever the request's `Accept-Encoding` names it. Bodies are
+ * compressed once during server setup, before browser timing begins, and the
+ * request callback only selects the cached bytes. `Content-Length` is always
  * the bytes of the body actually written.
  */
-async function startStaticServer(dist: string): Promise<StaticServer> {
+export async function startStaticServer(dist: string, options: StaticServerOptions = {}): Promise<StaticServer> {
   const outputHeaders = join(dist, '_headers');
   const headersSource = existsSync(outputHeaders) ? 'dist/_headers' : 'public/_headers';
   const rules = headerRules(readFileSync(existsSync(outputHeaders) ? outputHeaders : join(ROOT, 'public', '_headers'), 'utf8'));
   const records: ServerRecord[] = [];
-  const gzipCache = new Map<string, Buffer>();
   const root = resolve(dist);
+  // Compress before the browser starts. Request callbacks only select a cached
+  // body, so host-side gzip CPU cannot enter a timed cold intent.
+  const assets = preparedAssets(root);
   const serverStart = Date.now();
-  const server: Server = createServer((request, response) => {
-    const startedAtMs = Date.now();
+  const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
+    const requestStartedAtMs = Date.now() - serverStart;
+    let recordRegistered = false;
+    const registerRecord = (
+      path: string,
+      headers: Record<string, string>,
+      status: number,
+      bodyBytes: number,
+      contentEncoding: string | null,
+      started: number,
+    ): void => {
+      if (recordRegistered) return;
+      recordRegistered = true;
+      const cacheControl = headers['Cache-Control'] ?? '';
+      const contentLength = headers['Content-Length'] ?? null;
+      recordResponseCompletion(response, (completion) => {
+        records.push({
+          path,
+          method: request.method ?? 'GET',
+          status: response.headersSent ? response.statusCode : completion === 'finished' ? status : null,
+          completion,
+          cacheControl,
+          contentEncoding,
+          contentLength,
+          bytesServed: completion === 'finished' ? bodyBytes : null,
+          startedAtMs: started,
+          endedAtMs: Date.now() - serverStart,
+        });
+      });
+    };
+    void (async (): Promise<void> => {
+      const startedAtMs = requestStartedAtMs;
+      const responseDelayMs = options.responseDelayMs ?? 0;
+      const waitBeforeResponse = async (): Promise<void> => {
+        if (responseDelayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, responseDelayMs));
+      };
     let pathname: string;
     try {
       pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
     } catch {
+      registerRecord(request.url ?? '/', { 'Cache-Control': PLATFORM_REVALIDATION }, 400, 0, null, startedAtMs);
       response.writeHead(400);
       response.end('bad request');
-      records.push({
-        path: request.url ?? '/',
-        method: request.method ?? 'GET',
-        status: 400,
-        cacheControl: '',
-        contentEncoding: null,
-        contentLength: null,
-        bytesServed: 0,
-        startedAtMs,
-        endedAtMs: Date.now(),
-      });
       return;
     }
     if (pathname.endsWith('/')) pathname += 'index.html';
     const headers = applyHeaderRules(rules, pathname);
     if (headers['Cache-Control'] === undefined) headers['Cache-Control'] = PLATFORM_REVALIDATION;
-    const record = (status: number, bodyBytes: number, contentEncoding: string | null): void => {
-      records.push({
-        path: pathname,
-        method: request.method ?? 'GET',
-        status,
-        cacheControl: headers['Cache-Control'] ?? '',
-        contentEncoding,
-        contentLength: headers['Content-Length'] ?? null,
-        bytesServed: bodyBytes,
-        startedAtMs: Date.now() - serverStart,
-        endedAtMs: Date.now() - serverStart,
-      });
-    };
     const file = resolve(root, `.${pathname}`);
     // Directory boundary, not a string prefix: `/tmp/x/dist2/...` starts with
     // `/tmp/x/dist`, so a prefix test would serve a sibling's bytes.
     if (file !== root && !file.startsWith(root + sep)) {
+      registerRecord(pathname, headers, 403, 0, null, startedAtMs);
       response.writeHead(403, headers);
       response.end('forbidden');
-      record(403, 0, null);
       return;
     }
     let stat;
     try {
       stat = statSync(file);
     } catch {
+      registerRecord(pathname, headers, 404, 0, null, startedAtMs);
       response.writeHead(404, headers);
       response.end('not found');
-      record(404, 0, null);
+      return;
+    }
+    const asset = assets.get(file);
+    if (asset === undefined) {
+      registerRecord(pathname, headers, 500, 0, null, startedAtMs);
+      response.writeHead(500, headers);
+      response.end('asset changed while serving');
       return;
     }
     const etag = `W/"${stat.size}-${Math.trunc(stat.mtimeMs)}"`;
     if (request.headers['if-none-match'] === etag) {
       headers['ETag'] = etag;
+      registerRecord(pathname, headers, 304, 0, null, startedAtMs);
       response.writeHead(304, headers);
       response.end();
-      record(304, 0, null);
       return;
     }
-    let body: Buffer = readFileSync(file);
+    let body: Buffer = asset.body;
     let contentEncoding: string | null = null;
     if ((request.headers['accept-encoding'] ?? '').includes('gzip')) {
-      const key = `${file}:${stat.size}:${stat.mtimeMs}`;
-      let compressed = gzipCache.get(key);
-      if (compressed === undefined) {
-        compressed = gzipSync(body);
-        gzipCache.set(key, compressed);
-      }
-      body = compressed;
+      body = asset.gzip;
       contentEncoding = 'gzip';
       headers['Content-Encoding'] = 'gzip';
       headers['Vary'] = 'Accept-Encoding';
@@ -546,17 +984,33 @@ async function startStaticServer(dist: string): Promise<StaticServer> {
     headers['Content-Type'] = CONTENT_TYPES[extname(file)] ?? 'application/octet-stream';
     headers['Content-Length'] = String(body.length);
     headers['ETag'] = etag;
+    registerRecord(pathname, headers, 200, body.length, contentEncoding, startedAtMs);
+    await waitBeforeResponse();
     response.writeHead(200, headers);
     response.end(body);
-    record(200, body.length, contentEncoding);
+    })().catch((error: unknown) => {
+      if (!recordRegistered) {
+        registerRecord(request.url ?? '/', { 'Cache-Control': PLATFORM_REVALIDATION }, 500, 0, null, requestStartedAtMs);
+      }
+      if (!response.headersSent) {
+        response.writeHead(500);
+        response.end('internal server error');
+      }
+      process.stderr.write(`benchmark static server request failed: ${scrub(error)}\n`);
+    });
   });
-  await new Promise<void>((done) => server.listen(0, '127.0.0.1', () => done()));
+  try {
+    await listenServer(server, options.port ?? 0);
+  } catch (error) {
+    await closeServer(server);
+    throw error;
+  }
   return {
     origin: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
     headersSource,
     records,
     close(): Promise<void> {
-      return new Promise((done) => server.close(() => done()));
+      return closeServer(server);
     },
   };
 }
@@ -577,6 +1031,14 @@ interface DatabaseIdentity {
   notesWithheld: number | null;
   inDegree: { distribution: NumericDistribution; top: DegreeRow[] };
   outDegree: { distribution: NumericDistribution; top: DegreeRow[] };
+  fieldLengths: {
+    title: FieldLengthDistribution;
+    excerpt: FieldLengthDistribution;
+    language: FieldLengthDistribution;
+    aliases: FieldLengthDistribution;
+    tagKeys: FieldLengthDistribution;
+    tagLabels: FieldLengthDistribution;
+  };
   corpus: ReturnType<typeof corpusTextStats>;
 }
 
@@ -598,6 +1060,90 @@ interface DatabaseAnalysis {
   plan: WorkloadPlan;
   inDegree: Map<string, number>;
   outDegree: Map<string, number>;
+  nodes: (SelectionNode & { id: number })[];
+  edges: SelectionEdge[];
+}
+
+export interface GraphOracleSelection {
+  center: string | null;
+  selection: GraphSelectionShape;
+}
+
+function oracleNodeOrder(a: SelectionNode, b: SelectionNode): number {
+  if (a.title !== b.title) return a.title < b.title ? -1 : 1;
+  return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+}
+
+function oracleInducedEdges(selected: ReadonlySet<string>, edges: readonly SelectionEdge[]): SelectionEdge[] {
+  const seen = new Set<string>();
+  const result: SelectionEdge[] = [];
+  for (const edge of edges) {
+    if (edge.from === edge.to || !selected.has(edge.from) || !selected.has(edge.to)) continue;
+    const key = `${edge.from}\u0000${edge.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ from: edge.from, to: edge.to });
+  }
+  return result.sort((a, b) => (a.from !== b.from ? (a.from < b.from ? -1 : 1) : a.to < b.to ? -1 : a.to > b.to ? 1 : 0));
+}
+
+/** Independently derive the expected ranked graph from finalized DB rows and edges. */
+type GraphOracleRequest =
+  | { scope: 'local'; centerSlug: string }
+  | { scope: 'global'; candidateSlugs?: ReadonlySet<string> };
+
+export function graphOracleSelection(
+  nodes: readonly (SelectionNode & { id: number })[],
+  edges: readonly SelectionEdge[],
+  request: GraphOracleRequest,
+): GraphOracleSelection {
+  if (request.scope === 'local') {
+    const { centerSlug } = request;
+    const center = nodes.find((node) => node.slug === centerSlug);
+    if (center === undefined) throw new Error(`local graph oracle center is unknown: ${centerSlug}`);
+    const neighbourSlugs = new Set<string>();
+    for (const edge of edges) {
+      if (edge.from === centerSlug) neighbourSlugs.add(edge.to);
+      if (edge.to === centerSlug) neighbourSlugs.add(edge.from);
+    }
+    const candidates = nodes
+      .filter((node) => node.slug !== centerSlug && neighbourSlugs.has(node.slug))
+      .sort(oracleNodeOrder);
+    const drawn = candidates.slice(0, LOCAL_NODE_LIMIT);
+    const selectedSlugs = new Set([center.slug, ...drawn.map((node) => node.slug)]);
+    return {
+      center: center.slug,
+      selection: {
+        nodes: drawn.map(({ slug, title, language }) => ({ slug, title, language: language ?? '' })),
+        edges: oracleInducedEdges(selectedSlugs, edges),
+        omitted: candidates.length - drawn.length,
+      },
+    };
+  }
+  const { candidateSlugs } = request;
+  const candidates = candidateSlugs === undefined ? [...nodes] : nodes.filter((node) => candidateSlugs.has(node.slug));
+  const candidateSet = new Set(candidates.map((node) => node.slug));
+  const candidateEdges = edges.filter((edge) => candidateSet.has(edge.from) && candidateSet.has(edge.to));
+  const neighbours = new Map(candidates.map((node) => [node.slug, new Set<string>()]));
+  for (const edge of candidateEdges) {
+    if (edge.from === edge.to) continue;
+    neighbours.get(edge.from)!.add(edge.to);
+    neighbours.get(edge.to)!.add(edge.from);
+  }
+  const ranked = candidates.sort((a, b) => {
+    const degree = neighbours.get(b.slug)!.size - neighbours.get(a.slug)!.size;
+    return degree === 0 ? oracleNodeOrder(a, b) : degree;
+  });
+  const drawn = ranked.slice(0, GLOBAL_NODE_LIMIT);
+  const selectedSlugs = new Set(drawn.map((node) => node.slug));
+  return {
+    center: null,
+    selection: {
+      nodes: drawn.map(({ slug, title, language }) => ({ slug, title, language: language ?? '' })),
+      edges: oracleInducedEdges(selectedSlugs, candidateEdges),
+      omitted: ranked.length - drawn.length,
+    },
+  };
 }
 
 function queryRows<T>(db: DatabaseSync, sql: string, params: readonly (string | number | null)[] = []): T[] {
@@ -611,6 +1157,18 @@ function queryValue(
 ): unknown {
   const row = queryRows<Record<string, unknown>>(db, sql, params)[0];
   return row === undefined ? undefined : Object.values(row)[0];
+}
+
+/** Read directed graph edges without using SQLite keyword-shaped aliases. */
+export function selectionEdges(db: DatabaseSync): SelectionEdge[] {
+  return queryRows<{ sourceSlug: string; targetSlug: string }>(
+    db,
+    `SELECT s.slug AS sourceSlug, t.slug AS targetSlug
+     FROM edges AS e
+     JOIN nodes AS s ON s.id = e.source_id
+     JOIN nodes AS t ON t.id = e.target_id
+     ORDER BY s.slug, t.slug`,
+  ).map((edge) => ({ from: edge.sourceSlug, to: edge.targetSlug }));
 }
 
 function topDegrees(degrees: ReadonlyMap<string, number>, nodes: readonly string[]): DegreeRow[] {
@@ -635,7 +1193,18 @@ function analyseDatabase(
     tags: Number(queryValue(db, 'SELECT COUNT(*) FROM tags') ?? 0),
     nodeTags: Number(queryValue(db, 'SELECT COUNT(*) FROM node_tags') ?? 0),
   };
-  const nodes = queryRows<{ slug: string }>(db, 'SELECT slug FROM nodes').map((row) => row.slug);
+  const nodeRows = queryRows<{ id: number; slug: string; title: string; language: string; excerpt: string | null }>(
+    db,
+    'SELECT id, slug, title, excerpt, language FROM nodes ORDER BY slug',
+  );
+  const nodes = nodeRows.map((row) => row.slug);
+  const selectionNodes = nodeRows.map((row) => ({
+    id: Number(row.id),
+    slug: row.slug,
+    title: row.title,
+    language: row.language,
+  }));
+  const edges = selectionEdges(db);
   // Seed every published node so isolated nodes contribute zero to the
   // distribution, not only to the top-list fallback.
   const inDegree = new Map<string, number>(nodes.map((slug): [string, number] => [slug, 0]));
@@ -675,6 +1244,18 @@ function analyseDatabase(
      ORDER BY members DESC, t.key ASC
      LIMIT 1`,
   )[0];
+  const aliases = queryRows<{ nodeId: number; alias: string | null }>(
+    db,
+    'SELECT node_id AS nodeId, alias FROM aliases ORDER BY node_id, ordinal',
+  );
+  const tags = queryRows<{ id: number; key: string | null; label: string | null }>(
+    db,
+    'SELECT id, key, label FROM tags ORDER BY id',
+  );
+  const taggedNodeIds = new Set(
+    queryRows<{ nodeId: number }>(db, 'SELECT DISTINCT node_id AS nodeId FROM node_tags').map((row) => Number(row.nodeId)),
+  );
+  const aliasNodeIds = new Set(aliases.map((row) => Number(row.nodeId)));
   const pageSlug = byTotal[0];
   if (pageSlug === undefined) throw new Error('the finalized DB has no published nodes');
   const digestMatch = /^site\.([0-9a-f]{64})\.sqlite$/.exec(fileName);
@@ -688,6 +1269,23 @@ function analyseDatabase(
       notesWithheld: finalized === null ? null : finalized.withheld,
       inDegree: { distribution: distributionOf([...inDegree.values()]), top: topDegrees(inDegree, nodes) },
       outDegree: { distribution: distributionOf([...outDegree.values()]), top: topDegrees(outDegree, nodes) },
+      fieldLengths: {
+        title: fieldLengthDistribution(nodeRows.map((row) => row.title)),
+        excerpt: fieldLengthDistribution(nodeRows.map((row) => row.excerpt)),
+        language: fieldLengthDistribution(nodeRows.map((row) => row.language)),
+        aliases: fieldLengthDistribution(
+          aliases.map((row) => row.alias),
+          rows.nodes - aliasNodeIds.size,
+        ),
+        tagKeys: fieldLengthDistribution(
+          tags.map((row) => row.key),
+          rows.nodes - taggedNodeIds.size,
+        ),
+        tagLabels: fieldLengthDistribution(
+          tags.map((row) => row.label),
+          rows.nodes - taggedNodeIds.size,
+        ),
+      },
       corpus,
     },
     plan: {
@@ -704,17 +1302,60 @@ function analyseDatabase(
     },
     inDegree,
     outDegree,
+    nodes: selectionNodes,
+    edges,
   };
 }
 
-interface DependencyFile {
-  kind: 'snapshot' | 'wasm-binary' | 'wasm-glue' | 'worker-chunk';
+export interface DependencyFile {
+  kind: 'snapshot' | 'snapshot-client' | 'wasm-binary' | 'wasm-glue' | 'worker-chunk';
   path: string;
   file: string;
 }
 
+interface PageModuleGraph {
+  reachable: Set<string>;
+  staticImports: Map<string, string[]>;
+}
+
+function reachablePageModules(dist: string, entryHtml: string): PageModuleGraph {
+  const html = readFileSync(entryHtml, 'utf8');
+  const roots = [...html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>/gi)]
+    .map((match) => match[1]!)
+    .filter((path) => path.startsWith('/_astro/') && path.endsWith('.js'));
+  const reachable = new Set<string>();
+  const staticImports = new Map<string, string[]>();
+  const pending = [...roots];
+  while (pending.length > 0) {
+    const path = pending.pop()!;
+    if (reachable.has(path)) continue;
+    const file = join(dist, path.slice(1));
+    if (!existsSync(file)) throw new Error(`page module is missing from the build: ${path}`);
+    reachable.add(path);
+    const source = readFileSync(file, 'utf8');
+    const staticSpecifiers = [
+      ...source.matchAll(/\bimport\s*["']([^"']+)["']/g),
+      ...source.matchAll(/\b(?:import|export)\b[^"'()]*?\bfrom\s*["']([^"']+)["']/g),
+    ].map((match) => match[1]!);
+    const resolveSpecifier = (specifier: string): string | null => {
+      if (!specifier.startsWith('.') && !specifier.startsWith('/')) return null;
+      const imported = new URL(specifier, `https://benchmark.invalid${path}`).pathname;
+      return imported.startsWith('/_astro/') && imported.endsWith('.js') ? imported : null;
+    };
+    const staticPaths = staticSpecifiers.map(resolveSpecifier).filter((value): value is string => value !== null);
+    staticImports.set(path, staticPaths);
+    const dynamicPaths = [...source.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)]
+      .map((match) => resolveSpecifier(match[1]!))
+      .filter((value): value is string => value !== null);
+    for (const imported of [...staticPaths, ...dynamicPaths]) {
+      if (!reachable.has(imported)) pending.push(imported);
+    }
+  }
+  return { reachable, staticImports };
+}
+
 /** The complete SQLite dependency set the build wrote, classified by kind. */
-function dependencyFiles(dist: string): DependencyFile[] {
+export function dependencyFiles(dist: string, entryHtml: string): DependencyFile[] {
   const found: DependencyFile[] = [];
   const dataDirectory = join(dist, 'data');
   if (existsSync(dataDirectory)) {
@@ -732,6 +1373,14 @@ function dependencyFiles(dist: string): DependencyFile[] {
       });
     }
   }
+  const snapshots = found.filter((dependency) => dependency.kind === 'snapshot');
+  if (snapshots.length !== 1) throw new Error(`expected one snapshot dependency, found ${snapshots.length}`);
+  const wasmBinaries = found.filter((dependency) => dependency.kind === 'wasm-binary');
+  if (wasmBinaries.length !== 1) throw new Error(`expected one SQLite WASM binary, found ${wasmBinaries.length}`);
+  const wasmModules = found.filter(
+    (dependency) => dependency.kind === 'wasm-glue' && basename(dependency.path) === 'sqlite-wasm.js',
+  );
+  if (wasmModules.length !== 1) throw new Error(`expected one SQLite WASM module, found ${wasmModules.length}`);
   const astroDirectory = join(dist, '_astro');
   if (existsSync(astroDirectory)) {
     for (const name of readdirSync(astroDirectory)) {
@@ -740,30 +1389,61 @@ function dependencyFiles(dist: string): DependencyFile[] {
       }
     }
   }
+  const workerChunks = found.filter((dependency) => dependency.kind === 'worker-chunk');
+  if (workerChunks.length !== 1) throw new Error(`expected one snapshot Worker chunk, found ${workerChunks.length}`);
+  const workerBasename = basename(workerChunks[0]!.file);
+  const pageModules = reachablePageModules(dist, entryHtml);
+  const clientChunks = [...pageModules.reachable].filter((path) =>
+    readFileSync(join(dist, path.slice(1)), 'utf8').includes(workerBasename),
+  );
+  if (clientChunks.length !== 1) throw new Error(`expected one snapshot client chunk, found ${clientChunks.length}`);
+  const clientChunk = clientChunks[0]!;
+  const clientDependencies = new Set<string>();
+  const pendingClientDependencies = [clientChunk];
+  while (pendingClientDependencies.length > 0) {
+    const path = pendingClientDependencies.pop()!;
+    if (clientDependencies.has(path)) continue;
+    clientDependencies.add(path);
+    for (const imported of pageModules.staticImports.get(path) ?? []) pendingClientDependencies.push(imported);
+  }
+  for (const path of [...clientDependencies].sort()) {
+    found.push({ kind: 'snapshot-client', path, file: join(dist, path.slice(1)) });
+  }
   return found;
 }
 
 // --- Page-side recorder and driver ----------------------------------------------
 
-interface WorkerPhases {
-  totalMs: number | null;
-  fetchMs: number | null;
-  digestMs: number | null;
-  wasmInitMs: number | null;
-  importMs: number | null;
-  wasmMemoryBytes: number | null;
-}
+type WorkerPhases = LoadPhases;
 
 function normalizePhases(value: unknown): WorkerPhases | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
+  const durationFields = ['totalMs', 'fetchMs', 'digestMs', 'wasmInitMs', 'importMs'] as const;
+  const fields = [...durationFields, 'wasmMemoryBytes'] as const;
+  const keys = Object.keys(record);
+  if (keys.length !== fields.length || keys.some((key) => !fields.includes(key as (typeof fields)[number]))) {
+    return null;
+  }
+  const durations = durationFields.map((field) => {
+    const candidate = record[field];
+    return typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0 ? candidate : null;
+  });
+  if (durations.some((duration) => duration === null)) return null;
+  const wasmMemoryBytes = record['wasmMemoryBytes'];
+  if (
+    wasmMemoryBytes !== null &&
+    !(typeof wasmMemoryBytes === 'number' && Number.isFinite(wasmMemoryBytes) && wasmMemoryBytes >= 0)
+  ) {
+    return null;
+  }
   return {
-    totalMs: numberOrNull(record['totalMs']),
-    fetchMs: numberOrNull(record['fetchMs']),
-    digestMs: numberOrNull(record['digestMs']),
-    wasmInitMs: numberOrNull(record['wasmInitMs']),
-    importMs: numberOrNull(record['importMs']),
-    wasmMemoryBytes: numberOrNull(record['wasmMemoryBytes']),
+    totalMs: durations[0]!,
+    fetchMs: durations[1]!,
+    digestMs: durations[2]!,
+    wasmInitMs: durations[3]!,
+    importMs: durations[4]!,
+    wasmMemoryBytes,
   };
 }
 
@@ -885,22 +1565,224 @@ async function installRecorder(context: BrowserContext): Promise<void> {
 
 /** Read one page's recorder arrays as plain data. */
 async function readRecorder(page: Page): Promise<RecorderState> {
-  return page.evaluate(() => {
+  const recorded = await page.evaluate(() => {
     const state = window as unknown as {
       __benchSnapshot?: SnapshotEvent[];
       __benchGraphRender?: GraphRenderEvent[];
       __benchPreview?: PreviewObservation[];
     };
-    const snapshot = (state.__benchSnapshot ?? []).map((event) => ({
-      ...event,
-      phases: event.phases ?? null,
-    }));
     return {
-      snapshot,
+      snapshot: state.__benchSnapshot ?? [],
       graphRender: state.__benchGraphRender ?? [],
       preview: state.__benchPreview ?? [],
     };
   });
+  return {
+    ...recorded,
+    snapshot: recorded.snapshot.map((event) => ({ ...event, phases: normalizePhases(event.phases) })),
+  };
+}
+
+/** Read only newly appended snapshot events so paginated walks stay linear. */
+async function readSnapshotEvents(page: Page, offset: number): Promise<{ events: SnapshotEvent[]; total: number }> {
+  const batch = await page.evaluate((from) => {
+    const state = window as unknown as { __benchSnapshot?: SnapshotEvent[] };
+    const all = state.__benchSnapshot ?? [];
+    return {
+      events: all.slice(from),
+      total: all.length,
+    };
+  }, offset);
+  return {
+    events: batch.events.map((event) => ({ ...event, phases: normalizePhases(event.phases) })),
+    total: batch.total,
+  };
+}
+
+export interface RenderedSelectionShape {
+  nodes: GraphSelectionShape['nodes'];
+  edges: GraphSelectionShape['edges'];
+}
+
+export interface RenderedPreviewShape {
+  title: string;
+  excerpt: string;
+  fragment: string | null;
+  titleLanguage: string;
+  excerptLanguage: string;
+}
+
+interface TagIdentity {
+  key: string;
+  label: string;
+}
+
+export function tagIdentityFailure(
+  actual: TagIdentity | null,
+  expected: TagIdentity,
+  label: string,
+): string | null {
+  return actual?.key === expected.key && actual.label === expected.label
+    ? null
+    : `${label}: tag identity differs (actual ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)})`;
+}
+
+export function compareRenderedPreview(
+  actual: RenderedPreviewShape,
+  expected: RenderedPreviewShape,
+  label: string,
+): string | null {
+  const comparable = (value: RenderedPreviewShape): RenderedPreviewShape => ({
+    ...value,
+    titleLanguage: value.titleLanguage.toLowerCase(),
+    excerptLanguage: value.excerptLanguage.toLowerCase(),
+  });
+  return JSON.stringify(comparable(actual)) === JSON.stringify(comparable(expected))
+    ? null
+    : `${label}: rendered preview differs (actual ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)})`;
+}
+
+export async function readRenderedPreview(page: Page): Promise<RenderedPreviewShape> {
+  return page.locator('#link-preview').evaluate((panel) => {
+    const title = panel.querySelector<HTMLElement>(':scope > strong');
+    const excerpt = panel.querySelector<HTMLElement>(':scope > p');
+    if (title === null || excerpt === null) throw new Error('the rendered preview has no title or excerpt');
+    const documentLanguage = document.documentElement.lang || 'en';
+    return {
+      title: title.textContent ?? '',
+      excerpt: excerpt.textContent ?? '',
+      fragment: panel.querySelector<HTMLElement>(':scope > .preview-fragment')?.textContent ?? null,
+      titleLanguage: title.getAttribute('lang') ?? documentLanguage,
+      excerptLanguage: excerpt.getAttribute('lang') ?? documentLanguage,
+    };
+  });
+}
+
+function orderedEdges(edges: readonly SelectionEdge[]): SelectionEdge[] {
+  return [...edges].sort((left, right) =>
+    left.from !== right.from
+      ? left.from < right.from
+        ? -1
+        : 1
+      : left.to < right.to
+        ? -1
+        : left.to > right.to
+          ? 1
+          : 0,
+  );
+}
+
+export function compareRenderedSelection(
+  actual: RenderedSelectionShape,
+  expected: RenderedSelectionShape,
+  label: string,
+): string | null {
+  const comparableNodes = (nodes: GraphSelectionShape['nodes']): GraphSelectionShape['nodes'] =>
+    nodes.map((node) => ({ ...node, language: node.language.toLowerCase() }));
+  if (JSON.stringify(comparableNodes(actual.nodes)) !== JSON.stringify(comparableNodes(expected.nodes))) {
+    return `${label}: rendered nodes differ (actual ${JSON.stringify(actual.nodes)}, expected ${JSON.stringify(expected.nodes)})`;
+  }
+  const actualEdges = orderedEdges(actual.edges);
+  const expectedEdges = orderedEdges(expected.edges);
+  if (JSON.stringify(actualEdges) !== JSON.stringify(expectedEdges)) {
+    return `${label}: rendered edges differ (actual ${JSON.stringify(actualEdges)}, expected ${JSON.stringify(expectedEdges)})`;
+  }
+  return null;
+}
+
+export async function readRenderedGraph(page: Page): Promise<RenderedSelectionShape> {
+  return page.evaluate(() => {
+    const region = document.querySelector<HTMLElement>('[data-graph-region]');
+    if (region === null) throw new Error('the rendered graph region is missing');
+    const svg = region.querySelector<SVGSVGElement>('[data-graph-canvas] svg');
+    const table = region.querySelector<HTMLElement>('[data-graph-body]');
+    if (svg === null || table === null) throw new Error('the rendered graph surfaces are missing');
+
+    const slugOf = (href: string): string => {
+      const match = /^\/notes\/([^/]+)\/$/.exec(new URL(href, location.origin).pathname);
+      if (match === null) throw new Error(`rendered graph link is not a note route: ${href}`);
+      return match[1]!;
+    };
+    const documentLanguage = document.documentElement.lang || 'en';
+    const nodes = [...table.querySelectorAll<HTMLTableRowElement>(':scope > tr')].map((row) => {
+      const link = row.querySelector<HTMLAnchorElement>('th a[href]');
+      if (link === null) throw new Error('a rendered graph row has no identity link');
+      return {
+        slug: slugOf(link.href),
+        title: link.textContent ?? '',
+        language: link.getAttribute('lang') ?? documentLanguage,
+      };
+    });
+
+    const points = [...svg.querySelectorAll<SVGAElement>('.graph-nodes a[href]')].map((anchor) => {
+      const circle = anchor.querySelector<SVGCircleElement>('circle');
+      const x = circle?.getAttribute('cx');
+      const y = circle?.getAttribute('cy');
+      if (circle === null || x === null || y === null || !Number.isFinite(Number(x)) || !Number.isFinite(Number(y))) {
+        throw new Error('a rendered graph node has no finite coordinates');
+      }
+      return { slug: slugOf(anchor.href.baseVal), x: Number(x), y: Number(y) };
+    });
+    if (JSON.stringify(points.map((point) => point.slug)) !== JSON.stringify(nodes.map((node) => node.slug))) {
+      throw new Error('the rendered graph table and figure expose different node identities');
+    }
+    const closest = (x: number, y: number): string => {
+      const nearest = points
+        .map((point) => ({ point, distance: Math.hypot(point.x - x, point.y - y) }))
+        .sort((left, right) => left.distance - right.distance)[0];
+      if (nearest === undefined) throw new Error('a rendered graph edge has no node endpoint');
+      return nearest.point.slug;
+    };
+    const edges: SelectionEdge[] = [];
+    for (const line of svg.querySelectorAll<SVGLineElement>('.graph-edges line')) {
+      const coordinates = ['x1', 'y1', 'x2', 'y2'].map((name) => Number(line.getAttribute(name)));
+      if (coordinates.some((value) => !Number.isFinite(value))) {
+        throw new Error('a rendered graph edge has no finite coordinates');
+      }
+      const from = closest(coordinates[0]!, coordinates[1]!);
+      const to = closest(coordinates[2]!, coordinates[3]!);
+      if (from === to) throw new Error(`a rendered graph edge maps both endpoints to ${from}`);
+      edges.push({ from, to });
+      if (line.hasAttribute('marker-start')) edges.push({ from: to, to: from });
+    }
+    return { nodes, edges };
+  });
+}
+
+export async function readRenderedNotes(page: Page, selector: string): Promise<GraphSelectionShape['nodes']> {
+  return page.locator(selector).evaluateAll((links) => {
+    const documentLanguage = document.documentElement.lang || 'en';
+    return links.map((element) => {
+      if (!(element instanceof HTMLAnchorElement)) throw new Error('rendered note identity is not an anchor');
+      const match = /^\/notes\/([^/]+)\/$/.exec(element.pathname);
+      if (match === null) throw new Error(`rendered note link is not a note route: ${element.href}`);
+      return {
+        slug: match[1]!,
+        title: element.textContent ?? '',
+        language: element.getAttribute('lang') ?? documentLanguage,
+      };
+    });
+  });
+}
+
+/** Open a measured page and arm its page target before any navigation occurs. */
+export async function openMeasuredPage(
+  context: BrowserContext,
+  throttle: number,
+): Promise<{ page: Page; session: CDPSession }> {
+  const page = await context.newPage();
+  try {
+    const session = await context.newCDPSession(page);
+    if (throttle > 1) await session.send('Emulation.setCPUThrottlingRate', { rate: throttle });
+    return { page, session };
+  } catch (error) {
+    try {
+      await page.close();
+    } catch {
+      // The caller records the original page-setup failure; best-effort cleanup is enough here.
+    }
+    throw error;
+  }
 }
 
 /**
@@ -958,7 +1840,7 @@ async function navigationTiming(page: Page): Promise<RenderTiming> {
   });
 }
 
-interface ResourceEntry {
+export interface ResourceEntry {
   source: 'page' | 'worker';
   page: string;
   path: string;
@@ -979,7 +1861,7 @@ interface ResourceEntry {
  * timeline; both are collected here under `source` so the dependency table can
  * use the real numbers instead of a page-side absence reported as zero.
  */
-async function collectResources(page: Page, label: string, out: ResourceEntry[]): Promise<void> {
+export async function collectResources(page: Page, label: string, out: ResourceEntry[]): Promise<void> {
   const readEntries = (): Omit<ResourceEntry, 'source' | 'page'>[] => {
     return (performance.getEntriesByType('resource') as PerformanceResourceTiming[]).map((entry) => {
       let path: string;
@@ -1002,11 +1884,23 @@ async function collectResources(page: Page, label: string, out: ResourceEntry[])
       };
     });
   };
-  for (const entry of await page.evaluate(readEntries).catch(() => [])) {
+  let pageEntries: Omit<ResourceEntry, 'source' | 'page'>[];
+  try {
+    pageEntries = await page.evaluate(readEntries);
+  } catch (error) {
+    throw new Error(`${label} page resource timing failed: ${scrub(error)}`);
+  }
+  for (const entry of pageEntries) {
     out.push({ source: 'page', page: label, ...entry });
   }
-  for (const worker of page.workers()) {
-    for (const entry of await worker.evaluate(readEntries).catch(() => [])) {
+  for (const [index, worker] of page.workers().entries()) {
+    let workerEntries: Omit<ResourceEntry, 'source' | 'page'>[];
+    try {
+      workerEntries = await worker.evaluate(readEntries);
+    } catch (error) {
+      throw new Error(`${label} worker ${index + 1} resource timing failed: ${scrub(error)}`);
+    }
+    for (const entry of workerEntries) {
       out.push({ source: 'worker', page: label, ...entry });
     }
   }
@@ -1022,28 +1916,36 @@ interface HeapSummary {
 }
 
 /** Poll CDP `Performance.getMetrics` until stopped; the last sample is steady. */
-function startHeapPolling(session: CDPSession): { stop: () => Promise<HeapSummary> } {
+export function startHeapPolling(session: CDPSession): { stop: () => Promise<HeapSummary> } {
   const values: { jsHeap: number | null; arrayBuffer: number | null }[] = [];
   let stopped = false;
+  let failure: { error: unknown } | null = null;
   const loop = (async () => {
     while (!stopped) {
-      const metrics = await session.send('Performance.getMetrics').catch(() => null);
-      if (metrics !== null) {
+      try {
+        const metrics = await session.send('Performance.getMetrics');
         const find = (name: string): number | null => {
           const metric = metrics.metrics.find((entry) => entry.name === name);
           return metric === undefined || !Number.isFinite(metric.value) ? null : Math.round(metric.value);
         };
         values.push({ jsHeap: find('JSHeapUsedSize'), arrayBuffer: find('ArrayBufferBytes') });
+      } catch (error) {
+        failure = { error };
+        break;
       }
-      await new Promise((resolve) => setTimeout(resolve, HEAP_POLL_INTERVAL_MS));
+      if (!stopped) await new Promise((resolve) => setTimeout(resolve, HEAP_POLL_INTERVAL_MS));
     }
   })();
   return {
     async stop(): Promise<HeapSummary> {
       stopped = true;
       await loop;
+      if (failure !== null) throw new Error(`CDP Performance.getMetrics failed: ${scrub(failure.error)}`);
       const jsHeap = values.map((sample) => sample.jsHeap).filter((value): value is number => value !== null);
       const arrayBuffer = values.map((sample) => sample.arrayBuffer).filter((value): value is number => value !== null);
+      if (jsHeap.length < 2) {
+        throw new Error(`CDP Performance.getMetrics returned ${jsHeap.length} usable JSHeapUsedSize samples; need at least 2`);
+      }
       return {
         samples: values.length,
         arrayBufferObserved: values.some((sample) => sample.arrayBuffer !== null),
@@ -1065,7 +1967,12 @@ interface DriverReply {
   result?: {
     type: string;
     known?: boolean;
-    page?: { notes: { slug: string; title: string; language: string }[]; nextCursor: string | null };
+    page?: {
+      known?: boolean;
+      tag?: TagIdentity;
+      notes: { slug: string; title: string; language: string }[];
+      nextCursor: string | null;
+    };
     preview?: { slug: string; title: string; excerpt: string } | null;
     graph?: {
       center?: { slug: string };
@@ -1162,15 +2069,45 @@ function timingOf(): OperationTiming {
   return { repetitions: 0, dispatchMs: [], operationMs: [], sqlMs: [], phases: null, dispatchSummary: seriesOf([]), opSummary: seriesOf([]) };
 }
 
+export function measuredReplyFailure(
+  label: string,
+  reply: Pick<DriverReply, 'dispatchMs' | 'operationMs' | 'sqlMs' | 'phases'>,
+  requirePhases = false,
+): string | null {
+  if (!Number.isFinite(reply.dispatchMs)) return `${label}: measured reply has non-finite dispatchMs`;
+  if (!Number.isFinite(reply.operationMs)) return `${label}: measured reply has non-finite operationMs`;
+  if (!Number.isFinite(reply.sqlMs)) return `${label}: measured reply has non-finite sqlMs`;
+  if (requirePhases && normalizePhases(reply.phases) === null) return `${label}: cold measured reply has no complete phases`;
+  return null;
+}
+
+export function measuredEventFailure(label: string, event: SnapshotEvent, requirePhases = false): string | null {
+  if (!Number.isFinite(event.ms)) return `${label}: measured reply has non-finite dispatchMs`;
+  if (!Number.isFinite(event.operationMs)) return `${label}: measured reply has non-finite operationMs`;
+  if (!Number.isFinite(event.sqlMs)) return `${label}: measured reply has non-finite sqlMs`;
+  if (requirePhases && normalizePhases(event.phases) === null) return `${label}: cold measured reply has no complete phases`;
+  return null;
+}
+
 function absorbTiming(timing: OperationTiming, reply: DriverReply): void {
-  if (Number.isFinite(reply.dispatchMs)) timing.dispatchMs.push(round(reply.dispatchMs, 3));
-  if (typeof reply.operationMs === 'number') timing.operationMs.push(round(reply.operationMs, 3));
-  if (typeof reply.sqlMs === 'number') timing.sqlMs.push(round(reply.sqlMs, 3));
+  const failure = measuredReplyFailure('driver', reply);
+  if (failure !== null) throw new Error(failure);
+  timing.dispatchMs.push(round(reply.dispatchMs, 3));
+  timing.operationMs.push(round(reply.operationMs!, 3));
+  timing.sqlMs.push(round(reply.sqlMs!, 3));
   if (timing.phases === null && reply.phases != null) timing.phases = normalizePhases(reply.phases);
 }
 
-function finalizeTiming(timing: OperationTiming, repetitions: number): OperationTiming {
+function finalizeTiming(
+  timing: OperationTiming,
+  repetitions: number,
+  successfulReplies: number,
+  label: string,
+): OperationTiming {
   timing.repetitions = repetitions;
+  assertExactSampleCount(`${label} dispatch telemetry`, timing.dispatchMs.length, successfulReplies);
+  assertExactSampleCount(`${label} operation telemetry`, timing.operationMs.length, successfulReplies);
+  assertExactSampleCount(`${label} SQL telemetry`, timing.sqlMs.length, successfulReplies);
   timing.dispatchSummary = seriesOf(timing.dispatchMs);
   timing.opSummary = seriesOf(timing.operationMs);
   return timing;
@@ -1180,6 +2117,7 @@ interface WalkOutcome {
   timing: OperationTiming;
   pagesPerWalk: number;
   notes: { slug: string; title: string; language: string }[];
+  tag: TagIdentity | null;
   failures: string[];
 }
 
@@ -1190,11 +2128,14 @@ async function driveWalk(
   args: Record<string, unknown>,
   pageSize: number,
   repetitions: number,
+  maxPages: number = MAX_WALK_PAGES,
 ): Promise<WalkOutcome> {
   const timing = timingOf();
   const failures: string[] = [];
   const notes: { slug: string; title: string; language: string }[] = [];
+  let tag: TagIdentity | null = null;
   let pagesPerWalk = 0;
+  let successfulReplies = 0;
   for (let repetition = 0; repetition < repetitions; repetition += 1) {
     let cursor: string | null = null;
     let pages = 0;
@@ -1202,6 +2143,12 @@ async function driveWalk(
       const reply = await driverRequest(page, type, { ...args, cursor, pageSize }, DRIVER_WARM_TIMEOUT_MS);
       if (!reply.ok || reply.result === undefined) {
         failures.push(`${type} repetition ${repetition} page ${pages}: ${reply.code ?? 'failed'}`);
+        break;
+      }
+      successfulReplies += 1;
+      const telemetryFailure = measuredReplyFailure(`${type} repetition ${repetition} page ${pages}`, reply);
+      if (telemetryFailure !== null) {
+        failures.push(telemetryFailure);
         break;
       }
       absorbTiming(timing, reply);
@@ -1213,18 +2160,34 @@ async function driveWalk(
       if (walkPage.notes.length > pageSize) {
         failures.push(`${type} returned ${walkPage.notes.length} notes for page size ${pageSize}`);
       }
+      if (type === 'byTag') {
+        const observed = walkPage.known === true && walkPage.tag !== undefined ? walkPage.tag : null;
+        if (observed === null) failures.push(`byTag repetition ${repetition} page ${pages}: reply carried no tag identity`);
+        else if (tag === null) tag = observed;
+        else {
+          const mismatch = tagIdentityFailure(observed, tag, `byTag repetition ${repetition} page ${pages}`);
+          if (mismatch !== null) failures.push(mismatch);
+        }
+      }
       if (repetition === 0) notes.push(...walkPage.notes);
       cursor = walkPage.nextCursor;
       pages += 1;
       if (cursor === null) break;
-      if (pages >= MAX_WALK_PAGES) {
-        failures.push(`${type} cursor did not terminate within ${MAX_WALK_PAGES} pages`);
+      if (pages >= maxPages) {
+        failures.push(`${type} cursor did not terminate within ${maxPages} pages`);
         break;
       }
     }
     if (repetition === 0) pagesPerWalk = pages;
   }
-  return { timing: finalizeTiming(timing, repetitions), pagesPerWalk, notes, failures };
+  try {
+    finalizeTiming(timing, repetitions, successfulReplies, type);
+  } catch (error) {
+    failures.push(scrub(error));
+    timing.dispatchSummary = seriesOf([]);
+    timing.opSummary = seriesOf([]);
+  }
+  return { timing, pagesPerWalk, notes, tag, failures };
 }
 
 // --- Workload measurement ---------------------------------------------------------
@@ -1340,7 +2303,7 @@ interface QueriesReport {
   seam: { sqlMsObserved: boolean; phasesObserved: boolean };
 }
 
-interface DependencyReport {
+export interface DependencyReport {
   kind: DependencyFile['kind'];
   path: string;
   decodedBytes: number;
@@ -1367,6 +2330,61 @@ interface TransferReport {
   resources: ResourceEntry[];
 }
 
+type MeasuredDependency = DependencyFile & { decodedBytes: number; gzipBytes: number };
+
+function requiresColdTransfer(dependency: DependencyFile): boolean {
+  return dependency.kind !== 'wasm-glue' || basename(dependency.path) === 'sqlite-wasm.js';
+}
+
+export function dependencyTransferReports(
+  dependencies: readonly MeasuredDependency[],
+  serverRecords: readonly ServerRecord[],
+  resources: readonly ResourceEntry[],
+): { dependencies: DependencyReport[]; failures: string[] } {
+  const failures: string[] = [];
+  const reports = dependencies.map((dependency): DependencyReport => {
+    const attempts = serverRecords.filter((record) => record.path === dependency.path);
+    const http =
+      attempts.find((record) => record.completion === 'finished' && record.status === 200) ??
+      attempts.find((record) => record.completion === 'finished' && record.status === 304) ??
+      null;
+    const observed = resources.filter((entry) => entry.path === dependency.path);
+    const resource =
+      observed.find(
+        (entry) => (entry.encodedBodySize ?? 0) > 0 && (entry.transferSize ?? 0) >= (entry.encodedBodySize ?? 0),
+      ) ?? null;
+    const cacheHits = observed.filter(
+      (entry) => (entry.transferSize ?? 0) < (entry.encodedBodySize ?? 0),
+    ).length;
+    let cacheState: DependencyReport['cacheState'] = 'not-requested';
+    if (http?.status === 200) cacheState = 'network';
+    else if (http?.status === 304) cacheState = 'revalidated';
+    else if (observed.some((entry) => (entry.transferSize ?? 0) < (entry.encodedBodySize ?? 0))) cacheState = 'cache';
+    else if (attempts.length > 0 || observed.length > 0) cacheState = 'unknown';
+
+    if (requiresColdTransfer(dependency) && http?.status !== 200) {
+      failures.push(`${dependency.kind} ${dependency.path} has no finished HTTP 200 response`);
+    }
+    if (requiresColdTransfer(dependency) && resource === null) {
+      failures.push(`${dependency.kind} ${dependency.path} has no cold browser resource-timing observation`);
+    }
+
+    return {
+      kind: dependency.kind,
+      path: dependency.path,
+      decodedBytes: dependency.decodedBytes,
+      gzipBytes: dependency.gzipBytes,
+      http,
+      resource,
+      resourceObservations: observed.length,
+      cacheHitObservations: cacheHits,
+      requests: attempts.length,
+      cacheState,
+    };
+  });
+  return { dependencies: reports, failures };
+}
+
 interface ReadingReport {
   definition: string;
   zeroRequests: {
@@ -1384,7 +2402,7 @@ interface ReadingReport {
   regressionNote: string;
 }
 
-interface WorkloadReport {
+export interface WorkloadReport {
   id: string;
   size: number;
   topology: Topology;
@@ -1400,6 +2418,22 @@ interface WorkloadReport {
   checks: CheckResult[];
   failures: FailoverRecord[];
   elapsedSeconds: number;
+}
+
+export class WorkloadMeasurementError extends Error {
+  readonly workload: WorkloadReport;
+  readonly originalError: unknown;
+
+  constructor(workload: WorkloadReport, originalError: unknown) {
+    super(scrub(originalError));
+    this.name = 'WorkloadMeasurementError';
+    this.workload = workload;
+    this.originalError = originalError;
+    workload.failures.push({
+      phase: originalError instanceof BenchmarkIdentityDriftError ? 'identity' : 'workload',
+      message: scrub(originalError),
+    });
+  }
 }
 
 function emptyPreviewSample(): PreviewSample {
@@ -1430,6 +2464,18 @@ async function withFailure(
   }
 }
 
+export async function captureCleanupFailure(
+  failures: FailoverRecord[],
+  phase: string,
+  action: () => void | Promise<void>,
+): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    failures.push({ phase, message: scrub(error) });
+  }
+}
+
 function urlPath(url: string): string {
   try {
     return new URL(url).pathname;
@@ -1451,9 +2497,11 @@ let observedBrowserVersion: string | null = null;
  */
 async function measureWorkload(
   options: Options,
+  browserSettings: ResolvedBenchmarkBrowser,
   cliPath: string,
   size: number,
   topology: Topology,
+  expectedCandidate: CandidateIdentity,
 ): Promise<WorkloadReport> {
   const startedAt = Date.now();
   const id = `${size}-${topology}`;
@@ -1481,12 +2529,16 @@ async function measureWorkload(
     failures: [],
     elapsedSeconds: 0,
   };
-  const root = mkdtempSync(join(tmpdir(), `anc-bench-${id}-`));
-  scrubPaths.push(root);
+  let root: string | undefined;
+  let escapedFailure: { error: unknown } | null = null;
   let server: StaticServer | undefined;
   let browser: Browser | undefined;
   let db: DatabaseSync | undefined;
+  const cleanup = (phase: string, action: () => void | Promise<void>): Promise<void> =>
+    captureCleanupFailure(workload.failures, phase, action);
   try {
+    root = mkdtempSync(join(tmpdir(), `anc-bench-${id}-`));
+    scrubPaths.push(root);
     const contentDirectory = join(root, 'notes');
     mkdirSync(contentDirectory, { recursive: true });
     const generated = await generateCorpus(contentDirectory, workload.generator.options);
@@ -1502,6 +2554,8 @@ async function measureWorkload(
     workload.fixture = fixtureIdentity(contentDirectory);
     const corpusText = corpusTextStats(contentDirectory);
 
+    assertCandidateIdentityStable(expectedCandidate, cliPath, `workload ${id} before build`, 'state');
+
     const buildStarted = Date.now();
     const build = spawnSync(process.execPath, [cliPath, 'build', '--content', 'notes', '--out', 'dist'], {
       cwd: root,
@@ -1509,6 +2563,7 @@ async function measureWorkload(
       timeout: BUILD_TIMEOUT_MS,
       maxBuffer: 64 * 1024 * 1024,
     });
+    assertCandidateIdentityStable(expectedCandidate, cliPath, `workload ${id} after build`, 'state');
     workload.build = {
       seconds: round((Date.now() - buildStarted) / 1000, 2),
       cli: { basename: basename(cliPath), sha256: sha256File(cliPath) },
@@ -1545,8 +2600,21 @@ async function measureWorkload(
       });
     }
     const plan = analysis.plan;
+    const tagNodes =
+      plan.tagKey === null
+        ? []
+        : queryRows<{ slug: string; title: string; language: string }>(
+            db,
+            `SELECT n.slug AS slug, n.title AS title, n.language AS language
+             FROM tags AS t
+             JOIN node_tags AS nt ON nt.tag_id = t.id
+             JOIN nodes AS n ON n.id = nt.node_id
+             WHERE t.key = ?
+             ORDER BY n.slug`,
+            [plan.tagKey],
+          );
 
-    const dependencies = dependencyFiles(dist).map((dependency) => {
+    const dependencies = dependencyFiles(dist, join(dist, 'notes', plan.pageSlug, 'index.html')).map((dependency) => {
       const bytes = readFileSync(dependency.file);
       return { ...dependency, decodedBytes: bytes.length, gzipBytes: gzipSync(bytes).length };
     });
@@ -1561,10 +2629,9 @@ async function measureWorkload(
     server = await startStaticServer(dist);
     const resources: ResourceEntry[] = [];
     const { chromium } = await import('playwright');
-    browser = await chromium.launch();
+    browser = await chromium.launch(browserSettings.launchOptions);
     observedBrowserVersion = browser.version();
     const pageUrl = `${server.origin}/notes/${plan.pageSlug}/`;
-    const inactiveUrl = `${server.origin}/notes/${plan.pageSlug}/`;
 
     // --- F. Ordinary reading: inactive first, in its own fresh context ---
     const reading: ReadingReport = {
@@ -1586,28 +2653,25 @@ async function measureWorkload(
     };
     workload.reading = reading;
 
-    const inactiveContext = await browser.newContext({ javaScriptEnabled: false, viewport: VIEWPORT });
+    const inactiveContext = await browser.newContext({
+      ...browserSettings.contextOptions,
+      javaScriptEnabled: false,
+    });
     try {
-      const page = await inactiveContext.newPage();
-      const session = await inactiveContext.newCDPSession(page);
-      if (options.throttle > 1) await session.send('Emulation.setCPUThrottlingRate', { rate: options.throttle });
-      await page.goto(inactiveUrl, { waitUntil: 'load' });
+      const { page } = await openMeasuredPage(inactiveContext, options.throttle);
+      await page.goto(pageUrl, { waitUntil: 'load' });
       await page.waitForTimeout(300);
       reading.inactiveJavaScript = await navigationTiming(page);
     } finally {
-      await inactiveContext.close();
+      await cleanup('cleanup-inactive-context', () => inactiveContext.close());
     }
 
-    const context = await browser.newContext({ viewport: VIEWPORT });
+    const context = await browser.newContext(browserSettings.contextOptions);
     await installRecorder(context);
     try {
       // Active initial render, no intent of any kind, under the same throttle
       // as the inactive measurement so the delta is one variable.
-      const readingPage = await context.newPage();
-      const readingSession = await context.newCDPSession(readingPage);
-      if (options.throttle > 1) {
-        await readingSession.send('Emulation.setCPUThrottlingRate', { rate: options.throttle });
-      }
+      const { page: readingPage } = await openMeasuredPage(context, options.throttle);
       const readingRequests = sqliteAssetRequests(readingPage);
       await readingPage.goto(pageUrl, { waitUntil: 'load' });
       await readingPage.waitForTimeout(300);
@@ -1632,15 +2696,14 @@ async function measureWorkload(
           message: `reading page requested SQLite assets before intent: ${readingRequests.map(urlPath).join(', ')}`,
         });
       }
+      await collectResources(readingPage, 'reading-page', resources);
       await readingPage.close();
 
       let mainPage: Page | undefined;
       // --- B/C/D/E on the main page ---
       await withFailure(workload, 'preview-and-startup', async () => {
-        const page = await context.newPage();
+        const { page, session } = await openMeasuredPage(context, options.throttle);
         mainPage = page;
-        const session = await context.newCDPSession(page);
-        if (options.throttle > 1) await session.send('Emulation.setCPUThrottlingRate', { rate: options.throttle });
         await session.send('Performance.enable');
         const pageRequests = sqliteAssetRequests(page);
         const startup: StartupReport = {
@@ -1680,7 +2743,7 @@ async function measureWorkload(
           definitions: [
             'dispatch→result: armed request posted to observed successful snapshot-result on the page clock (event.ms)',
             'operationMs: the Worker reply’s own named-operation span after initialization',
-            'sqlMs/phases: present only when the runtime measurement seam supplies them; null otherwise',
+            'sqlMs: required finite inner-SQL telemetry on every successful measured reply; cold replies also require complete phases',
             'graph render: the graph client’s graph-render event, reported apart from query and messaging cost',
           ],
           ui: { localGraph: null, tagBrowse: null, globalGraph: null },
@@ -1691,6 +2754,24 @@ async function measureWorkload(
         await withFailure(workload, 'cold-warm-preview', async () => {
         const target = await firstEligibleLink(page);
         if (target === null) throw new Error('no eligible published note link on the measured page');
+        const previewNode = queryRows<{ id: number; title: string; excerpt: string; language: string }>(
+          db!,
+          'SELECT id, title, excerpt, language FROM nodes WHERE slug = ?',
+          [target.slug],
+        )[0];
+        if (previewNode === undefined) throw new Error(`preview target is absent from the DB: ${target.slug}`);
+        const previewAliases = queryRows<{ alias: string }>(
+          db!,
+          'SELECT alias FROM aliases WHERE node_id = ? ORDER BY ordinal',
+          [previewNode.id],
+        ).map((row) => row.alias);
+        const expectedPreview: RenderedPreviewShape = {
+          title: previewTitle({ title: previewNode.title, excerpt: previewNode.excerpt, aliases: previewAliases }),
+          excerpt: previewNode.excerpt,
+          fragment: previewFragment(new URL(target.href, pageUrl).hash) ?? null,
+          titleLanguage: previewNode.language,
+          excerptLanguage: previewNode.language,
+        };
         const polling = startHeapPolling(session);
         let coldSample = emptyPreviewSample();
         try {
@@ -1704,6 +2785,8 @@ async function measureWorkload(
           if (coldVisible === null || coldVisible.slug !== target.slug) {
             throw new Error('the cold hover did not produce an observed preview for the marked link');
           }
+          const coldMismatch = compareRenderedPreview(await readRenderedPreview(page), expectedPreview, 'cold preview');
+          if (coldMismatch !== null) throw new Error(coldMismatch);
           const coldText = coldVisible.text ?? '';
           coldSample = {
             ...coldSample,
@@ -1711,17 +2794,21 @@ async function measureWorkload(
             visible: true,
             nonEmpty: coldText.trim() !== '',
             targetSlug: coldVisible.slug,
+            targetTitle: previewNode.title,
+            titleMatched: true,
             panelTextSample: coldText.slice(0, 200),
           };
-          const firstReply = coldRecorder.snapshot.find((event) => event.ms !== null) ?? null;
-          startup.worker.firstReplyMs = firstReply?.ms ?? null;
-          const phasesEvent = coldRecorder.snapshot.find((event) => event.phases !== null) ?? null;
-          startup.worker.phases = phasesEvent === null ? null : normalizePhases(phasesEvent.phases);
+          const coldReplies = coldRecorder.snapshot.filter((event) => event.type === 'preview');
+          const firstReply = coldReplies.at(-1) ?? null;
+          if (firstReply === null) throw new Error('cold preview produced no measured preview reply');
+          const telemetryFailure = measuredEventFailure('cold preview', firstReply, true);
+          if (telemetryFailure !== null) throw new Error(telemetryFailure);
+          startup.worker.firstReplyMs = firstReply.ms;
+          const phasesEvent = firstReply;
+          startup.worker.phases = normalizePhases(phasesEvent.phases);
           startup.worker.wasmMemoryBytes = startup.worker.phases?.wasmMemoryBytes ?? null;
           startup.worker.phasesNote =
-            phasesEvent === null
-              ? 'no snapshot-result detail carried phases; the runtime measurement seam was not present at this run'
-              : 'phases from the first armed snapshot-result detail that carried them';
+            'phases from the first armed snapshot-result detail';
         } catch (error) {
           coldSample.error = scrub(error);
           workload.failures.push({ phase: 'preview-cold', message: coldSample.error });
@@ -1734,21 +2821,39 @@ async function measureWorkload(
         // Warm preview: the same link after readiness.
         const warmSample = emptyPreviewSample();
         try {
-          await page.mouse.move(0, 0);
-          await page.locator('#link-preview').waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => {});
-          await page.waitForTimeout(200);
-          const warmStarted = Date.now();
-          await page.locator('[data-bench-target-link]').hover();
-          await page.locator('#link-preview').waitFor({ state: 'visible', timeout: WARM_PREVIEW_TIMEOUT_MS });
-          warmSample.intentToVisibleMs = Date.now() - warmStarted;
-          const warmRecorder = await readRecorder(page);
-          const warmVisible =
-            warmRecorder.preview.filter((observation) => observation.visibleAt !== null).at(-1) ?? null;
-          if (warmVisible === null) throw new Error('the warm hover produced no observed visible panel');
+          const panel = page.locator('#link-preview');
+          if (!(await panel.isVisible())) throw new Error('the warm hover did not start from a visible cold panel');
+           await page.mouse.move(0, 0);
+            await panel.waitFor({ state: 'hidden', timeout: 5_000 });
+            const hiddenRecorder = await readRecorder(page);
+            const hiddenPreviewCount = hiddenRecorder.preview.length;
+           await page.waitForTimeout(200);
+           const warmStarted = Date.now();
+           await page.locator('[data-bench-target-link]').hover();
+           await panel.waitFor({ state: 'visible', timeout: WARM_PREVIEW_TIMEOUT_MS });
+           warmSample.intentToVisibleMs = Date.now() - warmStarted;
+           const warmRecorder = await readRecorder(page);
+           const warmReplies = warmRecorder.snapshot.slice(hiddenRecorder.snapshot.length).filter((event) => event.type === 'preview');
+           const warmReply = warmReplies.at(-1) ?? null;
+           if (warmReply === null) throw new Error('warm preview produced no measured preview reply');
+           const telemetryFailure = measuredEventFailure('warm preview', warmReply);
+           if (telemetryFailure !== null) throw new Error(telemetryFailure);
+           const warmVisible =
+             warmRecorder.preview
+               .slice(hiddenPreviewCount)
+              .filter((observation) => observation.visibleAt !== null && observation.slug === target.slug)
+              .at(-1) ?? null;
+          if (warmVisible === null) {
+            throw new Error(`the warm hover produced no fresh observed preview for ${target.slug}`);
+          }
+          const warmMismatch = compareRenderedPreview(await readRenderedPreview(page), expectedPreview, 'warm preview');
+          if (warmMismatch !== null) throw new Error(warmMismatch);
           warmSample.hoverDelayMs = round(warmVisible.visibleAt! - warmVisible.intentAt, 3);
           warmSample.visible = true;
           warmSample.nonEmpty = (warmVisible.text ?? '').trim() !== '';
           warmSample.targetSlug = warmVisible.slug;
+          warmSample.targetTitle = previewNode.title;
+          warmSample.titleMatched = true;
           warmSample.panelTextSample = (warmVisible.text ?? '').slice(0, 200);
         } catch (error) {
           warmSample.error = scrub(error);
@@ -1769,49 +2874,89 @@ async function measureWorkload(
           dispatchSummary: seriesOf([]),
         };
         const activate = page.locator('[data-graph-activate]');
-        if ((await activate.count()) > 0) {
-          for (let index = 0; index < options.samples; index += 1) {
-            try {
-              await activate.click();
-              await page.waitForFunction(
-                (expected) =>
-                  ((window as unknown as { __benchSnapshot?: { type: string; ms: number | null }[] }).__benchSnapshot ?? [])
-                    .filter((event) => event.type === 'localGraph' && event.ms !== null).length >= expected,
-                index + 1,
-                { timeout: 15_000 },
-              );
-              localGraph.activations += 1;
-            } catch {
-              workload.failures.push({
-                phase: 'ui-local-graph',
-                message: `activation ${index + 1} produced no armed localGraph reply`,
-              });
-              break;
-            }
-          }
-          // A render follows its reply; wait with a bound for the drawings to
-          // catch up rather than reading early and dropping the slowest draw.
-          await page
-            .waitForFunction(
+        const activationCount = await activate.count();
+        assertExactlyOneControl('local graph activation control', activationCount);
+        const localOracle = graphOracleSelection(analysis.nodes, analysis.edges, {
+          scope: 'local',
+          centerSlug: plan.localCenter,
+        });
+        const localCenterNode = analysis.nodes.find((node) => node.slug === localOracle.center);
+        if (localCenterNode === undefined) throw new Error(`local graph center is absent from the DB: ${plan.localCenter}`);
+        const expectedRenderedLocal: RenderedSelectionShape = {
+          nodes: [
+            {
+              slug: localCenterNode.slug,
+              title: localCenterNode.title,
+              language: localCenterNode.language ?? '',
+            },
+            ...localOracle.selection.nodes,
+          ],
+          edges: localOracle.selection.edges,
+        };
+        for (let index = 0; index < options.samples; index += 1) {
+          try {
+            await activate.click();
+            await page.waitForFunction(
               (expected) =>
-                ((window as unknown as { __benchGraphRender?: { scope: string }[] }).__benchGraphRender ?? [])
-                  .filter((event) => event.scope === 'local').length >= expected,
-              localGraph.activations,
+                ((window as unknown as { __benchSnapshot?: { type: string; ms: number | null }[] }).__benchSnapshot ?? [])
+                  .filter((event) => event.type === 'localGraph' && event.ms !== null).length >= expected,
+              index + 1,
+              { timeout: 15_000 },
+            );
+            await page.waitForFunction(
+              (expected) =>
+                ((window as unknown as { __benchGraphRender?: { scope: string }[] }).__benchGraphRender ?? []).filter(
+                  (event) => event.scope === 'local',
+                ).length >= expected,
+              index + 1,
               { timeout: 5_000 },
-            )
-            .catch(() => {});
-          const events = await readRecorder(page);
-          for (const event of events.snapshot.filter((entry) => entry.type === 'localGraph')) {
-            if (event.ms !== null) localGraph.dispatchMs.push(round(event.ms, 3));
-            if (event.operationMs !== null) localGraph.operationMs.push(round(event.operationMs, 3));
-            if (event.sqlMs !== null) localGraph.sqlMs.push(round(event.sqlMs, 3));
-            if (localGraph.phases === null && event.phases !== null) localGraph.phases = normalizePhases(event.phases);
+            );
+            const mismatch = compareRenderedSelection(
+              await readRenderedGraph(page),
+              expectedRenderedLocal,
+              `local graph sample ${index + 1}`,
+            );
+            if (mismatch !== null) throw new Error(mismatch);
+            localGraph.activations += 1;
+          } catch (error) {
+            workload.failures.push({
+              phase: 'ui-local-graph',
+              message: `activation ${index + 1} failed: ${scrub(error)}`,
+            });
+            break;
           }
-          localGraph.renderMs = events.graphRender
-            .filter((event) => event.scope === 'local' && event.ms !== null)
-            .map((event) => round(event.ms!, 3));
-          localGraph.dispatchSummary = seriesOf(localGraph.dispatchMs);
         }
+        // A render follows its reply; wait with a bound for the drawings to
+        // catch up rather than reading early and dropping the slowest draw.
+        await page.waitForFunction(
+          (expected) =>
+            ((window as unknown as { __benchGraphRender?: { scope: string }[] }).__benchGraphRender ?? []).filter(
+              (event) => event.scope === 'local',
+            ).length >= expected,
+          localGraph.activations,
+          { timeout: 5_000 },
+        );
+        const events = await readRecorder(page);
+        const localReplies = events.snapshot.filter((entry) => entry.type === 'localGraph');
+        assertExactEventCount('local graph snapshot replies', localReplies.length, localGraph.activations);
+        const localRenders = events.graphRender.filter((event) => event.scope === 'local');
+        assertExactEventCount('local graph render', localRenders.length, localGraph.activations);
+        if (localRenders.some((event) => event.ms === null || !Number.isFinite(event.ms))) {
+          throw new Error('local graph render series contains a missing duration');
+        }
+        for (const [index, event] of localReplies.entries()) {
+          const telemetryFailure = measuredEventFailure(`local graph sample ${index + 1}`, event);
+          if (telemetryFailure !== null) throw new Error(telemetryFailure);
+          localGraph.dispatchMs.push(round(event.ms!, 3));
+          localGraph.operationMs.push(round(event.operationMs!, 3));
+          localGraph.sqlMs.push(round(event.sqlMs!, 3));
+          if (localGraph.phases === null && event.phases !== null) localGraph.phases = normalizePhases(event.phases);
+        }
+        assertExactSampleCount('local graph dispatch samples', localGraph.dispatchMs.length, localReplies.length);
+        assertExactSampleCount('local graph operation samples', localGraph.operationMs.length, localReplies.length);
+        assertExactSampleCount('local graph SQL samples', localGraph.sqlMs.length, localReplies.length);
+        localGraph.renderMs = localRenders.map((event) => round(event.ms!, 3));
+        localGraph.dispatchSummary = seriesOf(localGraph.dispatchMs);
         workload.queries!.ui.localGraph =
           localGraph.activations === 0 && localGraph.dispatchMs.length === 0 ? null : localGraph;
         workload.queries!.seam = {
@@ -1823,8 +2968,10 @@ async function measureWorkload(
 
       // --- E(1) real UI flow: tag browser on its own page ---
       await withFailure(workload, 'ui-tag-browse', async () => {
-        if (plan.tagKey === null || workload.queries === null) throw new Error('the corpus has no tag to browse');
-        const page = await context.newPage();
+        if (plan.tagKey === null || plan.tagLabel === null || workload.queries === null) {
+          throw new Error('the corpus has no tag to browse');
+        }
+        const { page } = await openMeasuredPage(context, options.throttle);
         try {
           await page.goto(`${server!.origin}/tags/`, { waitUntil: 'load' });
           await page.waitForSelector('#tag-browser-select', { timeout: 15_000 });
@@ -1837,16 +2984,45 @@ async function measureWorkload(
           // re-record page one ten times and report its duration as a trend.
           let absorbed = 0;
           let byTagTotal = 0;
-          const absorb = (events: SnapshotEvent[]): void => {
-            for (const event of events.slice(absorbed)) {
+          const assertRenderedPage = async (pageCount: number): Promise<void> => {
+            const identity = await page.evaluate(() => {
+              const select = document.querySelector<HTMLSelectElement>('#tag-browser-select');
+              const current = document.querySelector<HTMLElement>('#tag-browser-current');
+              return select === null || current === null || current.hidden
+                ? null
+                : { key: select.value, label: current.textContent ?? '' };
+            });
+            const identityMismatch = tagIdentityFailure(
+              identity,
+              { key: plan.tagKey!, label: plan.tagLabel! },
+              `tag browser page ${pageCount}`,
+            );
+            if (identityMismatch !== null) throw new Error(identityMismatch);
+            const expected = tagNodes.slice(0, Math.min(pageCount * TAG_PAGE_SIZE, tagNodes.length));
+            await page.waitForFunction(
+              (count) => document.querySelectorAll('#tag-browser-results li > a[href]').length >= count,
+              expected.length,
+              { timeout: 15_000 },
+            );
+            const mismatch = compareRenderedSelection(
+              { nodes: await readRenderedNotes(page, '#tag-browser-results li > a[href]'), edges: [] },
+              { nodes: expected, edges: [] },
+              `tag browser ${plan.tagKey} page ${pageCount}`,
+            );
+            if (mismatch !== null) throw new Error(mismatch);
+          };
+          const absorb = (batch: { events: SnapshotEvent[]; total: number }): void => {
+            for (const event of batch.events) {
               if (event.type !== 'byTag') continue;
               byTagTotal += 1;
-              if (event.ms !== null) dispatchMs.push(round(event.ms, 3));
-              if (event.operationMs !== null) operationMs.push(round(event.operationMs, 3));
-              if (event.sqlMs !== null) sqlMs.push(round(event.sqlMs, 3));
+              const telemetryFailure = measuredEventFailure(`tag browser sample ${byTagTotal}`, event, byTagTotal === 1);
+              if (telemetryFailure !== null) throw new Error(telemetryFailure);
+              dispatchMs.push(round(event.ms!, 3));
+              operationMs.push(round(event.operationMs!, 3));
+              sqlMs.push(round(event.sqlMs!, 3));
               if (phases === null && event.phases !== null) phases = normalizePhases(event.phases);
             }
-            absorbed = events.length;
+            absorbed = batch.total;
           };
           await page.selectOption('#tag-browser-select', plan.tagKey);
           await page.waitForFunction(
@@ -1857,26 +3033,40 @@ async function measureWorkload(
             undefined,
             { timeout: 30_000 },
           );
-          absorb((await readRecorder(page)).snapshot);
+          absorb(await readSnapshotEvents(page, absorbed));
+          await assertRenderedPage(1);
+          const tagPageBound = tagWalkPageBound(plan.tagMembers, TAG_PAGE_SIZE);
+          const more = page.locator('#tag-browse-more');
           let pages = 1;
-          while (pages < MAX_WALK_PAGES && (await page.locator('#tag-browse-more').isVisible())) {
-            const expected = byTagTotal;
-            await page.locator('#tag-browse-more').click();
-            await page
-              .waitForFunction(
-                (count) =>
-                  ((window as unknown as { __benchSnapshot?: { type: string }[] }).__benchSnapshot ?? []).filter(
-                    (event) => event.type === 'byTag',
-                  ).length > count,
-                expected,
-                { timeout: 15_000 },
-              )
-              .catch(() => {});
-            absorb((await readRecorder(page)).snapshot);
-            if (byTagTotal === expected) break;
+          while (await more.isVisible()) {
+            if (pages >= tagPageBound) {
+              throw new Error(
+                `tag walk exposed More after the derived ${tagPageBound}-page bound for ${plan.tagMembers} members`,
+              );
+            }
+            await more.click();
+            await page.waitForFunction(
+              (count) =>
+                ((window as unknown as { __benchSnapshot?: { type: string }[] }).__benchSnapshot ?? []).length > count,
+              absorbed,
+              { timeout: 15_000 },
+            );
+            absorb(await readSnapshotEvents(page, absorbed));
             pages += 1;
+            await assertRenderedPage(pages);
           }
           const notesShown = await page.locator('#tag-browser-results li').count();
+          assertExactEventCount('tag browser page replies', byTagTotal, pages);
+          if (pages > tagPageBound) {
+            throw new Error(`tag browser walked ${pages} pages beyond derived bound ${tagPageBound}`);
+          }
+          if (notesShown !== plan.tagMembers) {
+            throw new Error(`tag browser showed ${notesShown} notes; DB plan requires ${plan.tagMembers}`);
+          }
+          if (await more.isVisible()) throw new Error('tag browser More control remained visible after enumeration');
+          assertExactSampleCount('tag browser dispatch samples', dispatchMs.length, byTagTotal);
+          assertExactSampleCount('tag browser operation samples', operationMs.length, byTagTotal);
+          assertExactSampleCount('tag browser SQL samples', sqlMs.length, byTagTotal);
           workload.queries!.ui.tagBrowse = {
             tagKey: plan.tagKey,
             pages,
@@ -1896,7 +3086,7 @@ async function measureWorkload(
       // --- E(1) real UI flow: site graph, unfiltered then tag-filtered ---
       await withFailure(workload, 'ui-global-graph', async () => {
         if (workload.queries === null) throw new Error('query report was not initialized');
-        const page = await context.newPage();
+        const { page } = await openMeasuredPage(context, options.throttle);
         try {
           await page.goto(`${server!.origin}/graph/`, { waitUntil: 'load' });
           const activate = page.locator('[data-graph-activate]');
@@ -1910,6 +3100,21 @@ async function measureWorkload(
             undefined,
             { timeout: 30_000 },
           );
+          await page.waitForFunction(
+            () =>
+              ((window as unknown as { __benchGraphRender?: { scope: string }[] }).__benchGraphRender ?? []).some(
+                (event) => event.scope === 'global',
+              ),
+            undefined,
+            { timeout: 5_000 },
+          );
+          const globalOracle = graphOracleSelection(analysis.nodes, analysis.edges, { scope: 'global' });
+          const globalMismatch = compareRenderedSelection(
+            await readRenderedGraph(page),
+            globalOracle.selection,
+            'global graph UI',
+          );
+          if (globalMismatch !== null) throw new Error(globalMismatch);
           if (plan.tagKey !== null) {
             await page.selectOption('[data-graph-tag]', plan.tagKey);
             await page.waitForFunction(
@@ -1920,26 +3125,47 @@ async function measureWorkload(
               undefined,
               { timeout: 30_000 },
             );
-          }
-          await page
-            .waitForFunction(
+            await page.waitForFunction(
               () =>
                 ((window as unknown as { __benchGraphRender?: { scope: string }[] }).__benchGraphRender ?? []).filter(
                   (event) => event.scope === 'global',
-                ).length >= 1,
+                ).length >= 2,
               undefined,
               { timeout: 5_000 },
-            )
-            .catch(() => {});
+            );
+            const filteredOracle = graphOracleSelection(analysis.nodes, analysis.edges, {
+              scope: 'global',
+              candidateSlugs: new Set(tagNodes.map((node) => node.slug)),
+            });
+            const filteredMismatch = compareRenderedSelection(
+              await readRenderedGraph(page),
+              filteredOracle.selection,
+              `global graph UI (${plan.tagKey})`,
+            );
+            if (filteredMismatch !== null) throw new Error(filteredMismatch);
+          }
+          const expectedGlobalReplies = plan.tagKey === null ? 1 : 2;
           const events = await readRecorder(page);
           const globals = events.snapshot.filter((event) => event.type === 'globalGraph');
+          assertExactEventCount('global graph snapshot replies', globals.length, expectedGlobalReplies);
+          for (const [index, event] of globals.entries()) {
+            const telemetryFailure = measuredEventFailure(`global graph sample ${index + 1}`, event, index === 0);
+            if (telemetryFailure !== null) throw new Error(telemetryFailure);
+          }
+          const globalRenders = events.graphRender.filter((event) => event.scope === 'global');
+          assertExactEventCount('global graph render', globalRenders.length, expectedGlobalReplies);
+          if (globalRenders.some((event) => event.ms === null || !Number.isFinite(event.ms))) {
+            throw new Error('global graph render series contains a missing duration');
+          }
+          const globalDispatchMs = globals.map((event) => round(event.ms!, 3));
+          const globalOperationMs = globals.map((event) => round(event.operationMs!, 3));
+          assertExactSampleCount('global graph dispatch samples', globalDispatchMs.length, globals.length);
+          assertExactSampleCount('global graph operation samples', globalOperationMs.length, globals.length);
           workload.queries!.ui.globalGraph = {
-            unfilteredMs: globals.slice(0, 1).flatMap((event) => (event.ms === null ? [] : [round(event.ms, 3)])),
-            filteredMs: globals.slice(1).flatMap((event) => (event.ms === null ? [] : [round(event.ms, 3)])),
-            operationMs: globals.flatMap((event) => (event.operationMs === null ? [] : [round(event.operationMs, 3)])),
-            renderMs: events.graphRender
-              .filter((event) => event.scope === 'global' && event.ms !== null)
-              .map((event) => round(event.ms!, 3)),
+            unfilteredMs: globalDispatchMs.slice(0, 1),
+            filteredMs: globalDispatchMs.slice(1),
+            operationMs: globalOperationMs,
+            renderMs: globalRenders.map((event) => round(event.ms!, 3)),
             phases: globals.find((event) => event.phases !== null)?.phases ?? null,
             filteredTag: plan.tagKey,
           };
@@ -1967,6 +3193,10 @@ async function measureWorkload(
           phases: normalizePhases(cold.phases),
         };
         if (!cold.ok) workload.failures.push({ phase: 'driver', message: `cold driver preview failed: ${cold.code ?? 'unknown'}` });
+        else {
+          const telemetryFailure = measuredReplyFailure('cold driver preview', cold, true);
+          if (telemetryFailure !== null) workload.failures.push({ phase: 'driver', message: telemetryFailure });
+        }
         if (cold.phases != null && workload.startup !== null && workload.startup.worker.phases === null) {
           workload.startup.worker.phases = normalizePhases(cold.phases);
           workload.startup.worker.wasmMemoryBytes = workload.startup.worker.phases?.wasmMemoryBytes ?? null;
@@ -1981,13 +3211,27 @@ async function measureWorkload(
           const timing = timingOf();
           const failures: string[] = [];
           let first: DriverReply = cold;
+          let successfulReplies = 0;
           for (let index = 0; index < repetitions; index += 1) {
             const reply = await driverRequest(mainPage!, type, args, DRIVER_WARM_TIMEOUT_MS);
-            if (!reply.ok) failures.push(`${type} repetition ${index}: ${reply.code ?? 'failed'}`);
-            absorbTiming(timing, reply);
+            if (!reply.ok || reply.result === undefined) {
+              failures.push(`${type} repetition ${index}: ${reply.code ?? 'failed'}`);
+            } else {
+              successfulReplies += 1;
+              const telemetryFailure = measuredReplyFailure(`${type} repetition ${index}`, reply);
+              if (telemetryFailure !== null) failures.push(telemetryFailure);
+              else absorbTiming(timing, reply);
+            }
             if (index === 0) first = reply;
           }
-          return { timing: finalizeTiming(timing, repetitions), first, failures };
+          try {
+            finalizeTiming(timing, repetitions, successfulReplies, type);
+          } catch (error) {
+            failures.push(scrub(error));
+            timing.dispatchSummary = seriesOf([]);
+            timing.opSummary = seriesOf([]);
+          }
+          return { timing, first, failures };
         };
 
         const preview = await single('preview', { slug: plan.previewSlug }, options.samples);
@@ -2013,7 +3257,14 @@ async function measureWorkload(
             1,
             Math.min(options.samples, Math.floor(WALK_REQUEST_BUDGET / Math.max(1, Math.ceil((plan.tagMembers + 1) / pageSize)))),
           );
-          tagWalk = await driveWalk(mainPage, 'byTag', { tagKey: plan.tagKey }, pageSize, tagRepetitions);
+          tagWalk = await driveWalk(
+            mainPage,
+            'byTag',
+            { tagKey: plan.tagKey },
+            pageSize,
+            tagRepetitions,
+            tagWalkPageBound(plan.tagMembers, pageSize),
+          );
           driverReports['byTag'] = { ...tagWalk.timing, pagesPerWalk: tagWalk.pagesPerWalk, notesWalked: tagWalk.notes.length, failures: tagWalk.failures };
         } else {
           driverReports['byTag'] = null;
@@ -2097,52 +3348,48 @@ async function measureWorkload(
         );
 
         if (tagWalk !== null && plan.tagKey !== null) {
-          const tagDb = dbSlugs(
-            `SELECT n.slug AS slug FROM tags AS t
-             JOIN node_tags AS nt ON nt.tag_id = t.id JOIN nodes AS n ON n.id = nt.node_id
-             WHERE t.key = ? ORDER BY n.slug`,
-            [plan.tagKey],
+          const tagMismatch = tagIdentityFailure(
+            tagWalk.tag,
+            { key: plan.tagKey, label: plan.tagLabel ?? '' },
+            'driver byTag',
+          );
+          const memberMismatch = compareRenderedSelection(
+            { nodes: tagWalk.notes, edges: [] },
+            { nodes: tagNodes, edges: [] },
+            'driver byTag members',
           );
           check(
             'driver-byTag-walk',
             tagWalk.failures.length === 0 &&
-              tagWalk.notes.length === tagDb.length &&
-              tagWalk.notes.every((note, index) => note.slug === tagDb[index]),
-            `byTag walk returned ${tagWalk.notes.length} over ${tagWalk.pagesPerWalk} pages for ${plan.tagKey}; DB has ${tagDb.length}` +
+              tagMismatch === null &&
+              memberMismatch === null,
+            `byTag walk returned ${tagWalk.notes.length} over ${tagWalk.pagesPerWalk} pages for ${plan.tagKey}; DB has ${tagNodes.length}` +
+              (tagMismatch === null ? '' : `; ${tagMismatch}`) +
+              (memberMismatch === null ? '' : `; ${memberMismatch}`) +
               (tagWalk.failures.length === 0 ? '' : `; ${tagWalk.failures.join('; ')}`),
           );
         }
 
-        const dbNeighbours = dbSlugs(
-          `SELECT n.slug AS slug FROM edges AS e
-           JOIN nodes AS s ON s.id = e.source_id JOIN nodes AS n ON n.id = e.target_id
-           WHERE s.slug = ?
-           UNION
-           SELECT n.slug AS slug FROM edges AS e
-           JOIN nodes AS s ON s.id = e.target_id JOIN nodes AS n ON n.id = e.source_id
-           WHERE s.slug = ?
-           ORDER BY slug`,
-          [plan.localCenter, plan.localCenter],
-        );
+        const graphShape = (graph: NonNullable<NonNullable<DriverReply['result']>['graph']>): GraphSelectionShape => ({
+          nodes: graph.nodes.map(({ slug, title, language }) => ({ slug, title, language })),
+          edges: graph.edges,
+          omitted: graph.omitted,
+        });
         const localReply = local.first;
         const localGraph = localReply.result?.graph ?? null;
         if (localGraph !== null) {
+          const oracle = graphOracleSelection(analysis.nodes, analysis.edges, {
+            scope: 'local',
+            centerSlug: plan.localCenter,
+          });
+          const mismatch = compareGraphSelection(graphShape(localGraph), oracle.selection, 'localGraph');
           const center = localGraph.center?.slug ?? null;
-          const nodes = localGraph.nodes.map((node) => node.slug);
-          const uniqueNodes = new Set(nodes);
-          const neighbourSet = new Set(dbNeighbours);
-          const drawnSet = new Set([center, ...nodes]);
-          const edgesValid = localGraph.edges.every((edge) => drawnSet.has(edge.from) && drawnSet.has(edge.to));
           check(
             'driver-localGraph',
-            center === plan.localCenter &&
-              nodes.length <= LOCAL_NODE_LIMIT &&
-              uniqueNodes.size === nodes.length &&
-              nodes.every((slug) => neighbourSet.has(slug)) &&
-              localGraph.omitted === dbNeighbours.length - nodes.length &&
-              edgesValid,
-            `localGraph center ${String(center)} nodes ${nodes.length}/${LOCAL_NODE_LIMIT} omitted ${localGraph.omitted} ` +
-              `DB neighbours ${dbNeighbours.length} edges ${localGraph.edges.length} edgesValid ${String(edgesValid)}`,
+            center === oracle.center && mismatch === null,
+            mismatch ??
+              `localGraph center ${String(center)} matched the DB-derived oracle with ` +
+                `${localGraph.nodes.length}/${LOCAL_NODE_LIMIT} drawn nodes`,
           );
         } else {
           check('driver-localGraph', false, `localGraph returned no selection for ${plan.localCenter}`);
@@ -2151,14 +3398,12 @@ async function measureWorkload(
         const globalReply = global.first;
         if (globalReply.ok && globalReply.result?.graph != null) {
           const graph = globalReply.result.graph;
-          const nodes = new Set(graph.nodes.map((node) => node.slug));
-          const edgesValid = graph.edges.every((edge) => nodes.has(edge.from) && nodes.has(edge.to));
+          const oracle = graphOracleSelection(analysis.nodes, analysis.edges, { scope: 'global' });
+          const mismatch = compareGraphSelection(graphShape(graph), oracle.selection, 'globalGraph');
           check(
             'driver-globalGraph',
-            graph.nodes.length <= GLOBAL_NODE_LIMIT &&
-              graph.omitted === analysis.plan.nodeCount - graph.nodes.length &&
-              edgesValid,
-            `globalGraph nodes ${graph.nodes.length}/${GLOBAL_NODE_LIMIT} omitted ${graph.omitted} DB nodes ${analysis.plan.nodeCount} edgesValid ${String(edgesValid)}`,
+            mismatch === null,
+            mismatch ?? `globalGraph matched the DB-derived oracle with ${graph.nodes.length}/${GLOBAL_NODE_LIMIT} drawn nodes`,
           );
         } else {
           check('driver-globalGraph', false, `globalGraph did not answer: ${globalReply.code ?? 'unknown'}`);
@@ -2167,7 +3412,6 @@ async function measureWorkload(
         if (globalTag !== null) {
           const graph = globalTag.first.result?.graph ?? null;
           if (graph !== null) {
-            const nodes = new Set(graph.nodes.map((node) => node.slug));
             const members = new Set(
               dbSlugs(
                 `SELECT n.slug AS slug FROM tags AS t
@@ -2176,50 +3420,41 @@ async function measureWorkload(
                 [plan.tagKey!],
               ),
             );
-            const edgesValid = graph.edges.every((edge) => nodes.has(edge.from) && nodes.has(edge.to));
+            const oracle = graphOracleSelection(analysis.nodes, analysis.edges, {
+              scope: 'global',
+              candidateSlugs: members,
+            });
+            const mismatch = compareGraphSelection(graphShape(graph), oracle.selection, `globalGraph(${plan.tagKey})`);
             check(
               'driver-globalGraphTag',
-              graph.nodes.length <= GLOBAL_NODE_LIMIT &&
-                graph.omitted === members.size - graph.nodes.length &&
-                graph.nodes.every((node) => members.has(node.slug)) &&
-                edgesValid,
-              `globalGraph(${plan.tagKey}) nodes ${graph.nodes.length}/${GLOBAL_NODE_LIMIT} omitted ${graph.omitted} members ${members.size} edgesValid ${String(edgesValid)}`,
+              mismatch === null,
+              mismatch ??
+                `globalGraph(${plan.tagKey}) matched the DB-derived oracle with ` +
+                  `${graph.nodes.length}/${GLOBAL_NODE_LIMIT} drawn nodes from ${members.size} members`,
             );
           } else {
             check('driver-globalGraphTag', false, `tag-filtered globalGraph returned no selection`);
           }
         }
 
-        // Preview correctness against the snapshot's own title, read after the run.
+        // The visible panel was compared field-for-field at each timed completion.
         const previewReport = workload.preview;
         if (previewReport !== null) {
           const targetSlug = previewReport.cold.targetSlug;
           const title = targetSlug === null ? null : dbTitle(targetSlug);
           previewReport.targetFromDb = targetSlug === null || title === null ? null : { slug: targetSlug, title };
-          const matches = (sample: PreviewSample): boolean | null => {
-            if (title === null) return null;
-            if (sample.panelTextSample === null) return null;
-            return sample.panelTextSample.includes(title);
-          };
           for (const [label, sample] of [
             ['cold', previewReport.cold],
             ['warm', previewReport.warm],
           ] as const) {
-            sample.targetTitle = title;
-            sample.titleMatched = matches(sample);
+            sample.targetTitle ??= title;
             if (sample.visible && !sample.nonEmpty) {
               workload.failures.push({ phase: 'preview', message: `${label} preview panel was empty` });
             }
-            if (sample.titleMatched === false) {
+            if (sample.visible && sample.titleMatched !== true) {
               workload.failures.push({
                 phase: 'preview',
-                message: `${label} preview text does not contain the DB title ${JSON.stringify(title)} for ${String(targetSlug)}`,
-              });
-            }
-            if (sample.titleMatched === null && sample.visible) {
-              workload.failures.push({
-                phase: 'preview',
-                message: `${label} preview could not be checked: target or title absent from the DB`,
+                message: `${label} preview was visible without an exact DB-backed field comparison`,
               });
             }
           }
@@ -2233,6 +3468,8 @@ async function measureWorkload(
         if (mainPage !== undefined) await collectResources(mainPage, 'main-page', resources);
       });
 
+      const transferEvidence = dependencyTransferReports(dependencies, server.records, resources);
+      for (const message of transferEvidence.failures) workload.failures.push({ phase: 'transfer', message });
       workload.transfer = {
         headersSource: server.headersSource,
         definitions: [
@@ -2241,85 +3478,292 @@ async function measureWorkload(
           'cacheState network = a 200 the server wrote to the wire; revalidated = a 304; cache = a resource-timing transferSize of 0 with decoded bytes',
           'dependency `resource` is the cold observation whose transferSize includes the encoded body; Chromium reports a cache hit as a header-only transferSize, and those observations are counted in cacheHitObservations',
         ],
-        dependencies: dependencies.map((dependency) => {
-          const http = server!.records.find((record) => record.path === dependency.path) ?? null;
-          const observed = resources.filter((entry) => entry.path === dependency.path);
-          const resource =
-            observed.find(
-              (entry) => (entry.encodedBodySize ?? 0) > 0 && (entry.transferSize ?? 0) >= (entry.encodedBodySize ?? 0),
-            ) ??
-            observed[0] ??
-            null;
-          const cacheHits = observed.filter(
-            (entry) => (entry.transferSize ?? 0) < (entry.encodedBodySize ?? 0),
-          ).length;
-          const requests = server!.records.filter((record) => record.path === dependency.path).length;
-          let cacheState: DependencyReport['cacheState'] = 'not-requested';
-          if (http !== null && http.status === 200) cacheState = 'network';
-          else if (http !== null && http.status === 304) cacheState = 'revalidated';
-          else if (resource !== null && (resource.transferSize ?? 0) < (resource.encodedBodySize ?? 0)) cacheState = 'cache';
-          else if (http !== null || resource !== null) cacheState = 'unknown';
-          return {
-            kind: dependency.kind,
-            path: dependency.path,
-            decodedBytes: dependency.decodedBytes,
-            gzipBytes: dependency.gzipBytes,
-            http,
-            resource,
-            resourceObservations: observed.length,
-            cacheHitObservations: cacheHits,
-            requests,
-            cacheState,
-          };
-        }),
+        dependencies: transferEvidence.dependencies,
         serverRecords: server!.records,
         resources,
       };
     } finally {
-      await context.close();
+      await cleanup('cleanup-context', () => context.close());
     }
+  } catch (error) {
+    escapedFailure = { error };
   } finally {
     workload.elapsedSeconds = round((Date.now() - startedAt) / 1000, 2);
-    try {
-      db?.close();
-    } catch {
-      // The original failure, if any, is the diagnosis.
+    await cleanup('cleanup-db', () => db?.close());
+    await cleanup('cleanup-browser', () => browser?.close());
+    await cleanup('cleanup-server', () => server?.close());
+    if (root !== undefined) {
+      const workspace = root;
+      await cleanup('cleanup-workspace', () =>
+        rmSync(workspace, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }),
+      );
     }
-    try {
-      await browser?.close();
-    } catch {
-      // A closed browser is not a measurement failure.
-    }
-    try {
-      await server?.close();
-    } catch {
-      // A closed server is not a measurement failure.
-    }
-    rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
+  if (escapedFailure !== null) throw new WorkloadMeasurementError(workload, escapedFailure.error);
   return workload;
 }
 
 // --- Report and entry point -------------------------------------------------------
 
-interface CandidateIdentity {
+interface CandidateFileState {
+  bytes: number;
+  mtimeNs: string;
+  scope: string;
+  method: string;
+}
+
+interface CandidateFileIdentity {
+  basename: string;
+  sha256: string;
+  bytes: number;
+  state: CandidateFileState;
+}
+
+const CANDIDATE_FILE_STATE_SCOPE = 'one candidate file; state covers byte size and high-resolution mtimeNs, but not file bytes';
+const CANDIDATE_FILE_STATE_METHOD =
+  'stat(byte size + high-resolution mtimeNs); a same-size content mutation whose mtime is restored may evade this change detector, so the final content SHA-256 remains authoritative';
+
+export interface CandidateIdentity {
   repositoryHead: { commit: string | null; scope: string };
-  cli: { basename: string; sha256: string; scope: string };
+  repositoryTree: RepositoryIdentity;
+  cli: { basename: string; bytes: number; sha256: string; scope: string; state: CandidateFileState };
   installedPackage: { name: string; version: string } | null;
   installedPackageTree: {
     sha256: string;
+    stateSha256: string;
     files: number;
     scope: string;
     method: string;
+    stateScope: string;
+    stateMethod: string;
   } | null;
+  runtimeDependencyTree: {
+    sha256: string;
+    stateSha256: string;
+    files: number;
+    scope: string;
+    method: string;
+    stateScope: string;
+    stateMethod: string;
+  } | null;
+  lockfile: CandidateFileIdentity | null;
+  tarball: CandidateFileIdentity | null;
+  runtime: {
+    node: string;
+    packageManager: { name: string; version: string } | null;
+  };
 }
 
-function candidateIdentity(cliPath: string): CandidateIdentity {
-  const probe = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' });
-  let installedPackage: { name: string; version: string } | null = null;
-  let installedPackageTree: CandidateIdentity['installedPackageTree'] = null;
-  if (cliPath.includes(`${sep}node_modules${sep}`)) {
-    let directory = dirname(cliPath);
+type CandidateIdentityCheck = 'state' | 'full';
+
+interface CandidatePackageContext {
+  installedPackage: { name: string; version: string } | null;
+  candidatePackageDirectory: string;
+  packageRoot: string;
+}
+
+function runtimePackageManager(): { name: string; version: string } | null {
+  const userAgent = process.env['npm_config_user_agent'];
+  const fromUserAgent = userAgent?.match(/(?:^|\s)([a-z][a-z0-9_-]*)\/([^\s]+)/i);
+  if (fromUserAgent !== undefined && fromUserAgent !== null) {
+    return { name: fromUserAgent[1]!, version: fromUserAgent[2]! };
+  }
+  for (const name of ['pnpm', 'npm', 'yarn']) {
+    const result = spawnSync(name, ['--version'], { encoding: 'utf8', maxBuffer: 1024 * 1024 });
+    if (result.status === 0 && result.error === undefined) {
+      const version = result.stdout.trim();
+      if (version !== '') return { name, version };
+    }
+  }
+  try {
+    const declared = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { packageManager?: unknown };
+    if (typeof declared.packageManager === 'string') {
+      const separator = declared.packageManager.lastIndexOf('@');
+      if (separator > 0) {
+        return {
+          name: declared.packageManager.slice(0, separator),
+          version: declared.packageManager.slice(separator + 1),
+        };
+      }
+    }
+  } catch {
+    // Keep the runtime identity explicit as unknown when no package manager can be resolved.
+  }
+  return null;
+}
+
+function candidateFileIdentity(file: string): CandidateFileIdentity {
+  const state = candidateFileState(file);
+  return {
+    basename: basename(file),
+    bytes: state.bytes,
+    sha256: sha256File(file),
+    state,
+  };
+}
+
+function candidateFileState(file: string): CandidateFileState {
+  const fileState = statSync(file, { bigint: true });
+  return {
+    bytes: Number(fileState.size),
+    mtimeNs: fileState.mtimeNs.toString(),
+    scope: CANDIDATE_FILE_STATE_SCOPE,
+    method: CANDIDATE_FILE_STATE_METHOD,
+  };
+}
+
+function findLockfile(directory: string): string | null {
+  for (const name of ['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml', 'yarn.lock']) {
+    const file = join(directory, name);
+    if (existsSync(file)) return file;
+  }
+  return null;
+}
+
+interface TarballEntry {
+  member: string;
+  type: 'file' | 'directory';
+}
+
+interface TarballPayloadIdentity {
+  sha256: string;
+  files: number;
+}
+
+function tarOutput(args: readonly string[], encoding: BufferEncoding | undefined = 'utf8'): string | Buffer {
+  const result =
+    encoding === undefined
+      ? spawnSync('tar', args, { maxBuffer: 256 * 1024 * 1024 })
+      : spawnSync('tar', args, { encoding, maxBuffer: 256 * 1024 * 1024 });
+  if (result.error !== undefined || result.status !== 0) {
+    throw new Error('could not inspect candidate tarball');
+  }
+  return result.stdout;
+}
+
+function safeTarballMember(member: string): string | null {
+  const normalized = member.replace(/\\/g, '/');
+  if (!normalized.startsWith('package/')) throw new Error(`candidate tarball contains an unsafe member ${JSON.stringify(member)}`);
+  const relativePath = normalized.slice('package/'.length);
+  if (relativePath === '') return null;
+  const parts = relativePath.replace(/\/$/, '').split('/');
+  if (relativePath.startsWith('/') || parts.some((part) => part === '' || part === '.' || part === '..')) {
+    throw new Error(`candidate tarball contains an unsafe member ${JSON.stringify(member)}`);
+  }
+  if (relativePath.endsWith('/')) return null;
+  return relativePath;
+}
+
+function tarballEntries(tarball: string): TarballEntry[] {
+  const names = String(tarOutput(['-tzf', tarball]))
+    .split(/\r?\n/)
+    .filter((line) => line !== '');
+  const details = String(tarOutput(['-tvzf', tarball]))
+    .split(/\r?\n/)
+    .filter((line) => line !== '');
+  if (names.length !== details.length) throw new Error(`candidate tarball listing is inconsistent: ${basename(tarball)}`);
+  return names.map((member, index) => {
+    const type = details[index]?.[0];
+    if (type === 'd') return { member, type: 'directory' };
+    if (type !== '-') throw new Error(`candidate tarball contains unsupported member ${JSON.stringify(member)}`);
+    return { member, type: 'file' };
+  });
+}
+
+function tarballPayloadIdentity(tarball: string): { manifest: { name: string; version: string }; payload: TarballPayloadIdentity } {
+  const entries = tarballEntries(tarball);
+  const expectedFiles = new Set<string>();
+  for (const entry of entries) {
+    const relativePath = safeTarballMember(entry.member);
+    if (entry.type !== 'file' || relativePath === null || isPackageGeneratedPath(relativePath)) continue;
+    if (expectedFiles.has(relativePath)) {
+      throw new Error(`candidate tarball contains duplicate member ${JSON.stringify(entry.member)}`);
+    }
+    expectedFiles.add(relativePath);
+  }
+  const extractionRoot = mkdtempSync(join(tmpdir(), 'anc-benchmark-tarball-'));
+  try {
+    tarOutput(['-xzf', tarball, '-C', extractionRoot]);
+    const packageDirectory = join(extractionRoot, 'package');
+    const actualFiles = walkFiles(packageDirectory)
+      .map((file) => relative(packageDirectory, file).split(sep).join('/'))
+      .filter((path) => !isPackageGeneratedPath(path))
+      .sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')));
+    const expected = [...expectedFiles].sort((left, right) => Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')));
+    if (JSON.stringify(actualFiles) !== JSON.stringify(expected)) {
+      throw new Error(`candidate tarball extraction does not match its validated member list: ${basename(tarball)}`);
+    }
+    let parsed: { name?: unknown; version?: unknown };
+    try {
+      parsed = JSON.parse(readFileSync(join(packageDirectory, 'package.json'), 'utf8')) as {
+        name?: unknown;
+        version?: unknown;
+      };
+    } catch {
+      throw new Error(`candidate tarball package.json is unreadable: ${basename(tarball)}`);
+    }
+    if (typeof parsed.name !== 'string' || typeof parsed.version !== 'string') {
+      throw new Error(`candidate tarball package.json has no name/version: ${basename(tarball)}`);
+    }
+    const payload = fixtureIdentity(packageDirectory, isPackageGeneratedPath);
+    return { manifest: { name: parsed.name, version: parsed.version }, payload };
+  } finally {
+    rmSync(extractionRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+}
+
+function expectedTarballBasename(packageName: string, version: string): string {
+  return `${packageName.replace(/^@/, '').replace('/', '-')}-${version}.tgz`;
+}
+
+function validateCandidateTarball(
+  tarball: string,
+  installedPackage: { name: string; version: string },
+  packageDirectory: string,
+): void {
+  const expectedBasename = expectedTarballBasename(installedPackage.name, installedPackage.version);
+  if (basename(tarball) !== expectedBasename) {
+    throw new Error(
+      `candidate tarball basename ${JSON.stringify(basename(tarball))} does not match ${JSON.stringify(expectedBasename)}`,
+    );
+  }
+  const inspected = tarballPayloadIdentity(tarball);
+  if (inspected.manifest.name !== installedPackage.name || inspected.manifest.version !== installedPackage.version) {
+    throw new Error(
+      `candidate tarball package identity ${inspected.manifest.name}@${inspected.manifest.version} does not match ${installedPackage.name}@${installedPackage.version}`,
+    );
+  }
+  const installed = fixtureIdentity(packageDirectory, isPackageGeneratedPath);
+  if (inspected.payload.sha256 !== installed.sha256 || inspected.payload.files !== installed.files) {
+    throw new Error(`candidate tarball payload does not match installed package ${installedPackage.name}@${installedPackage.version}`);
+  }
+}
+
+function findTarball(directory: string, packageName: string | null, version: string | null): string | null {
+  const configured = process.env['ANC_BENCHMARK_TARBALL'];
+  if (configured !== undefined) {
+    const configuredPath = resolve(configured);
+    if (!existsSync(configuredPath)) return null;
+    if (!statSync(configuredPath).isFile()) throw new Error(`configured benchmark tarball is not a regular file: ${basename(configuredPath)}`);
+    return configuredPath;
+  }
+  if (packageName === null || version === null || !existsSync(directory)) return null;
+  const expected = expectedTarballBasename(packageName, version);
+  const candidate = readdirSync(directory)
+    .filter((name) => name === expected)
+    .map((name) => join(directory, name))
+    .find((file) => statSync(file).isFile());
+  return candidate ?? null;
+}
+
+function candidatePackageContext(cliPath: string): CandidatePackageContext {
+  let installedPackage: CandidatePackageContext['installedPackage'] = null;
+  let packageRoot = ROOT;
+  let candidatePackageDirectory = ROOT;
+  const normalizedCliPath = resolve(cliPath);
+  const pathParts = normalizedCliPath.split(sep);
+  if (pathParts.includes('node_modules')) {
+    let directory = dirname(normalizedCliPath);
     for (let depth = 0; depth < 6; depth += 1) {
       const manifest = join(directory, 'package.json');
       if (existsSync(manifest)) {
@@ -2332,13 +3776,10 @@ function candidateIdentity(cliPath: string): CandidateIdentity {
         }
         if (typeof parsed.name === 'string' && typeof parsed.version === 'string') {
           installedPackage = { name: parsed.name, version: parsed.version };
-          const tree = fixtureIdentity(directory);
-          installedPackageTree = {
-            sha256: tree.sha256,
-            files: tree.files,
-            scope: 'installed package directory only, recursively hashed regular files; parent node_modules excluded',
-            method: tree.method,
-          };
+          candidatePackageDirectory = directory;
+          const packageParent = dirname(directory);
+          const packageNodeModules = basename(packageParent).startsWith('@') ? dirname(packageParent) : packageParent;
+          packageRoot = dirname(packageNodeModules);
         }
         break;
       }
@@ -2347,19 +3788,216 @@ function candidateIdentity(cliPath: string): CandidateIdentity {
       directory = parent;
     }
   }
+  return { installedPackage, candidatePackageDirectory, packageRoot };
+}
+
+function isPackageGeneratedPath(path: string): boolean {
+  return (
+    /^(?:\.astro|\.vite|\.cache)(?:\/|$)/.test(path) ||
+    /(?:^|\/)node_modules(?:\/|$)/.test(path)
+  );
+}
+
+export function candidateIdentity(cliPath: string, repository: RepositoryIdentity): CandidateIdentity {
+  const packageContext = candidatePackageContext(cliPath);
+  let installedPackageTree: CandidateIdentity['installedPackageTree'] = null;
+  if (packageContext.installedPackage !== null) {
+    const tree = fixtureIdentity(packageContext.candidatePackageDirectory, isPackageGeneratedPath);
+    const state = fixtureStateIdentity(packageContext.candidatePackageDirectory, isPackageGeneratedPath);
+    installedPackageTree = {
+      sha256: tree.sha256,
+      stateSha256: state.stateSha256,
+      files: tree.files,
+      scope:
+        'installed package payload, recursively hashed regular files; dependency node_modules and package-local build-generated .astro/.vite/.cache directories excluded',
+      method: tree.method,
+      stateScope: state.stateScope,
+      stateMethod: state.stateMethod,
+    };
+  }
+  const runtimeTree = runtimeDependencyClosure(packageContext.candidatePackageDirectory, packageContext.packageRoot);
+  const runtimeDependencyTree: CandidateIdentity['runtimeDependencyTree'] = {
+    sha256: runtimeTree.sha256,
+    stateSha256: runtimeTree.stateSha256,
+    files: runtimeTree.files,
+    scope: runtimeTree.scope,
+    method: runtimeTree.method,
+    stateScope: runtimeTree.stateScope,
+    stateMethod: runtimeTree.stateMethod,
+  };
+  const lockfilePath = findLockfile(packageContext.packageRoot);
+  const tarballPath = findTarball(
+    packageContext.packageRoot,
+    packageContext.installedPackage?.name ?? null,
+    packageContext.installedPackage?.version ?? null,
+  );
+  if (packageContext.installedPackage !== null) {
+    if (tarballPath === null) {
+      throw new Error(
+        `packaged candidate requires tarball ${expectedTarballBasename(packageContext.installedPackage.name, packageContext.installedPackage.version)}`,
+      );
+    }
+    validateCandidateTarball(tarballPath, packageContext.installedPackage, packageContext.candidatePackageDirectory);
+  }
   return {
     repositoryHead: {
-      commit: probe.status === 0 ? probe.stdout.trim() || null : null,
-      scope: 'benchmark harness repository HEAD; identifies the candidate only when --cli belongs to this repository',
+      commit: repository.gitHead,
+      scope: 'benchmark harness repository HEAD; paired with repositoryTree for the exact on-disk candidate bytes',
     },
+    repositoryTree: repository,
     cli: {
-      basename: basename(cliPath),
-      sha256: sha256File(cliPath),
+      ...candidateFileIdentity(cliPath),
       scope: 'sha256 of the --cli executable file bytes only',
     },
-    installedPackage,
+    installedPackage: packageContext.installedPackage,
     installedPackageTree,
+    runtimeDependencyTree,
+    lockfile: lockfilePath === null ? null : candidateFileIdentity(lockfilePath),
+    tarball: tarballPath === null ? null : candidateFileIdentity(tarballPath),
+    runtime: {
+      node: process.version,
+      packageManager: runtimePackageManager(),
+    },
   };
+}
+
+function candidateContentIdentity(candidate: CandidateIdentity): unknown {
+  const fileContent = (file: CandidateFileIdentity | null): unknown =>
+    file === null ? null : { basename: file.basename, bytes: file.bytes, sha256: file.sha256 };
+  const treeContent = (
+    tree: CandidateIdentity['installedPackageTree'] | CandidateIdentity['runtimeDependencyTree'],
+  ): unknown =>
+    tree === null
+      ? null
+      : {
+          sha256: tree.sha256,
+          files: tree.files,
+          scope: tree.scope,
+          method: tree.method,
+        };
+  return {
+    repositoryHead: candidate.repositoryHead,
+    repositoryTree: candidate.repositoryTree,
+    cli: {
+      basename: candidate.cli.basename,
+      bytes: candidate.cli.bytes,
+      sha256: candidate.cli.sha256,
+      scope: candidate.cli.scope,
+    },
+    installedPackage: candidate.installedPackage,
+    installedPackageTree: treeContent(candidate.installedPackageTree),
+    runtimeDependencyTree: treeContent(candidate.runtimeDependencyTree),
+    lockfile: fileContent(candidate.lockfile),
+    tarball: fileContent(candidate.tarball),
+    runtime: candidate.runtime,
+  };
+}
+
+function cheapRepositoryState(): Pick<RepositoryIdentity, 'gitHead' | 'worktreeDirty'> | null {
+  const head = spawnSync('git', ['-c', 'core.excludesFile=', 'rev-parse', '--verify', 'HEAD'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+  });
+  const status = spawnSync('git', ['-c', 'core.excludesFile=', 'status', '--porcelain=v1', '--untracked-files=all'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (head.status !== 0 || head.error !== undefined || status.status !== 0 || status.error !== undefined) return null;
+  return {
+    gitHead: head.stdout.trim() === '' ? null : head.stdout.trim(),
+    worktreeDirty: status.stdout.trim() !== '',
+  };
+}
+
+function assertCandidateIdentityStateStable(expected: CandidateIdentity, cliPath: string, boundary: string): void {
+  const repository = cheapRepositoryState();
+  if (
+    repository === null ||
+    repository.gitHead !== expected.repositoryTree.gitHead ||
+    repository.worktreeDirty !== expected.repositoryTree.worktreeDirty
+  ) {
+    throw new BenchmarkIdentityDriftError(boundary);
+  }
+
+  const packageContext = candidatePackageContext(cliPath);
+  if (JSON.stringify(packageContext.installedPackage) !== JSON.stringify(expected.installedPackage)) {
+    throw new BenchmarkIdentityDriftError(boundary);
+  }
+
+  const runtimeTree = runtimeDependencyClosure(packageContext.candidatePackageDirectory, packageContext.packageRoot, false);
+  const expectedRuntimeTree = expected.runtimeDependencyTree;
+  if (
+    expectedRuntimeTree === null ||
+    runtimeTree.stateSha256 !== expectedRuntimeTree.stateSha256 ||
+    runtimeTree.files !== expectedRuntimeTree.files
+  ) {
+    throw new BenchmarkIdentityDriftError(boundary);
+  }
+
+  if (expected.installedPackageTree === null) {
+    if (packageContext.installedPackage !== null) throw new BenchmarkIdentityDriftError(boundary);
+  } else {
+    if (packageContext.installedPackage === null) throw new BenchmarkIdentityDriftError(boundary);
+    const state = fixtureStateIdentity(packageContext.candidatePackageDirectory, isPackageGeneratedPath);
+    if (
+      state.stateSha256 !== expected.installedPackageTree.stateSha256 ||
+      state.files !== expected.installedPackageTree.files
+    ) {
+      throw new BenchmarkIdentityDriftError(boundary);
+    }
+  }
+
+  const currentCliState = candidateFileState(cliPath);
+  if (
+    currentCliState.bytes !== expected.cli.state.bytes ||
+    currentCliState.mtimeNs !== expected.cli.state.mtimeNs
+  ) {
+    throw new BenchmarkIdentityDriftError(boundary);
+  }
+
+  const compareFileState = (expectedFile: CandidateFileIdentity | null, currentPath: string | null): void => {
+    if (expectedFile === null) {
+      if (currentPath !== null) throw new BenchmarkIdentityDriftError(boundary);
+      return;
+    }
+    if (currentPath === null) throw new BenchmarkIdentityDriftError(boundary);
+    const state = candidateFileState(currentPath);
+    if (
+      basename(currentPath) !== expectedFile.basename ||
+      state.bytes !== expectedFile.state.bytes ||
+      state.mtimeNs !== expectedFile.state.mtimeNs
+    ) {
+      throw new BenchmarkIdentityDriftError(boundary);
+    }
+  };
+  const lockfilePath = findLockfile(packageContext.packageRoot);
+  const tarballPath = findTarball(
+    packageContext.packageRoot,
+    packageContext.installedPackage?.name ?? null,
+    packageContext.installedPackage?.version ?? null,
+  );
+  compareFileState(expected.lockfile, lockfilePath);
+  compareFileState(expected.tarball, tarballPath);
+}
+
+export function assertCandidateIdentityStable(
+  expected: CandidateIdentity,
+  cliPath: string,
+  boundary: string,
+  check: CandidateIdentityCheck = 'full',
+): CandidateIdentity {
+  if (check === 'state') {
+    assertCandidateIdentityStateStable(expected, cliPath, boundary);
+    return expected;
+  }
+  const observedRepository = assertRepositoryIdentityStable(expected.repositoryTree, ROOT, boundary);
+  const observed = candidateIdentity(cliPath, observedRepository);
+  if (JSON.stringify(candidateContentIdentity(expected)) !== JSON.stringify(candidateContentIdentity(observed))) {
+    throw new BenchmarkIdentityDriftError(boundary);
+  }
+  return observed;
 }
 
 interface BenchmarkReport {
@@ -2367,6 +4005,9 @@ interface BenchmarkReport {
   goal: '0008-acceptable-browser-cost';
   note: string;
   generatedAt: string;
+  instrument: {
+    sources: RepositoryIdentity | null;
+  };
   candidate: CandidateIdentity | null;
   host: {
     platform: string;
@@ -2377,7 +4018,9 @@ interface BenchmarkReport {
     totalMemoryBytes: number;
   };
   browser: string | null;
+  browserProfile: ResolvedBenchmarkBrowser['report'];
   viewport: { width: number; height: number };
+  network: { origin: string; throttling: string };
   throttling: { cpuRate: number; label: string } | null;
   quantileMethod: 'nearest-rank';
   cacheDefinitions: string[];
@@ -2385,12 +4028,6 @@ interface BenchmarkReport {
   workloads: WorkloadReport[];
   failures: string[];
   elapsedSeconds: number;
-}
-
-function gitReportDirectory(): string {
-  const probe = spawnSync('git', ['rev-parse', '--git-path', 'publish-report'], { cwd: ROOT, encoding: 'utf8' });
-  const path = probe.status === 0 ? probe.stdout.trim() : '';
-  return path === '' ? join(ROOT, '.publish-report') : resolve(ROOT, path);
 }
 
 function kib(bytes: number | null | undefined): string {
@@ -2419,14 +4056,21 @@ function printWorkload(workload: WorkloadReport): void {
 }
 
 async function main(): Promise<number> {
-  const options = parseOptions(process.argv.slice(2));
-  const out = options.out ?? join(gitReportDirectory(), `benchmark-snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
+  const options = parseSnapshotOptions(process.argv.slice(2));
+  const { devices } = await import('playwright');
+  const browserSettings = resolveBenchmarkBrowser(options.browser, options.device, devices);
+  const out =
+    options.out ??
+    join(benchmarkReportDirectory(ROOT), `benchmark-snapshot-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
   const report: BenchmarkReport = {
     kind: 'anc-snapshot-benchmark',
     goal: '0008-acceptable-browser-cost',
     note:
-      'This is goal 0008’s measurement instrument, not its acceptance: the physical mobile device and the recorded maintainer decision are external. Nulls mean the runtime seam did not supply the value, never an invented zero.',
+      'This is goal 0008’s measurement instrument, not the recorded maintainer decision. A named device field is Chrome-family mobile emulation, and null means no device profile was requested. Null runtime measurements are never invented zeros.',
     generatedAt: new Date().toISOString(),
+    instrument: {
+      sources: null,
+    },
     candidate: null,
     host: {
       platform: process.platform,
@@ -2437,13 +4081,18 @@ async function main(): Promise<number> {
       totalMemoryBytes: totalmem(),
     },
     browser: null,
-    viewport: VIEWPORT,
+    browserProfile: browserSettings.report,
+    viewport: browserSettings.report.viewport,
+    network: {
+      origin: 'loopback static server',
+      throttling: 'none; HTTP cache state and gzip negotiation are measured separately',
+    },
     throttling:
       options.throttle > 1
         ? {
             cpuRate: options.throttle,
             label:
-              'simulation (CDP Emulation.setCPUThrottlingRate on the page target only), not a physical mid-range mobile device',
+              'simulation (CDP Emulation.setCPUThrottlingRate on the page target only); device emulation does not emulate physical CPU hardware',
           }
         : null,
     quantileMethod: 'nearest-rank',
@@ -2454,7 +4103,7 @@ async function main(): Promise<number> {
     ],
     measurementSeam: {
       requested:
-        'armed requests carry measure: true; armed snapshot-result details may carry { type, ms, operationMs, sqlMs?, phases? } where phases = { totalMs, fetchMs, digestMs, wasmInitMs, importMs, wasmMemoryBytes }',
+        'armed requests carry measure: true; successful measured replies carry finite { dispatchMs, operationMs, sqlMs }; cold replies also carry complete phases = { totalMs, fetchMs, digestMs, wasmInitMs, importMs, wasmMemoryBytes }',
       observed: null,
     },
     workloads: [],
@@ -2463,54 +4112,83 @@ async function main(): Promise<number> {
   };
   const startedAt = Date.now();
   let exitCode = 0;
+  let expectedCandidate: CandidateIdentity | null = null;
+  let candidateCliPath: string | null = null;
+  let identityFailureRecorded = false;
   try {
-    const cliPath = options.cli === undefined ? join(ROOT, 'bin', 'anc.mjs') : isAbsolute(options.cli) ? options.cli : resolve(process.cwd(), options.cli);
+    const cliPath = options.cli === undefined ? join(ROOT, 'bin', 'anc.mjs') : resolve(process.cwd(), options.cli);
+    candidateCliPath = cliPath;
     if (!existsSync(cliPath)) throw new Error(`--cli does not exist: ${basename(cliPath)}`);
     if (extname(cliPath).toLowerCase() === '.tgz') {
       throw new Error('--cli must point to an executable CLI, not a .tgz package archive');
     }
-    report.candidate = candidateIdentity(cliPath);
-    for (const size of options.sizes) {
+    const repository = repositoryIdentity(ROOT);
+    report.instrument.sources = repository;
+    expectedCandidate = candidateIdentity(cliPath, repository);
+    report.candidate = expectedCandidate;
+    assertRepositoryIdentityClean(repository);
+    workloadLoop: for (const size of options.sizes) {
       for (const topology of options.topologies) {
         process.stdout.write(`benchmark ${size}/${topology}: generating and measuring\n`);
         try {
-          const workload = await measureWorkload(options, cliPath, size, topology);
+          const workload = await measureWorkload(options, browserSettings, cliPath, size, topology, expectedCandidate);
+          try {
+            assertCandidateIdentityStable(expectedCandidate, cliPath, `workload ${workload.id} after measurement`, 'state');
+          } catch (error) {
+            const message = scrub(error);
+            workload.failures.push({ phase: 'identity', message });
+            report.workloads.push(workload);
+            report.failures.push(`${workload.id}: ${message}`);
+            identityFailureRecorded = true;
+            exitCode = 1;
+            break workloadLoop;
+          }
           report.workloads.push(workload);
           if (workload.failures.length > 0) exitCode = 1;
           printWorkload(workload);
         } catch (error) {
-          const failure: WorkloadReport = {
-            id: `${size}-${topology}`,
-            size,
-            topology,
-            generator: {
-              name: 'scripts/generate-corpus.ts#generateCorpus',
-              seed: options.seed,
-              options: generatorRequest(options, size, topology),
-              result: null,
-              finalized: null,
-            },
-            fixture: null,
-            build: null,
-            database: null,
-            transfer: null,
-            startup: null,
-            preview: null,
-            queries: null,
-            reading: null,
-            checks: [],
-            failures: [{ phase: 'workload', message: scrub(error) }],
-            elapsedSeconds: 0,
-          };
+          const originalError = error instanceof WorkloadMeasurementError ? error.originalError : error;
+          const failure: WorkloadReport =
+            error instanceof WorkloadMeasurementError
+              ? error.workload
+              : {
+                  id: `${size}-${topology}`,
+                  size,
+                  topology,
+                  generator: {
+                    name: 'scripts/generate-corpus.ts#generateCorpus',
+                    seed: options.seed,
+                    options: generatorRequest(options, size, topology),
+                    result: null,
+                    finalized: null,
+                  },
+                  fixture: null,
+                  build: null,
+                  database: null,
+                  transfer: null,
+                  startup: null,
+                  preview: null,
+                  queries: null,
+                  reading: null,
+                  checks: [],
+                  failures: [{ phase: 'workload', message: scrub(originalError) }],
+                  elapsedSeconds: 0,
+                };
           report.workloads.push(failure);
-          report.failures.push(`${failure.id}: ${scrub(error)}`);
+          report.failures.push(`${failure.id}: ${scrub(originalError)}`);
           exitCode = 1;
           printWorkload(failure);
+          if (originalError instanceof BenchmarkIdentityDriftError) {
+            identityFailureRecorded = true;
+            break workloadLoop;
+          }
         }
       }
     }
+    assertCandidateIdentityStable(expectedCandidate, cliPath, 'report finalization', 'full');
   } catch (error) {
     report.failures.push(scrub(error));
+    if (error instanceof BenchmarkIdentityDriftError) identityFailureRecorded = true;
     exitCode = 1;
     process.stderr.write(`benchmark: ${scrub(error)}\n`);
   } finally {
@@ -2522,6 +4200,16 @@ async function main(): Promise<number> {
       phases: workloads.some((workload) => workload.queries?.seam.phasesObserved === true || workload.startup?.worker.phases !== null),
     };
     try {
+      if (!identityFailureRecorded && expectedCandidate !== null) {
+        try {
+          if (candidateCliPath !== null) {
+            assertCandidateIdentityStable(expectedCandidate, candidateCliPath, 'report write', 'state');
+          }
+        } catch (error) {
+          report.failures.push(scrub(error));
+          exitCode = 1;
+        }
+      }
       const body = `${JSON.stringify(report, null, 2)}\n`;
       mkdirSync(dirname(out), { recursive: true });
       writeFileSync(out, body, 'utf8');
