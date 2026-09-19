@@ -27,6 +27,9 @@
     "!scripts/build-site.ts",
     "!scripts/dist-lock.ts",
     "!scripts/npm-command.ts",
+    "!scripts/benchmark-limits.ts",
+    "!scripts/benchmark-browser.ts",
+    "!scripts/benchmark-identity.ts",
     "!scripts/benchmark-snapshot.ts",
     "!scripts/smoke-tarball.ts"
   ],

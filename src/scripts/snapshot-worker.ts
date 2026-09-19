@@ -18,11 +18,23 @@ import {
   isSnapshotMessage,
   requestPageSize,
   WORKER_LIMITS,
+  type LoadPhases,
   type SnapshotErrorCode,
   type SnapshotMessage,
   type SnapshotReply,
   type SnapshotResult,
 } from '../lib/worker-protocol.ts';
+
+/**
+ * The instant this module begins evaluating, before any load work.
+ *
+ * `load`'s `totalMs` is measured from here, so a measured reply reports the
+ * Worker's whole cold path rather than only the piece after `load` is called.
+ * That matters for goal 0008: the module's own evaluation and the shared
+ * initialization promise both precede the first reply, and a number that began
+ * at the fetch would silently omit them.
+ */
+const moduleStarted = performance.now();
 
 /** Minimal Worker global, avoiding a webworker/DOM lib declaration clash. */
 const scope = self as unknown as {
@@ -103,7 +115,17 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 
 interface Sqlite3 {
   oo1: { DB: new () => SqliteDb };
-  wasm: { allocFromTypedArray(source: Uint8Array): number };
+  wasm: {
+    allocFromTypedArray(source: Uint8Array): number;
+    /** The Emscripten heap, exposed beside `config.memory` by this build. */
+    memory?: WebAssembly.Memory;
+  };
+  /**
+   * The pinned package types `config.memory` as the module's
+   * `WebAssembly.Memory`. Optional here because `importSnapshot`'s Node tests
+   * drive it with a minimal fake that has no `config`.
+   */
+  config?: { memory?: WebAssembly.Memory };
   capi: {
     sqlite3_deserialize(
       pointer: number,
@@ -116,6 +138,21 @@ interface Sqlite3 {
     SQLITE_DESERIALIZE_READONLY: number;
     SQLITE_DESERIALIZE_FREEONCLOSE: number;
   };
+}
+
+/**
+ * The WASM linear memory's capacity, or `null` when it is not reachable.
+ *
+ * The pinned package types `sqlite3.config.memory` as a `WebAssembly.Memory`
+ * (the Emscripten heap, the same object as the untyped `wasm.memory`), so the
+ * size is its `buffer.byteLength`: capacity after import, not bytes in use and
+ * not the decoded DB size. A build that stops exposing either location yields
+ * `null` — the phase field is documented as unknown — rather than a fabricated
+ * number, and the `instanceof` keeps a foreign stand-in from being read as one.
+ */
+function wasmMemorySize(sqlite3: Sqlite3): number | null {
+  const memory = sqlite3.config?.memory ?? sqlite3.wasm.memory;
+  return memory instanceof WebAssembly.Memory ? memory.buffer.byteLength : null;
 }
 
 /**
@@ -211,7 +248,17 @@ export function importSnapshot(sqlite3: Sqlite3, databaseBytes: Uint8Array): Sql
   }
 }
 
-async function load(): Promise<SnapshotDb> {
+interface LoadedSnapshot {
+  db: SnapshotDb;
+  /**
+   * The measurement-only decomposition of this load, computed once and shared
+   * with every measured reply. `null` members are documented unknowns, not
+   * zeroes.
+   */
+  phases: LoadPhases;
+}
+
+async function load(): Promise<LoadedSnapshot> {
   const snapshotBinding = __ANC_SNAPSHOT_BINDING__;
   const wasmBinding = __ANC_WASM_BINDING__;
   if (snapshotBinding === null || wasmBinding === null) fault('not-ready');
@@ -221,11 +268,16 @@ async function load(): Promise<SnapshotDb> {
   // and aborts the sibling, so a failed load cannot leave a response draining
   // toward its cap behind the failure.
   const controller = new AbortController();
+  const fetchStarted = performance.now();
   const [databaseBytes, wasmBytes] = await Promise.all([
     fetchBounded(snapshotBinding.url, WORKER_LIMITS.maxSnapshotBytes, controller.signal),
     fetchBounded(wasmBinding.url, WORKER_LIMITS.maxWasmBytes, controller.signal),
   ]).finally(() => controller.abort());
+  const fetchMs = performance.now() - fetchStarted;
+
+  const digestStarted = performance.now();
   const [databaseDigest, wasmDigest] = await Promise.all([sha256(databaseBytes), sha256(wasmBytes)]);
+  const digestMs = performance.now() - digestStarted;
   if (databaseDigest !== snapshotBinding.digest) fault('integrity');
   if (databaseBytes.length < 100) fault('header');
   for (const [index, byte] of SQLITE_MAGIC.entries()) {
@@ -237,20 +289,38 @@ async function load(): Promise<SnapshotDb> {
   if (wasmDigest !== wasmBinding.digest) fault('integrity');
 
   let sqlite3: Awaited<ReturnType<typeof initSqlite>>;
+  const wasmInitStarted = performance.now();
   try {
     sqlite3 = await initSqlite(wasmBytes, wasmBinding.url);
   } catch {
     return fault('wasm');
   }
+  const wasmInitMs = performance.now() - wasmInitStarted;
 
+  // The schema validation inside `importSnapshot` is part of this phase: goal
+  // 0008's startup decomposition is fetch/hash/init/import, and `totalMs` is
+  // the whole module-to-ready span that also covers the header checks above.
+  const importStarted = performance.now();
   const database = importSnapshot(sqlite3, databaseBytes);
-  return { select: (sql, params) => database.selectObjects(sql, params ? [...params] : undefined) };
+  const importMs = performance.now() - importStarted;
+
+  return {
+    db: { select: (sql, params) => database.selectObjects(sql, params ? [...params] : undefined) },
+    phases: {
+      totalMs: performance.now() - moduleStarted,
+      fetchMs,
+      digestMs,
+      wasmInitMs,
+      importMs,
+      wasmMemoryBytes: wasmMemorySize(sqlite3),
+    },
+  };
 }
 
-let loading: Promise<SnapshotDb> | undefined;
+let loading: Promise<LoadedSnapshot> | undefined;
 
 /** One shared initialization promise; a failure clears it so intent can retry. */
-function database(): Promise<SnapshotDb> {
+function database(): Promise<LoadedSnapshot> {
   loading ??= load().catch((error: unknown) => {
     loading = undefined;
     throw error;
@@ -286,19 +356,43 @@ async function handle(value: unknown): Promise<void> {
     return;
   }
   try {
+    const loaded = await database();
+    // The measured request gets a wrapping adapter that sums every `select`
+    // span; an unmeasured request runs against the same adapter as before, so
+    // its reply shape and behavior are unchanged. The wrapper never changes
+    // what is executed or returned: `select` delegates straight through.
+    let sqlMs = 0;
+    const db: SnapshotDb =
+      value.measure === true
+        ? {
+            select(sql, params) {
+              const selectStarted = performance.now();
+              try {
+                return loaded.db.select(sql, params);
+              } finally {
+                sqlMs += performance.now() - selectStarted;
+              }
+            },
+          }
+        : loaded.db;
     // The measurement goal needs the operation's SQL/Worker time separated from
     // main-thread dispatch and rendering time, so a successful reply carries the
     // span around `run()` alone: the shared initialization promise is awaited
     // first so a cold start's download, hashing, WASM init, import, and schema
-    // validation can never land in a reply's duration. The span still covers the
-    // operation's selection and induced-edge work beside its queries; that is
-    // the worker-side half goal 0005 records for goal 0008, which owns any
-    // finer SQL-only split.
-    const db = await database();
+    // validation can never land in a reply's duration. The span still covers
+    // the operation's selection and induced-edge work beside its queries; that
+    // is the worker-side half goal 0005 records for goal 0008. A request that
+    // asked to measure additionally gets `sqlMs`, the subset of that span spent
+    // inside `select` calls, and `phases`, the decomposition of the cold start
+    // that preceded it.
     const started = performance.now();
     const result = run(db, value);
     const operationMs = performance.now() - started;
-    reply({ id: value.id, ok: true, result, operationMs });
+    if (value.measure === true) {
+      reply({ id: value.id, ok: true, result, operationMs, sqlMs, phases: loaded.phases });
+    } else {
+      reply({ id: value.id, ok: true, result, operationMs });
+    }
   } catch (error) {
     reply({ id: value.id, ok: false, code: codeOf(error) });
   }

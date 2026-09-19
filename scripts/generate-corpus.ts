@@ -25,6 +25,19 @@
  *   never exercises the degrade-to-text rewrite, which is the branch that
  *   allocates.
  *
+ * ## Workload options
+ *
+ * The defaults are the original corpus — the skewed graph above and no
+ * metadata — so an existing caller's bytes are unchanged. Two alternatives
+ * exist for the benchmark workloads. `topology: 'sparse'` removes the skew
+ * entirely: every note links one or two others and no note is a hub, which is
+ * what lets a measurement separate a cost that follows the graph shape from
+ * one that follows the note count. `metadata: true` gives every note
+ * frontmatter — three tags, at least one CJK, and a per-note alias — and every
+ * 25th note a mixed CJK/Latin heading, which is what a tag, alias, or
+ * non-ASCII search measurement needs. Neither option makes an unseeded choice,
+ * so either corpus is as reproducible as the default.
+ *
  * ## Nothing here names this project or this repository
  *
  * The tool is not for one person, so a fixture that encodes this repository's
@@ -134,7 +147,27 @@ export interface CorpusOptions {
   notes: number;
   /** Seeds the generator; the same seed and count give identical bytes. */
   seed?: number;
+  /**
+   * The link graph's shape. `'skewed'` is the default hub-heavy graph and
+   * `'sparse'` is its low-degree contrast; see {@link outDegreeFor}.
+   */
+  topology?: CorpusTopology;
+  /**
+   * `true` gives every note deterministic frontmatter — three tags, at least
+   * one CJK, and an `alias-<index>` alias — and every 25th note a mixed
+   * CJK/Latin heading. Withheld notes keep `publish: false`. The default
+   * `false` leaves the corpus exactly as it was.
+   */
+  metadata?: boolean;
 }
+
+/**
+ * Which link graph a corpus has.
+ *
+ * `'skewed'` is the default power-law graph and `'sparse'` is the low-degree
+ * contrast: every note links one or two others and no note is a hub.
+ */
+export type CorpusTopology = 'skewed' | 'sparse';
 
 /**
  * How many of a note's own words become links, by note rank.
@@ -144,8 +177,18 @@ export interface CorpusOptions {
  * things. The two ends cost differently — a hub's out-edges become every
  * target's backlinks, so the hubs are what make backlink derivation expensive —
  * and a uniform graph measures neither end.
+ *
+ * Sparse mode skips the skew rather than damping it: one or two links per note,
+ * drawn from the same seeded RNG, so a benchmark can tell a cost that follows
+ * the graph shape from one that follows the note count.
  */
-function outDegreeFor(rank: number, total: number, random: () => number): number {
+function outDegreeFor(
+  rank: number,
+  total: number,
+  random: () => number,
+  topology: CorpusTopology,
+): number {
+  if (topology === 'sparse') return 1 + Math.floor(random() * 2);
   // The first 1% of notes are hubs. `Math.max(1, …)` so a tiny corpus still has
   // one, which is what keeps a 100-note run comparable to a 10,000-note one
   // rather than differing in kind.
@@ -265,6 +308,45 @@ function linkTo(form: number, sourcePath: string, targetPath: string): string {
   }
 }
 
+/**
+ * Topic tags a metadata note draws two of, rotated by its index.
+ *
+ * A small colliding pool rather than per-note unique tags: a tag query whose
+ * every answer is one note measures lookup, not grouping, and the generic
+ * vocabulary keeps a generated corpus from naming anyone (see the header).
+ */
+const TOPIC_TAGS: readonly string[] = ['field-notes', 'gardening', 'journal', 'reference'];
+
+/** The CJK tag on every metadata note, so tag workloads include a non-ASCII key. */
+const CJK_TAG = '笔记';
+
+/**
+ * Mixed CJK/Latin headings for every 25th metadata note.
+ *
+ * A pool rather than one string so a search or preview workload has more than
+ * one non-ASCII title to tokenize. The first is the title the benchmark
+ * snapshot already uses, so both harnesses describe the same corpus shape.
+ */
+const CJK_TITLES: readonly string[] = [
+  '星图与笔记：中英混排',
+  '潮汐名录：观测与记录',
+  '码头备忘：标点与行句',
+];
+
+/**
+ * Three deterministic tags for one note, the last CJK.
+ *
+ * `index % 4` and `(index + 1) % 4` can never agree, so the first two are
+ * distinct without a retry loop. See {@link TOPIC_TAGS}.
+ */
+function tagsFor(index: number): string[] {
+  return [
+    TOPIC_TAGS[index % TOPIC_TAGS.length]!,
+    TOPIC_TAGS[(index + 1) % TOPIC_TAGS.length]!,
+    CJK_TAG,
+  ];
+}
+
 /** One note's Markdown, links included. */
 function noteBody(
   index: number,
@@ -272,23 +354,40 @@ function noteBody(
   paths: readonly string[],
   random: () => number,
   withheld: boolean,
+  topology: CorpusTopology,
+  metadata: boolean,
 ): string {
-  const title = sentence(random, 3 + Math.floor(random() * 3)).replace(/\.$/, '');
-  const lines: string[] = [];
+  const generatedTitle = sentence(random, 3 + Math.floor(random() * 3)).replace(/\.$/, '');
 
   // Frontmatter on roughly a third of notes, and on every withheld one. Parsing
   // and stripping it is per-note work the walk pays for, and a corpus with none
-  // would leave `frontmatterOf` measuring its own early return.
-  if (withheld || random() < 0.3) {
+  // would leave `frontmatterOf` measuring its own early return. Drawn here even
+  // when metadata writes a block regardless, so metadata mode consumes the same
+  // RNG sequence and its bodies differ from the default only by that metadata.
+  const sampledFrontmatter = withheld || random() < 0.3;
+
+  // Every 25th metadata note gets a mixed-script heading. The sentence above is
+  // still generated and discarded, for the same sequence argument.
+  const title =
+    metadata && index % 25 === 0
+      ? CJK_TITLES[Math.floor(index / 25) % CJK_TITLES.length]!
+      : generatedTitle;
+
+  const lines: string[] = [];
+  if (sampledFrontmatter || metadata) {
     lines.push('---');
     if (withheld) lines.push('publish: false');
-    else lines.push(`title: ${title}`);
+    else if (sampledFrontmatter) lines.push(`title: ${title}`);
+    if (metadata) {
+      lines.push(`tags: [${tagsFor(index).join(', ')}]`);
+      lines.push(`aliases: ["alias-${index}"]`);
+    }
     lines.push('---', '');
   }
 
   lines.push(`# ${title}`, '');
 
-  const degree = outDegreeFor(index, paths.length, random);
+  const degree = outDegreeFor(index, paths.length, random, topology);
   for (let paragraph = 0, total = paragraphsFor(random); paragraph < total; paragraph += 1) {
     const parts = [sentence(random, 6 + Math.floor(random() * 14))];
 
@@ -297,7 +396,19 @@ function noteBody(
     // replaces spans last-to-first, and a body whose links all sit in one region
     // would not exercise that ordering across a realistic span distribution.
     if (paragraph < degree) {
-      const target = paths[Math.floor(random() * paths.length)]!;
+      let target = paths[Math.floor(random() * paths.length)]!;
+      // Sparse mode promises every note an out-edge, and a drawn self-target
+      // would silently delete one. Replacing rather than redrawing keeps the
+      // RNG count — and so the default mode's bytes — unchanged.
+      if (target === path && topology === 'sparse') {
+        for (let step = 1; step < paths.length; step += 1) {
+          const candidate = paths[(index + step) % paths.length]!;
+          if (candidate !== path) {
+            target = candidate;
+            break;
+          }
+        }
+      }
       if (target !== path) parts.push(linkTo(index + paragraph, path, target));
       // One link in twenty names nothing at all. This is the degrade-to-text
       // branch, which allocates a replacement where a resolved link does not,
@@ -322,6 +433,8 @@ export async function generateCorpus(
   options: CorpusOptions,
 ): Promise<GeneratedCorpus> {
   const random = seededRandom(options.seed ?? 1);
+  const topology = options.topology ?? 'skewed';
+  const metadata = options.metadata ?? false;
   const paths = planPaths(options.notes, random);
 
   const result: GeneratedCorpus = {
@@ -350,7 +463,7 @@ export async function generateCorpus(
     // `unpublished` outcome, which is the branch that rewrites a label rather
     // than just replacing a span.
     const withheld = random() < 0.04;
-    const body = noteBody(index, path, paths, random, withheld);
+    const body = noteBody(index, path, paths, random, withheld, topology, metadata);
     const destination = join(directory, path);
     await ensure(destination);
     await writeFile(destination, body, 'utf8');

@@ -1,6 +1,6 @@
 # 0008 — Acceptable browser cost
 
-Status: ready. Created: 2026-09-14. Replaces part of [0001](0001-unified-public-query-model.md).
+Status: in progress. Created: 2026-09-14. Replaces part of [0001](0001-unified-public-query-model.md).
 
 ## Desired outcome
 
@@ -26,9 +26,9 @@ hub-heavy topology with real edges, tags, aliases and varied text, including CJK
 Record counts, degree distribution, field lengths, generator/seed and fixture
 identity. These are evaluation workloads, not a new maximum corpus size.
 
-The inherited warm local-neighborhood target is p95 **below 50 ms** on a named
-representative mid-range mobile device after Worker readiness. Interpret it as
-request dispatch to validated Worker result, including messaging, selection and
+The inherited warm local-neighborhood target is p95 **below 50 ms** under a named
+Chrome-family mobile device-emulation profile after Worker readiness. Interpret it
+as request dispatch to validated Worker result, including messaging, selection and
 induced-edge extraction; report inner SQL separately and graph drawing separately.
 The target must hold on each stated topology/size for the declared supported mobile
 workload. Do not average away a failing large or hub-heavy case.
@@ -49,52 +49,97 @@ limits until that decision. No JSON fast path or body-in-DB exception is implied
 | Ordinary reading | Network evidence of zero SQLite assets before intent and initial-render comparison with enhancements inactive under the same environment. Report meaningful observed regressions. |
 | Limits and overload | Recorded finite decoded-byte, pending-request, page-size, startup/query deadline and rendering policies are enforced. Exceed each configured boundary and verify bounded failure, cleanup, static usability and successful later retry. |
 
-Record commit/tarball hash, browser/version, OS, physical device/CPU/RAM, network,
-cache definitions, sample counts, repetitions, quantile method, raw observations
-and summaries. Cold means no ready Worker/DB and empty relevant HTTP cache; warm
-means the same ready snapshot. Preserve failures, timeouts and OOMs in results;
-do not calculate an apparently passing p95 after silently removing them.
+Record commit/tarball hash, instrument source hashes, browser channel/version, OS,
+host CPU/RAM, the named emulation profile and its user agent, viewport, screen,
+device scale factor, mobile/touch flags, network, cache definitions, sample counts,
+repetitions, quantile method, raw observations and summaries. Cold means no ready
+Worker/DB and empty relevant HTTP cache; warm means the same ready snapshot.
+Preserve failures, timeouts and OOMs in results; do not calculate an apparently
+passing p95 after silently removing them.
 
-Use a real named mobile device for the mobile judgment. CPU/network throttling
-may supplement it but must be labeled simulation. Use the same corpus/device for
-comparison with the pre-SQLite preview at commit
+The maintainer accepted Chrome or Edge mobile device emulation as the supported
+mobile judgment on 2026-09-18; a physical Android device and `adb` are not required.
+State CPU and network throttling separately and do not describe emulation as
+physical hardware. Use the same exact fixture identity and emulation configuration
+for comparison with the pre-SQLite preview at commit
 `7579cc16a4320f7410b71e784587a01fdf14333d`; this does not require shipping that code.
 If the baseline cannot build a workload, record that limitation rather than
 silently simplifying the corpus or fabricating a comparative latency.
 
 The maintainer's recorded acceptance must identify the measured candidate,
 comparison, finite policies and material UX trade-off. Lack of access to a suitable
-device or acceptance authority leaves this goal open; it does not reopen settled
-architecture choices or postpone SQLite beyond 0.1.0.
+supported browser or acceptance authority leaves this goal open; it does not reopen
+settled architecture choices or postpone SQLite beyond 0.1.0.
 
-## Implementation progress (2026-09-15)
+## Implementation progress (2026-09-19)
 
-The functional prerequisites (0002–0007) are implemented and their gates pass on
-this host, but **this goal's own measurement and acceptance cannot be produced
-here**: it requires a named physical mid-range mobile device for the p95 target
-and a recorded maintainer decision accepting the cold-preview/resource policies.
-Neither the device nor the acceptance authority is available in this
-environment, so no number is invented and the goal stays open. A benchmark
-harness and desktop-throttled numbers can be added, but they are labeled
-simulation and do not satisfy the mobile judgment.
+The measurement and overload instruments are implemented, but no current report is
+completion evidence yet. Review found several ways the earlier instruments could
+pass without observing the required result. Those paths have been hardened, and
+the pre-fix reports are retained only as diagnostic history until the finalized
+instrument is committed and rerun from a clean tree.
 
-**Measured 2026-09-15** with `pnpm run benchmark:snapshot --sizes
-100,1000,10000 --topologies sparse,hub --samples 30 --throttle 4` (desktop
-Chromium, CDP `Emulation.setCPUThrottlingRate=4`, nearest-rank p95, JS-heap-only
-memory). Warm local-neighbourhood p95, after the 10,000-note local query was
-changed from a whole-corpus edge scan to a query over the selected endpoints:
-100 sparse 12.7 ms / hub 17.4 ms; 1,000 sparse 13.5 ms / hub 17.5 ms; 10,000
-sparse 12.7 ms / hub 20.8 ms. Cold preview ~370-394 ms, warm ~226-253 ms;
-decoded DB 48 KiB/200 KiB/1.6 MiB and gzip 6.5/54/371 KiB. This holds under a
-**simulation** on this host; the physical mid-range mobile device and the
-recorded maintainer acceptance below are still required and are not satisfied by
-these numbers. The pre-optimization run measured 82 ms / 162 ms at 10,000, so the
-ablation of the endpoint-restricted query is the difference between failing and
-holding at the largest workload.
+### Instrument
+
+- `scripts/benchmark-snapshot.ts` generates exact published-node workloads while
+  retaining withheld notes and records the generator, seed, fixture identity,
+  degree distributions and material SQLite field-length distributions. Preview
+  measurement requires a confirmed hidden transition and a newly appended result
+  for the requested slug. Render series require one finite event per activation;
+  tag walks must enumerate the exact DB membership and exhaust their continuation;
+  local, global and tag-filtered graph replies are compared with an independently
+  derived DB-row oracle, including exact ranked nodes, directed induced edges and
+  omitted counts.
+- The snapshot server precomputes encoded bodies before browser intent, preserves
+  actual request start and end offsets, and rejects listen failures into the
+  partial-report path. Candidate identity covers repository and CLI bytes, the
+  installed package, its complete runtime dependency tree, the lockfile, a bound
+  tarball when supplied, Node and package-manager versions, and is rechecked at
+  material boundaries.
+- `scripts/benchmark-limits.ts` accepts the same strict `--cli`, browser and device
+  selection as the snapshot runner. Its page-size control refuses an unsaturated
+  corpus; the pending-request control waits for all held requests to settle and
+  proves a fresh request succeeds through the same client and Worker; unreadable
+  child-test output fails closed; listen failures still produce a private partial
+  report. The local rendering fixture must exceed `LOCAL_NODE_LIMIT` before that
+  control can pass.
+- `src/lib/worker-protocol.ts`, `src/scripts/snapshot-worker.ts` and
+  `src/scripts/snapshot-client.ts` carry the opt-in measurement seam. The owning
+  Worker protocol design records its literal boolean opt-in, numeric-only result
+  fields, Goal 0008 consumer and ablation result. Ordinary readers remain on the
+  unchanged request/reply path.
+- Repository-only benchmark runners and helpers are excluded from the installable
+  tarball, whose production dependency set does not include Playwright.
+
+### Invalidated diagnostic runs
+
+The 2026-09-18 six-workload Edge/Pixel 7 run, paired pre-SQLite comparison, limits
+run and npm-installed-package run all preceded the finalized instrument and used a
+dirty candidate. In addition, the cited limits report recorded 11 local neighbours
+against a limit of 12, so it did not exercise local truncation even though it was
+described as a passing overload control. Their latencies, hashes and 7/7 claim are
+not completion evidence and must not be used for acceptance.
+
+### Verification before the qualified rerun
+
+On the working tree, lint, type checking, focused benchmark and packaging tests,
+the normal build, tarball compilation and diff checks pass. These checks establish
+the implementation shape; they do not replace the clean-tree browser measurements.
+
+### Still required
+
+Commit the finalized instrument, then rerun the six 100/1,000/10,000-note sparse
+and hub-heavy workloads under the accepted Edge/Pixel 7 profile, the paired
+pre-SQLite baseline, every overload control against both the checkout and the
+npm-installed tarball, and the full release gates. Record only reports whose
+candidate/instrument identity stays stable and whose failure arrays are empty.
+Then record the maintainer's dated acceptance of the exact candidate, finite
+policies, cold-preview cost and material limitations. Mobile evidence remains
+browser emulation; CPU throttling applies to the page target rather than the
+Worker; loopback network is not a physical mobile network; and Worker heap,
+process RSS and total peak memory remain unavailable.
 
 ## Completion record
 
-Not completed. Record reproducible benchmark command/tool, candidate identity, raw
-artifact links, per-workload results, mobile evidence, overload-control outcomes,
-and dated maintainer acceptance. Any added optimization must also record what its
-ablation loses; measurements alone do not authorize a new public index.
+Not completed. The implementation is awaiting clean-tree qualified measurements
+and the maintainer acceptance named above.

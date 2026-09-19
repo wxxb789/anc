@@ -67,8 +67,39 @@ export type SnapshotArguments =
   | { type: 'localGraph'; slug: string }
   | { type: 'globalGraph'; tagKey?: string | null };
 
-/** One request as it arrives: an operation plus its id. */
-export type SnapshotMessage = SnapshotArguments & { id: number };
+/**
+ * Measurement-only decomposition of the shared cold start.
+ *
+ * Every member is a number, `null`, or a boolean flag — never text that could
+ * carry SQL, a URL, or a path — so carrying it crosses the same boundary the
+ * header's no-SQL/no-URL/no-path rule governs. The numbers describe timings of
+ * the Worker's own load phases, and goal 0008 is the consumer: a measured
+ * request can attribute startup cost instead of reading it as one opaque span.
+ */
+export interface LoadPhases {
+  /** Worker module evaluation to a validated, imported snapshot. */
+  totalMs: number;
+  /** The awaited pair of same-origin downloads (snapshot and WASM). */
+  fetchMs: number;
+  /** Both SHA-256 digests, measured as one awaited pair. */
+  digestMs: number;
+  /** Instantiation of the pinned SQLite WASM module. */
+  wasmInitMs: number;
+  /** Read-only deserialization, `query_only` guard, and schema validation. */
+  importMs: number;
+  /** WASM linear-memory capacity after import, or `null` where unexposed. */
+  wasmMemoryBytes: number | null;
+}
+
+/**
+ * One request as it arrives: an operation plus its id.
+ *
+ * `measure` is the instrumentation opt-in. Omitted by every ordinary client
+ * dispatch, and `true` only when the measurer armed the client deliberately;
+ * the Worker acts on it only as a literal boolean. `false` and an absent flag
+ * mean the same reply shape as before this field existed.
+ */
+export type SnapshotMessage = SnapshotArguments & { id: number; measure?: boolean };
 
 export type SnapshotErrorCode =
   | 'bad-request'
@@ -110,6 +141,19 @@ export type SnapshotReply =
        * be executed or resolved, and a duration is none.
        */
       operationMs: number;
+      /**
+       * Measurement-only inner-SQL figure: the sum of the spans this operation
+       * spent inside its `select` calls, a subset of `operationMs`. Present
+       * only when the request asked (`measure === true`); an ordinary reply
+       * does not carry the key at all.
+       */
+      sqlMs?: number;
+      /**
+       * Measurement-only decomposition of the shared load that preceded this
+       * reply, present only when the request asked and the load completed.
+       * Never corpus data: durations and a memory capacity.
+       */
+      phases?: LoadPhases;
     }
   | { id: number; ok: false; code: SnapshotErrorCode };
 
@@ -129,6 +173,14 @@ export function isSnapshotMessage(value: unknown): value is SnapshotMessage {
 
   const type = message['type'];
   if (typeof type !== 'string' || !SNAPSHOT_OPERATIONS.includes(type as SnapshotOperation)) return false;
+
+  // The instrumentation flag is optional, and only a boolean is a request the
+  // Worker may act on; any other value is refused rather than coerced. Checked
+  // before the per-operation branches because `preview`, `localGraph`, and
+  // `globalGraph` return from those branches, and an invalid flag must not slip
+  // past one of them. Unrelated extra keys stay ignored, as before.
+  const measure = message['measure'];
+  if (measure !== undefined && typeof measure !== 'boolean') return false;
 
   if (type === 'preview' || type === 'localGraph') return isLookupSlug(message['slug']);
   if (type === 'globalGraph') {

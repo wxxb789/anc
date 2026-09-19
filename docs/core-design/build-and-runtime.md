@@ -129,13 +129,24 @@ Do not label the filtered result as the whole corpus.
 
 Messages use a discriminated `type`, a request ID, and operation-specific validated
 arguments; replies echo the request ID and carry either a typed result or a small
-error code, and a successful reply also carries the measured milliseconds the
-named operation spent in the Worker after initialization settled — its queries
-and selection work, never a cold start (a number for the performance goal, not a
-data-model field). Results are structured-clone-safe values. IDs never cross snapshot
-boundaries. Validate slug/key shape, cursor, and bounded page size in the Worker;
-SQL uses bound parameters. No message accepts SQL text, arbitrary URLs, filesystem
-paths, or a table/column name supplied by the UI.
+error code. A successful reply always carries the measured milliseconds the named
+operation spent in the Worker after initialization settled — its queries and
+selection work, never a cold start (a number for the performance goal, not a
+data-model field). The measurement seam is explicitly opt-in: `measure` is an
+optional request field, and only the literal boolean `true` arms it. An absent or
+`false` flag is the ordinary client path and keeps the prior request and reply
+behavior. A measured success may add only numeric telemetry: `sqlMs` and a
+`phases` object whose load-phase members are numbers or `null` (`totalMs`,
+`fetchMs`, `digestMs`, `wasmInitMs`, `importMs`, and `wasmMemoryBytes`); these
+fields carry no SQL, URL, path, or corpus text. Goal 0008 is the named consumer:
+it uses the opt-in fields to separate inner SQL and cold-load costs from
+main-thread dispatch and rendering. Ablation of `measure`, `sqlMs`, and `phases`
+leaves ordinary queries and replies working but removes that attribution, so the
+instrumentation survives as evidence rather than as a runtime data-model field.
+Results are structured-clone-safe values. IDs never cross snapshot boundaries.
+Validate slug/key shape, cursor, and bounded page size in the Worker; SQL uses
+bound parameters. No message accepts SQL text, arbitrary URLs, filesystem paths,
+or a table/column name supplied by the UI.
 
 Bound pending requests and apply a finite startup/query deadline. A main-thread
 deadline may terminate an unresponsive Worker because a cancel message cannot
