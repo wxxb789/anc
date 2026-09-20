@@ -12,7 +12,7 @@
 
 每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
 
-*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；包名与它安装的命令都是 `anc`。
+*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`。
 
 ## 目录
 
@@ -29,7 +29,7 @@
 
 ## 状态
 
-**预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。`package.json` 仍然是 `"private": true`，因此 `anc` 尚未发布到任何 registry，`npx anc` 对任何人都无法解析；并且 npm 上的非 scoped 名称 `anc` 已被一个无关的包占用，正式发布需要一个 scoped 或改名后的包名。请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
+**预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。`package.json` 仍然是 `"private": true`，尚未发布到任何 registry；包名为 `@wxxb789/anc`，因为 npm 上的非 scoped 名称 `anc` 已被占用。请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
 
 ## 功能
 
@@ -60,14 +60,14 @@ node /path/to/anc/bin/anc.mjs preview --dist ~/notes/dist
 
 ```bash
 cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/anc/anc-*.tgz
+cd ~/notes && npm install /path/to/anc/wxxb789-anc-*.tgz
 npx anc build
 npx anc preview          # 在 http://localhost:4321/ 提供 dist/
 npx anc review           # 生成 .publish-set.json 供检查
 npx anc build --release  # 精确发布集 + PATH 上固定版本的 Gitleaks
 ```
 
-`npx anc` 是目标形态，也是包发布之后这些命令的写法。npm 上的非 scoped 名称 `anc` 已被占用，正式发布时可能需要 scoped 或改名后的包名；在决定之前，`npx anc` 会解析到一个无关的包。请改用上面两种方式之一。
+命令名是 `anc`。发布后 registry 形式为 `npx @wxxb789/anc build`；本地安装后也可以直接 `npx anc build`，因为包提供的二进制名就是 `anc`。在正式发布之前，请改用上面两种方式之一。
 
 ## 发布与否如何决定
 

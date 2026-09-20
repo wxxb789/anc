@@ -23,9 +23,9 @@ Node 22.18 or newer — `package.json` `engines` pins it, and the shipped code i
 JavaScript, so nothing needs a TypeScript toolchain.
 
 **And, today, a checkout of this repository.** `package.json` carries `"private": true`, so
-`anc` is on no registry and `npx anc` resolves for nobody. The unscoped npm name `anc` is
-also already taken by an unrelated package, so the published specifier will need to be
-scoped or renamed; that choice is open. Until it is published, the two ways to run it are:
+it is on no registry and `npx anc` resolves for nobody. The package is named
+`@wxxb789/anc`, because the unscoped npm name `anc` is already taken by an unrelated
+package. Until it is published, the two ways to run it are:
 
 ```bash
 # from a checkout, against your notes elsewhere
@@ -33,13 +33,13 @@ node /path/to/anc/bin/anc.mjs build --content ~/notes --out ~/notes/dist
 
 # or install the tarball the repository builds
 cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/anc/anc-*.tgz
+cd ~/notes && npm install /path/to/anc/wxxb789-anc-*.tgz
 npx anc build
 ```
 
-Everything below is written as `npx anc`, which is the intended shape and
-the one the commands become once a package is published under that name. Substitute one of
-the above until then.
+Everything below is written as `npx anc`. The command is `anc`; the registry form is
+`npx @wxxb789/anc`, which runs the same binary once the package is published. Substitute
+one of the above until then.
 
 ## The shortest thing that works
 

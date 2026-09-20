@@ -420,7 +420,7 @@ test('the pre-paint script and the toggle module agree on the storage keys', () 
   // both derive it.
   const own = (
     JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { name: string }
-  ).name.replace(/^@/, '').split('/')[0]!;
+  ).name.replace(/^@[^/]+\//, '')!;
   assert.ok(own.length > 2, 'package.json declares no name for this gate to forbid');
 
   for (const key of stored) {

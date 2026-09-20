@@ -1,5 +1,5 @@
 {
-  "name": "anc",
+  "name": "@wxxb789/anc",
   "type": "module",
   "version": "0.1.0",
   "description": "Build a static, privacy-preserving site from a directory of Markdown",

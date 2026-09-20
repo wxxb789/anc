@@ -41,7 +41,10 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
   name: string;
   version: string;
 };
-const TARBALL = join(ROOT, 'anc-' + MANIFEST.version + '.tgz');
+const TARBALL = join(
+  ROOT,
+  MANIFEST.name.replace(/^@/, '').replace('/', '-') + '-' + MANIFEST.version + '.tgz',
+);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);

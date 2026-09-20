@@ -209,8 +209,7 @@ test('the default title belongs to nobody, and the two modules holding one agree
   // instead of a memory of it. The package has since been renamed, which is how
   // a literal would have been caught — or, had it stayed, not been.
   const own = (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string })
-    .name.replace(/^@/, '')
-    .split('/')[0]!;
+    .name.replace(/^@[^/]+\//, '')!;
   assert.ok(own.length > 2, 'package.json declares no name for this gate to forbid');
 
   for (const [what, value] of [['the loader', DEFAULT_TITLE], ['src/lib/site.ts', fallback]] as const) {

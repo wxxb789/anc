@@ -64,11 +64,15 @@ const ROOT = fileURLToPath(new URL('../', import.meta.url));
  * on passing against a token nothing uses. The manifest is the one place a
  * package's identity is unambiguous.
  *
- * The name is unscoped, so the token is the whole manifest name.
+ * **The basename, not the scope.** A scoped package is `@publisher/name`: the
+ * scope identifies who publishes the package, and the basename is the project's
+ * own name — the one that must never reach a stranger's site. `@wxxb789/anc` and
+ * an unscoped `anc` both yield `anc`, so the gate follows the product rather
+ * than the account that happens to own it.
  */
 const OWN_NAME = (
   JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string }
-).name.replace(/^@/, '').split('/')[0]!;
+).name.replace(/^@[^/]+\//, '')!;
 
 /**
  * The name as a **delimited token**, which is what this file searches for.

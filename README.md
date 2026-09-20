@@ -16,8 +16,8 @@ plain static files that any host can serve.
 Every note publishes unless you exclude it. Ordinary reading needs no JavaScript, and
 nothing is sent to a third party.
 
-*anc* is short for **A**ctive **N**oise **C**ancelling. The package and the command
-it installs are both `anc`.
+*anc* is short for **A**ctive **N**oise **C**ancelling. The command it installs is
+`anc`; the package is published as `@wxxb789/anc`.
 
 ## Contents
 
@@ -35,12 +35,12 @@ it installs are both `anc`.
 ## Status
 
 **Pre-release.** The tool builds, previews, and ships the GitHub Action and the `init`
-command. `package.json` still carries `"private": true`, so `anc` is on no registry
-and `npx anc` resolves for nobody yet — and the unscoped name `anc` is already taken
-on npm, so registry publication needs a scoped or renamed specifier. Install from a
-checkout or from the tarball the repository builds. [`docs/adoption.md`](docs/adoption.md)
-gives both, along with configuration, exclusion, links, and hosting. ANC is not yet
-0.1.0-ready or 1.0.0-ready and makes no backward-compatibility promise.
+command. `package.json` still carries `"private": true`, so it is on no registry yet;
+it is named `@wxxb789/anc`, because the unscoped `anc` is already taken on npm. Install
+from a checkout or from the tarball the repository builds.
+[`docs/adoption.md`](docs/adoption.md) gives both, along with configuration, exclusion,
+links, and hosting. ANC is not yet 0.1.0-ready or 1.0.0-ready and makes no
+backward-compatibility promise.
 
 ## Features
 
@@ -71,17 +71,16 @@ Or install the tarball the repository builds:
 
 ```bash
 cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/anc/anc-*.tgz
+cd ~/notes && npm install /path/to/anc/wxxb789-anc-*.tgz
 npx anc build
 npx anc preview          # serves dist/ at http://localhost:4321/
 npx anc review           # write .publish-set.json for inspection
 npx anc build --release  # exact publish set + pinned Gitleaks on PATH
 ```
 
-`npx anc` is the intended shape and the form these commands take once a package is
-published. The unscoped name `anc` is taken on npm, so the published specifier may be
-scoped or renamed; until that is decided, `npx anc` resolves to an unrelated package.
-Use one of the two approaches above.
+The command is `anc`. Once published, the registry form is `npx @wxxb789/anc build`;
+installed locally, `npx anc build` also works because that is the binary the package
+ships. Until publication, use one of the two approaches above.
 
 ## How publication is decided
 

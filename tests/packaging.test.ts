@@ -410,7 +410,7 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
 });
 
 test('the manifest declares what npm needs to install and run this package', () => {
-  assert.equal(MANIFEST.name, 'anc', 'the package name is not the one the plan publishes');
+  assert.equal(MANIFEST.name, '@wxxb789/anc', 'the package name is not the one the plan publishes');
   assert.notEqual(MANIFEST.version, '0.0.1', 'the version is still the placeholder');
   assert.match(MANIFEST.version, /^\d+\.\d+\.\d+/, 'the version is not a release version');
 
@@ -750,7 +750,7 @@ test('the default origin a packaged build ships names nobody, and has one home',
   // rename of the package cannot leave this matching nothing and passing for
   // ever. `tests/config.test.ts` and `tests/design-tokens.test.ts` derive it the
   // same way and for the same reason.
-  const own = MANIFEST.name.replace(/^@/, '').split('/')[0]!;
+  const own = MANIFEST.name.replace(/^@[^/]+\//, '')!;
   assert.ok(own.length > 2, 'package.json declares no name for this gate to forbid');
 
   const host = new URL(site).hostname;

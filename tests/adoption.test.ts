@@ -789,21 +789,20 @@ test('the action names the package nowhere, so a rename is one edit', () => {
     `action.yml carries the package name (${manifest.name}); a rename would have to find it here too`,
   );
 
-  // The scope is the half that identifies *this project* rather than what the
-  // tool does, and it is what a rename replaces. The unscoped tail is
-  // deliberately not checked: measured, it is the word `publish`, which is in
-  // the binary's own filename and in the words "the publish tool" — a gate over
-  // it fails on correct code and would be deleted by whoever it next stopped.
-  // A rule that cannot distinguish an identifier from an English word is not a
-  // rule about identifiers.
-  const scope = manifest.name.replace(/^@/, '').split('/')[0]!;
+  // The basename is the half that identifies *this project*; the scope only says
+  // who publishes it. The package is `@wxxb789/anc`, so the token is `anc` — the
+  // name a stranger's repository must not acquire. The old scoped name,
+  // `@thoughtscape/publish`, has a generic basename, which is why the rule is
+  // "the package's own name" rather than "whatever follows the slash": `anc`
+  // distinguishes an identifier, `publish` does not.
+  const own = manifest.name.replace(/^@[^/]+\//, '')!;
   assert.ok(
-    !new RegExp(scope, 'i').test(ACTION),
-    `action.yml carries this project's name (${scope}); the rename must be one edit, not a search`,
+    !new RegExp(own, 'i').test(ACTION),
+    `action.yml carries this project's name (${own}); the rename must be one edit, not a search`,
   );
 
   // Non-vacuity: the scan must be able to find the name at all.
-  assert.match(`a line mentioning ${scope}`, new RegExp(scope, 'i'), 'the scan cannot see the name it looks for');
+  assert.match(`a line mentioning ${own}`, new RegExp(own, 'i'), 'the scan cannot see the name it looks for');
 });
 
 test('nothing init writes into a user\'s repository names this project', () => {
@@ -815,7 +814,7 @@ test('nothing init writes into a user\'s repository names this project', () => {
   // The subject is what reaches *their disk*, which is the seeded header and the
   // config template. Doc comments in this repository's own sources are not that.
   const manifest = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { name: string };
-  const scope = manifest.name.replace(/^@/, '').split('/')[0]!;
+  const own = manifest.name.replace(/^@[^/]+\//, '')!;
 
   for (const [what, text] of [
     ['the .gitignore header', SEEDED_HEADER],
@@ -823,7 +822,7 @@ test('nothing init writes into a user\'s repository names this project', () => {
   ] as const) {
     assert.ok(!text.includes(manifest.name), `${what} carries the package name`);
     assert.ok(
-      !new RegExp(scope, 'i').test(text),
+      !new RegExp(own, 'i').test(text),
       `${what} carries this project's name, which a stranger's repository must not acquire`,
     );
   }
@@ -831,8 +830,8 @@ test('nothing init writes into a user\'s repository names this project', () => {
   // Non-vacuity: the scan has to be capable of finding the name. Without this a
   // typo in the pattern reads as a clean result — `docs/gate-reading.md` case 4.
   assert.match(
-    `a line mentioning ${scope} here`,
-    new RegExp(scope, 'i'),
+    `a line mentioning ${own} here`,
+    new RegExp(own, 'i'),
     'the scan cannot find the name even when it is present, so its zero means nothing',
   );
 });
