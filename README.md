@@ -1,49 +1,145 @@
-# anc
+# anc — a privacy-preserving static site generator for Markdown
 
-Short for *Active Noise Cancelling*. The package and the command it installs are both `anc`.
+[![status: pre-release](https://img.shields.io/badge/status-pre--release-orange)](#status)
+[![node: >=22.18](https://img.shields.io/badge/node-%E2%89%A522.18-brightgreen)](#working-on-the-tool)
+[![docs: core design](https://img.shields.io/badge/docs-core%20design-blue)](docs/core-design/README.md)
 
-Build a static site from a git repository of Markdown. Every note publishes unless you
-exclude it.
+[English](README.md) · [简体中文](README_zh-cn.md)
 
-**This repository is the tool.** It is not anybody's site and ships no content of its own.
-If you want to publish your notes, read [`docs/adoption.md`](docs/adoption.md) — it is the one
-document a stranger needs.
+**anc turns a git repository of Markdown into a fast, self-hosted static knowledge
+garden**: articles, backlinks, a link graph, breadcrumbs, tags, collections, a table
+of contents, full-text search, feeds, and a sitemap — all rendered ahead of time into
+plain static files that any host can serve.
 
-## What it does
+Every note publishes unless you exclude it. Ordinary reading needs no JavaScript, and
+nothing is sent to a third party.
 
-- Walks a repository of Markdown and publishes every `.md` file, minus what you withhold by
-  glob or by `publish: false` in frontmatter.
-- Resolves five link forms in one pass, following Obsidian's own resolution order. A link into
-  a note you withheld keeps its full label and path, points to `/private/`, and is reported; the
-  target body remains unpublished. An ambiguous link warns with every candidate named.
-- Renders backlinks, outgoing links, a graph, breadcrumbs, tags, collections, and a table of
-  contents as build-time HTML — no fetch, no database. YAML frontmatter can set slug, language,
-  description, tags, and searchable/displayed aliases; aliases deliberately remain non-link
-  targets. The first folder supplies the collection, and git history supplies dates.
-- Pagefind for search, bilingual chrome resolved per document, client-rendered math and Mermaid
-  with source fallbacks, RSS, sitemap, and a strict CSP.
-- Writes the names of everything it dropped to a file under `.git/` that cannot be committed,
-  and only counts to the log. Every build also rejects routes or assets outside the exact
-  route model and the package/Astro/Pagefind-owned output inventory. Release builds additionally
-  run an exact-version, redacted Gitleaks scan over raw and inflated output.
+*anc* is short for **A**ctive **N**oise **C**ancelling. The package and the command
+it installs are both `anc`.
+
+## Contents
+
+- [Status](#status)
+- [Features](#features)
+- [Quick start](#quick-start)
+- [How publication is decided](#how-publication-is-decided)
+- [Links, tags, and metadata](#links-tags-and-metadata)
+- [Architecture](#architecture)
+- [Working on the tool](#working-on-the-tool)
+- [Adoption and hosting](#adoption-and-hosting)
+- [Documentation](#documentation)
+
+## Status
+
+**Pre-release.** The tool builds, previews, and ships the GitHub Action and the `init`
+command. `package.json` still carries `"private": true`, so `anc` is on no registry
+and `npx anc` resolves for nobody yet; install from a checkout or from the tarball
+the repository builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with
+configuration, exclusion, links, and hosting. ANC is not yet 0.1.0-ready or
+1.0.0-ready and makes no backward-compatibility promise.
+
+## Features
+
+| Surface | What you get |
+| --- | --- |
+| Markdown | CommonMark plus GFM: tables, task lists, footnotes, callouts, highlighted code |
+| Links | `[[wikilinks]]`, relative and root-anchored links, Markdown links, and note embeds |
+| Relationships | Backlinks, outgoing links, and a link graph, rendered to static HTML |
+| Navigation | Tags, collections, breadcrumbs, table of contents, and recent changes |
+| Search | Pagefind full-text search, with a per-document language |
+| Rich content | Client-rendered math and Mermaid diagrams, each with a source fallback |
+| Discovery | Atom feed, sitemap, `robots.txt`, canonical URLs, and Open Graph metadata |
+| Languages | Per-document chrome in English and Simplified Chinese (`zh-CN`) |
+| Privacy | Default-publish with explicit withholding; released names stay out of logs |
+| Delivery | Static HTML by default; a public SQLite/WASM snapshot for lazy previews |
+| Security | A strict Content-Security-Policy in `dist/_headers`; no trackers or analytics |
+
+## Quick start
+
+From a checkout of this repository, against your own notes:
+
+```bash
+node /path/to/anc/bin/anc.mjs build --content ~/notes --out ~/notes/dist
+node /path/to/anc/bin/anc.mjs preview --dist ~/notes/dist
+```
+
+Or install the tarball the repository builds:
+
+```bash
+cd /path/to/anc && pnpm run pack:tarball
+cd ~/notes && npm install /path/to/anc/anc-*.tgz
+npx anc build
+npx anc preview          # serves dist/ at http://localhost:4321/
+npx anc review           # write .publish-set.json for inspection
+npx anc build --release  # exact publish set + pinned Gitleaks on PATH
+```
+
+`npx anc` is the intended shape and the form these commands take the day the package
+is published. Until then, substitute one of the two approaches above.
+
+## How publication is decided
+
+**Everything publishes unless you exclude it.** There is no allowlist and no
+`publish: true` to opt in with. Two mechanisms withhold a note, and when they
+disagree the one pointing at *not publishing* wins:
+
+```markdown
+---
+publish: false
+---
+```
+
+```yaml
+# publish.config.yaml
+title: Field Notes
+origin: https://notes.example.org/
+exclude:
+  - "drafts/**"
+  - "clients/**"
+```
+
+A pattern that matches nothing stops the build. That is deliberate: `draft/**` typed
+for `drafts/**` would otherwise build green while the drafts went live. A link to a
+withheld note keeps the full label and path you wrote, resolves to `/private/`, and is
+reported; the withheld note's own body, title, and excerpt reach nothing.
+
+The build prints counts and no filenames. The list of dropped files goes to
+`content-report.json` under `<git-dir>/publish-report/` (or your user state directory
+outside git), which `git add -A` cannot reach and which is never copied into `dist/`.
+A workflow log on a public repository is world-readable, so a withheld file's path is
+a disclosure there; that is why the names and the counts are split.
+
+## Links, tags, and metadata
+
+- Five link spellings resolve in one pass, following Obsidian's own order: `[[note]]`,
+  `[[./sibling]]`, `[[folder/note]]`, `[text](../other.md)`, and `[[note|shown]]`.
+- Tags come from a frontmatter list, and each one gets a `/tags/<key>/` page. The
+  first folder under the content root becomes the flat collection.
+- Git history supplies `created` and `updated`; frontmatter does not.
+- Frontmatter can set `slug`, `language`, `description`, `tags`, and `aliases`.
+  Aliases are public, searchable metadata with no route of their own — deliberately
+  not alternate link targets.
+- Non-Markdown files are never published. There is no asset pipeline, so an embedded
+  image degrades to text and is reported.
 
 ## Architecture
 
-Long-term architecture is documented in
-[`docs/core-design/`](docs/core-design/README.md); bounded development outcomes and
-completion evidence live in [`docs/goals/`](docs/goals/README.md). ANC is not yet
-0.1.0-ready or 1.0.0-ready and makes no backward-compatibility commitment.
-SQLite/WASM is required for the first release: one public relational/preview DB,
-with static HTML and Pagefind retaining their roles. The current implementation
-below still uses the old JSON preview index; see the active goal for the target.
+Long-term architecture is documented in [`docs/core-design/`](docs/core-design/README.md);
+bounded development outcomes and their completion evidence live in
+[`docs/goals/`](docs/goals/README.md). Markdown stays canonical, the compiler IR stays
+private, static HTML delivers pages, and Pagefind owns full-text search.
 
 - Astro `output: "static"`; the build output is `dist/`.
-- Content is produced by `scripts/markdown-to-artifact.ts` and `scripts/resolve-links.ts`, then
-  validated against `src/lib/schema.ts` before anything renders.
-- About 4.7 KB gzip of vanilla script for the base interactive surfaces. Pages containing math
-  or diagrams lazy-load the accepted client renderers (~116 KB or ~232 KB gzip respectively).
-- No D1, R2, Functions, or build-time data service. Browser search and previews
-  request same-origin static assets; there is no runtime application server.
+- Content is produced by `scripts/markdown-to-artifact.ts` and `scripts/resolve-links.ts`,
+  then validated against `src/lib/schema.ts` before anything renders.
+- The one public relational and preview index is `data/site.<sha256>.sqlite`, holding
+  `nodes`, `edges`, `aliases`, `tags`, and `node_tags`. It contains no page body and no
+  SQLite FTS; the browser fetches it lazily in a read-only Worker for hover previews,
+  tag browsing, and graph exploration.
+- Base interactive surfaces are a few KB gzip of vanilla script. Pages containing math
+  or diagrams lazy-load the accepted client renderers; both have source fallbacks.
+- No D1, R2, Functions, analytics, comments, or build-time data service. A runtime
+  application server is not required.
 
 ## Working on the tool
 
@@ -55,49 +151,44 @@ pnpm run build:fixture   # rebuild against the 32-note corpus
 pnpm run build:example   # build example/ into .tmp/example-dist
 pnpm run preview:example # serve the example build locally
 pnpm run pack:tarball    # compile TypeScript and pack the installable tarball
-pnpm run smoke:tarball   # install that tarball in a foreign repo and build/read it
+pnpm run smoke:tarball   # install that tarball in a foreign repo and read it
 ```
 
-`pnpm run verify` also requires the exact Gitleaks version exported by
-`scripts/scan-secrets.ts` on `PATH`; ordinary `pnpm run build` does not.
+`pnpm run verify` requires the exact Gitleaks version exported by
+`scripts/scan-secrets.ts` on `PATH`; an ordinary `pnpm run build` does not.
+`packageManager` in `package.json` pins the pnpm version, which `corepack enable`
+honours. Dependencies install into a symlinked `node_modules`, so a package not
+declared in `package.json` does not resolve — a boundary rather than a preference.
 
-`packageManager` in `package.json` pins the pnpm version, which Corepack honours when enabled
-(`corepack enable`). Dependencies install into a symlinked `node_modules`, so a package not
-declared in `package.json` does not resolve — which is a boundary rather than a preference.
+Read [`AGENTS.md`](AGENTS.md) before changing anything. It carries the verification
+contract, what runs where, and what is known stale and whose it is. The synthetic
+corpus under [`example/`](example/) is the smallest useful feature tour, with public
+notes, both exclusion mechanisms, links and backlinks, rich Markdown, math, and Mermaid.
 
-Read [`AGENTS.md`](AGENTS.md) before changing anything. It carries the verification contract,
-what runs where, and a list of what is known stale and whose it is.
+## Adoption and hosting
 
-The synthetic corpus under [`example/`](example/) is the smallest useful feature tour. It
-contains public notes, both exclusion mechanisms, links and backlinks, rich Markdown, math,
-and Mermaid without adding personal content to the repository.
+The GitHub Action at the repository root runs a release build on a supported Linux
+runner, installs the checksum-pinned secret scanner, and writes a static `dist/`. Any
+static host serves that directory. `dist/_headers` carries a Content-Security-Policy
+and three other security headers in Cloudflare Pages' format; a host that does not read
+that file serves the site without them, which works and is weaker.
 
-## Running the tool on your own notes
+Publication is an explicit external side effect. Building does not deploy, and nothing
+in this repository can. [`docs/adoption.md`](docs/adoption.md) covers both the Action
+and a hand-assembled GitHub Pages example, with no secrets required.
 
-```bash
-cd your-notes
-npx anc build          # unrestricted local preview build
-npx anc preview
-npx anc review         # write .publish-set.json for inspection
-npx anc build --release # exact set + pinned Gitleaks on PATH
-```
+## Documentation
 
-**Not yet, though:** `package.json` carries `"private": true`, so the package is on no registry
-and that specifier resolves for nobody. Until it is published, run
-`bin/anc.mjs` from a checkout or install the tarball `pnpm run pack:tarball`
-builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with configuration, exclusion,
-links, and hosting.
+- [`docs/adoption.md`](docs/adoption.md) — what a stranger with a notes repository does.
+- [`docs/core-design/`](docs/core-design/README.md) — authoritative long-term architecture.
+- [`docs/goals/`](docs/goals/README.md) — active goals and the completed-goal archive.
+- [`docs/gate-reading.md`](docs/gate-reading.md) — the seven ways an instrument lies
+  about itself.
+- [`AGENTS.md`](AGENTS.md) — contributor workflow and the verification contract.
+- [`example/`](example/) — a synthetic corpus demonstrating every public surface.
 
-The GitHub Action and `init` command both ship. The Linux Action installs checksum-pinned
-Gitleaks automatically; a manual release build must install the exact version itself. The
-package is still private, so adoption uses the Action by git ref or the tarball until a registry
-release exists.
+[Astro documentation](https://docs.astro.build) · [Pagefind documentation](https://pagefind.app/docs/)
 
-## Deployment
+---
 
-Any static host serves `dist/`. `dist/_headers` carries a Content-Security-Policy and three
-other security headers in Cloudflare Pages' format; a host that does not read that file serves
-the site without them.
-
-Publication remains an explicit external side effect. Building does not deploy, and nothing in
-this repository can.
+[English](README.md) · [简体中文](README_zh-cn.md)
