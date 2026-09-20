@@ -308,11 +308,15 @@ means anything — and so does the explanation.
 
 ## Known-stale, and whose
 
-The accepted SQLite/WASM core design is not yet implemented in the reviewed baseline.
-It is required for 0.1.0; see [`docs/goals/`](docs/goals/README.md) for the bounded
-development outcome and its completion evidence. Neither 0.1.0 nor 1.0.0 is ready.
-Registry publication, deployment, and post-deploy smoke tests are separate external
-actions. Version 0.1 intentionally adds no non-Markdown asset pipeline or corpus redirects.
+The public SQLite/WASM read model has landed: the five-table
+`data/site.<sha256>.sqlite` snapshot replaced the public content index, static
+relationships render from it, and a lazy read-only Worker/WASM powers previews, tag
+browsing, and graph exploration. [`docs/goals/archive/`](docs/goals/archive/) holds the
+completed outcomes; [goal 0008](docs/goals/0008-acceptable-browser-cost.md) is still in
+progress, and the older note here that the design was "not yet implemented" predates
+that landing. Neither 0.1.0 nor 1.0.0 is ready. Registry publication, deployment, and
+post-deploy smoke tests are separate external actions. Version 0.1 intentionally adds no
+non-Markdown asset pipeline or corpus redirects.
 
 ## Documentation
 

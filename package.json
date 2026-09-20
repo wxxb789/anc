@@ -3,6 +3,22 @@
   "type": "module",
   "version": "0.1.0",
   "description": "Build a static, privacy-preserving site from a directory of Markdown",
+  "keywords": [
+    "static-site-generator",
+    "static-site",
+    "markdown",
+    "obsidian",
+    "digital-garden",
+    "knowledge-base",
+    "backlinks",
+    "full-text-search",
+    "pagefind",
+    "privacy",
+    "self-hosted",
+    "astro",
+    "sqlite",
+    "wasm"
+  ],
   "private": true,
   "packageManager": "pnpm@11.18.0",
   "engines": {
