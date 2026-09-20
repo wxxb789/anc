@@ -28,7 +28,9 @@
     "url": "https://github.com/wxxb789/anc/issues"
   },
   "homepage": "https://github.com/wxxb789/anc#readme",
-  "private": true,
+  "publishConfig": {
+    "access": "public"
+  },
   "packageManager": "pnpm@11.18.0",
   "engines": {
     "node": ">=22.18.0"

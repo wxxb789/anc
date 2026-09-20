@@ -8,6 +8,8 @@
 
 [English](README.md) · [简体中文](README_zh-cn.md)
 
+![anc — a privacy-preserving static site generator for Markdown](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.png)
+
 **anc turns a git repository of Markdown into a fast, self-hosted static knowledge
 garden**: articles, backlinks, a link graph, breadcrumbs, tags, collections, a table
 of contents, full-text search, feeds, and a sitemap — all rendered ahead of time into
@@ -35,12 +37,11 @@ nothing is sent to a third party.
 ## Status
 
 **Pre-release.** The tool builds, previews, and ships the GitHub Action and the `init`
-command. `package.json` still carries `"private": true`, so it is on no registry yet;
-it is named `@wxxb789/anc`, because the unscoped `anc` is already taken on npm. Install
-from a checkout or from the tarball the repository builds.
-[`docs/adoption.md`](docs/adoption.md) gives both, along with configuration, exclusion,
-links, and hosting. ANC is not yet 0.1.0-ready or 1.0.0-ready and makes no
-backward-compatibility promise.
+command. It is named `@wxxb789/anc`, because the unscoped `anc` is already taken on
+npm, and it is not on the registry yet; install from a checkout or from the tarball the
+repository builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with
+configuration, exclusion, links, and hosting. ANC is not yet 0.1.0-ready or
+1.0.0-ready and makes no backward-compatibility promise.
 
 ## Features
 

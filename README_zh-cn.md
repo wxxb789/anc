@@ -8,6 +8,8 @@
 
 [English](README.md) · [简体中文](README_zh-cn.md)
 
+![anc —— 面向 Markdown 的隐私优先静态网站生成器](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.png)
+
 **anc 把一个存放 Markdown 的 Git 仓库构建成快速、可自托管的静态知识花园**：文章、反向链接、链接图谱、面包屑、标签、合集、目录、全文搜索、订阅源与站点地图，全部预先渲染为纯静态文件，任何静态主机都能托管。
 
 每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
@@ -29,7 +31,7 @@
 
 ## 状态
 
-**预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。`package.json` 仍然是 `"private": true`，尚未发布到任何 registry；包名为 `@wxxb789/anc`，因为 npm 上的非 scoped 名称 `anc` 已被占用。请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
+**预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。包名为 `@wxxb789/anc`，因为 npm 上的非 scoped 名称 `anc` 已被占用；目前尚未发布到 registry，请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
 
 ## 功能
 

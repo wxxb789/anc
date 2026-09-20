@@ -22,10 +22,10 @@ reported as measured.
 Node 22.18 or newer — `package.json` `engines` pins it, and the shipped code is compiled
 JavaScript, so nothing needs a TypeScript toolchain.
 
-**And, today, a checkout of this repository.** `package.json` carries `"private": true`, so
-it is on no registry and `npx anc` resolves for nobody. The package is named
-`@wxxb789/anc`, because the unscoped npm name `anc` is already taken by an unrelated
-package. Until it is published, the two ways to run it are:
+**And, today, a checkout of this repository.** The package is named `@wxxb789/anc`, and
+it is on no registry yet, so `npx anc` resolves for nobody. The name is scoped because
+the unscoped npm name `anc` is already taken by an unrelated package. Until it is
+published, the two ways to run it are:
 
 ```bash
 # from a checkout, against your notes elsewhere

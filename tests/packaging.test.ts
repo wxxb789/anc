@@ -43,7 +43,7 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
   version: string;
   bin: Record<string, string>;
   files: string[];
-  private: boolean;
+  publishConfig: { access?: string };
   scripts: Record<string, string>;
   exports: Record<string, unknown>;
   dependencies: Record<string, string>;
@@ -480,16 +480,18 @@ test('the tarball carries what the build reads and none of this owner\'s content
     );
   }
 
-  // Nothing here may be published by accident. The plan's §5 adoption path is
-  // `npx anc@<pinned>`, but no ticket has authorized a
-  // publication, and `AGENTS.md` makes publication "an external side effect
-  // requiring explicit approval". `private` is the flag that makes `npm publish`
-  // refuse; `npm pack` still works, which is what the acceptance test needs.
+  // Publication is enabled: the name resolved to the scoped `@wxxb789/anc`, whose
+  // registry publication the owner has approved. The guard against publishing the
+  // *wrong thing* moved rather than disappeared — a bare `npm publish` at the
+  // repository root still fires the refusing `prepack` hook tested below, and the
+  // supported release publishes the compiled tarball `pnpm run pack:tarball`
+  // writes. What must hold here is that a scoped package is public: without
+  // `publishConfig.access = public`, npm publishes a scoped package privately by
+  // default, and a consumer's `npx @wxxb789/anc` would 404.
   assert.equal(
-    MANIFEST.private,
-    true,
-    'package.json is not private, so `npm publish` would succeed — and publication is a ' +
-      'separately approved action (AGENTS.md, Boundaries)',
+    MANIFEST.publishConfig?.access,
+    'public',
+    'a scoped package without publishConfig.access=public publishes private by default',
   );
 });
 
