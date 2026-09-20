@@ -411,8 +411,16 @@ test('the packaged build runs the same chain as `pnpm run build`', () => {
 
 test('the manifest declares what npm needs to install and run this package', () => {
   assert.equal(MANIFEST.name, '@wxxb789/anc', 'the package name is not the one the plan publishes');
-  assert.notEqual(MANIFEST.version, '0.0.1', 'the version is still the placeholder');
-  assert.match(MANIFEST.version, /^\d+\.\d+\.\d+/, 'the version is not a release version');
+  // The version is deliberately `0.0.1`: the first public pre-release, which
+  // reserves the npm name without claiming the 0.1.0 readiness `AGENTS.md` says
+  // does not exist yet. Semver in full, because npm publishes whatever string is
+  // here; the placeholder guard this replaces forbade `0.0.1` only because it was
+  // the untouched scaffold value, which it no longer is.
+  assert.match(
+    MANIFEST.version,
+    /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/,
+    'the version is not a semantic version',
+  );
 
   // The trusted-host vault exporter was superseded by the shipped producer. A
   // manifest command would falsely advertise a path no adopter has and preserve
