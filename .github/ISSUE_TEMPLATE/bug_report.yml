@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in the build, the CLI, or the browser runtime is wrong.
+title: "[bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. This is a public tracker, so do not paste a
+        withheld note's path, title, or body. Redact your notes and keep the
+        shape of the problem.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behavior, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: The smallest Markdown file, config, and command that shows it.
+      placeholder: |
+        # note.md
+        ---
+        title: Example
+        ---
+        Body with [[a link]].
+
+        $ npx anc build
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The package version, or the commit you ran.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Node version, operating system, and how you installed ANC.
+    validations:
+      required: false

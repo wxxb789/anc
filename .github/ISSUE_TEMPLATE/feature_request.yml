@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a capability or a change in behavior.
+title: "[feat]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ANC is pre-release and follows a measured, goal-driven process. A proposal
+        that names the consumer and the problem it solves is far easier to accept
+        than one that names only a feature. Read `docs/core-design/` before filing
+        one that changes architecture or content semantics.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do and where the tool stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What you would like to see, and who consumes it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways you could solve the same problem, including doing nothing.
+    validations:
+      required: false

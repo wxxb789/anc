@@ -2,6 +2,8 @@
 
 [![状态：预发布](https://img.shields.io/badge/status-pre--release-orange)](#状态)
 [![node: >=22.18](https://img.shields.io/badge/node-%E2%89%A522.18-brightgreen)](#参与开发)
+[![verify](https://github.com/wxxb789/anc/actions/workflows/verify.yml/badge.svg)](https://github.com/wxxb789/anc/actions/workflows/verify.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![文档：核心设计](https://img.shields.io/badge/docs-core%20design-blue)](docs/core-design/README.md)
 
 [English](README.md) · [简体中文](README_zh-cn.md)
@@ -23,10 +25,11 @@
 - [参与开发](#参与开发)
 - [接入与托管](#接入与托管)
 - [文档](#文档)
+- [许可证](#许可证)
 
 ## 状态
 
-**预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。`package.json` 仍然是 `"private": true`，因此 `anc` 尚未发布到任何 registry，`npx anc` 对任何人都无法解析；请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
+**预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。`package.json` 仍然是 `"private": true`，因此 `anc` 尚未发布到任何 registry，`npx anc` 对任何人都无法解析；并且 npm 上的非 scoped 名称 `anc` 已被一个无关的包占用，正式发布需要一个 scoped 或改名后的包名。请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
 
 ## 功能
 
@@ -64,7 +67,7 @@ npx anc review           # 生成 .publish-set.json 供检查
 npx anc build --release  # 精确发布集 + PATH 上固定版本的 Gitleaks
 ```
 
-`npx anc` 是目标形态，也是包发布之后这些命令的写法。在此之前，请改用上面两种方式之一。
+`npx anc` 是目标形态，也是包发布之后这些命令的写法。npm 上的非 scoped 名称 `anc` 已被占用，正式发布时可能需要 scoped 或改名后的包名；在决定之前，`npx anc` 会解析到一个无关的包。请改用上面两种方式之一。
 
 ## 发布与否如何决定
 
@@ -140,6 +143,10 @@ pnpm run smoke:tarball   # 在外部仓库中安装该 tarball 并读取结果
 - [`example/`](example/) —— 展示全部公开界面的合成语料。
 
 [Astro 文档](https://docs.astro.build) · [Pagefind 文档](https://pagefind.app/docs/)
+
+## 许可证
+
+本项目以 [MIT 许可证](LICENSE) 发布。
 
 ---
 

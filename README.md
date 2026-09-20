@@ -2,6 +2,8 @@
 
 [![status: pre-release](https://img.shields.io/badge/status-pre--release-orange)](#status)
 [![node: >=22.18](https://img.shields.io/badge/node-%E2%89%A522.18-brightgreen)](#working-on-the-tool)
+[![verify](https://github.com/wxxb789/anc/actions/workflows/verify.yml/badge.svg)](https://github.com/wxxb789/anc/actions/workflows/verify.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![docs: core design](https://img.shields.io/badge/docs-core%20design-blue)](docs/core-design/README.md)
 
 [English](README.md) · [简体中文](README_zh-cn.md)
@@ -28,15 +30,17 @@ it installs are both `anc`.
 - [Working on the tool](#working-on-the-tool)
 - [Adoption and hosting](#adoption-and-hosting)
 - [Documentation](#documentation)
+- [License](#license)
 
 ## Status
 
 **Pre-release.** The tool builds, previews, and ships the GitHub Action and the `init`
 command. `package.json` still carries `"private": true`, so `anc` is on no registry
-and `npx anc` resolves for nobody yet; install from a checkout or from the tarball
-the repository builds. [`docs/adoption.md`](docs/adoption.md) gives both, along with
-configuration, exclusion, links, and hosting. ANC is not yet 0.1.0-ready or
-1.0.0-ready and makes no backward-compatibility promise.
+and `npx anc` resolves for nobody yet — and the unscoped name `anc` is already taken
+on npm, so registry publication needs a scoped or renamed specifier. Install from a
+checkout or from the tarball the repository builds. [`docs/adoption.md`](docs/adoption.md)
+gives both, along with configuration, exclusion, links, and hosting. ANC is not yet
+0.1.0-ready or 1.0.0-ready and makes no backward-compatibility promise.
 
 ## Features
 
@@ -74,8 +78,10 @@ npx anc review           # write .publish-set.json for inspection
 npx anc build --release  # exact publish set + pinned Gitleaks on PATH
 ```
 
-`npx anc` is the intended shape and the form these commands take the day the package
-is published. Until then, substitute one of the two approaches above.
+`npx anc` is the intended shape and the form these commands take once a package is
+published. The unscoped name `anc` is taken on npm, so the published specifier may be
+scoped or renamed; until that is decided, `npx anc` resolves to an unrelated package.
+Use one of the two approaches above.
 
 ## How publication is decided
 
@@ -188,6 +194,10 @@ and a hand-assembled GitHub Pages example, with no secrets required.
 - [`example/`](example/) — a synthetic corpus demonstrating every public surface.
 
 [Astro documentation](https://docs.astro.build) · [Pagefind documentation](https://pagefind.app/docs/)
+
+## License
+
+Released under the [MIT License](LICENSE).
 
 ---
 

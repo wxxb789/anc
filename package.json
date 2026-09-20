@@ -19,6 +19,15 @@
     "sqlite",
     "wasm"
   ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wxxb789/anc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/wxxb789/anc/issues"
+  },
+  "homepage": "https://github.com/wxxb789/anc#readme",
   "private": true,
   "packageManager": "pnpm@11.18.0",
   "engines": {

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas
+    url: https://github.com/wxxb789/anc/discussions
+    about: Ask a question or discuss an idea that is not yet a bug report or a scoped proposal.
+  - name: Security report
+    url: https://github.com/wxxb789/anc/security/advisories/new
+    about: Report a vulnerability privately. Do not open a public issue.

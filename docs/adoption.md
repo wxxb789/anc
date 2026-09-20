@@ -23,8 +23,9 @@ Node 22.18 or newer — `package.json` `engines` pins it, and the shipped code i
 JavaScript, so nothing needs a TypeScript toolchain.
 
 **And, today, a checkout of this repository.** `package.json` carries `"private": true`, so
-`anc` is on no registry and `npx anc` resolves for nobody.
-Until it is published, the two ways to run it are:
+`anc` is on no registry and `npx anc` resolves for nobody. The unscoped npm name `anc` is
+also already taken by an unrelated package, so the published specifier will need to be
+scoped or renamed; that choice is open. Until it is published, the two ways to run it are:
 
 ```bash
 # from a checkout, against your notes elsewhere
@@ -37,8 +38,8 @@ npx anc build
 ```
 
 Everything below is written as `npx anc`, which is the intended shape and
-the one the commands become on the day the package is published. Substitute one of the above
-until then.
+the one the commands become once a package is published under that name. Substitute one of
+the above until then.
 
 ## The shortest thing that works
 
