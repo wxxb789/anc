@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 import { scanResidue } from '../scripts/scan-residue.ts';
 
@@ -776,4 +777,41 @@ test('the math residue exemption is scoped, and covers only math', () => {
     'CODE_EXEMPT now exempts absolute paths in every code region — a pasted shell transcript ' +
       'carrying a real host path would stop being reported',
   );
+});
+
+test('every workflow job is bounded, deduplicated, and calls third-party actions by commit SHA', () => {
+  // A tag on a third-party action can be moved to different code after review;
+  // a 40-character SHA cannot. Local actions (`./…`) are this repository's own
+  // code at the checked-out commit and need no pin. Every job also carries a
+  // timeout, so a hang fails in bounded time instead of the six-hour default,
+  // and a concurrency group, so superseded pull-request runs are cancelled.
+  const directory = new URL('.github/workflows/', ROOT);
+  const files = readdirSync(directory).filter((name) => /\.ya?ml$/.test(name));
+  assert.ok(files.length >= 3, `only ${files.length} workflow files found, so this gate is reading the wrong place`);
+  let usesSeen = 0;
+  for (const file of files) {
+    const text = readFileSync(new URL(file, directory), 'utf8');
+    const workflow = parseYaml(text) as {
+      jobs?: Record<string, { 'timeout-minutes'?: unknown; concurrency?: unknown; steps?: { uses?: string }[] }>;
+    };
+    const jobs = Object.entries(workflow.jobs ?? {});
+    assert.ok(jobs.length > 0, `${file}: declares no jobs`);
+    for (const [name, job] of jobs) {
+      assert.equal(typeof job['timeout-minutes'], 'number', `${file}: job ${name} has no timeout-minutes`);
+      assert.ok(job.concurrency, `${file}: job ${name} has no concurrency group`);
+      for (const step of job.steps ?? []) {
+        if (step.uses === undefined || step.uses.startsWith('./')) continue;
+        usesSeen += 1;
+        assert.match(step.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/, `${file}: ${step.uses} is not pinned to a commit SHA`);
+      }
+    }
+    // The resolved release travels as a trailing comment, which is what
+    // Dependabot rewrites alongside the SHA and what a reviewer reads.
+    for (const line of text.split('\n')) {
+      if (/^\s*-?\s*uses:\s*[\w.-]+\/[\w.-]+@[0-9a-f]{40}/.test(line)) {
+        assert.match(line, /# v\d+\.\d+\.\d+\s*$/, `${file}: a pinned action carries no # vX.Y.Z comment: ${line.trim()}`);
+      }
+    }
+  }
+  assert.ok(usesSeen > 0, 'no third-party action was read, so the pin rule held vacuously');
 });

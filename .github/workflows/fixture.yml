@@ -1,0 +1,54 @@
+# Runs `pnpm run build:fixture` on a schedule and on demand.
+#
+# About 34 gates skip under `pnpm run verify`, because the synthetic content the
+# default build uses has one entry and those gates need several: bilingual
+# pages, graph edges, aliases, search across notes. `build:fixture` rebuilds the
+# site from the 32-note corpus and runs the whole suite against it. It is not in
+# `verify.yml` because it builds the site twice and takes several times longer;
+# nightly keeps those gates from rotting unseen between manual runs.
+#
+# Like `verify.yml`, it lists no gates: `build:fixture` is one `package.json`
+# script, so a gate added there is added here. The setup steps mirror
+# `verify.yml` (pinned Node and pnpm, frozen lockfile, Chromium, the pinned
+# scanner) because the fixture run needs the same toolchain. It deploys nothing,
+# needs no secrets, and its token cannot write.
+name: fixture
+
+on:
+  schedule:
+    # 03:17 UTC daily, off the hour to avoid the scheduler's top-of-hour load.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ASTRO_TELEMETRY_DISABLED: 1
+
+jobs:
+  build-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+        with:
+          install: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: bash .github/scripts/install-gitleaks.sh
+
+      - run: pnpm run build:fixture
