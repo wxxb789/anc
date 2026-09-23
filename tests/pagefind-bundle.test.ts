@@ -19,7 +19,7 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { test } from 'vitest';
 import { indexWithPagefind, writePagefindBundle } from '../scripts/run-pagefind.ts';
@@ -51,7 +51,7 @@ test('the authored bundle reaches every member, nested paths included', () => {
 
     const written = filesUnder(join(root, 'pagefind'));
     assert.deepEqual(
-      written.map((path) => path.slice(join(root, 'pagefind').length + 1)),
+      written.map((path) => path.slice(join(root, 'pagefind').length + 1).split(sep).join('/')),
       files.map((file) => file.path).sort(),
       'the bundle does not hold exactly the authored members',
     );

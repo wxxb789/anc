@@ -45,7 +45,6 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -55,7 +54,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { createServer, type Server, type ServerResponse } from 'node:http';
-import { arch, cpus, release as osRelease, tmpdir, totalmem, type as osType } from 'node:os';
+import { tmpdir } from 'node:os';
 import { basename, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
@@ -70,12 +69,18 @@ import {
   parseBenchmarkOptions,
   resolveBenchmarkBrowser,
   type BenchmarkBrowserReport,
+  type ResolvedBenchmarkBrowser,
 } from './benchmark-browser.ts';
 import {
+  assertCandidateCliPath,
   assertCandidateIdentityStable,
   candidateIdentity,
   type CandidateIdentity,
-} from './benchmark-snapshot.ts';
+} from './benchmark-candidate.ts';
+import { walkFiles } from './benchmark-files.ts';
+import { hostIdentity, ROOT } from './benchmark-host.ts';
+import { listenServer } from './benchmark-server.ts';
+import { applyRules, headerRules, type HeaderRule } from '../tests/support/browser-site.ts';
 import {
   assertRepositoryIdentityClean,
   benchmarkReportDirectory,
@@ -85,7 +90,6 @@ import {
   type RepositoryIdentity,
 } from './benchmark-identity.ts';
 
-const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const BINARY = join(ROOT, 'bin', 'anc.mjs');
 const CLIENT_BOUND_TEST_PATH = 'tests/snapshot-client.test.ts';
 const CLIENT_BOUND_TEST_FILE = resolve(ROOT, CLIENT_BOUND_TEST_PATH);
@@ -174,39 +178,10 @@ interface Site {
   close(): Promise<void>;
 }
 
-interface HeaderRule {
-  matcher: RegExp;
-  headers: Record<string, string>;
-}
-
 export interface SiteHeaders {
   source: 'dist/_headers';
   sha256: string;
   rules: HeaderRule[];
-}
-
-/**
- * Parse the Cloudflare Pages `_headers` grammar: an unindented line is a path
- * pattern and an indented `Name: value` line attaches to the pattern above it.
- * The shipped file carries no `:placeholder` patterns, so unlike the browser
- * tests' copy this one does not need to translate them.
- */
-function headerRules(text: string): HeaderRule[] {
-  const rules: HeaderRule[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
-    if (!/^\s/.test(line)) {
-      const escaped = line.trim().replace(/[.+?^${}()|[\]\\]/g, '\\$&');
-      rules.push({ matcher: new RegExp(`^${escaped.replace(/\*/g, '.*')}$`), headers: {} });
-      continue;
-    }
-    const rule = rules.at(-1);
-    if (rule === undefined) continue;
-    const trimmed = line.trim();
-    const separator = trimmed.indexOf(':');
-    if (separator > 0) rule.headers[trimmed.slice(0, separator)] = trimmed.slice(separator + 1).trim();
-  }
-  return rules;
 }
 
 /** Read the headers emitted by the candidate build, never the checkout source. */
@@ -338,36 +313,6 @@ const CONTENT_TYPES: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-/** Await one loopback listen and surface bind errors to the caller. */
-export function listenServer(server: Server, port: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const cleanup = (): void => {
-      server.off('error', onError);
-      server.off('listening', onListening);
-    };
-    const onListening = (): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve();
-    };
-    const onError = (error: Error): void => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    server.once('error', onError);
-    server.once('listening', onListening);
-    try {
-      server.listen(port, '127.0.0.1');
-    } catch (error) {
-      onError(error instanceof Error ? error : new Error(String(error)));
-    }
-  });
-}
-
 /**
  * Serve a built site with the shipped headers, plus this runner's mutable
  * routes.
@@ -397,8 +342,7 @@ export async function startSite(dist: string): Promise<Site> {
       return;
     }
     if (pathname.endsWith('/')) pathname += 'index.html';
-    const headers: Record<string, string> = {};
-    for (const rule of rules) if (rule.matcher.test(pathname)) Object.assign(headers, rule.headers);
+    const headers = applyRules(rules, pathname);
     if (headers['Cache-Control'] === undefined) {
       headers['Cache-Control'] = 'public, max-age=0, must-revalidate';
     }
@@ -511,16 +455,6 @@ function hashDirectory(directory: string): { sha256: string; files: number } {
   };
   walk(directory, '');
   return { sha256: hash.digest('hex'), files };
-}
-
-function countFiles(directory: string): number {
-  let files = 0;
-  for (const name of readdirSync(directory)) {
-    const path = join(directory, name);
-    if (statSync(path).isDirectory()) files += countFiles(path);
-    else files += 1;
-  }
-  return files;
 }
 
 function gitOutput(args: readonly string[]): string {
@@ -2095,17 +2029,6 @@ interface LimitsIdentity {
   assets: LimitAssets | null;
 }
 
-function hostIdentity(): LimitsReport['host'] {
-  return {
-    platform: process.platform,
-    osType: osType(),
-    osRelease: osRelease(),
-    arch: arch(),
-    cpus: cpus().length,
-    totalMemoryBytes: totalmem(),
-  };
-}
-
 function emptyCandidate(): LimitsCandidate {
   return {
     gitHead: null,
@@ -2228,262 +2151,339 @@ function sanitizeForStream(text: string, workspace: string | undefined): string 
   return scrubBenchmarkFailure(text, workspace === undefined ? [] : [workspace]);
 }
 
+/** Mutable facts one limits run accumulates; the `finally` block reads them. */
+interface LimitsRun {
+  report: LimitsReport;
+  phase: string;
+  exitCode: number;
+  identityFailureRecorded: boolean;
+  workspace: string | undefined;
+  dist: string | undefined;
+  site: Site | undefined;
+  browser: Browser | undefined;
+  expectedIdentity: LimitsIdentity | undefined;
+}
+
+function workspaceRoots(run: LimitsRun): string[] {
+  return run.workspace === undefined ? [] : [run.workspace];
+}
+
+/** Resolve, record, and refuse a dirty candidate before anything is generated. */
+function identifyLimitsCandidate(run: LimitsRun, options: LimitsOptions): string {
+  const { report } = run;
+  const repository = repositoryIdentity(ROOT);
+  const cliPath = options.cli;
+  assertCandidateCliPath(cliPath, true);
+  const candidate = candidateIdentity(cliPath, repository);
+  const packageVersion =
+    candidate.installedPackage?.version ??
+    (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string }).version;
+  const changedFiles = gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
+    .split('\n')
+    .filter((line) => line.trim() !== '').length;
+  report.instrument.repository = repository;
+  // Every instrument module, found rather than listed: a hand-kept list went
+  // stale the day the runner was split into modules it imports.
+  const instrumentFiles = readdirSync(join(ROOT, 'scripts'))
+    .filter((name) => /^benchmark-.*\.ts$/.test(name))
+    .sort()
+    .map((name) => `scripts/${name}`);
+  report.instrument.sources = Object.fromEntries(
+    [...instrumentFiles, 'scripts/generate-corpus.ts'].map((path) => [path, sha256File(join(ROOT, path))]),
+  );
+  report.candidate = {
+    ...candidate,
+    gitHead: repository.gitHead,
+    worktreeDirty: repository.worktreeDirty,
+    changedFiles,
+    packageVersion,
+    repository,
+    assets: null,
+  };
+  run.expectedIdentity = { repository, cliPath, candidate, assets: null };
+  assertRepositoryIdentityClean(repository);
+  return cliPath;
+}
+
+async function generateLimitsCorpus(run: LimitsRun): Promise<string> {
+  const workspace = mkdtempSync(join(tmpdir(), 'anc-bench-limits-'));
+  run.workspace = workspace;
+  const corpusDirectory = join(workspace, 'notes');
+  const corpus = await generateCorpus(corpusDirectory, {
+    notes: CORPUS_NOTES,
+    seed: CORPUS_SEED,
+    topology: CORPUS_TOPOLOGY,
+    metadata: CORPUS_METADATA,
+  });
+  const corpusHash = hashDirectory(corpusDirectory);
+  run.report.corpus = {
+    generator: 'scripts/generate-corpus.ts',
+    generatorSha256: run.report.instrument.sources['scripts/generate-corpus.ts']!,
+    seed: CORPUS_SEED,
+    requestedNotes: CORPUS_NOTES,
+    topology: CORPUS_TOPOLOGY,
+    metadata: CORPUS_METADATA,
+    generated: corpus,
+    contentSha256: corpusHash.sha256,
+    hashedFiles: corpusHash.files,
+  };
+  return workspace;
+}
+
+interface BuiltWorkload {
+  assets: LimitAssets;
+  publishedSlugs: Set<string>;
+  tagMemberCounts: Map<string, number>;
+}
+
+/** Build with the candidate CLI and bind the run to the exact built assets. */
+function buildLimitsWorkload(run: LimitsRun, cliPath: string, workspace: string): BuiltWorkload {
+  const buildStarted = Date.now();
+  const build = spawnSync(process.execPath, [cliPath, 'build', '--content', 'notes', '--out', 'dist'], {
+    cwd: workspace,
+    encoding: 'utf8',
+    timeout: 20 * 60_000,
+  });
+  if (build.status !== 0) {
+    throw new Error(`the workload build failed (${build.status}): ${build.stdout}${build.stderr}`);
+  }
+  const buildMs = Date.now() - buildStarted;
+  const dist = join(workspace, 'dist');
+  run.dist = dist;
+  const assets = builtAssetIdentity(dist);
+  run.expectedIdentity!.assets = assets;
+  run.report.candidate.assets = assets;
+  assertLimitsIdentityStable(run.expectedIdentity!, dist, 'after build', 'state');
+
+  const publishedSlugs = new Set(readdirSync(join(dist, 'notes')));
+  const tagMemberCounts = readTagMemberCounts(join(dist, 'data', assets.snapshot.name));
+  assert.ok(publishedSlugs.size > 0, 'the build published no note routes');
+  run.report.workload = {
+    buildCommand: `node ${basename(cliPath)} build --content notes --out dist`,
+    buildMs,
+    outputFiles: walkFiles(dist).length,
+    publishedNoteRoutes: publishedSlugs.size,
+    assets,
+  };
+  return { assets, publishedSlugs, tagMemberCounts };
+}
+
+function createHarness(
+  site: Site,
+  browser: Browser,
+  browserSettings: ResolvedBenchmarkBrowser,
+  dist: string,
+  built: BuiltWorkload,
+): Harness {
+  const { assets, publishedSlugs, tagMemberCounts } = built;
+  return {
+    site,
+    origin: site.origin,
+    hubSlug: '',
+    publishedSlugs,
+    tagMemberCounts,
+    paths: {
+      snapshot: `/data/${assets.snapshot.name}`,
+      wasm: `/wasm/${assets.wasm.name}`,
+      worker: `/_astro/${assets.worker.name}`,
+    },
+    client: findClientChunk(dist),
+    notePath,
+    newContext(): Promise<BrowserContext> {
+      return browser.newContext(browserSettings.contextOptions);
+    },
+    newPage(context: BrowserContext): Promise<Page> {
+      return (async () => {
+        const page = await context.newPage();
+        await installProbe(page);
+        return page;
+      })();
+    },
+    pickLink(page: Page, currentPath: string): Promise<string> {
+      return collectLink(page, currentPath, publishedSlugs);
+    },
+  };
+}
+
+/** Run every required control in order, re-checking identity after each. */
+async function runControls(run: LimitsRun, harness: Harness): Promise<ControlRecord[]> {
+  const controls: ControlRecord[] = [];
+  const controlDefinitions: readonly [string, string, () => Promise<ControlOutcome>][] = [
+    [REQUIRED_CONTROL_IDS[0], 'Decoded snapshot-byte cap', () => controlSnapshotByteCap(harness)],
+    [REQUIRED_CONTROL_IDS[1], 'Decoded WASM-byte cap', () => controlWasmByteCap(harness)],
+    [REQUIRED_CONTROL_IDS[2], 'Worker startup deadline', () => controlStartupDeadline(harness)],
+    [REQUIRED_CONTROL_IDS[3], 'Query deadline', () => controlQueryDeadline(harness)],
+    [REQUIRED_CONTROL_IDS[4], 'Page-size clamp', () => controlPageSizeClamp(harness)],
+    [REQUIRED_CONTROL_IDS[5], 'Rendering policy', () => controlRenderingPolicy(harness)],
+    [REQUIRED_CONTROL_IDS[6], 'Pending request bound', () => controlPendingBound(harness)],
+  ];
+  for (const [id, name, body] of controlDefinitions) {
+    run.phase = `control:${id}`;
+    const control = await runControl(id, name, body);
+    controls.push(control);
+    run.report.controls = controls;
+    assertLimitsIdentityStable(run.expectedIdentity!, run.dist, `after ${id}`, 'state');
+  }
+  return controls;
+}
+
+/** Every phase from argv to the final identity check; a throw escapes to `main`. */
+async function runLimits(run: LimitsRun): Promise<void> {
+  const { report } = run;
+  const options = parseLimitsOptions(process.argv.slice(2));
+  report.browser.engine = options.browser;
+  report.browser.requestedDevice = options.device ?? null;
+
+  run.phase = 'resolve-browser';
+  const { devices } = await import('playwright');
+  const browserSettings = resolveBenchmarkBrowser(options.browser, options.device, devices);
+  report.browser.profile = browserSettings.report;
+
+  run.phase = 'identify-candidate';
+  const cliPath = identifyLimitsCandidate(run, options);
+
+  run.phase = 'generate-corpus';
+  const workspace = await generateLimitsCorpus(run);
+
+  run.phase = 'build';
+  const built = buildLimitsWorkload(run, cliPath, workspace);
+  const dist = run.dist!;
+
+  run.phase = 'serve';
+  const site = await startSite(dist);
+  run.site = site;
+  report.instrument.sources[site.headers.source] = site.headers.sha256;
+  run.phase = 'browser-launch';
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch(browserSettings.launchOptions);
+  run.browser = browser;
+  report.browser.version = browser.version();
+  const harness = createHarness(site, browser, browserSettings, dist, built);
+  assertLimitsIdentityStable(run.expectedIdentity!, dist, 'before readiness', 'state');
+  run.phase = 'readiness';
+  const readiness = await discoverReadiness(harness);
+  harness.hubSlug = readiness.hubSlug;
+  report.readiness = readiness;
+
+  const controls = await runControls(run, harness);
+
+  run.phase = 'client-bound-test';
+  const clientBoundTest = runClientBoundTest();
+  report.clientBoundTest = clientBoundTest;
+  assertLimitsIdentityStable(run.expectedIdentity!, dist, 'after client-bound test', 'state');
+
+  report.limitations = [];
+  report.controls = controls.map((control) => ({
+    ...control,
+    observations: { ...control.observations, summary: summarize(control) },
+  }));
+  run.phase = 'identity-finalization';
+  assertLimitsIdentityStable(run.expectedIdentity!, dist, 'report finalization', 'full');
+  run.exitCode = benchmarkExitCode(controls, clientBoundTest);
+}
+
+/** Release the browser, then the site, then the workspace; each failure is recorded. */
+async function releaseLimitsResources(run: LimitsRun): Promise<void> {
+  try {
+    await run.browser?.close();
+  } catch (error) {
+    recordLimitsFailure(run.report, 'browser-close', error, workspaceRoots(run));
+    run.exitCode = 1;
+  }
+  try {
+    await run.site?.close();
+  } catch (error) {
+    recordLimitsFailure(run.report, 'site-close', error, workspaceRoots(run));
+    run.exitCode = 1;
+  }
+  if (run.workspace !== undefined) {
+    try {
+      rmSync(run.workspace, { recursive: true, force: true });
+    } catch (error) {
+      recordLimitsFailure(run.report, 'workspace-cleanup', error, [run.workspace]);
+      run.exitCode = 1;
+    }
+  }
+}
+
+function printLimitsSummary(report: LimitsReport, workspace: string | undefined, digest: string): void {
+  const passed = report.controls.filter((control) => control.status === 'pass').length;
+  const failed = report.controls.filter((control) => control.status === 'fail').length;
+  const notImplemented = report.controls.filter((control) => control.status === 'not-implemented').length;
+  console.log(
+    `benchmark-limits: ${report.controls.length} controls, ${passed} pass, ${failed} fail, ${notImplemented} not-implemented, ${report.failures.length} setup failures`,
+  );
+  for (const control of report.controls) {
+    const summary = summarize(control);
+    const failure =
+      control.status === 'fail' && control.failure !== undefined
+        ? ` (${sanitizeForStream(control.failure, workspace)})`
+        : '';
+    console.log(`  ${control.id}: ${control.status}${summary === '' ? '' : ` [${summary}]`}${failure}`);
+  }
+  if (report.clientBoundTest !== null) {
+    console.log(`client-bound-test: ${report.clientBoundTest.status} (${report.clientBoundTest.detail})`);
+  }
+  console.log(`report sha256: ${digest}`);
+}
+
+/** A last cheap identity check, path scrubbing, the write, and the stream summary. */
+function writeLimitsReport(run: LimitsRun, reportPath: string): void {
+  const { report } = run;
+  try {
+    if (!run.identityFailureRecorded && run.expectedIdentity !== undefined) {
+      try {
+        assertLimitsIdentityStable(run.expectedIdentity, undefined, 'report write', 'state');
+      } catch (error) {
+        run.identityFailureRecorded = true;
+        recordLimitsFailure(report, 'identity-report-write', error);
+        run.exitCode = 1;
+      }
+    }
+    const failureRoots = workspaceRoots(run);
+    report.controls = report.controls.map((control) => ({
+      ...control,
+      ...(control.failure === undefined ? {} : { failure: scrubBenchmarkFailure(control.failure, failureRoots) }),
+    }));
+    const reportBody = `${JSON.stringify(report, null, 2)}\n`;
+    writeFileSync(reportPath, reportBody, 'utf8');
+    const digest = createHash('sha256').update(reportBody).digest('hex');
+    printLimitsSummary(report, run.workspace, digest);
+  } catch (error) {
+    process.stderr.write(`benchmark: report write failed: ${scrubBenchmarkFailure(error)}\n`);
+    run.exitCode = 1;
+  }
+}
+
 async function main(): Promise<number> {
   const started = Date.now();
-  const report = createLimitsReportSkeleton();
   const reportDirectory = benchmarkReportDirectory(ROOT);
   mkdirSync(reportDirectory, { recursive: true });
   const reportPath = join(reportDirectory, `benchmark-limits-${Date.now()}.json`);
-  let workspace: string | undefined;
-  let site: Site | undefined;
-  let browser: Browser | undefined;
-  let expectedIdentity: LimitsIdentity | undefined;
-  let dist: string | undefined;
-  let phase = 'parse';
-  let exitCode = 1;
-  let identityFailureRecorded = false;
+  const run: LimitsRun = {
+    report: createLimitsReportSkeleton(),
+    phase: 'parse',
+    exitCode: 1,
+    identityFailureRecorded: false,
+    workspace: undefined,
+    dist: undefined,
+    site: undefined,
+    browser: undefined,
+    expectedIdentity: undefined,
+  };
   try {
-    const options = parseLimitsOptions(process.argv.slice(2));
-    report.browser.engine = options.browser;
-    report.browser.requestedDevice = options.device ?? null;
-
-    phase = 'resolve-browser';
-    const { devices } = await import('playwright');
-    const browserSettings = resolveBenchmarkBrowser(options.browser, options.device, devices);
-    report.browser.profile = browserSettings.report;
-
-    phase = 'identify-candidate';
-    const repository = repositoryIdentity(ROOT);
-    const cliPath = options.cli;
-    if (!existsSync(cliPath)) throw new Error(`--cli does not exist: ${basename(cliPath)}`);
-    if (!statSync(cliPath).isFile()) throw new Error(`--cli is not a file: ${basename(cliPath)}`);
-    if (extname(cliPath).toLowerCase() === '.tgz') {
-      throw new Error('--cli must point to an executable CLI, not a .tgz package archive');
-    }
-    const candidate = candidateIdentity(cliPath, repository);
-    const packageVersion =
-      candidate.installedPackage?.version ??
-      (JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string }).version;
-    const changedFiles = gitOutput(['status', '--porcelain=v1', '--untracked-files=all'])
-      .split('\n')
-      .filter((line) => line.trim() !== '').length;
-    report.instrument.repository = repository;
-    report.instrument.sources = {
-      'scripts/benchmark-limits.ts': sha256File(fileURLToPath(import.meta.url)),
-      'scripts/benchmark-browser.ts': sha256File(join(ROOT, 'scripts', 'benchmark-browser.ts')),
-      'scripts/benchmark-identity.ts': sha256File(join(ROOT, 'scripts', 'benchmark-identity.ts')),
-      'scripts/generate-corpus.ts': sha256File(join(ROOT, 'scripts', 'generate-corpus.ts')),
-    };
-    report.candidate = {
-      ...candidate,
-      gitHead: repository.gitHead,
-      worktreeDirty: repository.worktreeDirty,
-      changedFiles,
-      packageVersion,
-      repository,
-      assets: null,
-    };
-    expectedIdentity = { repository, cliPath, candidate, assets: null };
-    assertRepositoryIdentityClean(repository);
-
-    phase = 'generate-corpus';
-    workspace = mkdtempSync(join(tmpdir(), 'anc-bench-limits-'));
-    const corpusDirectory = join(workspace, 'notes');
-    const corpus = await generateCorpus(corpusDirectory, {
-      notes: CORPUS_NOTES,
-      seed: CORPUS_SEED,
-      topology: CORPUS_TOPOLOGY,
-      metadata: CORPUS_METADATA,
-    });
-    const corpusHash = hashDirectory(corpusDirectory);
-    const generatorDigest = report.instrument.sources['scripts/generate-corpus.ts']!;
-
-    report.corpus = {
-      generator: 'scripts/generate-corpus.ts',
-      generatorSha256: generatorDigest,
-      seed: CORPUS_SEED,
-      requestedNotes: CORPUS_NOTES,
-      topology: CORPUS_TOPOLOGY,
-      metadata: CORPUS_METADATA,
-      generated: corpus,
-      contentSha256: corpusHash.sha256,
-      hashedFiles: corpusHash.files,
-    };
-
-    phase = 'build';
-    const buildStarted = Date.now();
-    const build = spawnSync(process.execPath, [cliPath, 'build', '--content', 'notes', '--out', 'dist'], {
-      cwd: workspace,
-      encoding: 'utf8',
-      timeout: 20 * 60_000,
-    });
-    if (build.status !== 0) {
-      throw new Error(`the workload build failed (${build.status}): ${build.stdout}${build.stderr}`);
-    }
-    const buildMs = Date.now() - buildStarted;
-    dist = join(workspace, 'dist');
-    const assets = builtAssetIdentity(dist);
-    expectedIdentity.assets = assets;
-    report.candidate.assets = assets;
-    assertLimitsIdentityStable(expectedIdentity, dist, 'after build', 'state');
-
-    const snapshotName = assets.snapshot.name;
-    const wasmName = assets.wasm.name;
-    const workerName = assets.worker.name;
-    const publishedSlugs = new Set(readdirSync(join(dist, 'notes')));
-    const tagMemberCounts = readTagMemberCounts(join(dist, 'data', snapshotName));
-    assert.ok(publishedSlugs.size > 0, 'the build published no note routes');
-    report.workload = {
-      buildCommand: `node ${basename(cliPath)} build --content notes --out dist`,
-      buildMs,
-      outputFiles: countFiles(dist),
-      publishedNoteRoutes: publishedSlugs.size,
-      assets,
-    };
-
-    phase = 'serve';
-    site = await startSite(dist);
-    report.instrument.sources[site.headers.source] = site.headers.sha256;
-    phase = 'browser-launch';
-    const { chromium } = await import('playwright');
-    const launchedBrowser = await chromium.launch(browserSettings.launchOptions);
-    browser = launchedBrowser;
-    report.browser.version = launchedBrowser.version();
-    const harness: Harness = {
-      site,
-      origin: site.origin,
-      hubSlug: '',
-      publishedSlugs,
-      tagMemberCounts,
-      paths: {
-        snapshot: `/data/${snapshotName}`,
-        wasm: `/wasm/${wasmName}`,
-        worker: `/_astro/${workerName}`,
-      },
-      client: findClientChunk(dist),
-      notePath,
-      newContext(): Promise<BrowserContext> {
-        return launchedBrowser.newContext(browserSettings.contextOptions);
-      },
-      newPage(context: BrowserContext): Promise<Page> {
-        return (async () => {
-          const page = await context.newPage();
-          await installProbe(page);
-          return page;
-        })();
-      },
-      pickLink(page: Page, currentPath: string): Promise<string> {
-        return collectLink(page, currentPath, publishedSlugs);
-      },
-    };
-    assertLimitsIdentityStable(expectedIdentity, dist, 'before readiness', 'state');
-    phase = 'readiness';
-    const readiness = await discoverReadiness(harness);
-    harness.hubSlug = readiness.hubSlug;
-    report.readiness = readiness;
-
-    const controls: ControlRecord[] = [];
-    const controlDefinitions: readonly [string, string, () => Promise<ControlOutcome>][] = [
-      [REQUIRED_CONTROL_IDS[0], 'Decoded snapshot-byte cap', () => controlSnapshotByteCap(harness)],
-      [REQUIRED_CONTROL_IDS[1], 'Decoded WASM-byte cap', () => controlWasmByteCap(harness)],
-      [REQUIRED_CONTROL_IDS[2], 'Worker startup deadline', () => controlStartupDeadline(harness)],
-      [REQUIRED_CONTROL_IDS[3], 'Query deadline', () => controlQueryDeadline(harness)],
-      [REQUIRED_CONTROL_IDS[4], 'Page-size clamp', () => controlPageSizeClamp(harness)],
-      [REQUIRED_CONTROL_IDS[5], 'Rendering policy', () => controlRenderingPolicy(harness)],
-      [REQUIRED_CONTROL_IDS[6], 'Pending request bound', () => controlPendingBound(harness)],
-    ];
-    for (const [id, name, body] of controlDefinitions) {
-      phase = `control:${id}`;
-      const control = await runControl(id, name, body);
-      controls.push(control);
-      report.controls = controls;
-      assertLimitsIdentityStable(expectedIdentity, dist, `after ${id}`, 'state');
-    }
-
-    phase = 'client-bound-test';
-    const clientBoundTest = runClientBoundTest();
-    report.clientBoundTest = clientBoundTest;
-    assertLimitsIdentityStable(expectedIdentity, dist, 'after client-bound test', 'state');
-
-    report.limitations = [];
-    report.controls = controls.map((control) => ({
-      ...control,
-      observations: { ...control.observations, summary: summarize(control) },
-    }));
-    phase = 'identity-finalization';
-    assertLimitsIdentityStable(expectedIdentity, dist, 'report finalization', 'full');
-    exitCode = benchmarkExitCode(controls, clientBoundTest);
+    await runLimits(run);
   } catch (error) {
-    if (error instanceof BenchmarkIdentityDriftError) identityFailureRecorded = true;
-    recordLimitsFailure(report, phase, error, workspace === undefined ? [] : [workspace]);
-    process.stderr.write(`benchmark: ${scrubBenchmarkFailure(error, workspace === undefined ? [] : [workspace])}\n`);
-    exitCode = 1;
+    if (error instanceof BenchmarkIdentityDriftError) run.identityFailureRecorded = true;
+    recordLimitsFailure(run.report, run.phase, error, workspaceRoots(run));
+    process.stderr.write(`benchmark: ${scrubBenchmarkFailure(error, workspaceRoots(run))}\n`);
+    run.exitCode = 1;
   } finally {
-    try {
-      await browser?.close();
-    } catch (error) {
-      recordLimitsFailure(report, 'browser-close', error, workspace === undefined ? [] : [workspace]);
-      exitCode = 1;
-    }
-    try {
-      await site?.close();
-    } catch (error) {
-      recordLimitsFailure(report, 'site-close', error, workspace === undefined ? [] : [workspace]);
-      exitCode = 1;
-    }
-    if (workspace !== undefined) {
-      try {
-        rmSync(workspace, { recursive: true, force: true });
-      } catch (error) {
-        recordLimitsFailure(report, 'workspace-cleanup', error, [workspace]);
-        exitCode = 1;
-      }
-    }
-    report.elapsedSeconds = Number(((Date.now() - started) / 1000).toFixed(2));
-    try {
-      if (!identityFailureRecorded && expectedIdentity !== undefined) {
-        try {
-          assertLimitsIdentityStable(expectedIdentity, undefined, 'report write', 'state');
-        } catch (error) {
-          identityFailureRecorded = true;
-          recordLimitsFailure(report, 'identity-report-write', error);
-          exitCode = 1;
-        }
-      }
-      const failureRoots = workspace === undefined ? [] : [workspace];
-      report.controls = report.controls.map((control) => ({
-        ...control,
-        ...(control.failure === undefined
-          ? {}
-          : { failure: scrubBenchmarkFailure(control.failure, failureRoots) }),
-      }));
-      const reportBody = `${JSON.stringify(report, null, 2)}\n`;
-      writeFileSync(reportPath, reportBody, 'utf8');
-      const digest = createHash('sha256').update(reportBody).digest('hex');
-      const passed = report.controls.filter((control) => control.status === 'pass').length;
-      const failed = report.controls.filter((control) => control.status === 'fail').length;
-      const notImplemented = report.controls.filter((control) => control.status === 'not-implemented').length;
-      console.log(
-        `benchmark-limits: ${report.controls.length} controls, ${passed} pass, ${failed} fail, ${notImplemented} not-implemented, ${report.failures.length} setup failures`,
-      );
-      for (const control of report.controls) {
-        const summary = summarize(control);
-        const failure =
-          control.status === 'fail' && control.failure !== undefined
-            ? ` (${sanitizeForStream(control.failure, workspace)})`
-            : '';
-        console.log(`  ${control.id}: ${control.status}${summary === '' ? '' : ` [${summary}]`}${failure}`);
-      }
-      if (report.clientBoundTest !== null) {
-        console.log(`client-bound-test: ${report.clientBoundTest.status} (${report.clientBoundTest.detail})`);
-      }
-      console.log(`report sha256: ${digest}`);
-    } catch (error) {
-      process.stderr.write(`benchmark: report write failed: ${scrubBenchmarkFailure(error)}\n`);
-      exitCode = 1;
-    }
+    await releaseLimitsResources(run);
+    run.report.elapsedSeconds = Number(((Date.now() - started) / 1000).toFixed(2));
+    writeLimitsReport(run, reportPath);
   }
-  return exitCode;
+  return run.exitCode;
 }
 
 /** A path-free numeric summary for the stream, one line per control. */

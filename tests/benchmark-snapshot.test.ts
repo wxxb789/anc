@@ -21,31 +21,36 @@ import {
   assertExactEventCount,
   assertExactSampleCount,
   assertExactlyOneControl,
+  fieldLengthDistribution,
+} from '../scripts/benchmark-stats.ts';
+import {
   assertCandidateIdentityStable,
-  captureCleanupFailure,
   candidateIdentity,
+  type CandidateIdentity,
+} from '../scripts/benchmark-candidate.ts';
+import {
   compareGraphSelection,
   compareRenderedPreview,
   compareRenderedSelection,
-  collectResources,
-  dependencyFiles,
-  dependencyTransferReports,
-  fieldLengthDistribution,
   graphOracleSelection,
-  measuredEventFailure,
-  measuredReplyFailure,
-  openMeasuredPage,
-  parseSnapshotOptions,
-  recordResponseCompletion,
   selectionEdges,
-  startStaticServer,
-  startHeapPolling,
   tagIdentityFailure,
-  tagWalkPageBound,
+} from '../scripts/benchmark-oracle.ts';
+import {
+  collectResources,
+  measuredEventFailure,
+  openMeasuredPage,
+  startHeapPolling,
+} from '../scripts/benchmark-page.ts';
+import { dependencyFiles, dependencyTransferReports } from '../scripts/benchmark-transfer.ts';
+import { measuredReplyFailure, tagWalkPageBound } from '../scripts/benchmark-driver.ts';
+import { recordResponseCompletion, startStaticServer } from '../scripts/benchmark-server.ts';
+import {
+  captureCleanupFailure,
   WorkloadMeasurementError,
-  type CandidateIdentity,
   type WorkloadReport,
-} from '../scripts/benchmark-snapshot.ts';
+} from '../scripts/benchmark-workload-report.ts';
+import { parseSnapshotOptions } from '../scripts/benchmark-snapshot.ts';
 import { repositoryIdentity, type RepositoryIdentity } from '../scripts/benchmark-identity.ts';
 import { spawnNpm } from '../scripts/npm-command.ts';
 import { GLOBAL_NODE_LIMIT } from '../src/lib/graph-selection.ts';

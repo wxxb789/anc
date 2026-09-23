@@ -9,7 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { DatabaseSync } from '../../src/lib/sqlite.ts';
 import { snapshotWorkspace } from '../../src/lib/snapshot-reader.ts';
 import { SNAPSHOT_FILE_PATTERN, snapshotFileName } from '../../src/lib/snapshot.ts';
@@ -147,7 +147,7 @@ export function snapshotTags(dist: string): { key: string; label: string; member
 export function installSnapshotMarker(destination: string, source: string): string {
   const targetDirectory = join(destination, 'data');
   mkdirSync(targetDirectory, { recursive: true });
-  const name = snapshotPath(source).split('/').at(-1)!;
+  const name = basename(snapshotPath(source));
   copyFileSync(snapshotPath(source), join(targetDirectory, name));
   return join('data', name);
 }
