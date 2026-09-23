@@ -450,6 +450,19 @@ test('init is named by the usage text', () => {
   assert.match(help.output, /\banc init \[options\]/, 'the usage text does not name the init command');
 });
 
+test('--version and -v print the manifest version and succeed', () => {
+  // The first thing an issue asks for. Read from the manifest rather than
+  // written here, so the gate follows every version bump instead of pinning one.
+  const { version } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string };
+  assert.match(version, /^\d+\.\d+\.\d+/, 'package.json declares no semver version, so this gate is vacuous');
+  for (const flag of ['--version', '-v']) {
+    const run = cli(ROOT, flag);
+    assert.equal(run.status, 0, `${flag} exited ${run.status}`);
+    assert.equal(run.output.trim(), version, `${flag} printed something other than the version`);
+  }
+  assert.match(cli(ROOT, '--help').output, /--version, -v/, 'the usage text does not name --version');
+});
+
 test('init refuses an unrecognised option without echoing it', () => {
   scratch('tk32-argv-', (root) => {
     notesRepository(root);

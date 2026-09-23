@@ -52,7 +52,7 @@ export type MathMode = 'build-time' | 'client';
 
 export const MATH_MODE: MathMode = 'client';
 
-/**
+/*
  * The costs carried by the selected client mode.
  *
  * Unlike Mermaid, temml needs no relaxation at all — measured at 0 CSP
@@ -82,8 +82,3 @@ export const MATH_MODE: MathMode = 'client';
  *    mathematics — the same bargain client diagrams make with their Mermaid
  *    source, and what the owner chose.
  */
-export const CLIENT_MATH_COSTS: readonly string[] = [
-  'a math page downloads temml: 115,541 B gzip unminified, measured — the ~59 KB figure is temml.min.js, which the exports map does not serve',
-  'the TeX source is excluded from the search index, so an expression is not findable',
-  'a reader with JavaScript disabled sees the TeX source rather than typeset mathematics',
-];

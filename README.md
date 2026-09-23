@@ -10,7 +10,7 @@
 
 ![anc — a privacy-preserving static site generator for Markdown](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.png)
 
-**anc turns a git repository of Markdown into a fast, self-hosted static knowledge
+**anc turns a git repository of Markdown into a self-hosted static knowledge
 garden**: articles, backlinks, a link graph, breadcrumbs, tags, collections, a table
 of contents, full-text search, feeds, and a sitemap — all rendered ahead of time into
 plain static files that any host can serve.
@@ -19,7 +19,7 @@ Every note publishes unless you exclude it. Ordinary reading needs no JavaScript
 nothing is sent to a third party.
 
 *anc* is short for **A**ctive **N**oise **C**ancelling. The command it installs is
-`anc`; the package is published as `@wxxb789/anc`.
+`anc`; the package is named `@wxxb789/anc` and is not yet published to npm.
 
 ## Contents
 
@@ -72,16 +72,37 @@ Or install the tarball the repository builds:
 
 ```bash
 cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/anc/wxxb789-anc-*.tgz
-npx anc build
-npx anc preview          # serves dist/ at http://localhost:4321/
-npx anc review           # write .publish-set.json for inspection
-npx anc build --release  # exact publish set + pinned Gitleaks on PATH
+cd ~/notes
+pnpm add -D /path/to/anc/wxxb789-anc-*.tgz   # or: npm install -D /path/to/anc/wxxb789-anc-*.tgz
 ```
 
-The command is `anc`. Once published, the registry form is `npx @wxxb789/anc build`;
-installed locally, `npx anc build` also works because that is the binary the package
-ships. Until publication, use one of the two approaches above.
+Then name the commands in your notes repository's `package.json`; the same scripts
+work under pnpm and npm:
+
+```json
+{
+  "scripts": {
+    "build": "anc build",
+    "preview": "anc preview",
+    "review": "anc review",
+    "release": "anc build --release"
+  }
+}
+```
+
+```bash
+pnpm run build     # or: npm run build
+pnpm run preview   # serves dist/ at http://localhost:4321/
+pnpm run review    # write .publish-set.json for inspection
+pnpm run release   # exact publish set + pinned Gitleaks on PATH
+```
+
+To call the binary directly, use `pnpm exec anc build`, or `npx --no anc build` under
+npm: `--no` makes `npx` refuse rather than fetch from the registry when the local
+install is missing. After publication the registry form will be
+`npx @wxxb789/anc build`. **Do not type bare `npx anc`:** outside a project with the
+tarball installed it falls back to the registry, where the unscoped `anc` is an
+unrelated third-party package that `npx` would offer to download and run.
 
 ## How publication is decided
 
@@ -175,9 +196,11 @@ notes, both exclusion mechanisms, links and backlinks, rich Markdown, math, and 
 
 The GitHub Action at the repository root runs a release build on a supported Linux
 runner, installs the checksum-pinned secret scanner, and writes a static `dist/`. Any
-static host serves that directory. `dist/_headers` carries a Content-Security-Policy
-and three other security headers in Cloudflare Pages' format; a host that does not read
-that file serves the site without them, which works and is weaker.
+static host serves that directory, at the root of a domain: a site under a path such
+as `https://<user>.github.io/<repo>/` is not supported. `dist/_headers` carries a
+Content-Security-Policy and three other security headers in Cloudflare Pages' format;
+a host that ignores that file still gets the policy from each page's `<meta>` tag,
+except `frame-ancestors`, and serves the other headers only if configured to.
 
 Publication is an explicit external side effect. Building does not deploy, and nothing
 in this repository can. [`docs/adoption.md`](docs/adoption.md) covers both the Action

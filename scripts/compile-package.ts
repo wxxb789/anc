@@ -354,7 +354,10 @@ export function compilePackage(destination: string): { compiled: number; rewritt
   // compiled one did not, 65 files against 64. That was a difference between two
   // tarballs; once `prepack` refuses the bare pack, the compiled one is the only
   // tarball, and the omission would be the shipped state.
-  for (const entry of [...roots, 'package.json', 'README.md']) {
+  //
+  // `LICENSE` for the same reason, and with a stronger one behind it: the MIT
+  // terms require the notice to travel with every copy, and a tarball is one.
+  for (const entry of [...roots, 'package.json', 'README.md', 'LICENSE']) {
     const from = join(ROOT, entry);
     if (!existsSync(from)) continue;
     cpSync(from, join(destination, entry), {

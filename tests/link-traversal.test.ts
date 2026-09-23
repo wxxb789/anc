@@ -9,9 +9,10 @@
  * The structural claim is that `outgoing` and the rewritten hrefs come from one
  * resolution per node, so they cannot disagree. That is not gated by comparing
  * the two — a comparison test would pass on two passes that happened to agree
- * today — but it *is* gated: the mutations recorded in `.tmp/tk-27-report.md`
- * include severing the edge from the rewrite, and the gates below go red on it
- * because each names the pair a single link must produce.
+ * today — but it *is* gated: severing the edge from the rewrite (recording an
+ * edge the body no longer links, or rewriting a link without recording its
+ * edge) is a mutation the gates below go red on, because each names the pair a
+ * single link must produce.
  *
  * The corpus in `traverse()` is deliberately hostile in three ways the plan
  * names: a note documenting wikilink syntax inside a fence, a same-basename
@@ -1086,8 +1087,8 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   }
 
   // **The set is `[` and `]` and nothing else, measured rather than assumed.**
-  // Each of these was run through both paths and the renderer
-  // (`.tmp/probe-labels.mjs`) and round-trips intact: the parser closes a label
+  // Each of these was run through both paths and the renderer (a one-off probe,
+  // not kept) and round-trips intact: the parser closes a label
   // at its `]` before a destination begins, so a paren cannot truncate one, and
   // a backtick and a lone backslash are not label syntax at all. A gate over the
   // two that break would pass just as well if the escape were widened to all

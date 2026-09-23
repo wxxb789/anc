@@ -18,7 +18,9 @@
  * the Mermaid feasibility probe, §2 and §5.
  *
  * This is a build-time module. Nothing here reaches the client in either mode:
- * `mermaid` and `happy-dom` are devDependencies, and the build emits SVG.
+ * in build-time mode this module runs under Node and the build emits SVG. Both
+ * `mermaid` and `happy-dom` are runtime `dependencies` of the package, because
+ * a stranger's build must be able to take this path.
  */
 
 import { Window } from 'happy-dom';

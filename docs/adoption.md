@@ -23,30 +23,61 @@ Node 22.18 or newer — `package.json` `engines` pins it, and the shipped code i
 JavaScript, so nothing needs a TypeScript toolchain.
 
 **And, today, a checkout of this repository.** The package is named `@wxxb789/anc`, and
-it is on no registry yet, so `npx anc` resolves for nobody. The name is scoped because
-the unscoped npm name `anc` is already taken by an unrelated package. Until it is
-published, the two ways to run it are:
+it is not yet published to npm. The name is scoped because the unscoped npm name `anc` is
+already taken by an unrelated third-party package — so **never type bare `npx anc`**: outside
+a project that has this package installed, `npx` falls back to the registry and offers to
+download and run that stranger's package. Until publication, there are two ways to run it.
+
+From a checkout, against your notes elsewhere:
 
 ```bash
-# from a checkout, against your notes elsewhere
 node /path/to/anc/bin/anc.mjs build --content ~/notes --out ~/notes/dist
-
-# or install the tarball the repository builds
-cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/anc/wxxb789-anc-*.tgz
-npx anc build
 ```
 
-Everything below is written as `npx anc`. The command is `anc`; the registry form is
-`npx @wxxb789/anc`, which runs the same binary once the package is published. Substitute
-one of the above until then.
+Or install the tarball the repository builds as a dev dependency of your notes repository,
+with pnpm or npm:
+
+```bash
+cd /path/to/anc && pnpm run pack:tarball
+cd ~/notes
+pnpm add -D /path/to/anc/wxxb789-anc-*.tgz     # or: npm install -D /path/to/anc/wxxb789-anc-*.tgz
+```
+
+then give the commands names in your notes repository's `package.json`, which work the same
+under both package managers:
+
+```json
+{
+  "scripts": {
+    "build": "anc build",
+    "preview": "anc preview",
+    "review": "anc review",
+    "release": "anc build --release"
+  }
+}
+```
+
+```bash
+pnpm run build       # or: npm run build
+pnpm run preview     # or: npm run preview
+```
+
+To call the binary directly instead, use `pnpm exec anc build`, or `npx --no anc build`
+under npm: `--no` makes `npx` refuse rather than fetch the unrelated registry `anc` when the
+local install is missing.
+
+Everything below is written as `anc <command>`, meaning whichever of those you use. After
+publication the registry form will be `npx @wxxb789/anc`, which runs the same binary.
+`anc --version` prints the version you are running; through `npx`, write
+`npx --no -- anc --version`, because without the `--` npm takes `--version` as its own flag
+and prints npm's version instead.
 
 ## The shortest thing that works
 
 ```bash
 cd your-notes
-npx anc build
-npx anc preview
+anc build
+anc preview
 ```
 
 Two commands. The first writes `dist/`; the second serves it at
@@ -54,7 +85,7 @@ Two commands. The first writes `dist/`; the second serves it at
 
 `build` prints four lines and no filenames:
 
-```
+```text
 residue scan ok: … files, 0 findings
 site written
 content: 4 discovered, 2 published, 2 dropped (1 excluded-by-frontmatter, 1 not-markdown)
@@ -102,7 +133,7 @@ the site is complete.
 **A pattern that matches nothing fails the build.** This is the guard the whole design rests
 on, so it has no override:
 
-```
+```text
 publish.config.yaml — exclude[0] matched 0 files. A pattern that matches nothing is
 usually a typo, and a mistyped exclusion publishes what it was meant to withhold.
 Correct it, or delete it.
@@ -114,7 +145,7 @@ delete the line until you need it.
 
 A key you spell wrong also fails, by line and with a suggestion:
 
-```
+```text
 publish.config.yaml: 1 configuration violation
   - line 1: unknown key is not allowed. Did you mean "title"?
 ```
@@ -149,7 +180,7 @@ three copies of the block, and the command now recognises its own.
 **Do not add `dist/**` to `exclude`.** It reads like the obvious hygiene rule and it does
 nothing you want. Measured on a one-note repository, three builds in a row:
 
-```
+```text
 first build (no dist/ yet)        1 discovered,  1 published,  0 dropped
 second build (dist/ exists)      42 discovered,  1 published, 41 dropped
 third build, dist/** excluded    43 discovered,  1 published, 42 dropped
@@ -198,6 +229,11 @@ its chrome; `description` supplies the public note summary. Invalid shapes stop 
 the private report identifies the source note. If a slug override collides with another note,
 the first path in sorted order wins and the private report records the dropped path and winner.
 
+**A site-wide default language** goes in `publish.config.yaml` as `language: zh-CN` (any BCP 47
+tag). Every note without its own `language:` takes it, and so do the navigation pages. It also
+picks the search index: Pagefind indexes a page under its `<html lang>`, and a Chinese note in
+an English-indexed page is searchable only by whole sentences. Unset, the default is English.
+
 Tracked notes take `created` and `updated` from the first and last commits that touch their
 current paths. Creation requires full history — the Action example below uses `fetch-depth: 0`;
 a shallow clone emits only `updated`. Untracked notes and directories outside git stay undated.
@@ -229,11 +265,6 @@ filename still resolves and a macOS-decomposed filename matches an NFC link.
 A link that resolves to **more than one** file is reported with every candidate and the site
 still builds — `/`-anchor it to disambiguate. A link to a note you excluded keeps the full
 label and path you wrote, points to `/private/`, and is reported; the target note's body never
-**A site-wide default language** goes in `publish.config.yaml` as `language: zh-CN` (any BCP 47
-tag). Every note without its own `language:` takes it, and so do the navigation pages. It also
-picks the search index: Pagefind indexes a page under its `<html lang>`, and a Chinese note in
-an English-indexed page is searchable only by whole sentences. Unset, the default is English.
-
 ships. That report row is your exclusion seen from the other side.
 
 Aliases are **not** link targets. Obsidian desktop and Obsidian Publish genuinely disagree
@@ -260,12 +291,12 @@ An ordinary `build` is for local preview and needs no approval file. Before prod
 artifact for deployment, record and commit the exact public note set:
 
 ```bash
-npx anc review
+anc review
 git add --intent-to-add .publish-set.json
 git diff -- .publish-set.json
 git add .publish-set.json
 git commit -m "review publish set"
-npx anc build --release
+anc build --release
 ```
 
 The review file contains sorted public slugs only — no source paths and no withheld names.
@@ -287,10 +318,15 @@ hand-assembled equivalent below is still worth reading, because it is what the A
 the two properties are yours to preserve either way.
 
 The Action is referenced by git coordinate — `uses: <owner>/<repo>@<ref>` — rather than by
-package name, and that is deliberate rather than temporary. The package is not published, so
-`npx` resolves for nobody today; but a git ref keeps working through a rename, and a workflow
-pinned to a package name does not. A user's adopted workflow surviving a rename of this tool is
-worth more than a shorter install line.
+package name, and that is deliberate rather than temporary. The Action installs the generator
+from its own checkout with a frozen lockfile, so the ref you write pins the generator *and*
+its whole dependency tree; it does not use the registry, and will not after publication.
+
+**Pin the ref to a full commit SHA.** No release tag exists yet, so a 40-character commit SHA
+from this repository is the only immutable pin available today. `@main` also works, but it is
+unpinned: every push to this repository changes what your next build runs. Once releases are
+tagged, `@vX.Y.Z` names one release exactly and `@v0` follows the latest 0.x release; a SHA
+stays the strongest pin for a deploy workflow.
 
 - **Clone at full depth.** `created` needs the first commit touching each current path. A
   shallow clone cannot prove that date, so the producer deliberately omits `created` there and
@@ -304,9 +340,19 @@ worth more than a shorter install line.
 - **Use a Linux Action runner.** The checksum-pinned scanner installer supports Linux x64 and
   arm64. Manual release builds on other platforms may use the same Gitleaks version from PATH.
 
-The output is a directory of static files. Any static host serves it. `dist/_headers` carries
-a Content-Security-Policy and three other security headers in Cloudflare Pages' format; a host
-that does not read that file serves the site without them, which works and is weaker.
+The output is a directory of static files. Any static host serves it, **at the root of a
+domain.** Every route, the snapshot and WASM URLs, the Worker, and the search index are
+root-anchored, and there is no base-path setting: `build` refuses an `origin` with a path
+(`must be a bare origin with no path, query, or fragment`). So serve the site from a custom domain or
+subdomain (`https://notes.example.org/`), or from a GitHub Pages *user or organisation* site —
+a repository named `<user>.github.io`, served at `https://<user>.github.io/`. A GitHub Pages
+*project* site at `https://<user>.github.io/<repo>/` is not supported unless you attach a
+custom domain to it.
+
+`dist/_headers` carries a Content-Security-Policy and three other security headers in
+Cloudflare Pages' format. A host that ignores that file still applies the Content-Security-Policy
+from the `<meta>` tag in every page, except `frame-ancestors`, which a meta tag cannot carry;
+the other three headers are served only if you configure them on that host.
 
 A rough GitHub Pages workflow, given the four caveats above:
 
@@ -324,7 +370,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { fetch-depth: 0 }
-      - uses: <owner>/<repo>@v1
+      - uses: <owner>/<repo>@<commit-sha>   # a full 40-character SHA; see above
         with: { content-dir: ., out-dir: dist }
       - uses: actions/upload-pages-artifact@v3
         with: { path: dist }

@@ -5,28 +5,36 @@
 # no triggers and never runs on its own, and it exists to be named by somebody
 # else's workflow as
 #
-#     - uses: <owner>/<repo>@v1
+#     - uses: <owner>/<repo>@<commit-sha>
+#
+# with a full 40-character commit SHA. This repository has no release tag yet,
+# so a SHA is the only immutable pin that exists today; `@main` also resolves
+# but is unpinned — every push here changes what a user's next build runs.
+# Once tags are cut (`CONTRIBUTING.md`, "Releasing"), `@v0` follows the latest
+# 0.x release and `@vX.Y.Z` names one exactly; a SHA remains the strongest pin.
 #
 # It builds the site and stops. It does not deploy, does not push, and does not
 # write anything into the user's repository — the deploy step belongs to the
 # user's own workflow, where they can see it, and `docs/adoption.md` shows it.
 #
-# ## How the generator gets here today, and where its name lives
+# ## How the generator gets here, and where its name lives
 #
-# `package.json` carries `"private": true`, so this package is on no registry and
-# `npx` resolves nothing for it. **It will be published, but under a different
-# name than it has now** — the rename is the owner's and has not happened. So
-# this action is built to need neither: it depends on no registry today, and the
-# rename must be a single edit rather than a search.
+# The package name in `package.json` is final and registry publication is
+# enabled, but nothing has been published yet. This action does not depend on
+# the registry either way, **and that is the design rather than a stopgap**: it
+# installs the generator from its own checkout, and it keeps doing so after
+# publication.
 #
 # **What makes that work is a property of `uses:` rather than a workaround.**
 # When a workflow names an action by repository, the runner checks that whole
 # repository out at `$GITHUB_ACTION_PATH` before the first step runs. This file
 # sits at the root of the generator's own repository, so the generator's complete
-# source — `bin/`, `scripts/`, `src/`, `astro.config.mjs` — is already on disk
-# next to it, at the exact commit the user's `@v1` resolves to. Nothing needs
-# fetching from a registry, and the version pin plan §5.3 asks for is the git ref
-# the user wrote, which is one pin rather than two.
+# source — `bin/`, `scripts/`, `src/`, `astro.config.mjs` — and its
+# `pnpm-lock.yaml` are already on disk next to it, at the exact commit the
+# user's ref resolves to. The git ref therefore pins the whole tree: the
+# generator, and every transitive dependency through the frozen lockfile. A
+# registry install would pin only the direct dependencies the tarball's
+# manifest names, which is a weaker pin, so switching to one is not planned.
 #
 # The `.ts` sources run directly: Node strips types from a plain checkout, and
 # refuses to only under `node_modules` — which is why the tarball is compiled and
@@ -37,18 +45,9 @@
 # **The package name appears nowhere in this file, and that is the design.** The
 # binary is located by reading `package.json`'s `bin` key out of the checkout
 # rather than by writing its filename here — that key is the one place a package
-# name and its entry point are tied together, so a rename touches the manifest
-# and nothing else. `tests/adoption.test.ts` holds the property by reading the
-# name from the manifest and asserting it is absent here, which keeps working
-# through the rename rather than pinning the name it exists to remove.
-#
-# **On the day it is published**, the install step below is deleted and the build
-# step's `run:` becomes `npx <the-published-name>@<version> build …`. That is the
-# first time this file would carry the name, and it is one line. Until then the
-# name a user types is the repository in their own `uses:` line, which is a git
-# coordinate and not a package name — so adoption today survives the rename,
-# while adoption *after* publishing does not: a user's committed workflow would
-# name the old package. Whoever writes the release process owns that ordering.
+# name and its entry point are tied together, so the manifest stays the single
+# source of both. `tests/adoption.test.ts` holds the property by reading the
+# name from the manifest and asserting it is absent here.
 #
 # ## What this may print
 #
@@ -263,10 +262,9 @@ runs:
     #
     # **The binary is located through `package.json`'s `bin` key rather than by
     # its filename.** That key is the one place a package's name and its entry
-    # point are tied together, and this package is going to be renamed before it
-    # is published — so a filename written here would be a second place the
-    # rename has to find. `node -p` reads it out of the manifest that ships
-    # beside this file in the same checkout. The value is a literal of the
+    # point are tied together, so a filename written here would be a second
+    # place that has to agree with the manifest. `node -p` reads it out of the
+    # manifest that ships beside this file in the same checkout. The value is a literal of the
     # generator's own manifest, not user input, so it is not the injection class
     # the paragraph below is about.
     #

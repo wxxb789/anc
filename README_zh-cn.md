@@ -10,11 +10,11 @@
 
 ![anc —— 面向 Markdown 的隐私优先静态网站生成器](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.png)
 
-**anc 把一个存放 Markdown 的 Git 仓库构建成快速、可自托管的静态知识花园**：文章、反向链接、链接图谱、面包屑、标签、合集、目录、全文搜索、订阅源与站点地图，全部预先渲染为纯静态文件，任何静态主机都能托管。
+**anc 把一个存放 Markdown 的 Git 仓库构建成可自托管的静态知识花园**：文章、反向链接、链接图谱、面包屑、标签、合集、目录、全文搜索、订阅源与站点地图，全部预先渲染为纯静态文件，任何静态主机都能托管。
 
 每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
 
-*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`。
+*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`，目前尚未发布到 npm。
 
 ## 目录
 
@@ -62,14 +62,31 @@ node /path/to/anc/bin/anc.mjs preview --dist ~/notes/dist
 
 ```bash
 cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/anc/wxxb789-anc-*.tgz
-npx anc build
-npx anc preview          # 在 http://localhost:4321/ 提供 dist/
-npx anc review           # 生成 .publish-set.json 供检查
-npx anc build --release  # 精确发布集 + PATH 上固定版本的 Gitleaks
+cd ~/notes
+pnpm add -D /path/to/anc/wxxb789-anc-*.tgz   # 或：npm install -D /path/to/anc/wxxb789-anc-*.tgz
 ```
 
-命令名是 `anc`。发布后 registry 形式为 `npx @wxxb789/anc build`；本地安装后也可以直接 `npx anc build`，因为包提供的二进制名就是 `anc`。在正式发布之前，请改用上面两种方式之一。
+然后在笔记仓库的 `package.json` 中为命令命名；同一组脚本在 pnpm 与 npm 下都能使用：
+
+```json
+{
+  "scripts": {
+    "build": "anc build",
+    "preview": "anc preview",
+    "review": "anc review",
+    "release": "anc build --release"
+  }
+}
+```
+
+```bash
+pnpm run build     # 或：npm run build
+pnpm run preview   # 在 http://localhost:4321/ 提供 dist/
+pnpm run review    # 生成 .publish-set.json 供检查
+pnpm run release   # 精确发布集 + PATH 上固定版本的 Gitleaks
+```
+
+如需直接调用二进制，使用 `pnpm exec anc build`；npm 下使用 `npx --no anc build`：`--no` 让 `npx` 在本地未安装时直接拒绝，而不是从 registry 获取。发布之后，registry 形式将是 `npx @wxxb789/anc build`。**不要输入裸 `npx anc`：** 在未安装 tarball 的项目中它会回退到 registry，而 npm 上的非 scoped 包 `anc` 是一个无关的第三方包，`npx` 会提示下载并运行它。
 
 ## 发布与否如何决定
 
@@ -131,7 +148,7 @@ pnpm run smoke:tarball   # 在外部仓库中安装该 tarball 并读取结果
 
 ## 接入与托管
 
-仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。任何静态主机都能托管该目录。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；不读取该文件的主机会在缺少它们的情况下提供站点，功能可用但保护更弱。
+仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。任何静态主机都能托管该目录，但必须部署在域名根路径下：不支持 `https://<user>.github.io/<repo>/` 这类带路径的站点。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；忽略该文件的主机仍会通过每个页面的 `<meta>` 标签获得该策略（`frame-ancestors` 除外），其余响应头则需要自行配置。
 
 发布是显式的外部副作用。构建不会部署，本仓库也无法部署。[`docs/adoption.md`](docs/adoption.md) 同时给出了 Action 用法与手工搭建的 GitHub Pages 示例，二者都不需要任何密钥。
 

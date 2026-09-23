@@ -7,6 +7,11 @@ vulnerability reporting instead:
 
 <https://github.com/wxxb789/anc/security/advisories/new>
 
+If that form is unavailable to you, open a public issue or discussion that asks
+the maintainer ([@wxxb789](https://github.com/wxxb789)) for a private contact and
+says nothing else: no affected file, no reproduction, no description of the
+problem. The details follow once a private channel exists.
+
 Include the affected version or commit, the smallest reproduction you can make,
 and the impact you believe it has. You will get an acknowledgement and an update
 as the report is triaged.
