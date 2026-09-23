@@ -640,6 +640,18 @@ test('an unterminated block carrying publish fails rather than publishing as pro
     put(root, 'note.md', '---\n\nOpens with a break and never closes it.\n');
     assert.equal((await discover(root)).entries.length, 1);
   });
+
+  // No line bound: long frontmatter is valid, so an opt-out below any fixed
+  // window must still fail closed rather than publish.
+  await scratch('producer-optout-long-', async (root) => {
+    const keys = Array.from({ length: 200 }, (_, index) => `key${index}: value`).join('\n');
+    put(root, 'withheld.md', `---\n${keys}\npublish: false\n\n# Withheld\n\nCANARY-BODY\n`);
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as { code: string },
+    );
+    assert.equal(failure?.code, 'unrecognised-frontmatter', 'an opt-out on line 202 was published');
+  });
 });
 
 test('aliases remain metadata rather than wikilink targets', async () => {
@@ -850,6 +862,31 @@ test('a symlinked note is discovered rather than vanishing from both columns', a
     );
     assert.equal(found.counts.discovered, 2, 'the symlinked note was not discovered');
     assert.deepEqual(found.entries.map((entry) => entry.slug).sort(), ['link', 'real']);
+  });
+});
+
+test('a symlink whose target leaves the content root is dropped unread', async (context) => {
+  // `readFile` follows a link, so a `.md` link to a file outside the content
+  // directory published that file under the link's name — and a release ledger
+  // records only the slug, while git never sees the target change.
+  await scratch('producer-symlink-escape-', async (workspace) => {
+    const root = join(workspace, 'notes');
+    put(workspace, 'outside/secret.md', '# Secret\n\nCANARY-OUTSIDE\n');
+    put(root, 'inside.md', '# Inside\n\nprose\n');
+    put(root, 'real.md', '# Real\n\nprose\n');
+    try {
+      symlinkSync(join(workspace, 'outside', 'secret.md'), join(root, 'escape.md'), 'file');
+      symlinkSync('real.md', join(root, 'kept.md'), 'file');
+    } catch {
+      context.skip(true, 'this host cannot create a symlink');
+      return;
+    }
+
+    const found = await discover(root);
+    assert.deepEqual(found.entries.map((entry) => entry.slug).sort(), ['inside', 'kept', 'real']);
+    assert.deepEqual(found.dropped, [{ path: 'escape.md', reason: 'link-outside-content' }]);
+    assert.equal(found.counts.discovered, found.counts.published + found.counts.dropped, 'the partition broke');
+    assert.ok(!JSON.stringify(found.entries).includes('CANARY-OUTSIDE'), 'the outside file was published');
   });
 });
 

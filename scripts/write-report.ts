@@ -87,6 +87,7 @@ export type DropReason =
   | 'not-markdown' // the extension is not .md
   | 'excluded-by-pattern' // a user exclusion glob matched it
   | 'excluded-by-frontmatter' // the note itself carries `publish: false`
+  | 'link-outside-content' // a file link whose target resolves outside the content root
   | 'repository-readme'; // the root README addresses the repository, not the reader
 
 export interface DroppedFile {

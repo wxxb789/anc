@@ -79,8 +79,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, matchesGlob } from 'node:path';
+import { readFile, readdir, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, matchesGlob, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import {
   FIELD_LIMITS,
@@ -540,8 +540,14 @@ function frontmatterOf(source: string): { body: string; data: Record<string, unk
  */
 const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
 
-/** An opening delimiter followed, within the next lines, by a `publish:` key. */
-const UNRECOGNISED_PUBLISH_BLOCK = /^---[ \t]*\r?\n(?:[^\n]*\n){0,64}?[ \t]*publish[ \t]*:/;
+/**
+ * An opening delimiter followed, anywhere after it, by a line opening with a
+ * `publish:` key. Unbounded on purpose: the caller reaches this only when no
+ * closing delimiter matched, so the block runs to the end of the file, and a
+ * long frontmatter block is valid — a bound would publish an opt-out that
+ * happened to sit below it.
+ */
+const UNRECOGNISED_PUBLISH_BLOCK = /^---[ \t]*\r?\n(?:[^\n]*\n)*?[ \t]*publish[ \t]*:/;
 
 class FrontmatterError extends Error {
   readonly code: string;
@@ -881,7 +887,7 @@ function excerptFor(markdown: string): string {
  * is `false` on win32 — so a native-separator path would silently match no
  * pattern at all on the platform where the user is most likely to be testing.
  */
-async function walk(root: string, prefix = ''): Promise<string[]> {
+async function walk(root: string, escaped: Set<string>, prefix = ''): Promise<string[]> {
   const entries = (await readdir(prefix === '' ? root : `${root}/${prefix}`, { withFileTypes: true })).sort(
     (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
   );
@@ -904,7 +910,7 @@ async function walk(root: string, prefix = ''): Promise<string[]> {
     // rather than answering — which is a file that is not there, so it is
     // pruned like a directory rather than counted.
     if (entry.isDirectory()) {
-      found.push(...(await walk(root, relativePath)));
+      found.push(...(await walk(root, escaped, relativePath)));
       continue;
     }
     if (entry.isFile()) {
@@ -920,7 +926,19 @@ async function walk(root: string, prefix = ''): Promise<string[]> {
     // treated exactly as a real directory's own entry is — pruned, in neither
     // column, because "the tool declined to follow" is not a fact about a file
     // the user wrote.
-    if (target?.isFile() === true) found.push(relativePath);
+    if (target?.isFile() !== true) continue;
+    // A file link is followed only while it stays inside the content root.
+    // `readFile` later follows it too, so a link to `~/private/plan.md` would
+    // publish that file's contents under the link's own name — and a release
+    // ledger records only the slug, while git never sees the target change, so
+    // an approved slug could carry different private text on every build.
+    // Resolved through `realpath` on both sides, so a root reached through a
+    // link of its own still contains its own files.
+    const resolvedRoot = await realpath(root);
+    const resolvedTarget = await realpath(`${root}/${relativePath}`).catch(() => undefined);
+    const step = resolvedTarget === undefined ? '..' : relative(resolvedRoot, resolvedTarget);
+    found.push(relativePath);
+    if (step === '' || step.startsWith('..') || isAbsolute(step)) escaped.add(relativePath);
   }
   return found;
 }
@@ -1061,7 +1079,9 @@ export async function discover(
 ): Promise<Discovery> {
   const patterns = options.exclude ?? [];
   const matched = patterns.map(() => false);
-  const paths = await walk(contentDirectory);
+  /** File links whose target resolves outside the content root: dropped unread. */
+  const escaped = new Set<string>();
+  const paths = await walk(contentDirectory, escaped);
   const gitDates = gitDatesFor(contentDirectory, paths);
 
   /** Published source paths whose derived slug belongs to the site itself. */
@@ -1111,6 +1131,14 @@ export async function discover(
     // which test runs first.
     if (excluded) {
       dropped.push({ path, reason: 'excluded-by-pattern' });
+      continue;
+    }
+
+    // Below the author's own exclusions, which may already cover it, and above
+    // the read: the target lies outside what the author chose to publish from,
+    // so its bytes are never read at all. See `walk`.
+    if (escaped.has(path)) {
+      dropped.push({ path, reason: 'link-outside-content' });
       continue;
     }
 

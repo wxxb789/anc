@@ -22,7 +22,7 @@
  * hand-written fixture, because no hand-written fixture gzips anything.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
@@ -91,7 +91,8 @@ function build(
  * before `Zzq X.md`, so the winner is the one in capitals. A fixture built on
  * the intuitive reading asserts the report names a file that was published.
  */
-function corpusWithEveryDropReason(notes: string): void {
+/** Returns whether the escaping-symlink reason could be planted on this host. */
+function corpusWithEveryDropReason(notes: string): boolean {
   mkdirSync(join(notes, 'drafts'), { recursive: true });
   writeFileSync(join(notes, 'publish.config.yaml'), 'exclude:\n  - "drafts/**"\n', 'utf8');
   writeFileSync(join(notes, 'README.md'), '# Repo readme\n\nAddresses the repository.\n', 'utf8');
@@ -102,6 +103,15 @@ function corpusWithEveryDropReason(notes: string): void {
   writeFileSync(join(notes, '___.md'), '# Nameless\n\nprose.\n', 'utf8');
   writeFileSync(join(notes, 'asset.pdf'), 'not markdown\n', 'utf8');
   writeFileSync(join(notes, 'alpha.md'), '# Alpha\n\nprose.\n', 'utf8');
+  // A file link out of the content root. Creating one needs a privilege a
+  // Windows host may lack, so the caller learns whether the reason is present.
+  writeFileSync(join(notes, '..', 'outside.md'), '# Outside\n\nprose.\n', 'utf8');
+  try {
+    symlinkSync(join(notes, '..', 'outside.md'), join(notes, 'escape.md'), 'file');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -586,7 +596,7 @@ test('the report’s counts partition every discovered file, whatever dropped it
     const state = join(directory, 'state');
     mkdirSync(state, { recursive: true });
     const notes = join(directory, 'notes');
-    corpusWithEveryDropReason(notes);
+    const escapes = corpusWithEveryDropReason(notes);
 
     // No git directory here on purpose: this is also the only gate over the
     // state-directory branch end to end, and both properties want the same run.
@@ -628,6 +638,7 @@ test('the report’s counts partition every discovered file, whatever dropped it
       [
         'excluded-by-frontmatter',
         'excluded-by-pattern',
+        ...(escapes ? ['link-outside-content'] : []),
         'not-markdown',
         'repository-readme',
         'slug-collision',

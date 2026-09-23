@@ -165,6 +165,10 @@ these rather than acting on them, but quoting avoids the argument entirely.
 `README.md` — which addresses your repository rather than your reader. A `README.md` inside a
 folder is an ordinary note. Re-include the root one with `"!README.md"`.
 
+A symbolic link to a note elsewhere inside the content directory publishes under the link's
+name. A link to a file **outside** it is dropped unread and counted as `link-outside-content`:
+publishing only reads what lives under the directory you pointed it at.
+
 Non-Markdown files are discovered and never emitted. **There is no asset pipeline**: an
 embedded image does not ship, and a link to one degrades to text and is reported. That is
 deliberate rather than pending — the alternative shape, copying every non-Markdown file, is

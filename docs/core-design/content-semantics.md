@@ -10,6 +10,14 @@ configuration exclusions apply next; `publish: true` cannot override exclusion.
 Malformed configuration and zero-match exclusion patterns fail. Existing built-in
 exclusions and the absence of a non-Markdown asset-copy pipeline remain in force.
 
+Publication reads only what lies inside the content root. A `.md` symbolic link
+whose resolved target is outside it is dropped unread as `link-outside-content`,
+after both exclusion ranks. A release ledger records slugs, and git does not see
+an external target change, so following such a link would let an approved slug
+carry different private text on each build. A link to a file inside the root
+publishes under the link's own path. A leading `---` block that carries a
+`publish:` key but has no closing delimiter fails the build, whatever its length.
+
 `review` produces the exact public slug set. Release builds require the committed,
 unchanged ledger to equal the newly computed set, including removals. A successful
 build is not a deployment action. Reports retain names privately; stdout/stderr
