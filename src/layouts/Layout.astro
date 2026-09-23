@@ -5,6 +5,10 @@ import '../styles/global.css';
 // wrong theme. Importing the URL keeps the source under `src/scripts/` and
 // content-hashed, while the tag stays inline-free and same-origin.
 import themeInit from '../scripts/theme-init.js?url';
+// The deployed policy's one source. `?raw` inlines the file's text at build
+// time, so the `<meta>` below is derived from the same bytes `_headers` ships
+// rather than restated, and cannot drift from it.
+import shippedHeaders from '../../public/_headers?raw';
 import SiteMetadata from '../components/SiteMetadata.astro';
 import CollectionExplorer from '../components/CollectionExplorer.astro';
 import { entries } from '../lib/content.ts';
@@ -72,12 +76,54 @@ const description = describe(Astro.props.description, t.siteDescription);
  * it and carries the measurements.
  */
 const explorerGroups = collectionNavigation(entries, Astro.url.pathname, t.uncollected);
+
+/**
+ * The site-wide Content-Security-Policy, as a `<meta http-equiv>`.
+ *
+ * `public/_headers` is Cloudflare Pages' format, so a host that ignores it —
+ * GitHub Pages, the documented zero-secret path, or any plain static server —
+ * served no CSP at all. The meta element carries the same policy to every host.
+ *
+ * Read from the `/*` rule of `_headers` rather than restated, minus the
+ * directives a meta-delivered policy cannot carry and the browser ignores with a
+ * console warning (CSP3 §3.3): `frame-ancestors`, `report-uri`, `report-to`, and
+ * `sandbox`. Clickjacking protection therefore still depends on a host that
+ * sends the header. Where `_headers` is honoured both policies apply; they are
+ * the same policy, so the intersection is unchanged.
+ *
+ * Omitted under `astro dev` only, whose client injects inline scripts the
+ * shipped policy forbids. Keyed on Vite's `MODE`, not `PROD`: `PROD` follows
+ * `NODE_ENV`, so a build started with `NODE_ENV=test` — every build a test
+ * harness spawns — would silently ship no policy. `tests/csp-meta.test.ts`
+ * asserts the emitted value against `_headers` and its enforcement in Chromium.
+ */
+const META_UNSUPPORTED = new Set(['frame-ancestors', 'report-uri', 'report-to', 'sandbox']);
+const metaPolicy = (() => {
+  let inSiteRule = false;
+  for (const line of shippedHeaders.split(/\r?\n/)) {
+    if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
+    if (!/^\s/.test(line)) {
+      inSiteRule = line.trim() === '/*';
+      continue;
+    }
+    const match = inSiteRule ? /^\s*Content-Security-Policy:\s*(.+)$/i.exec(line) : null;
+    if (match === null) continue;
+    return match[1]!
+      .split(';')
+      .map((directive) => directive.trim())
+      .filter((directive) => directive !== '' && !META_UNSUPPORTED.has(directive.split(/\s+/)[0]!.toLowerCase()))
+      .join('; ');
+  }
+  throw new Error('public/_headers declares no site-wide Content-Security-Policy for the <meta> policy');
+})();
 ---
 
 <!doctype html>
 <html lang={lang}>
   <head>
     <meta charset="UTF-8" />
+    {/* First after the charset: a meta policy governs only what follows it. */}
+    {import.meta.env.MODE !== 'development' && <meta http-equiv="Content-Security-Policy" content={metaPolicy} />}
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />

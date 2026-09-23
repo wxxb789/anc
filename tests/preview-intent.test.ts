@@ -254,3 +254,70 @@ test('ordinary reading and scrolling past a graph stay lazy, and intent starts t
 
   await page.close();
 }, 120_000);
+
+/**
+ * A link inside the open search dialog previews nothing.
+ *
+ * The dialog is modal: everything behind it is inert, and the preview panel is
+ * behind it. A preview opened from a search result would download the whole
+ * SQLite runtime for a panel the dialog covers, and point the result's
+ * `aria-describedby` at an element a screen reader cannot reach. Arrowing
+ * through results is keyboard focus with `:focus-visible` set, and a pointer
+ * resting on a result is hover — both are the intent signals the gate above
+ * proves start the runtime anywhere else, so both are exercised here.
+ *
+ * Positive control first: the same page, outside the dialog, does start the
+ * runtime, so an instrument that could not see it would fail here rather than
+ * report a vacuous zero.
+ */
+test('a search result inside the modal dialog starts no preview and no SQLite runtime', async () => {
+  const page = await browser.newPage();
+  const sqlite = sqliteAssetRequests(page);
+  await page.goto(`${site.origin}/notes/alpha/`, { waitUntil: 'load' });
+
+  await page.keyboard.press('/');
+  const dialog = page.locator('#search-dialog');
+  await dialog.waitFor({ state: 'visible', timeout: 10_000 });
+  await page.fill('#search-input', 'Beta');
+  const results = page.locator('#search-results a');
+  await results.first().waitFor({ state: 'visible', timeout: 20_000 });
+  const resultHref = await results.first().getAttribute('href');
+  assert.ok(resultHref?.includes('/notes/'), `the first search result is not a note link: ${resultHref}`);
+
+  // Keyboard: the dialog's own arrow handling moves focus onto the result.
+  await page.keyboard.press('ArrowDown');
+  const focusedInDialog = await page.evaluate(
+    () => document.activeElement instanceof HTMLAnchorElement && document.activeElement.closest('dialog') !== null,
+  );
+  assert.ok(focusedInDialog, 'ArrowDown did not focus a result inside the dialog, so the focus path was not measured');
+  const previewState = (): Promise<{ describedby: number; panelHidden: boolean }> =>
+    page.evaluate(() => ({
+      describedby: document.querySelectorAll('#search-dialog a[aria-describedby]').length,
+      panelHidden: document.querySelector<HTMLElement>('#link-preview')?.hidden ?? true,
+    }));
+  // Long enough for a cold Worker, snapshot, and WASM to answer, which is what
+  // an unguarded preview waits for before it shows.
+  await page.waitForTimeout(2_000);
+  const afterFocus = await previewState();
+  assert.equal(afterFocus.describedby, 0, 'a focused search result points aria-describedby behind the modal');
+  assert.equal(afterFocus.panelHidden, true, 'focusing a search result opened the preview behind the modal');
+  // Pointer: rest on every result for longer than the open delay.
+  for (let index = 0; index < (await results.count()); index += 1) {
+    await results.nth(index).hover();
+    await page.waitForTimeout(400);
+  }
+  await page.waitForTimeout(1_500);
+
+  const state = await previewState();
+  assert.equal(state.describedby, 0, 'a search result points aria-describedby at the preview behind the modal');
+  assert.equal(state.panelHidden, true, 'the preview panel opened behind the modal search dialog');
+  assert.deepEqual(sqlite, [], `searching started the SQLite runtime: ${sqlite.join(', ')}`);
+
+  // Positive control: close the dialog, hover the same target in the article.
+  await page.keyboard.press('Escape');
+  await dialog.waitFor({ state: 'hidden', timeout: 5_000 });
+  await page.locator('article a[href="/notes/beta/"]').first().hover();
+  await page.locator('#link-preview').waitFor({ state: 'visible', timeout: 10_000 });
+  assert.ok(sqlite.length > 0, 'the instrument saw no runtime even outside the dialog, so the zero above is vacuous');
+  await page.close();
+}, 120_000);

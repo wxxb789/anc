@@ -218,9 +218,13 @@ async function checkGraph(browser: Browser, server: ServedSite): Promise<void> {
       'the local graph activation control was not reachable by Tab',
     );
     await graphPage.keyboard.press('Enter');
-    await graphPage.waitForFunction(
-      () => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0,
-    );
+    // Wait for the answer, not for any status: the cold load writes a loading
+    // string into the same live region first, and a non-empty test passes on it.
+    await graphPage.waitForFunction(() => {
+      const status = document.querySelector('[data-graph-status]')?.textContent ?? '';
+      const controls = document.querySelector<HTMLElement>('[data-graph-controls]');
+      return status !== '' && status !== controls?.dataset['graphLoading'] && !controls?.hasAttribute('aria-busy');
+    });
     const region = graphPage.locator('[data-graph-region="note-graph"]');
     // A two-note corpus draws the same figure and table before activation as
     // after it, so the counts below cannot distinguish a live redraw from the

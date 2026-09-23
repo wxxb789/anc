@@ -28,6 +28,7 @@
 
 import { noteSlugFromPath } from '../lib/route-path.ts';
 import { placePreview, previewFragment, previewTitle } from '../lib/preview-model.ts';
+import type { NotePreview } from '../lib/snapshot-queries.ts';
 import { requestPreview } from './snapshot-client.ts';
 
 /* Astro concatenates these scripts into one bundle. `export {}` makes this file
@@ -61,193 +62,215 @@ interface PreviewLink {
   slug: string;
 }
 
-function install(panel: HTMLElement): void {
+/** The panel and its pending/showing state, shared by the event handlers. */
+interface PreviewState {
+  panel: HTMLElement;
   /** The link whose preview is showing or scheduled. Unset means nothing is pending. */
-  let current: HTMLAnchorElement | undefined;
-  let openTimer: ReturnType<typeof setTimeout> | undefined;
-  let closeTimer: ReturnType<typeof setTimeout> | undefined;
+  current: HTMLAnchorElement | undefined;
+  openTimer: ReturnType<typeof setTimeout> | undefined;
+  closeTimer: ReturnType<typeof setTimeout> | undefined;
+}
 
-  /**
-   * The previewable note behind a link, or nothing.
-   *
-   * The origin comparison, rather than an `href^="/"` selector, is what makes
-   * "same site" true instead of merely likely: `href="//example.com/notes/x/"`
-   * starts with `/` and has a perfectly good-looking note `pathname`, so a prefix
-   * test would hand a third-party origin a preview of one of *our* notes.
-   * Asking for `.origin` puts the question to the browser's own URL parser, and
-   * it also admits an absolute same-origin href, which is public and previewable
-   * and which the prefix selector silently excluded.
-   *
-   * A link to the page already open is **not** previewable, and that guard is
-   * load-bearing rather than tidy. Every `href="#section"` on a note page
-   * resolves to that note's own `pathname`, so without it the table of contents,
-   * all fifteen heading anchors, and — worst — the skip link all preview the note
-   * the reader is currently reading. On the published note page that is 29 such
-   * anchors, and the *first* Tab on the page opened a panel describing the page
-   * itself and pointed the skip link's `aria-describedby` at it. A preview of the
-   * open page is not information, it is noise in front of the one control a
-   * keyboard reader meets first. `tests/rendered-page.test.ts` gates it over the
-   * real anchors on real note pages — counted there rather than trusted from
-   * here, and it fails when this line is deleted.
-   *
-   * The slug comes back with the link rather than being re-derived at display
-   * time. One call to `noteSlugFromPath` is what makes this the single decision
-   * about whether a link is previewable — a second copy downstream would make
-   * each of them look optional, and a check nothing depends on is a check that
-   * gets deleted.
-   */
-  function previewTarget(node: EventTarget | null): PreviewLink | undefined {
-    const link = node instanceof Element ? node.closest('a[href]') : undefined;
-    if (!(link instanceof HTMLAnchorElement) || link.origin !== location.origin) return undefined;
-    if (link.pathname === location.pathname) return undefined;
-    // Only a note route carries a previewable slug. Reading the route through the
-    // shared helper is what keeps this from previewing `/tags/<tag>/` as though
-    // the tag were a note, and it means the route model moves in one place.
-    const slug = noteSlugFromPath(link.pathname);
-    return slug === undefined ? undefined : { link, slug };
+/**
+ * The previewable note behind a link, or nothing.
+ *
+ * The origin comparison, rather than an `href^="/"` selector, is what makes
+ * "same site" true instead of merely likely: `href="//example.com/notes/x/"`
+ * starts with `/` and has a perfectly good-looking note `pathname`, so a prefix
+ * test would hand a third-party origin a preview of one of *our* notes.
+ * Asking for `.origin` puts the question to the browser's own URL parser, and
+ * it also admits an absolute same-origin href, which is public and previewable
+ * and which the prefix selector silently excluded.
+ *
+ * A link to the page already open is **not** previewable, and that guard is
+ * load-bearing rather than tidy. Every `href="#section"` on a note page
+ * resolves to that note's own `pathname`, so without it the table of contents,
+ * all fifteen heading anchors, and — worst — the skip link all preview the note
+ * the reader is currently reading. On the published note page that is 29 such
+ * anchors, and the *first* Tab on the page opened a panel describing the page
+ * itself and pointed the skip link's `aria-describedby` at it. A preview of the
+ * open page is not information, it is noise in front of the one control a
+ * keyboard reader meets first. `tests/rendered-page.test.ts` gates it over the
+ * real anchors on real note pages — counted there rather than trusted from
+ * here, and it fails when this line is deleted.
+ *
+ * The slug comes back with the link rather than being re-derived at display
+ * time. One call to `noteSlugFromPath` is what makes this the single decision
+ * about whether a link is previewable — a second copy downstream would make
+ * each of them look optional, and a check nothing depends on is a check that
+ * gets deleted.
+ */
+function previewTarget(node: EventTarget | null): PreviewLink | undefined {
+  const link = node instanceof Element ? node.closest('a[href]') : undefined;
+  if (!(link instanceof HTMLAnchorElement) || link.origin !== location.origin) return undefined;
+  if (link.pathname === location.pathname) return undefined;
+  // A link inside a `<dialog>` — the modal search dialog — is never previewed.
+  // The panel lives behind the modal, so a preview would be covered by it,
+  // `aria-describedby` would point at an element outside the reader's reach,
+  // and arrowing through results would download the whole SQLite runtime for
+  // nothing. `tests/preview-intent.test.ts` gates both effects.
+  if (link.closest('dialog') !== null) return undefined;
+  // Only a note route carries a previewable slug. Reading the route through the
+  // shared helper is what keeps this from previewing `/tags/<tag>/` as though
+  // the tag were a note, and it means the route model moves in one place.
+  const slug = noteSlugFromPath(link.pathname);
+  return slug === undefined ? undefined : { link, slug };
+}
+
+function hide(state: PreviewState): void {
+  clearTimeout(state.openTimer);
+  clearTimeout(state.closeTimer);
+  state.openTimer = undefined;
+  state.closeTimer = undefined;
+  // Only while the panel is showing. A description pointing at a hidden element
+  // announces nothing, so leaving the attribute behind would tell a screen
+  // reader the link has a description that is not there.
+  state.current?.removeAttribute('aria-describedby');
+  state.current = undefined;
+  state.panel.hidden = true;
+}
+
+/** Whether an event's target or `relatedTarget` is the panel or inside it. */
+function isInPanel(panel: HTMLElement, node: EventTarget | null): boolean {
+  return node instanceof Node && panel.contains(node);
+}
+
+/** The pointer came back to the link, or reached the panel. */
+function keep(state: PreviewState): void {
+  clearTimeout(state.closeTimer);
+  state.closeTimer = undefined;
+}
+
+/**
+ * The pointer left. A visible panel gets the grace period; a pending one does
+ * not, so a reader who brushes past a link never sees it open at all.
+ */
+function leave(state: PreviewState): void {
+  if (state.current === undefined) return;
+  if (state.panel.hidden) hide(state);
+  else if (state.closeTimer === undefined) state.closeTimer = setTimeout(() => hide(state), CLOSE_DELAY_MS);
+}
+
+/**
+ * Fill and place the panel for a previewable link, if it is still the one
+ * wanted.
+ *
+ * The re-check after the await is the reason this is not written inline: the
+ * index fetch can resolve long after the pointer has moved on, and without it a
+ * reader who brushed past a link gets a panel for it seconds later, anchored to
+ * a rectangle that may have scrolled away in the meantime.
+ */
+async function show(state: PreviewState, { link, slug }: PreviewLink): Promise<void> {
+  let entry;
+  try {
+    entry = (await requestPreview(slug)).preview;
+  } catch {
+    // A failed Worker, fetch, digest, or schema falls back to the static page:
+    // the link stays usable and nothing stale is shown. The client clears its
+    // failed initialization so a later intent can retry.
+    entry = null;
+  }
+  if (state.current !== link) return;
+  if (entry === null) {
+    // Nothing to show: a failed index load, or a slug the projection does not
+    // carry. `current` is released because it means "the link whose preview is
+    // showing or scheduled", and after a miss neither is true. Leaving it set
+    // makes the next `pointerover` on that same link take the "already here"
+    // branch instead of retrying, and the preview never comes back.
+    //
+    // The gesture that reaches it is **moving between a link's own child
+    // elements**. `pointerout` is correctly swallowed — the pointer has not
+    // left the link — but crossing the internal boundary fires a fresh
+    // `pointerover` for the same anchor, and that is the one this releases for.
+    // An earlier version of this comment claimed no such gesture existed; it
+    // was wrong, and the mistake was testing jitter *within* one element, which
+    // fires no events at all. Reproduced on `/notes/accessibility-baseline/`
+    // moving between the collection pager's two spans: without this line the
+    // preview stays dead, with it the crossing re-arms.
+    //
+    // Not hypothetical markup: the collection pager in
+    // `src/pages/notes/[slug].astro` wraps `<span class="pager-direction">`
+    // and `<span class="pager-title">` in every anchor, and the fixture corpus
+    // builds **50** of them. `tests/rendered-page.test.ts` gates it on those
+    // real anchors.
+    state.current = undefined;
+    return;
   }
 
-  function hide(): void {
-    clearTimeout(openTimer);
-    clearTimeout(closeTimer);
-    openTimer = undefined;
-    closeTimer = undefined;
-    // Only while the panel is showing. A description pointing at a hidden element
-    // announces nothing, so leaving the attribute behind would tell a screen
-    // reader the link has a description that is not there.
-    current?.removeAttribute('aria-describedby');
-    current = undefined;
-    panel.hidden = true;
+  renderPanel(state.panel, entry, link);
+}
+
+/**
+ * Fill the panel with a preview entry and place it beside its link.
+ *
+ * Stateless: it reads only its arguments and the document's own geometry and
+ * language, and the caller has already decided the entry is still wanted.
+ */
+function renderPanel(panel: HTMLElement, entry: NotePreview, link: HTMLAnchorElement): void {
+  // Text nodes throughout — `textContent`, never `innerHTML` — so every string
+  // from the snapshot stays data and is never parsed as markup.
+  const pageLanguage = document.documentElement.lang || 'en';
+  const markLanguage = (element: HTMLElement, language: string): void => {
+    if (language.toLowerCase() !== pageLanguage.toLowerCase()) element.lang = language;
+  };
+  const title = document.createElement('strong');
+  title.textContent = previewTitle(entry);
+  markLanguage(title, entry.language);
+  const excerpt = document.createElement('p');
+  excerpt.textContent = entry.excerpt;
+  markLanguage(excerpt, entry.language);
+  const fragment = previewFragment(link.hash);
+  if (fragment === undefined) panel.replaceChildren(title, excerpt);
+  else {
+    // A heading-target link says which section it lands on. The projection
+    // carries nothing per heading, so this is the fragment itself rather than a
+    // de-slugged guess at the heading's prose — see `previewFragment`.
+    const section = document.createElement('span');
+    section.className = 'preview-fragment';
+    section.textContent = fragment;
+    panel.replaceChildren(title, section, excerpt);
   }
 
-  /** Whether an event's target or `relatedTarget` is the panel or inside it. */
-  function isInPanel(node: EventTarget | null): boolean {
-    return node instanceof Node && panel.contains(node);
+  // Unhidden before measuring, because a `display: none` element has no size to
+  // measure. Both happen inside this one task, so the browser paints the placed
+  // panel and never the provisional position.
+  panel.hidden = false;
+  const { left, top } = placePreview(link.getBoundingClientRect(), panel.getBoundingClientRect(), {
+    // Not `window.innerWidth`, which counts a classic scrollbar the panel
+    // cannot occupy. `clientWidth`/`clientHeight` are the box a fixed-position
+    // element is laid out in, so the arithmetic and the CSS agree on the edge.
+    width: document.documentElement.clientWidth,
+    height: document.documentElement.clientHeight,
+  });
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+  link.setAttribute('aria-describedby', panel.id);
+}
+
+/**
+ * Arm the intent delay for a link, replacing whatever was pending.
+ *
+ * The `current === link` branch is the pointer arriving somewhere it already
+ * counts as being — onto a `<code>` or `<em>` inside the link it is already
+ * over, or back from the panel — so it cancels a pending close rather than
+ * restarting the open. Restarting would let a pointer drifting across a link's
+ * inner elements postpone the preview indefinitely.
+ */
+function open(state: PreviewState, target: PreviewLink): void {
+  if (state.current === target.link) {
+    keep(state);
+    return;
   }
+  hide(state);
+  state.current = target.link;
+  state.openTimer = setTimeout(() => {
+    state.openTimer = undefined;
+    void show(state, target);
+  }, OPEN_DELAY_MS);
+}
 
-  /** The pointer came back to the link, or reached the panel. */
-  function keep(): void {
-    clearTimeout(closeTimer);
-    closeTimer = undefined;
-  }
-
-  /**
-   * The pointer left. A visible panel gets the grace period; a pending one does
-   * not, so a reader who brushes past a link never sees it open at all.
-   */
-  function leave(): void {
-    if (current === undefined) return;
-    if (panel.hidden) hide();
-    else if (closeTimer === undefined) closeTimer = setTimeout(hide, CLOSE_DELAY_MS);
-  }
-
-  /**
-   * Fill and place the panel for a previewable link, if it is still the one
-   * wanted.
-   *
-   * The re-check after the await is the reason this is not written inline: the
-   * index fetch can resolve long after the pointer has moved on, and without it a
-   * reader who brushed past a link gets a panel for it seconds later, anchored to
-   * a rectangle that may have scrolled away in the meantime.
-   */
-  async function show({ link, slug }: PreviewLink): Promise<void> {
-    let entry;
-    try {
-      entry = (await requestPreview(slug)).preview;
-    } catch {
-      // A failed Worker, fetch, digest, or schema falls back to the static page:
-      // the link stays usable and nothing stale is shown. The client clears its
-      // failed initialization so a later intent can retry.
-      entry = null;
-    }
-    if (current !== link) return;
-    if (entry === null) {
-      // Nothing to show: a failed index load, or a slug the projection does not
-      // carry. `current` is released because it means "the link whose preview is
-      // showing or scheduled", and after a miss neither is true. Leaving it set
-      // makes the next `pointerover` on that same link take the "already here"
-      // branch instead of retrying, and the preview never comes back.
-      //
-      // The gesture that reaches it is **moving between a link's own child
-      // elements**. `pointerout` is correctly swallowed — the pointer has not
-      // left the link — but crossing the internal boundary fires a fresh
-      // `pointerover` for the same anchor, and that is the one this releases for.
-      // An earlier version of this comment claimed no such gesture existed; it
-      // was wrong, and the mistake was testing jitter *within* one element, which
-      // fires no events at all. Reproduced on `/notes/accessibility-baseline/`
-      // moving between the collection pager's two spans: without this line the
-      // preview stays dead, with it the crossing re-arms.
-      //
-      // Not hypothetical markup: the collection pager in
-      // `src/pages/notes/[slug].astro` wraps `<span class="pager-direction">`
-      // and `<span class="pager-title">` in every anchor, and the fixture corpus
-      // builds **50** of them. `tests/rendered-page.test.ts` gates it on those
-      // real anchors.
-      current = undefined;
-      return;
-    }
-
-    // Text nodes throughout — `textContent`, never `innerHTML` — so every string
-    // from the snapshot stays data and is never parsed as markup.
-    const pageLanguage = document.documentElement.lang || 'en';
-    const markLanguage = (element: HTMLElement, language: string): void => {
-      if (language.toLowerCase() !== pageLanguage.toLowerCase()) element.lang = language;
-    };
-    const title = document.createElement('strong');
-    title.textContent = previewTitle(entry);
-    markLanguage(title, entry.language);
-    const excerpt = document.createElement('p');
-    excerpt.textContent = entry.excerpt;
-    markLanguage(excerpt, entry.language);
-    const fragment = previewFragment(link.hash);
-    if (fragment === undefined) panel.replaceChildren(title, excerpt);
-    else {
-      // A heading-target link says which section it lands on. The projection
-      // carries nothing per heading, so this is the fragment itself rather than a
-      // de-slugged guess at the heading's prose — see `previewFragment`.
-      const section = document.createElement('span');
-      section.className = 'preview-fragment';
-      section.textContent = fragment;
-      panel.replaceChildren(title, section, excerpt);
-    }
-
-    // Unhidden before measuring, because a `display: none` element has no size to
-    // measure. Both happen inside this one task, so the browser paints the placed
-    // panel and never the provisional position.
-    panel.hidden = false;
-    const { left, top } = placePreview(link.getBoundingClientRect(), panel.getBoundingClientRect(), {
-      // Not `window.innerWidth`, which counts a classic scrollbar the panel
-      // cannot occupy. `clientWidth`/`clientHeight` are the box a fixed-position
-      // element is laid out in, so the arithmetic and the CSS agree on the edge.
-      width: document.documentElement.clientWidth,
-      height: document.documentElement.clientHeight,
-    });
-    panel.style.left = `${left}px`;
-    panel.style.top = `${top}px`;
-    link.setAttribute('aria-describedby', panel.id);
-  }
-
-  /**
-   * Arm the intent delay for a link, replacing whatever was pending.
-   *
-   * The `current === link` branch is the pointer arriving somewhere it already
-   * counts as being — onto a `<code>` or `<em>` inside the link it is already
-   * over, or back from the panel — so it cancels a pending close rather than
-   * restarting the open. Restarting would let a pointer drifting across a link's
-   * inner elements postpone the preview indefinitely.
-   */
-  function open(target: PreviewLink): void {
-    if (current === target.link) {
-      keep();
-      return;
-    }
-    hide();
-    current = target.link;
-    openTimer = setTimeout(() => {
-      openTimer = undefined;
-      void show(target);
-    }, OPEN_DELAY_MS);
-  }
+function install(panel: HTMLElement): void {
+  const state: PreviewState = { panel, current: undefined, openTimer: undefined, closeTimer: undefined };
 
   document.addEventListener('pointerover', (event) => {
     // Touch raises `pointerover` as part of the tap it precedes, so without this
@@ -255,9 +278,9 @@ function install(panel: HTMLElement): void {
     // like a mouse and is left alone.
     if (event.pointerType === 'touch') return;
     const target = previewTarget(event.target);
-    if (target) open(target);
-    else if (isInPanel(event.target)) keep();
-    else leave();
+    if (target) open(state, target);
+    else if (isInPanel(panel, event.target)) keep(state);
+    else leave(state);
   });
 
   document.addEventListener('pointerout', (event) => {
@@ -275,9 +298,9 @@ function install(panel: HTMLElement): void {
     // timer to clear, and the `pointerout` behind it would then arm a close
     // while the pointer was still inside the link. One line against an ordering
     // assumption is cheaper than the flicker it prevents.
-    if (previewTarget(event.relatedTarget)?.link === current) return;
-    if (isInPanel(event.relatedTarget)) return;
-    leave();
+    if (previewTarget(event.relatedTarget)?.link === state.current) return;
+    if (isInPanel(panel, event.relatedTarget)) return;
+    leave(state);
   });
 
   // `focusin`/`focusout` rather than `focus`/`blur`: the latter do not bubble, so
@@ -295,12 +318,12 @@ function install(panel: HTMLElement): void {
   // ring uses, so a reader who sees the ring is the reader who gets the preview.
   document.addEventListener('focusin', (event) => {
     const target = previewTarget(event.target);
-    if (target && target.link.matches(':focus-visible')) open(target);
-    else hide();
+    if (target && target.link.matches(':focus-visible')) open(state, target);
+    else hide(state);
   });
 
   document.addEventListener('focusout', (event) => {
-    if (current !== undefined && previewTarget(event.target)?.link === current) hide();
+    if (state.current !== undefined && previewTarget(event.target)?.link === state.current) hide(state);
   });
 
   document.addEventListener('keydown', (event) => {
@@ -308,7 +331,7 @@ function install(panel: HTMLElement): void {
     // break the search dialog's own dismissal on a page where both are open, and
     // dismissing a tooltip is not a reason to take the key away from everything
     // else.
-    if (event.key === 'Escape' && current !== undefined) hide();
+    if (event.key === 'Escape' && state.current !== undefined) hide(state);
   });
 
   // `capture`, so a scroll inside any container dismisses rather than leaving the
@@ -323,7 +346,7 @@ function install(panel: HTMLElement): void {
   // link that was off screen. Nothing is stale either way: the panel is placed
   // from a rectangle read when it is shown, not when it was scheduled.
   const dismissIfShowing = (): void => {
-    if (!panel.hidden) hide();
+    if (!panel.hidden) hide(state);
   };
   window.addEventListener('scroll', dismissIfShowing, { passive: true, capture: true });
   window.addEventListener('resize', dismissIfShowing, { passive: true });

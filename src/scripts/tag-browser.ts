@@ -57,11 +57,17 @@ function install(root: HTMLElement): void {
     // One continuation may be in flight at a time. `#tag-browse-more` is the only
     // way to dispatch one, and a second click before the first reply lands would
     // send the same cursor again — both replies pass the generation guard below
-    // and append the same page. Disabled synchronously, before the first await,
-    // so a double click cannot get two handlers in; the cursor advances only
-    // when a reply lands, and the `finally` re-enables the button for the next
+    // and append the same page. Marked busy synchronously, before the first
+    // await, so a double click cannot get two handlers in; the cursor advances
+    // only when a reply lands, and the `finally` clears the mark for the next
     // explicit continuation.
-    if (more !== null) more.disabled = true;
+    //
+    // `aria-disabled` plus the click handler's own check, **not** `disabled`.
+    // Disabling the button that holds focus drops focus to `<body>`, so a
+    // keyboard reader who pressed Enter on "Load more" was thrown back to the
+    // top of the tab order on every page. `tests/tag-browser.test.ts` asserts
+    // `document.activeElement` across a continuation.
+    if (more !== null) more.setAttribute('aria-disabled', 'true');
     status.textContent = string(TAG_BROWSE_DATASET.loading);
     let page;
     try {
@@ -74,7 +80,7 @@ function install(root: HTMLElement): void {
       status.textContent = string(TAG_BROWSE_DATASET.failed);
       return;
     } finally {
-      if (more !== null) more.disabled = false;
+      if (more !== null) more.removeAttribute('aria-disabled');
     }
     if (forGeneration !== generation) return; // a stale tag's reply cannot replace this one
 
@@ -92,6 +98,7 @@ function install(root: HTMLElement): void {
 
     // `partLanguage` compares case-insensitively, so the page's raw tag is fine.
     const language = document.documentElement.lang || 'en';
+    let firstAppended: HTMLAnchorElement | undefined;
     for (const note of state.notes) {
       const item = document.createElement('li');
       const link = document.createElement('a');
@@ -103,6 +110,7 @@ function install(root: HTMLElement): void {
       if (lang !== undefined) link.lang = lang;
       item.append(link);
       results.append(item);
+      firstAppended ??= link;
     }
     if (page.known) {
       current.textContent = page.tag.label;
@@ -110,6 +118,10 @@ function install(root: HTMLElement): void {
     }
     cursor = state.nextCursor;
     if (cursor === null) {
+      // Hiding the focused button would drop focus to `<body>` just as above,
+      // so a reader who reached the last page from "Load more" continues at
+      // the first result that page added.
+      if (more !== null && document.activeElement === more) firstAppended?.focus();
       if (more !== null) more.hidden = true;
       status.textContent = string(TAG_BROWSE_DATASET.exhausted);
     } else {
@@ -131,6 +143,7 @@ function install(root: HTMLElement): void {
   start?.addEventListener('click', () => select(mode === 'fixed' ? (root.dataset['tagKey'] ?? '') : ''));
   chooser?.addEventListener('change', () => select(chooser.value));
   more?.addEventListener('click', () => {
+    if (more.getAttribute('aria-disabled') === 'true') return; // a continuation is in flight
     const forGeneration = generation;
     void load(cursor, forGeneration);
   });

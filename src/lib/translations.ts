@@ -411,6 +411,8 @@ export interface Translation {
   graphExplorerStatusGlobal: string;
   /** Live status: tag-filtered global scope. `{tag}` is artifact text. */
   graphExplorerStatusFiltered: string;
+  /** A live graph is loading; announced through the polite status region. */
+  graphExplorerLoading: string;
   /** A live graph could not be produced; the static figure remains. */
   graphExplorerFailed: string;
   /** The requested center is not in the snapshot. */
@@ -642,6 +644,7 @@ const EN = {
   graphExplorerStatusLocal: 'Live graph: {shown} of {total} neighbouring notes drawn.',
   graphExplorerStatusGlobal: 'Live graph: {shown} of {total} published notes drawn.',
   graphExplorerStatusFiltered: 'Live graph for tag {tag}: {shown} of {total} matching notes drawn.',
+  graphExplorerLoading: 'Loading the live graph…',
   graphExplorerFailed: 'The live graph could not be loaded. The static figure above is complete.',
   graphExplorerUnknownCenter: 'That note is not in the live index.',
   graphExplorerEmptyFilter: 'No published note carries that tag.',
@@ -848,6 +851,7 @@ const ZH_CN = {
   graphExplorerStatusLocal: '实时图：已画出 {total} 篇相邻笔记中的 {shown} 篇。',
   graphExplorerStatusGlobal: '实时图：已画出 {total} 篇公开笔记中的 {shown} 篇。',
   graphExplorerStatusFiltered: '标签 {tag} 的实时图：已画出 {total} 篇匹配笔记中的 {shown} 篇。',
+  graphExplorerLoading: '正在加载实时图…',
   graphExplorerFailed: '实时图加载失败；上方静态图仍然完整。',
   graphExplorerUnknownCenter: '实时索引中没有这篇笔记。',
   graphExplorerEmptyFilter: '没有公开笔记带有这个标签。',
