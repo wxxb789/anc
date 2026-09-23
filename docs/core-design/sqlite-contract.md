@@ -94,10 +94,14 @@ do not build a generic repository framework or interchangeable storage backend.
 | Local graph | Incoming ∪ outgoing, then induced edges | Both edge directions |
 | Global graph / ranking | Aggregate the requested edge set | Computation, not a stored degree column |
 
-Use explicit result order. Pagination order is canonical ASCII slug order, never
-rowid or unspecified SQL order. Presentation ordering that already uses the JS
-title/slug comparator must keep that comparator; SQLite binary Unicode order is
-not automatically the same as JavaScript UTF-16 ordering. Apply graph selection
+Use explicit result order. Pagination order is canonical slug order — Unicode code
+point order, which is SQLite `BINARY` (UTF-8 byte) order and which the producer
+reproduces with `compareSlugs` in `src/lib/route-path.ts` when it assigns IDs —
+never rowid or unspecified SQL order. JavaScript `<` compares UTF-16 units and
+disagrees for astral characters, so it is not the canonical order. Presentation
+ordering that already uses the JS title/slug comparator must keep that comparator;
+SQLite binary Unicode order is not automatically the same as JavaScript UTF-16
+ordering. Apply graph selection
 limits after its documented ranking/order, not before sorting an arbitrary slice.
 
 ### Preview

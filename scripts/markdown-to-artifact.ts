@@ -78,6 +78,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { readFile, readdir, mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, matchesGlob } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -92,6 +93,7 @@ import {
   validateArtifact,
 } from '../src/lib/schema.ts';
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
+import { SLUG_MAX_BYTES, compareSlugs, slugSegment, utf8Length } from '../src/lib/route-path.ts';
 import { BuildFailure, bySourceThenLine, type DroppedFile, type LinkFindingRow } from './write-report.ts';
 
 /**
@@ -130,48 +132,77 @@ function structurallyIgnored(name: string): boolean {
  */
 const REPOSITORY_README = 'README.md';
 
-/** Mirrors the slug shape `schema.ts` enforces: lowercase, single hyphens. */
-function slugSegment(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
 /**
  * The repo-relative path, slugified per segment and joined.
  *
+ * Each segment goes through `slugSegment` from `src/lib/route-path.ts` — NFC,
+ * Unicode lowercase, invisible code points removed, every run of anything that
+ * is not a letter, number, or mark collapsed to one hyphen — so `日记/今天.md`
+ * is `日记-今天` and `Projects/观点.md` is `projects-观点`. There is no
+ * transliteration: every transliteration is locale-dependent, and a
+ * locale-dependent URL is not deterministic output.
+ *
  * Per segment and not over the whole string, so a directory boundary survives as
- * a hyphen and `a/b.md` cannot collide with a root-level `a-b.md` for a reason
- * invisible in the source. Empty segments are dropped rather than producing the
- * doubled hyphen `src/lib/schema.ts:64` rejects.
+ * a hyphen. A *folder* segment that slugifies to nothing is dropped rather than
+ * producing the doubled hyphen `src/lib/schema.ts` rejects.
+ *
+ * **When the result is not an addressable slug, the answer is a hash, not a
+ * drop.** A stem of only punctuation or emoji (`___.md`, `🌱.md`, `---.md`), a
+ * stem of only combining marks, or a path whose slug exceeds
+ * `SLUG_MAX_BYTES` gets {@link hashSlug} of its own path. Dropping it — the
+ * earlier behaviour — silently lost a note the author never excluded, under a
+ * default-publish contract; failing would refuse a repository for a filename.
+ * Only the stem is tested for emptiness, because a stem that vanished while its
+ * folder did not would otherwise take the folder's slug and collide with the
+ * folder's own index note for a reason invisible in the source.
  */
-function slugFor(relativePath: string): string | undefined {
-  const slug = relativePath
-    // Case-sensitive, matching the extension test that admitted this path: only
-    // `.md` reaches here, so an `/i` flag would describe a case that cannot
-    // occur while contradicting this file's byte-exact rule.
-    .replace(/\.md$/, '')
-    .split('/')
-    .map(slugSegment)
-    .filter((segment) => segment !== '')
-    .join('-');
-  return slug === '' ? undefined : slug;
+function slugFor(relativePath: string): string {
+  // Case-sensitive, matching the extension test that admitted this path: only
+  // `.md` reaches here, so an `/i` flag would describe a case that cannot
+  // occur while contradicting this file's byte-exact rule.
+  const segments = relativePath.replace(/\.md$/, '').split('/').map(slugSegment);
+  if (segments.at(-1) === '') return hashSlug(relativePath);
+  const slug = segments.filter((segment) => segment !== '').join('-');
+  return isSlug(slug) ? slug : hashSlug(relativePath);
 }
 
 /**
- * First folder as the flat collection key the existing artifact contract accepts.
+ * A deterministic slug for a path that yields no addressable one.
  *
- * The collection field is still an ASCII `SLUG`, unlike Unicode tag route keys.
- * A folder that yields no such key leaves the note uncollected rather than
- * rejecting a repository that already publishes; widening that field is a
- * schema decision, not transliteration for this producer to invent.
+ * `note-` and the first ten hex digits of the SHA-256 of the NFC repo-relative
+ * path. A pure function of that one path: it does not read a sibling, a
+ * position, or a corpus size, so adding or removing another file can never move
+ * this note's URL — the same stability property tag route keys keep, and the
+ * reason a numeric disambiguating suffix is not used. NFC, so a macOS-decomposed
+ * filename and its composed spelling get one URL. Forty bits keeps an accidental
+ * collision negligible for any real repository, and a collision would still be
+ * reported as `slug-collision` rather than merge two notes.
+ *
+ * The digest is of a path this build publishes, so it names nothing withheld.
+ */
+function hashSlug(relativePath: string): string {
+  return `note-${createHash('sha256').update(relativePath.normalize('NFC'), 'utf8').digest('hex').slice(0, 10)}`;
+}
+
+/**
+ * First folder as the flat collection key.
+ *
+ * The same segment derivation as a slug, so `研究/note.md` is in the `研究`
+ * collection. A folder that yields no addressable key — only punctuation or
+ * emoji, say — leaves the note uncollected rather than rejecting a repository
+ * that already publishes; a folder whose key exceeds the slug byte limit fails,
+ * because silently uncollecting it would change the site's navigation for a
+ * reason the author cannot see.
  */
 function collectionFor(relativePath: string): string | undefined {
   const separator = relativePath.indexOf('/');
   if (separator === -1) return undefined;
   const collection = slugSegment(relativePath.slice(0, separator));
+  if (collection === '') return undefined;
   const limits = contentLimitIssues({ collection }, 'frontmatter');
+  if (utf8Length(collection) > SLUG_MAX_BYTES) {
+    limits.push(`frontmatter.collection: is ${utf8Length(collection)} UTF-8 bytes, over the ${SLUG_MAX_BYTES} byte limit`);
+  }
   if (limits.length > 0) {
     throw new BuildFailure(
       'collection-folder-too-long',
@@ -179,7 +210,7 @@ function collectionFor(relativePath: string): string | undefined {
       `${relativePath}: ${limits.join('; ')}`,
     );
   }
-  return collection === '' ? undefined : collection;
+  return isSlug(collection) ? collection : undefined;
 }
 
 /** Read a bounded public-label list without silently coercing YAML values. */
@@ -220,17 +251,29 @@ function publicLabelsFor(
   return labels.length === 0 ? undefined : [...labels];
 }
 
+/**
+ * A frontmatter `slug:` override, in the same grammar a derived slug has.
+ *
+ * NFC-normalised before it is judged, so an override typed on a platform that
+ * writes decomposed text names the same URL as the composed spelling. Nothing
+ * else is rewritten: an override is the author saying exactly which URL they
+ * want, so an uppercase or punctuated one is refused rather than slugified into
+ * a URL they did not write. Unlike a derived slug, an over-long override fails
+ * rather than falling back to a hash — the author asked for that URL.
+ */
 function slugOverrideFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
   const value = data?.['slug'];
   if (value === undefined) return undefined;
-  if (typeof value !== 'string' || !isSlug(value) || value.length > FIELD_LIMITS.strings.slug) {
+  const slug = typeof value === 'string' ? value.normalize('NFC') : undefined;
+  if (slug === undefined || !isSlug(slug)) {
     throw new BuildFailure(
       'invalid-slug-frontmatter',
       'frontmatter slug must be a lowercase public route key',
-      `${path}: slug must use lowercase ASCII letters, digits, and single interior hyphens`,
+      `${path}: slug must use lowercase letters, digits, or marks in single-hyphen runs, ` +
+        `at most ${SLUG_MAX_BYTES} UTF-8 bytes`,
     );
   }
-  return value;
+  return slug;
 }
 
 function languageFor(data: Record<string, unknown> | undefined, path: string): string | undefined {
@@ -378,12 +421,13 @@ function gitDatesFor(contentDirectory: string, paths: readonly string[]): Readon
   let commitDate: string | undefined;
   for (const raw of history.stdout.split('\0')) {
     if (raw.startsWith('\x1e')) {
-      // `%cI` is strict ISO 8601, and git spells UTC as `+00:00` rather than
-      // `Z` — both are the same instant, but a canonical `Z` keeps the artifact
-      // byte-stable across the git versions that format it either way. The
-      // schema accepts both forms; this is determinism, not validation.
-      const candidate = raw.slice(1).trim().replace(/[+-]00:00$/, 'Z');
-      commitDate = Number.isNaN(Date.parse(candidate)) ? undefined : candidate;
+      // `%cI` is strict ISO 8601 in the committer's own offset, and that offset
+      // is a fact about where the author was, published on every page, in the
+      // feed, and in the sitemap. Normalise to UTC `Z`: the same instant, no
+      // location, and byte-stable across git versions. Second precision stays,
+      // because `recentFirst` orders by it.
+      const parsed = Date.parse(raw.slice(1).trim());
+      commitDate = Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString().replace(/\.000Z$/, 'Z');
       continue;
     }
     if (commitDate === undefined) continue;
@@ -433,9 +477,28 @@ function gitDatesFor(contentDirectory: string, paths: readonly string[]): Readon
  * a *malformed* frontmatter block loud, because such a block still opens with a
  * key.
  */
-function frontmatterOf(markdown: string): { body: string; data: Record<string, unknown> | undefined } {
-  const match = /^---\r?\n(?!\s*\r?\n)([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(markdown);
-  if (match === null) return { body: markdown, data: undefined };
+function frontmatterOf(source: string): { body: string; data: Record<string, unknown> | undefined } {
+  // A byte-order mark is invisible in every editor that writes one, and left in
+  // place it kept the anchored delimiter below from matching: measured, the
+  // block — and the `publish: false` inside it — became body text and the note
+  // published. Trailing blanks after the opening delimiter, and YAML's own `...`
+  // document end as the closer, did the same.
+  const markdown = source.startsWith(BYTE_ORDER_MARK) ? source.slice(BYTE_ORDER_MARK.length) : source;
+  const match = /^---[ \t]*\r?\n(?!\s*\r?\n)([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(markdown);
+  if (match === null) {
+    // Fail closed rather than guess. A leading block that plainly carries a
+    // `publish:` key but is not one this parser recognises — an unterminated
+    // block, most often — is an author's opt-out that would publish as prose.
+    if (UNRECOGNISED_PUBLISH_BLOCK.test(markdown)) {
+      throw new FrontmatterError(
+        'unrecognised-frontmatter',
+        'a leading `---` block carries `publish:` but has no closing `---` line, so the ' +
+          'flag would be ignored and the note published. See the report for the file.',
+        'opening `---` and a `publish:` key with no closing delimiter line',
+      );
+    }
+    return { body: markdown, data: undefined };
+  }
 
   const raw = match[1] ?? '';
   let parsed: unknown;
@@ -475,6 +538,11 @@ function frontmatterOf(markdown: string): { body: string; data: Record<string, u
  * offending file — which the thrower does not know — before it reaches the
  * boundary as one.
  */
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+
+/** An opening delimiter followed, within the next lines, by a `publish:` key. */
+const UNRECOGNISED_PUBLISH_BLOCK = /^---[ \t]*\r?\n(?:[^\n]*\n){0,64}?[ \t]*publish[ \t]*:/;
+
 class FrontmatterError extends Error {
   readonly code: string;
   readonly detail: string;
@@ -553,9 +621,10 @@ function publishFlag(data: Record<string, unknown> | undefined): boolean | undef
  * The label pattern admits `\]`, which `scripts/resolve-links.ts` writes when an
  * author's own label contains a bracket; those escapes are unescaped afterwards,
  * since a reader of a plain-text field should see the bracket rather than the
- * backslash. A reference link (`[text][ci]`) is deliberately untouched: nothing
- * here resolves one, so its definition may not even be in this note, and
- * dropping the syntax would assert a resolution this module never made.
+ * backslash. A reference link (`[text][ci]`) never reaches this in its
+ * reference form when its definition is internal: `scripts/resolve-links.ts`
+ * has already rewritten it inline. What is left untouched is an external or
+ * missing-definition reference, whose target this module cannot vouch for.
  */
 function withoutLinkSyntax(markdown: string): string {
   let text = markdown;
@@ -880,6 +949,17 @@ export interface ExclusionOptions {
   exclude?: readonly string[];
   /** What to call the patterns' origin in a message, e.g. `publish.config.ts`. */
   excludeSource?: string;
+  /**
+   * The site's configured default language (`language:` in the configuration),
+   * already validated as BCP 47 by the loader.
+   *
+   * Written into every entry that declares none, so the artifact's `language`
+   * is the effective one: static `<html lang>`, the snapshot's
+   * `nodes.language`, and the Pagefind index a page lands in all read the same
+   * value rather than each re-applying a fallback. Absent, an undeclared note
+   * stays undeclared and every consumer falls back to `NAV_LANGUAGE`.
+   */
+  language?: string;
 }
 
 /**
@@ -1056,10 +1136,6 @@ export async function discover(
     }
 
     const slug = slugOverrideFor(parsed.data, path) ?? slugFor(path);
-    if (slug === undefined) {
-      dropped.push({ path, reason: 'empty-slug' });
-      continue;
-    }
     if (RESERVED_SLUGS.has(slug)) {
       // Fatal candidates are not "dropped": no Discovery is returned and the
       // failure report owns these paths. Calling this an exclusion would imply
@@ -1085,7 +1161,7 @@ export async function discover(
     const tags = publicLabelsFor(parsed.data, 'tags', path);
     const aliases = publicLabelsFor(parsed.data, 'aliases', path);
     const collection = collectionFor(path);
-    const language = languageFor(parsed.data, path);
+    const language = languageFor(parsed.data, path) ?? options.language;
     const description = descriptionFor(parsed.data, path);
     const dates = gitDates.get(path);
     entries.push({
@@ -1296,7 +1372,7 @@ export async function resolveCorpusLinks(
     //
     // The *page* still renders links in document order: this array is the edge
     // set, not the body, and the body is `result.markdown` above.
-    entry.outgoing = [...result.outgoing].sort();
+    entry.outgoing = [...result.outgoing].sort(compareSlugs);
     // Re-derived from the rewritten body. A title and an excerpt are
     // projections of what was published, and taking them from the pre-traversal
     // text put an unresolved `[[wikilink]]` into the excerpt of a body that no
@@ -1326,7 +1402,7 @@ export async function resolveCorpusLinks(
   for (const entry of entries) {
     for (const target of entry.outgoing) backlinks.get(target)?.push(entry.slug);
   }
-  for (const entry of entries) entry.backlinks = (backlinks.get(entry.slug) ?? []).sort();
+  for (const entry of entries) entry.backlinks = (backlinks.get(entry.slug) ?? []).sort(compareSlugs);
 
   // Sorted by where a reader would look for them, so a report reads identically
   // however the walk found the notes. One comparator, exported by the module

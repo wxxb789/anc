@@ -245,7 +245,7 @@ test('the config init writes changes nothing about the build', () => {
   const parsed = parseConfig(CONFIG_TEMPLATE);
   assert.deepEqual(
     parsed,
-    { title: DEFAULTS.title, origin: DEFAULTS.origin, exclude: [] },
+    { title: DEFAULTS.title, origin: DEFAULTS.origin, exclude: [], language: DEFAULTS.language },
     'the seeded template configures something — an absent file and this file must build the same site',
   );
 

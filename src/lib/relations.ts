@@ -14,22 +14,14 @@
  */
 
 import type { ContentEntry } from './schema.ts';
-import { collectionFacets, tagFacets, type Facet } from './routes.ts';
+import { byTitleThenSlug, collectionFacets, tagFacets, type Facet } from './routes.ts';
 
 /**
- * Total order over notes: title, then the unique slug so no tie is left open.
- *
- * The same order `routes.ts` sorts a facet's notes by. Restated rather than
- * exported from there because TK-08 is editing that file in parallel; the two
- * are asserted to agree in `tests/relations.test.ts`, which sorts a facet's own
- * entries with this comparator and requires the result to be unchanged. If they
- * ever diverge, that gate fails rather than the pager quietly disagreeing with
- * the collection index it walks.
+ * The shared title-then-slug comparator, owned by `routes.ts` and re-exported so
+ * this module's callers keep one import. It used to be restated here and held
+ * to agreement by a test; one definition makes the agreement structural.
  */
-export function byTitleThenSlug(a: ContentEntry, b: ContentEntry): number {
-  if (a.title !== b.title) return a.title < b.title ? -1 : 1;
-  return a.slug < b.slug ? -1 : 1;
-}
+export { byTitleThenSlug };
 
 /**
  * Resolve an edge list to the notes it names, in a stable reader order.

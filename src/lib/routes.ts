@@ -21,7 +21,14 @@
 import { slug as slugify } from 'github-slugger';
 import type { ContentEntry } from './schema.ts';
 import type { NavLabelKey } from './translations.ts';
-import { NOTES_SEGMENT, WITHHELD_ROUTE, noteRoute, noteSlugFromPath } from './route-path.ts';
+import {
+  INVISIBLE_CODE_POINTS,
+  NOTES_SEGMENT,
+  SLUG_CHARACTERS,
+  WITHHELD_ROUTE,
+  noteRoute,
+  noteSlugFromPath,
+} from './route-path.ts';
 
 /**
  * Re-exported so pages have one route module to import. The definitions live in
@@ -48,7 +55,7 @@ export function collectionRoute(key: string): string {
 /**
  * The vocabulary a public route key may use.
  *
- * Wider than the `[a-z0-9-]` slug shape TK-01 enforces, because a tag is free
+ * The note-slug character class from `route-path.ts` plus `_`. A tag is free
  * text in any script: `笔记`, `हिन्दी`, and `tiếng việt` must all produce a
  * readable key. Combining marks are admitted for exactly that reason — Devanagari
  * vowel signs and Vietnamese tone marks are `\p{M}`, and excluding them would
@@ -65,7 +72,7 @@ export function collectionRoute(key: string): string {
  * because a hyphen is what the slugger *substitutes* for stripped characters,
  * which is how a gap becomes a separator nobody wrote.
  */
-const ROUTE_KEY = /^[\p{L}\p{N}\p{M}_]+(?:-[\p{L}\p{N}\p{M}_]+)*$/u;
+const ROUTE_KEY = new RegExp(`^[${SLUG_CHARACTERS}_]+(?:-[${SLUG_CHARACTERS}_]+)*$`, 'u');
 
 /**
  * At least one visible letter or digit. A key of only combining marks satisfies
@@ -81,7 +88,7 @@ const ROUTE_KEY_SUBSTANCE = /[\p{L}\p{N}]/u;
  * {@link ROUTE_KEY}: it is a *nonspacing mark*, so `\p{M}` admits it, and
  * `⚠️ warning` would otherwise key a route whose first character is invisible.
  */
-const INVISIBLE_IN_KEY = /\p{Default_Ignorable_Code_Point}/gu;
+const INVISIBLE_IN_KEY = INVISIBLE_CODE_POINTS;
 
 /** Whether a string is usable, as-is, as a public route segment. */
 export function isRouteKey(key: string): boolean {
@@ -153,8 +160,15 @@ export interface Facet {
   entries: ContentEntry[];
 }
 
-/** Total order over notes: title, then the unique slug so no tie is left open. */
-function byTitleThenSlug(a: ContentEntry, b: ContentEntry): number {
+/**
+ * Total order over notes: title, then the unique slug so no tie is left open.
+ *
+ * The one presentation comparator for note lists: facets, related notes, and
+ * collection neighbours all sort with it. It compares with JavaScript `<`
+ * (UTF-16 code units) because it is a display order; the canonical *slug* order
+ * that SQLite IDs and cursors follow is `compareSlugs` in `route-path.ts`.
+ */
+export function byTitleThenSlug(a: ContentEntry, b: ContentEntry): number {
   if (a.title !== b.title) return a.title < b.title ? -1 : 1;
   return a.slug < b.slug ? -1 : 1;
 }

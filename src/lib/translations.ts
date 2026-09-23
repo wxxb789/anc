@@ -108,13 +108,34 @@ export const TAG_BROWSE_DATASET = {
 } as const;
 
 /**
+ * The environment variable carrying the configured site `language` into the
+ * build: `configForBuild` in `scripts/load-config.ts` sets it from
+ * `publish.config.yaml`, beside the site title, for the reason
+ * `SITE_TITLE_VARIABLE` in `site.ts` records.
+ */
+export const SITE_LANGUAGE_VARIABLE = 'PUBLISH_SITE_LANGUAGE';
+
+/** The interface's own default when no site language is configured. */
+export const DEFAULT_NAV_LANGUAGE = 'en';
+
+/**
  * The site navigation language: what a route that is not one document renders,
  * and what a document carrying no `language` falls back to.
  *
- * The published corpus is exactly that fallback case — its single note declares
- * no language — so this is the resolution most pages actually take.
+ * The configured site `language` when there is one — already validated as
+ * BCP 47 by the loader — else {@link DEFAULT_NAV_LANGUAGE}. Read through
+ * `globalThis.process` rather than `process`, because browser scripts import
+ * this module (`partLanguage`) and have no `process`: there it is always the
+ * default, which is harmless because every note the browser receives from the
+ * snapshot already carries its effective language. The producer writes the
+ * configured default into every undeclared entry, so a note page, its
+ * `nodes.language` row, and its Pagefind index never depend on this fallback
+ * in a configured build.
  */
-export const NAV_LANGUAGE = 'en';
+export const NAV_LANGUAGE: string =
+  (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[
+    SITE_LANGUAGE_VARIABLE
+  ] || DEFAULT_NAV_LANGUAGE;
 
 /**
  * Every string the interface says to a reader.

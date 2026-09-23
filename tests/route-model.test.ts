@@ -31,6 +31,7 @@ import {
   tagFacets,
   tagRoute,
 } from '../src/lib/routes.ts';
+import { compareSlugs } from '../src/lib/route-path.ts';
 
 /** A minimal valid entry; every field the route model reads is overridable. */
 function entry(slug: string, overrides: Partial<ContentEntry> = {}): ContentEntry {
@@ -127,6 +128,53 @@ test('note paths are recognized only in their canonical form', () => {
     '',
   ]) {
     assert.equal(noteSlugFromPath(path), undefined, `wrongly read a slug out of "${path}"`);
+  }
+});
+
+test('note paths read a Unicode slug from raw and percent-encoded forms alike', () => {
+  // A browser's `location.pathname` and `link.pathname` are percent-encoded;
+  // a build-time href may be raw. Red against the ASCII-only NOTE_PATH, which
+  // returned undefined for both, so link previews never fired on a CJK note.
+  const encoded = `/notes/${encodeURIComponent('日记-今天')}/`;
+  assert.equal(encoded, '/notes/%E6%97%A5%E8%AE%B0-%E4%BB%8A%E5%A4%A9/');
+  assert.equal(noteSlugFromPath(encoded), '日记-今天');
+  assert.equal(noteSlugFromPath('/notes/日记-今天/'), '日记-今天');
+  assert.equal(noteSlugFromPath('/notes/日记-今天'), '日记-今天');
+  // Decomposed input is normalised before it is judged.
+  assert.equal(noteSlugFromPath(`/notes/${encodeURIComponent('café'.normalize('NFD'))}/`), 'café');
+
+  for (const path of [
+    '/notes/%E6%97%A5%ZZ/', // a malformed escape
+    '/notes/a%2Fb/', //       an encoded slash
+    '/notes/%20a/', //        encoded whitespace
+    '/notes/%E2%80%8Ba/', //  a zero-width space
+    '/notes/Caf%C3%A9/', //   uppercase
+    '/notes/a--b/', //        a doubled hyphen
+    `/notes/${encodeURIComponent('长'.repeat(43))}/`, // 129 bytes, over the limit
+  ]) {
+    assert.equal(noteSlugFromPath(path), undefined, `wrongly read a slug out of "${path}"`);
+  }
+});
+
+test('canonical slug order is code point order, which SQLite BINARY agrees with', async () => {
+  // JavaScript `<` compares UTF-16 units and puts U+20000 (surrogates D840 …)
+  // before U+FF41; UTF-8 bytes, and therefore SQLite, put it after.
+  const astral = '\u{20000}';
+  const fullwidth = 'ａ';
+  assert.ok(astral < fullwidth, 'the fixture no longer shows the UTF-16 disagreement');
+  assert.equal(compareSlugs(astral, fullwidth), 1);
+  const slugs = ['b', fullwidth, astral, 'a', '日记', 'a-b'];
+  const ordered = [...slugs].sort(compareSlugs);
+  const { DatabaseSync } = await import('../src/lib/sqlite.ts');
+  const database = new DatabaseSync(':memory:');
+  try {
+    database.exec('CREATE TABLE t (slug TEXT NOT NULL)');
+    const insert = database.prepare('INSERT INTO t (slug) VALUES (?)');
+    for (const slug of slugs) insert.run(slug);
+    const rows = database.prepare('SELECT slug FROM t ORDER BY slug').all() as { slug: string }[];
+    assert.deepEqual(rows.map((row) => row.slug), ordered);
+  } finally {
+    database.close();
   }
 });
 
@@ -359,12 +407,14 @@ test('the slug contract and the route vocabulary agree', () => {
   const valid = (slug: string) =>
     validateArtifact({ version: 1, entries: [entry(slug)] }) !== undefined;
 
-  for (const slug of ['a', 'a-b', 'deep-dive', 'note-2026', '2026-notes']) {
+  for (const slug of ['a', 'a-b', 'deep-dive', 'note-2026', '2026-notes', '日记-今天', 'projects-观点', 'café']) {
     assert.ok(valid(slug), `"${slug}" is a valid slug`);
     assert.ok(isRouteKey(slug), `the contract admits "${slug}" but routing cannot address it`);
   }
 
-  for (const slug of ['deep--dive', '-lead', 'trail-', 'Upper', 'has space', 'a/b', '']) {
+  // `first_note`: underscore is a tag-key character but never a slug one, since
+  // slug derivation replaces it with a hyphen.
+  for (const slug of ['deep--dive', '-lead', 'trail-', 'Upper', 'has space', 'a/b', '', 'first_note', 'café'.normalize('NFD')]) {
     assert.throws(
       () => validateArtifact({ version: 1, entries: [entry(slug)] }),
       `the contract admits "${slug}", which routing rejects`,

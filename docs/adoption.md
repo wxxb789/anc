@@ -57,7 +57,7 @@ Two commands. The first writes `dist/`; the second serves it at
 ```
 residue scan ok: … files, 0 findings
 site written
-content: 4 discovered, 2 published, 2 dropped
+content: 4 discovered, 2 published, 2 dropped (1 excluded-by-frontmatter, 1 not-markdown)
 report: cat "$(git rev-parse --git-path publish-report/content-report.json)"
 ```
 
@@ -94,8 +94,10 @@ exclude:
   - "clients/**"
 ```
 
-Three keys, and every one is optional. With no file at all you get `title: Notes`, no
-exclusions, and a preview origin — the build succeeds and the site is complete.
+Four keys — `title`, `origin`, `exclude`, and `language` (see
+[Filenames and URLs](#filenames-and-urls)) — and every one is optional. With no file at all
+you get `title: Notes`, no exclusions, English, and a preview origin — the build succeeds and
+the site is complete.
 
 **A pattern that matches nothing fails the build.** This is the guard the whole design rests
 on, so it has no override:
@@ -173,12 +175,25 @@ tags:
 
 Each tag gets a `/tags/<key>/` page and a link on the note. The first folder under the content
 directory becomes the flat collection: `Projects/deep/note.md` belongs to `projects`; a root
-note is uncollected. Deeper folders remain part of the note slug, not nested collections. The
-collection field is currently ASCII; a first folder with no ASCII letters or digits is not
-transliterated and leaves the note uncollected, while the note itself still publishes.
+note is uncollected. Deeper folders remain part of the note slug, not nested collections.
+A first folder with no letters or digits at all — only punctuation or emoji — leaves the note
+uncollected, while the note itself still publishes.
+
+### Filenames and URLs
+
+A note's URL is `/notes/<slug>/`, and the slug comes from its path, in any script: each folder
+and the filename are lowercased and every run of spaces or punctuation becomes one hyphen, then
+the parts are joined with `-`. `日记/今天.md` is `/notes/日记-今天/`, `Projects/Three laws.md` is
+`/notes/projects-three-laws/`. Nothing is transliterated. A filename that leaves no letters or
+digits (`___.md`, `🌱.md`) gets `note-` plus ten hex digits of a hash of its own path — stable
+across builds, and unaffected by other files. So does a slug longer than 128 UTF-8 bytes (about
+42 CJK characters). If two files derive the same slug (`a-b.md` and `a/b.md`), the first in sorted
+order publishes, the other is dropped, the count line says `1 slug-collision`, and the report
+names both; give one a `slug:` override.
 
 Three other optional frontmatter fields reach the page: `slug` overrides the path-derived URL
-with a lowercase ASCII route key; `language` (or `lang`) sets the BCP 47 document locale and
+with a lowercase route key in the same grammar (letters, digits, single hyphens, any script);
+`language` (or `lang`) sets the BCP 47 document locale and
 its chrome; `description` supplies the public note summary. Invalid shapes stop the build and
 the private report identifies the source note. If a slug override collides with another note,
 the first path in sorted order wins and the private report records the dropped path and winner.
@@ -214,6 +229,11 @@ filename still resolves and a macOS-decomposed filename matches an NFC link.
 A link that resolves to **more than one** file is reported with every candidate and the site
 still builds — `/`-anchor it to disambiguate. A link to a note you excluded keeps the full
 label and path you wrote, points to `/private/`, and is reported; the target note's body never
+**A site-wide default language** goes in `publish.config.yaml` as `language: zh-CN` (any BCP 47
+tag). Every note without its own `language:` takes it, and so do the navigation pages. It also
+picks the search index: Pagefind indexes a page under its `<html lang>`, and a Chinese note in
+an English-indexed page is searchable only by whole sentences. Unset, the default is English.
+
 ships. That report row is your exclusion seen from the other side.
 
 Aliases are **not** link targets. Obsidian desktop and Obsidian Publish genuinely disagree

@@ -45,10 +45,13 @@ import {
   DEFAULTS,
   DEFAULT_TITLE,
   exclusionOptions,
+  SITE_LANGUAGE_VARIABLE,
+  configForBuild,
   isLoopbackOrigin,
   loadConfig,
   parseConfig,
 } from '../scripts/load-config.ts';
+import { SITE_LANGUAGE_VARIABLE as READ_LANGUAGE_VARIABLE } from '../src/lib/translations.ts';
 import { discover } from '../scripts/markdown-to-artifact.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -293,7 +296,7 @@ test('an unknown key fails, naming the file, the line, and the key it resembles'
  *
  * **Mutation watched fail:** deleting the containment loop from `suggestionFor`
  * turned this red on `siteTitle` and `excludes` — both fell through to
- * `The keys are title, origin, exclude` with no suggestion.
+ * `The keys are title, origin, exclude, language` with no suggestion.
  */
 test('each near-miss key suggests the key it was a near miss for', () => {
   for (const [written, meant] of [
@@ -323,7 +326,7 @@ test('each near-miss key suggests the key it was a near miss for', () => {
  */
 test('a key resembling nothing is told what the keys are, not given a wrong guess', () => {
   const message = refusalOf(() => parseConfig('bananas: 3\n'));
-  assert.ok(message.includes('title, origin, exclude'), 'the refusal does not list the keys');
+  assert.ok(message.includes('title, origin, exclude, language'), 'the refusal does not list the keys');
   assert.ok(!message.includes('Did you mean'), 'a key resembling nothing was given a suggestion');
 });
 
@@ -904,7 +907,7 @@ test('a very short unknown key is told what the keys are, not given a guess', ()
   for (const key of ['e', 'x', 'o', 't', 'lu', 'gi']) {
     const message = refusalOf(() => parseConfig(`${key}: 1\n`));
     assert.ok(
-      message.includes('title, origin, exclude'),
+      message.includes('title, origin, exclude, language'),
       `${key}: was given a suggestion instead of the list — ${message}`,
     );
   }
@@ -1424,5 +1427,57 @@ test('the configuration loader declares no origin of its own', async () => {
   assert.equal(parseConfig('title: Notes\n').origin, undefined, 'a file without an origin key produced one');
   await scratch('tk30-noorigin-', async (directory) => {
     assert.equal(loadConfig(directory).origin, undefined, 'an absent file produced an origin');
+  });
+});
+
+// --- Site language ------------------------------------------------------------
+
+/**
+ * `language` is the site's default BCP 47 tag, validated as a note's is.
+ *
+ * Red before the key existed: `language: zh-CN` was refused as an unknown key,
+ * so a Chinese site could only declare its language note by note.
+ */
+test('language is a known key, validated as a BCP 47 tag', () => {
+  assert.equal(parseConfig('language: zh-CN\n').language, 'zh-CN');
+  assert.equal(parseConfig('').language, undefined, 'an unconfigured site invented a language');
+  for (const [text, fragment] of [
+    ['language: [zh-CN]\n', 'must be a string'],
+    ['language: 3\n', 'must be a string'],
+    ['language: not_a_locale\n', 'BCP 47'],
+    ['language: " zh-CN"\n', 'BCP 47'],
+    [`language: en-${Array.from({ length: 6 }, () => 'abcdef').join('-')}\n`, 'BCP 47'],
+  ] as const) {
+    const message = refusalOf(() => parseConfig(text));
+    assert.ok(message.includes(fragment), `${JSON.stringify(text)}: ${message}`);
+    assert.ok(message.includes('language (line 1)'), `${JSON.stringify(text)} did not name the key: ${message}`);
+  }
+  // Unknown-key and near-miss gates still hold around it.
+  assert.ok(refusalOf(() => parseConfig('languages: zh-CN\n')).includes('"language"'));
+  assert.ok(refusalOf(() => parseConfig('locale: zh-CN\n')).includes('unknown key'));
+});
+
+test('the configured language crosses to the page modules on the variable they read', async () => {
+  assert.equal(SITE_LANGUAGE_VARIABLE, READ_LANGUAGE_VARIABLE, 'the loader and translations.ts name different variables');
+  await scratch('site-language-env-', async (directory) => {
+    const saved = { dir: process.env['PUBLISH_CONFIG_DIR'], language: process.env[SITE_LANGUAGE_VARIABLE] };
+    try {
+      process.env['PUBLISH_CONFIG_DIR'] = directory;
+      writeFileSync(join(directory, CONFIG_FILENAME), 'language: zh-CN\n', 'utf8');
+      configForBuild();
+      assert.equal(process.env[SITE_LANGUAGE_VARIABLE], 'zh-CN');
+      // A later build with no language must not inherit the earlier one.
+      writeFileSync(join(directory, CONFIG_FILENAME), 'title: Notes\n', 'utf8');
+      configForBuild();
+      assert.equal(process.env[SITE_LANGUAGE_VARIABLE], undefined);
+    } finally {
+      for (const [key, value] of [
+        ['PUBLISH_CONFIG_DIR', saved.dir],
+        [SITE_LANGUAGE_VARIABLE, saved.language],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 });

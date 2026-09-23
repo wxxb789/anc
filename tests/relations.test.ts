@@ -76,30 +76,22 @@ test('an edge naming no published entry is skipped, not rendered as a dead link'
 });
 
 /**
- * This module's comparator and the route model's are the same order.
+ * The shared title-then-slug order: title first, slug only to break a tie.
  *
- * `relations.ts` restates `byTitleThenSlug` rather than importing it, and that
- * duplication is only defensible while the two agree. Sorting a facet's own
- * entries — which `routes.ts` has already ordered with its copy — must be a
- * no-op under this one. If either changes, the pager silently starts walking a
- * collection in an order its own index does not show; this fails instead.
+ * `relations.ts` re-exports the comparator `routes.ts` owns, so there is no
+ * second copy to agree with; what remains to hold is the order itself, over a
+ * fixture where title order and slug order disagree.
  */
-test('the two copies of the title-then-slug order agree', () => {
+test('the title-then-slug comparator orders by title, then by slug', () => {
   const corpus = [
     entry('zebra', { title: 'Apple', collection: 'shared' }),
     entry('apple', { title: 'Zebra', collection: 'shared' }),
     entry('same-b', { title: 'Same', collection: 'shared' }),
     entry('same-a', { title: 'Same', collection: 'shared' }),
   ];
+  assert.deepEqual(slugsOf([...corpus].sort(byTitleThenSlug)), ['zebra', 'same-a', 'same-b', 'apple']);
+  // The facet's own entries use the same comparator.
   const ordered = collectionFacets(corpus).find((facet) => facet.key === 'shared')!.entries;
-  assert.ok(ordered.length > 1, 'the fixture no longer orders more than one note');
-  assert.deepEqual(
-    slugsOf([...ordered].sort(byTitleThenSlug)),
-    slugsOf(ordered),
-    'relations.ts and routes.ts no longer sort notes the same way',
-  );
-  // And the fixture must actually exercise both keys, or the comparison holds
-  // for a list that was already in slug order.
   assert.deepEqual(slugsOf(ordered), ['zebra', 'same-a', 'same-b', 'apple']);
 });
 

@@ -44,11 +44,14 @@
  * omission would cost.
  */
 import Layout from '../layouts/Layout.astro';
+import { DEFAULT_NAV_LANGUAGE } from '../lib/translations.ts';
 import { SITE_NAME, TITLE_SUFFIX } from '../lib/site.ts';
 ---
 
+{/* The prose below is English whatever the site language, so the page says so. */}
 <Layout
   title={`About${TITLE_SUFFIX}`}
+  lang={DEFAULT_NAV_LANGUAGE}
   description="What this site is, and how its pages came to be here."
 >
   <article class="prose">

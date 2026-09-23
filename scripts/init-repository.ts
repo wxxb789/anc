@@ -18,7 +18,7 @@
  * reason rather than for want of time:
  *
  * - **`.github/workflows/publish.yml`.** A workflow file names the action it
- *   calls, as `uses: <owner>/<repo>@v1`. This repository has no git remote, so
+ *   calls, as `uses: <owner>/<repo>@<commit-sha>`. This repository has no git remote, so
  *   there is no such coordinate to write — `init` would put a `uses:` line
  *   naming a repository that does not exist into a stranger's CI, which fails
  *   on their first push with an error about *our* naming rather than about
@@ -116,6 +116,13 @@ export const CONFIG_TEMPLATE = `# ${CONFIG_FILENAME} — every key is optional, 
 # exclude:
 #   - "drafts/**"
 #   - "private/**"
+
+# The site's default language, as a BCP 47 tag. Every note that declares no
+# "language:" of its own takes it, and so does the site's navigation. It also
+# picks the search index a page lands in, which matters for Chinese and
+# Japanese: an English-indexed Chinese page is searchable only by whole
+# sentences. Without it, the default is English.
+# language: zh-CN
 
 # A single note can also withhold itself, which no glob can re-include:
 #

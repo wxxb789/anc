@@ -333,6 +333,38 @@ test('a rejected argument is never echoed, whatever shape it has', () => {
   });
 }, 120_000);
 
+test('the per-reason drop counts on the stream do not change when the dropped files are renamed', () => {
+  // The counts line names each drop reason with a count. Reasons are literals of
+  // the closed `DropReason` set and counts are integers, so renaming every
+  // dropped file, and the colliding pair, must leave the line byte-identical.
+  scratch('tk25-reasons-', (root) => {
+    const outputOf = (token: string): string => {
+      const here = join(root, token);
+      const content = join(here, 'notes');
+      mkdirSync(content, { recursive: true });
+      writeFileSync(join(content, 'alpha.md'), '# Alpha\n\nprose.\n', 'utf8');
+      writeFileSync(join(content, `${token}-plan.md`), '---\npublish: false\n---\n\n# Held\n', 'utf8');
+      writeFileSync(join(content, `${token.toUpperCase()}__X.md`), '# Winner\n', 'utf8');
+      writeFileSync(join(content, `${token} X.md`), '# Loser\n', 'utf8');
+      writeFileSync(join(content, `${token}-terms.pdf`), 'not markdown\n', 'utf8');
+      git(here, 'init', '-q', '.');
+      const run = build(here, '--content', 'notes', '--out', 'out');
+      assert.equal(run.status, 0, `the ${token} fixture did not build:\n${run.output}`);
+      return run.output;
+    };
+    const alpha = outputOf('zzqalpha');
+    const beta = outputOf('qqbeta');
+    // Non-vacuity: the reasons are on the line this gate compares.
+    assert.match(
+      alpha,
+      /content: 5 discovered, 2 published, 3 dropped \(1 excluded-by-frontmatter, 1 not-markdown, 1 slug-collision\)/,
+      alpha,
+    );
+    assert.equal(beta, alpha, `renaming the dropped files changed the stream:\n${alpha}\n---\n${beta}`);
+    assert.ok(!alpha.includes('zzq') && !beta.includes('qqbeta'), 'a dropped file was named on the stream');
+  });
+}, 180_000);
+
 test('a dropped file is named in the report and nowhere else', () => {
   scratch('tk25-g2-', (root) => {
     const content = join(root, 'notes');
@@ -359,7 +391,9 @@ test('a dropped file is named in the report and nowhere else', () => {
     // nothing in the tree computes a dropped set at all.
     const report = readReport(root);
     assert.equal(report.status, 'complete');
-    assert.deepEqual(report.counts, { discovered: 5, published: 2, dropped: 3 });
+    // `___.md` publishes under a hash slug now (it was an `empty-slug` drop),
+    // and its filename still reaches nothing public: the slug is a digest.
+    assert.deepEqual(report.counts, { discovered: 5, published: 3, dropped: 2 });
     assert.equal(
       report.counts.discovered,
       report.counts.published + report.counts.dropped,
@@ -367,9 +401,14 @@ test('a dropped file is named in the report and nowhere else', () => {
     );
     assert.deepEqual(report.dropped, [
       { path: 'Zzq Layoff.md', reason: 'slug-collision', collidedWith: 'ZZQ__LAYOFF.md' },
-      { path: '___.md', reason: 'empty-slug' },
       { path: 'zzq-terms.pdf', reason: 'not-markdown' },
     ]);
+    // The stream carries the reasons as counts, never the names.
+    assert.match(
+      run.output,
+      /content: 5 discovered, 3 published, 2 dropped \(1 not-markdown, 1 slug-collision\)/,
+      run.output,
+    );
 
     // Absence half. The loser's spelling, not the substring `zzq`: the published
     // slug `zzq-layoff` legitimately appears throughout `dist/`, and asserting
@@ -518,7 +557,8 @@ test('the report survives the failure it describes', () => {
     const barren = join(root, 'barren');
     mkdirSync(barren, { recursive: true });
     writeFileSync(join(barren, 'zzq-terms.pdf'), 'not markdown\n', 'utf8');
-    writeFileSync(join(barren, '___.md'), '# Nameless\n', 'utf8');
+    // A withheld note rather than `___.md`, which now publishes under a hash slug.
+    writeFileSync(join(barren, 'zzq-plan.md'), '---\npublish: false\n---\n\n# Nameless\n', 'utf8');
     const empty = build(root, '--content', 'barren', '--out', 'out');
     assert.equal(empty.status, 1, `a corpus with no publishable note did not fail:\n${empty.output}`);
 
@@ -531,7 +571,7 @@ test('the report survives the failure it describes', () => {
     assert.deepEqual(nothing.counts, { discovered: 2, published: 0, dropped: 2 });
     assert.deepEqual(
       nothing.dropped.map((row) => row.reason).sort(),
-      ['empty-slug', 'not-markdown'],
+      ['excluded-by-frontmatter', 'not-markdown'],
       'the report does not say why the corpus produced nothing',
     );
     assert.equal(nothing.failure?.code, 'no-markdown-found');

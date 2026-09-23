@@ -9,12 +9,12 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { compareSlugs, isNoteSlug } from '../src/lib/route-path.ts';
 import { BuildFailure } from './write-report.ts';
 
 export const PUBLISH_SET_REVIEW_FILE = '.publish-set.json';
 const REVIEW_VERSION = 1;
 const MAX_REVIEW_BYTES = 1_048_576;
-const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 interface PublishSetReview {
   version: 1;
@@ -24,7 +24,7 @@ interface PublishSetReview {
 function canonicalSlugs(slugs: readonly string[]): string[] {
   const unique = [...new Set(slugs)];
   for (const slug of unique) {
-    if (!SLUG.test(slug)) {
+    if (!isNoteSlug(slug)) {
       throw new BuildFailure(
         'publish-set-review-invalid',
         'publish-set review is invalid; run anc review again',
@@ -32,7 +32,8 @@ function canonicalSlugs(slugs: readonly string[]): string[] {
       );
     }
   }
-  return unique.sort();
+  // Canonical slug order (code points), the same order the snapshot uses.
+  return unique.sort(compareSlugs);
 }
 
 function invalidReview(detail: string): never {
@@ -62,7 +63,7 @@ function parseReview(text: string): PublishSetReview {
   if (table['version'] !== REVIEW_VERSION) invalidReview('publish-set review has an unsupported version');
   if (!Array.isArray(table['slugs'])) invalidReview('publish-set review slugs must be an array');
   const slugs = table['slugs'];
-  if (!slugs.every((slug): slug is string => typeof slug === 'string' && SLUG.test(slug))) {
+  if (!slugs.every((slug): slug is string => typeof slug === 'string' && isNoteSlug(slug))) {
     invalidReview('publish-set review contains an invalid slug');
   }
   const canonical = canonicalSlugs(slugs);

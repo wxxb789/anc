@@ -1,3 +1,7 @@
 title: Example Knowledge Garden
 exclude:
   - "drafts/**"
+# The site's default BCP 47 language: every note without its own `language:`
+# takes it, and so do the navigation pages and the search index a page lands in.
+# Unset, it is English. A Chinese site would write `language: zh-CN`.
+# language: en

@@ -44,11 +44,14 @@
  * as not, and it leads to a page that says the note is not published.
  */
 import Layout from '../layouts/Layout.astro';
+import { DEFAULT_NAV_LANGUAGE } from '../lib/translations.ts';
 import { TITLE_SUFFIX } from '../lib/site.ts';
 ---
 
+{/* The prose below is English whatever the site language, so the page says so. */}
 <Layout
   title={`Privacy${TITLE_SUFFIX}`}
+  lang={DEFAULT_NAV_LANGUAGE}
   description="No analytics, no comments, no third-party tracking."
 >
   <article class="prose">

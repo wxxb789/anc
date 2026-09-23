@@ -626,7 +626,6 @@ test('the report’s counts partition every discovered file, whatever dropped it
     assert.deepEqual(
       [...new Set(report.dropped.map((row) => row.reason))].sort(),
       [
-        'empty-slug',
         'excluded-by-frontmatter',
         'excluded-by-pattern',
         'not-markdown',

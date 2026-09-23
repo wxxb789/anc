@@ -28,11 +28,11 @@ import sanitizeHtml from 'sanitize-html';
 import { runHighlighterWithAstro } from '@astrojs/prism/dist/highlighter';
 import prismComponents from 'prismjs/components.json' with { type: 'json' };
 import { renderMath } from './math.ts';
-import { renderDiagram } from './mermaid-render.ts';
 import { DIAGRAM_MODE } from './diagram-mode.ts';
 import { MATH_MODE } from './math-mode.ts';
 import { RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH, type RenderedKind } from './rendered-marker.ts';
 import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
+import { slugFromSegment } from './route-path.ts';
 
 /** A heading authored in the Markdown body, in document order. */
 export interface Heading {
@@ -281,8 +281,17 @@ const LANGUAGE_ALIASES: Readonly<Record<string, string>> = {
   text: 'plaintext',
 };
 
-/** Mirrors the slug shape TK-01 enforces in `schema.ts`. */
-const INTERNAL_HREF = /^\/([a-z0-9]+(?:-+[a-z0-9]+)*)\/(#[^\s]*)?$/;
+/**
+ * A single-segment root-relative href, `/<segment>/` with an optional fragment.
+ *
+ * The segment is read through `slugFromSegment`, the shared slug grammar, and
+ * not matched as a slug here. Measured against the installed `satteri`: a body
+ * link written `[a](/日记-今天/)` is emitted **percent-encoded**, as
+ * `href="/%E6%97%A5%E8%AE%B0-%E4%BB%8A%E5%A4%A9/"`, so a pattern over raw
+ * letters would never see a non-ASCII slug. Decoding first accepts both forms,
+ * and anything that does not decode to a slug is left untouched.
+ */
+const INTERNAL_HREF = /^\/([^/?#\s]+)\/(#[^\s]*)?$/;
 
 /**
  * Placeholders that survive sanitization and are replaced with rendered markup
@@ -1357,7 +1366,9 @@ function sanitize(
       a: (tagName, attribs) => {
         const match = INTERNAL_HREF.exec(attribs['href'] ?? '');
         if (!match) return { tagName, attribs };
-        const route = routeForSlug(match[1]!);
+        const slug = slugFromSegment(match[1]!);
+        if (slug === undefined) return { tagName, attribs };
+        const route = routeForSlug(slug);
         // An empty or absent route means "not a published slug"; leave the href
         // untouched so a dead link stays visible rather than becoming "/".
         if (!route) return { tagName, attribs };
@@ -1678,7 +1689,10 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
           request.sourceOnly === true
             ? `<pre class="diagram-source" tabindex="0"><code class="language-${MERMAID_LANGUAGE}">${escapeHtml(request.source)}</code></pre>` +
               `<figcaption>${escapeHtml(request.caption ?? '')}</figcaption>`
-            : await renderDiagram(
+            : // Imported only on this branch: `mermaid-render.ts` loads a DOM
+              // shim that costs about a second, and `client` mode — the one that
+              // ships — never reaches here, so it never pays for it.
+              await (await import('./mermaid-render.ts')).renderDiagram(
                 request.source,
                 `diagram-${index}`,
                 diagramCaption(request.source, chrome.diagramCaption),
