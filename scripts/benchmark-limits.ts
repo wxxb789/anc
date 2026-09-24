@@ -891,7 +891,7 @@ async function staticFallbackRecord(
     );
     const panel = document.querySelector('#link-preview') as HTMLElement | null;
     return {
-      panelHidden: panel?.hidden ?? false,
+      panelHidden: Boolean(panel?.hidden),
       ariaDescribedBy: link?.getAttribute('aria-describedby') ?? null,
       href: link?.getAttribute('href') ?? null,
       articleChars: document.querySelector('article')?.textContent?.length ?? 0,
