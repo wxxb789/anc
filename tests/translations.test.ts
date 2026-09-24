@@ -416,6 +416,7 @@ test('a locale missing a key, or carrying an unknown one, fails type checking', 
       process.execPath,
       [
         fileURLToPath(new URL('../node_modules/typescript/lib/tsc.js', import.meta.url)),
+        '--ignoreConfig',
         '--noEmit',
         '--strict',
         '--target',
