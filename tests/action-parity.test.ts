@@ -49,8 +49,8 @@ const WORKFLOW = parse(TEXT) as Workflow;
  * commit SHA its release tag resolved to. A tag can be moved after review; a
  * SHA cannot, so the pin is what makes this allowlist mean what it says.
  */
-const CHECKOUT = 'actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09';
-const SETUP_NODE = 'actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444';
+const CHECKOUT = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1';
+const SETUP_NODE = 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020';
 const JOBS = Object.entries(WORKFLOW.jobs ?? {});
 
 /** Every step, tagged with the job that owns it. */

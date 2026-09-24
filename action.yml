@@ -143,7 +143,7 @@ runs:
                 manifest.engines.node + " is required.");
               console.error("Add a setup-node step before this action:");
               console.error("");
-              console.error("      - uses: actions/setup-node@v5");
+              console.error("      - uses: actions/setup-node@v7");
               console.error("        with:");
               console.error("          node-version: 24");
               process.exit(1);
