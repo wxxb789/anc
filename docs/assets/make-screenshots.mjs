@@ -1,5 +1,5 @@
 /**
- * Generator for the README screenshots and the publication diagram.
+ * Generator for the README screenshots. The diagrams are drawn by `make-card.mjs`.
  *
  * Not part of the product, for the reason `make-card.mjs` gives. Run it from the
  * repository root with `node docs/assets/make-screenshots.mjs` after a
@@ -89,43 +89,6 @@ const NOTES = {
   'private/salary-negotiation.md': ['---', 'publish: false', '---', '', 'Not for the site.'],
 };
 
-const DIAGRAM = `<!doctype html><html><head><meta charset="utf-8"><style>
-  * { margin: 0; box-sizing: border-box; }
-  body { background: #0d1013; color: #e9edf2; padding: 40px 48px;
-    font: 17px/1.45 ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
-  .row { display: grid; grid-template-columns: 1fr 44px 1.25fr 44px 1.2fr; align-items: center; }
-  .box { border: 1px solid #2b323c; background: #161b21; border-radius: 12px; padding: 18px 20px; }
-  .box h3 { font-size: 15px; letter-spacing: .08em; text-transform: uppercase; color: #a4b0be; margin-bottom: 10px; }
-  .box ul { padding: 0; } .box li { list-style: none; margin: 4px 0; }
-  code { font: 15px ui-monospace, "Cascadia Code", Consolas, monospace; color: #cdd6e0; }
-  .ok { color: #8ad884; } .no { color: #f08c8c; } .muted { color: #a4b0be; }
-  .arrow { text-align: center; color: #86c8e6; font-size: 28px; }
-  .out { display: grid; gap: 14px; }
-  .pub { border-color: #3d6b3a; } .priv { border-color: #6b3a3a; }
-</style></head><body><div class="row">
-  <div class="box"><h3>Your git repository</h3><ul>
-    <li><code>ideas/evergreen.md</code></li>
-    <li><code>projects/roadmap.md</code></li>
-    <li><code>drafts/half-done.md</code></li>
-    <li><code>journal/private.md</code></li>
-  </ul></div>
-  <div class="arrow">→</div>
-  <div class="box"><h3>anc build</h3><ul>
-    <li><span class="ok">✓</span> every Markdown file publishes by default</li>
-    <li><span class="no">✕</span> <code>publish: false</code> in frontmatter</li>
-    <li><span class="no">✕</span> <code>exclude: ["drafts/**"]</code></li>
-    <li><span class="muted">a pattern matching nothing fails the build</span></li>
-  </ul></div>
-  <div class="arrow">→</div>
-  <div class="out">
-    <div class="box pub"><h3>dist/ — public</h3><ul>
-      <li>static HTML, backlinks, graph</li><li>Pagefind search, feed, sitemap</li>
-    </ul></div>
-    <div class="box priv"><h3>content-report.json — private</h3><ul>
-      <li>names of withheld files, under <code>.git/</code></li><li class="muted">the log prints counts only</li>
-    </ul></div>
-  </div>
-</div></body></html>`;
 
 function writeCorpus() {
   const root = mkdtempSync(join(tmpdir(), 'readme-garden-'));
@@ -209,10 +172,6 @@ try {
   await page.fill('#search-input', 'backlink');
   await page.waitForTimeout(1500);
   await shot('screenshot-search.webp', { clip: { x: 280, y: 140, width: 720, height: 520 } });
-
-  const diagram = await browser.newPage({ viewport: { width: 1180, height: 330 }, deviceScaleFactor: 1.5 });
-  await diagram.setContent(DIAGRAM);
-  await saveWebp(encoder, await diagram.screenshot({ fullPage: true }), 'publication-flow.webp');
 } finally {
   await browser.close();
   server.stop();
