@@ -21,7 +21,7 @@ describe('benchmark browser configuration', () => {
     expect(resolved.launchOptions).toEqual({ channel: 'msedge' });
     expect(resolved.contextOptions).toEqual({
       userAgent:
-        'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Mobile Safari/537.36',
+        'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Mobile Safari/537.36',
       viewport: { width: 412, height: 839 },
       screen: { width: 412, height: 915 },
       deviceScaleFactor: 2.625,
@@ -32,7 +32,7 @@ describe('benchmark browser configuration', () => {
       channel: 'edge',
       device: 'Pixel 7',
       userAgent:
-        'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Mobile Safari/537.36',
+        'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Mobile Safari/537.36',
       viewport: { width: 412, height: 839 },
       screen: { width: 412, height: 915 },
       deviceScaleFactor: 2.625,
