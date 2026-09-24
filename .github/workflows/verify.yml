@@ -48,7 +48,7 @@ jobs:
       group: ${{ github.workflow }}-verify-${{ github.ref }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # `pnpm/setup` rather than the older `pnpm/action-setup`: pnpm documents
       # the latter as the action for pnpm v10 and older, and `packageManager`
@@ -58,7 +58,7 @@ jobs:
       #
       # `install: false` because the install belongs after Node is pinned, as
       # its own step, against `pnpm-lock.yaml` with `--frozen-lockfile`.
-      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
+      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
         with:
           install: false
 
@@ -70,7 +70,7 @@ jobs:
       # `node-version-file` rather than a literal version: `.nvmrc` is the
       # existing pin, and `tests/deployment.test.ts` already gates it against
       # `engines.node`.
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: pnpm
