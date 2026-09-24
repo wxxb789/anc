@@ -21,6 +21,10 @@ project makes no backward-compatibility promise.
 - The Content-Security-Policy is also emitted as a `<meta>` tag, so hosts that
   ignore `_headers` still apply it (except `frame-ancestors`, which a meta tag
   cannot carry).
+- A `.md` symbolic link whose target lies outside the content directory is
+  dropped unread instead of publishing the external file.
+- An unterminated leading `---` block that carries `publish:` fails the build
+  however long it is, rather than only within its first 64 lines.
 
 ### Added
 
@@ -35,6 +39,8 @@ project makes no backward-compatibility promise.
 ### Fixed
 
 - Runtime and accessibility fixes in the browser scripts.
+- Client-rendered math parses TeX commands again: the bundler had corrupted the
+  shipped renderer, so `\sum` or `\alpha` rendered as separate letters.
 - The test suite runs on a Windows development host.
 
 ### Changed
