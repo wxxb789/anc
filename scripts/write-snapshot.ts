@@ -21,6 +21,7 @@ import { DatabaseSync } from '../src/lib/sqlite.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { tagFacets } from '../src/lib/routes.ts';
 import { NAV_LANGUAGE } from '../src/lib/translations.ts';
+import { compareSlugs } from '../src/lib/route-path.ts';
 import {
   SNAPSHOT_APPLICATION_ID,
   SNAPSHOT_PAGE_SIZE,
@@ -38,10 +39,13 @@ export interface WrittenSnapshot extends SnapshotBinding {
   size: number;
 }
 
-/** Compare slugs in the canonical order IDs are assigned in. */
-function bySlug(a: string, b: string): number {
-  return a < b ? -1 : 1;
-}
+/**
+ * Compare slugs in the canonical order IDs are assigned in: Unicode code point
+ * order, which is what SQLite's BINARY collation gives `ORDER BY slug` and the
+ * `slug > ?` cursor. JavaScript `<` (UTF-16 units) disagrees for astral
+ * characters, and would make `ORDER BY id` and `ORDER BY slug` diverge.
+ */
+const bySlug = compareSlugs;
 
 /**
  * Fail unless the file carries exactly the accepted schema.

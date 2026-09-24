@@ -245,7 +245,7 @@ test('the config init writes changes nothing about the build', () => {
   const parsed = parseConfig(CONFIG_TEMPLATE);
   assert.deepEqual(
     parsed,
-    { title: DEFAULTS.title, origin: DEFAULTS.origin, exclude: [] },
+    { title: DEFAULTS.title, origin: DEFAULTS.origin, exclude: [], language: DEFAULTS.language },
     'the seeded template configures something — an absent file and this file must build the same site',
   );
 
@@ -448,6 +448,19 @@ test('init is named by the usage text', () => {
   // `\b` because the command name is three letters: an unanchored `anc` also
   // matches "balance init", which is the dilution the identity gate documents.
   assert.match(help.output, /\banc init \[options\]/, 'the usage text does not name the init command');
+});
+
+test('--version and -v print the manifest version and succeed', () => {
+  // The first thing an issue asks for. Read from the manifest rather than
+  // written here, so the gate follows every version bump instead of pinning one.
+  const { version } = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { version: string };
+  assert.match(version, /^\d+\.\d+\.\d+/, 'package.json declares no semver version, so this gate is vacuous');
+  for (const flag of ['--version', '-v']) {
+    const run = cli(ROOT, flag);
+    assert.equal(run.status, 0, `${flag} exited ${run.status}`);
+    assert.equal(run.output.trim(), version, `${flag} printed something other than the version`);
+  }
+  assert.match(cli(ROOT, '--help').output, /--version, -v/, 'the usage text does not name --version');
 });
 
 test('init refuses an unrecognised option without echoing it', () => {

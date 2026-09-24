@@ -108,13 +108,34 @@ export const TAG_BROWSE_DATASET = {
 } as const;
 
 /**
+ * The environment variable carrying the configured site `language` into the
+ * build: `configForBuild` in `scripts/load-config.ts` sets it from
+ * `publish.config.yaml`, beside the site title, for the reason
+ * `SITE_TITLE_VARIABLE` in `site.ts` records.
+ */
+export const SITE_LANGUAGE_VARIABLE = 'PUBLISH_SITE_LANGUAGE';
+
+/** The interface's own default when no site language is configured. */
+export const DEFAULT_NAV_LANGUAGE = 'en';
+
+/**
  * The site navigation language: what a route that is not one document renders,
  * and what a document carrying no `language` falls back to.
  *
- * The published corpus is exactly that fallback case — its single note declares
- * no language — so this is the resolution most pages actually take.
+ * The configured site `language` when there is one — already validated as
+ * BCP 47 by the loader — else {@link DEFAULT_NAV_LANGUAGE}. Read through
+ * `globalThis.process` rather than `process`, because browser scripts import
+ * this module (`partLanguage`) and have no `process`: there it is always the
+ * default, which is harmless because every note the browser receives from the
+ * snapshot already carries its effective language. The producer writes the
+ * configured default into every undeclared entry, so a note page, its
+ * `nodes.language` row, and its Pagefind index never depend on this fallback
+ * in a configured build.
  */
-export const NAV_LANGUAGE = 'en';
+export const NAV_LANGUAGE: string =
+  (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[
+    SITE_LANGUAGE_VARIABLE
+  ] || DEFAULT_NAV_LANGUAGE;
 
 /**
  * Every string the interface says to a reader.
@@ -390,6 +411,8 @@ export interface Translation {
   graphExplorerStatusGlobal: string;
   /** Live status: tag-filtered global scope. `{tag}` is artifact text. */
   graphExplorerStatusFiltered: string;
+  /** A live graph is loading; announced through the polite status region. */
+  graphExplorerLoading: string;
   /** A live graph could not be produced; the static figure remains. */
   graphExplorerFailed: string;
   /** The requested center is not in the snapshot. */
@@ -621,6 +644,7 @@ const EN = {
   graphExplorerStatusLocal: 'Live graph: {shown} of {total} neighbouring notes drawn.',
   graphExplorerStatusGlobal: 'Live graph: {shown} of {total} published notes drawn.',
   graphExplorerStatusFiltered: 'Live graph for tag {tag}: {shown} of {total} matching notes drawn.',
+  graphExplorerLoading: 'Loading the live graph…',
   graphExplorerFailed: 'The live graph could not be loaded. The static figure above is complete.',
   graphExplorerUnknownCenter: 'That note is not in the live index.',
   graphExplorerEmptyFilter: 'No published note carries that tag.',
@@ -827,6 +851,7 @@ const ZH_CN = {
   graphExplorerStatusLocal: '实时图：已画出 {total} 篇相邻笔记中的 {shown} 篇。',
   graphExplorerStatusGlobal: '实时图：已画出 {total} 篇公开笔记中的 {shown} 篇。',
   graphExplorerStatusFiltered: '标签 {tag} 的实时图：已画出 {total} 篇匹配笔记中的 {shown} 篇。',
+  graphExplorerLoading: '正在加载实时图…',
   graphExplorerFailed: '实时图加载失败；上方静态图仍然完整。',
   graphExplorerUnknownCenter: '实时索引中没有这篇笔记。',
   graphExplorerEmptyFilter: '没有公开笔记带有这个标签。',

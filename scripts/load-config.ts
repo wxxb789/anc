@@ -110,6 +110,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LineCounter, parseAllDocuments } from 'yaml';
+import { FIELD_LIMITS, isLanguageTag } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
 import type { ExclusionOptions } from './markdown-to-artifact.ts';
 
@@ -170,7 +171,7 @@ export const NEAR_MISS_NAMES: readonly string[] = [
 ];
 
 /** Every key the file may carry. The order is the order they are documented in. */
-const KNOWN_KEYS = ['title', 'origin', 'exclude'] as const;
+const KNOWN_KEYS = ['title', 'origin', 'exclude', 'language'] as const;
 
 /**
  * The configuration a build runs with, after defaults are applied.
@@ -197,6 +198,16 @@ export interface LoadedConfig {
   origin: string | undefined;
   /** Gitignore-style globs, last match wins, `!` re-includes. Defaults to none. */
   exclude: readonly string[];
+  /**
+   * The site's default BCP 47 language, when the user configured one.
+   *
+   * The fallback for every note that declares no `language:`/`lang:` — the
+   * producer writes it into those entries, so static `<html lang>`, the
+   * snapshot's `nodes.language`, and Pagefind's per-language index all agree —
+   * and the chrome language of every route that is not one note. `undefined`
+   * means the interface's own default, English.
+   */
+  language: string | undefined;
 }
 
 /**
@@ -225,6 +236,7 @@ export const DEFAULTS: LoadedConfig = Object.freeze({
   title: DEFAULT_TITLE,
   origin: undefined,
   exclude: Object.freeze([]) as readonly string[],
+  language: undefined,
 });
 
 /** The defaults, as a value a caller may keep and a later caller cannot see. */
@@ -521,6 +533,27 @@ function checkTitle(value: unknown, line: number | undefined, issues: string[], 
   if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/.test(value)) {
     issues.push(`${at}: must not contain a control character — XML has no escape for one, so the feed would not parse`);
     details.push(`title = ${JSON.stringify(value)}`);
+  }
+}
+
+/**
+ * A BCP 47 tag, validated exactly as a note's own `language:` is.
+ *
+ * The same shape (`isLanguageTag`) and the same 35-character registry ceiling
+ * the content contract applies, so a value accepted here is one every consumer
+ * of a note's language already accepts. Refused rather than trimmed or
+ * case-folded, for the reason {@link checkTitle} gives.
+ */
+function checkLanguage(value: unknown, line: number | undefined, issues: string[], details: string[]): void {
+  const at = line === undefined ? 'language' : `language (line ${line})`;
+  if (typeof value !== 'string') {
+    issues.push(`${at}: must be a string holding a BCP 47 language tag, found ${typeName(value)}`);
+    details.push(`language = ${JSON.stringify(value)}`);
+    return;
+  }
+  if (!isLanguageTag(value) || value.length > FIELD_LIMITS.strings.language) {
+    issues.push(`${at}: must be a BCP 47 language tag such as en, zh-CN, or zh-Hans-CN`);
+    details.push(`language = ${JSON.stringify(value)}`);
   }
 }
 
@@ -893,6 +926,7 @@ export function parseConfig(text: string): LoadedConfig {
 
   if ('title' in table) checkTitle(table['title'], lines.get('title'), issues, details);
   if ('origin' in table) checkOrigin(table['origin'], lines.get('origin'), issues, details);
+  if ('language' in table) checkLanguage(table['language'], lines.get('language'), issues, details);
   if ('exclude' in table) {
     checkExclude(
       table['exclude'],
@@ -913,6 +947,7 @@ export function parseConfig(text: string): LoadedConfig {
     title: 'title' in table ? (table['title'] as string) : DEFAULTS.title,
     origin: 'origin' in table ? (table['origin'] as string) : DEFAULTS.origin,
     exclude: 'exclude' in table ? [...(table['exclude'] as string[])] : [],
+    language: 'language' in table ? (table['language'] as string) : DEFAULTS.language,
   };
 }
 
@@ -969,6 +1004,11 @@ export function loadConfig(directory?: string): LoadedConfig {
 /**
  * The exclusion argument `discover()` takes, built from a loaded config.
  *
+ * It also carries the configured site `language`, because `discover()` is
+ * where an undeclared note's effective language is decided: one options object
+ * keeps every caller of `discover()` (build and review) passing the same
+ * configuration rather than threading a second argument through each.
+ *
  * The return type is imported from the producer rather than restated, so the
  * handoff is checked by `astro check` instead of by a comment: if TK-26's
  * `ExclusionOptions` ever gains a field or changes one, this stops compiling.
@@ -992,7 +1032,11 @@ export function loadConfig(directory?: string): LoadedConfig {
  * evidence when it is not.
  */
 export function exclusionOptions(config: LoadedConfig): ExclusionOptions {
-  return { exclude: config.exclude, excludeSource: CONFIG_FILENAME };
+  return {
+    exclude: config.exclude,
+    excludeSource: CONFIG_FILENAME,
+    ...(config.language === undefined ? {} : { language: config.language }),
+  };
 }
 
 /**
@@ -1022,5 +1066,23 @@ export const CONFIG_DIRECTORY_VARIABLE = 'PUBLISH_CONFIG_DIR';
  * against wherever the process happens to be standing.
  */
 export function configForBuild(): LoadedConfig {
-  return loadConfig(process.env[CONFIG_DIRECTORY_VARIABLE] || process.cwd());
+  const config = loadConfig(process.env[CONFIG_DIRECTORY_VARIABLE] || process.cwd());
+  // The configured site language crosses into the page modules the way the
+  // title does — an environment variable, because `src/lib/` cannot import
+  // this module (see `SITE_TITLE_VARIABLE` in `src/lib/site.ts`). Set here
+  // rather than in `astro.config.mjs` so every caller that resolves the build's
+  // configuration also publishes its language, and cleared when the user
+  // configured none so a value left by an earlier build in the same process
+  // cannot leak into this one. The spelling is `SITE_LANGUAGE_VARIABLE` in
+  // `src/lib/translations.ts`; `tests/config.test.ts` holds the two equal.
+  if (config.language === undefined) delete process.env[SITE_LANGUAGE_VARIABLE];
+  else process.env[SITE_LANGUAGE_VARIABLE] = config.language;
+  return config;
 }
+
+/**
+ * The environment variable `src/lib/translations.ts` reads the site language
+ * from. Spelled out rather than imported: importing `translations.ts` here would
+ * evaluate its `NAV_LANGUAGE` before this module has set the variable.
+ */
+export const SITE_LANGUAGE_VARIABLE = 'PUBLISH_SITE_LANGUAGE';

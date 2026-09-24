@@ -1,4 +1,4 @@
-# anc —— 面向 Markdown 的隐私优先静态网站生成器
+# anc —— 面向 Markdown 笔记与数字花园的隐私优先静态网站生成器
 
 [![状态：预发布](https://img.shields.io/badge/status-pre--release-orange)](#状态)
 [![node: >=22.18](https://img.shields.io/badge/node-%E2%89%A522.18-brightgreen)](#参与开发)
@@ -8,18 +8,22 @@
 
 [English](README.md) · [简体中文](README_zh-cn.md)
 
-![anc —— 面向 Markdown 的隐私优先静态网站生成器](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.png)
+![anc：把存放 Markdown 笔记的 Git 仓库发布为数字花园的隐私优先静态网站生成器](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.webp)
 
-**anc 把一个存放 Markdown 的 Git 仓库构建成快速、可自托管的静态知识花园**：文章、反向链接、链接图谱、面包屑、标签、合集、目录、全文搜索、订阅源与站点地图，全部预先渲染为纯静态文件，任何静态主机都能托管。
+**anc 把一个存放 Markdown 的 Git 仓库构建成可自托管的静态知识花园**：文章、反向链接、链接图谱、面包屑、标签、合集、目录、全文搜索、订阅源与站点地图，全部预先渲染为纯静态文件，任何静态主机都能托管。
 
-每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
+它直接读取你已有的笔记，包括 Obsidian 风格的 `[[wikilinks]]`，不需要数据库、服务器或账号。每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
 
-*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`。
+![anc 构建的笔记页面：面包屑、来自 Git 的发布与更新日期、标签、别名、目录与 callout，深色主题](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-note.webp)
+
+*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`，目前尚未发布到 npm。
 
 ## 目录
 
 - [状态](#状态)
+- [为什么选择 anc](#为什么选择-anc)
 - [功能](#功能)
+- [截图](#截图)
 - [快速开始](#快速开始)
 - [发布与否如何决定](#发布与否如何决定)
 - [链接、标签与元数据](#链接标签与元数据)
@@ -32,6 +36,13 @@
 ## 状态
 
 **预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。包名为 `@wxxb789/anc`，因为 npm 上的非 scoped 名称 `anc` 已被占用；目前尚未发布到 registry，请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
+
+## 为什么选择 anc
+
+- **笔记始终属于你。** Git 里的 Markdown 就是唯一数据源：没有导入步骤，没有私有格式，也没有需要订阅的托管服务。
+- **隐私在发布时决定。** `publish: false` 与排除 glob 可以撤回笔记；写错的模式会让构建失败而不是泄露草稿；构建日志从不打印被撤回文件的名称。
+- **是数字花园，而不是博客。** 反向链接与链接图谱在构建时根据笔记之间的链接计算；悬停预览与图谱探索按需读取同一份公开快照。
+- **静态且可迁移。** 产物是一个 `dist/` 目录，包含 HTML、CSS、Pagefind 索引和一个 SQLite 文件。GitHub Pages、Cloudflare Pages、Netlify 或任何 Web 服务器都能在域名根路径托管它。
 
 ## 功能
 
@@ -49,6 +60,16 @@
 | 交付 | 默认静态 HTML；公开的 SQLite/WASM 快照用于懒加载预览 |
 | 安全 | `dist/_headers` 提供严格 CSP；没有追踪器与分析脚本 |
 
+## 截图
+
+下列图片均为 anc 用一个小型合成花园真实构建出的页面，可用 [`docs/assets/make-screenshots.mjs`](docs/assets/make-screenshots.mjs) 重新生成。
+
+| 反向链接与出链 | 局部链接图谱 |
+| --- | --- |
+| ![笔记页面上的「Links to」与「Linked from」列表，均为静态 HTML](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-relationships.webp) | ![围绕一篇笔记的「Nearby notes」图谱，在构建时布局，并附表格回退](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-graph.webp) |
+| **悬停预览** | **全文搜索** |
+| ![悬停链接时显示目标笔记标题与摘要的预览卡片](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-preview.webp) | ![Pagefind 搜索对话框，跨笔记高亮匹配结果](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-search.webp) |
+
 ## 快速开始
 
 在本仓库的检出目录中，针对你自己的笔记运行：
@@ -62,18 +83,37 @@ node /path/to/anc/bin/anc.mjs preview --dist ~/notes/dist
 
 ```bash
 cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes && npm install /path/to/anc/wxxb789-anc-*.tgz
-npx anc build
-npx anc preview          # 在 http://localhost:4321/ 提供 dist/
-npx anc review           # 生成 .publish-set.json 供检查
-npx anc build --release  # 精确发布集 + PATH 上固定版本的 Gitleaks
+cd ~/notes
+pnpm add -D /path/to/anc/wxxb789-anc-*.tgz   # 或：npm install -D /path/to/anc/wxxb789-anc-*.tgz
 ```
 
-命令名是 `anc`。发布后 registry 形式为 `npx @wxxb789/anc build`；本地安装后也可以直接 `npx anc build`，因为包提供的二进制名就是 `anc`。在正式发布之前，请改用上面两种方式之一。
+然后在笔记仓库的 `package.json` 中为命令命名；同一组脚本在 pnpm 与 npm 下都能使用：
+
+```json
+{
+  "scripts": {
+    "build": "anc build",
+    "preview": "anc preview",
+    "review": "anc review",
+    "release": "anc build --release"
+  }
+}
+```
+
+```bash
+pnpm run build     # 或：npm run build
+pnpm run preview   # 在 http://localhost:4321/ 提供 dist/
+pnpm run review    # 生成 .publish-set.json 供检查
+pnpm run release   # 精确发布集 + PATH 上固定版本的 Gitleaks
+```
+
+如需直接调用二进制，使用 `pnpm exec anc build`；npm 下使用 `npx --no anc build`：`--no` 让 `npx` 在本地未安装时直接拒绝，而不是从 registry 获取。发布之后，registry 形式将是 `npx @wxxb789/anc build`。**不要输入裸 `npx anc`：** 在未安装 tarball 的项目中它会回退到 registry，而 npm 上的非 scoped 包 `anc` 是一个无关的第三方包，`npx` 会提示下载并运行它。
 
 ## 发布与否如何决定
 
 **所有文件默认发布，除非你排除它。** 没有白名单，也没有用于「选择加入」的 `publish: true`。两种机制可以撤回一个文件，当二者冲突时，指向「不发布」的一方获胜：
+
+![anc 如何决定发布：仓库中每个 Markdown 文件默认发布，publish: false 与 exclude glob 撤回笔记，公开的 dist/ 接收站点，而位于 .git/ 下的私有 content-report.json 接收被撤回的文件名](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/publication-flow.webp)
 
 ```markdown
 ---
@@ -131,7 +171,7 @@ pnpm run smoke:tarball   # 在外部仓库中安装该 tarball 并读取结果
 
 ## 接入与托管
 
-仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。任何静态主机都能托管该目录。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；不读取该文件的主机会在缺少它们的情况下提供站点，功能可用但保护更弱。
+仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。任何静态主机都能托管该目录，但必须部署在域名根路径下：不支持 `https://<user>.github.io/<repo>/` 这类带路径的站点。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；忽略该文件的主机仍会通过每个页面的 `<meta>` 标签获得该策略（`frame-ancestors` 除外），其余响应头则需要自行配置。
 
 发布是显式的外部副作用。构建不会部署，本仓库也无法部署。[`docs/adoption.md`](docs/adoption.md) 同时给出了 Action 用法与手工搭建的 GitHub Pages 示例，二者都不需要任何密钥。
 

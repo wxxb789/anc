@@ -84,10 +84,10 @@ export const REPORT_SCHEMA_VERSION = 1;
  */
 export type DropReason =
   | 'slug-collision' // an earlier file already took this slug
-  | 'empty-slug' // the filename yields no [a-z0-9-] characters
   | 'not-markdown' // the extension is not .md
   | 'excluded-by-pattern' // a user exclusion glob matched it
   | 'excluded-by-frontmatter' // the note itself carries `publish: false`
+  | 'link-outside-content' // a file link whose target resolves outside the content root
   | 'repository-readme'; // the root README addresses the repository, not the reader
 
 export interface DroppedFile {
@@ -488,7 +488,18 @@ export function openReport(userDirectory: string): OpenReport {
       // own literal instead, and the counts are simply not claimed.
       if (report.status === 'aborted') return 'content: discovery did not finish';
       const { discovered, published, dropped } = report.counts;
-      return `content: ${discovered} discovered, ${published} published, ${dropped} dropped`;
+      // Per-reason counts after the total: still integers and literals of the
+      // closed {@link DropReason} set, so the line stays rename-invariant, and a
+      // collision or an exclusion is visible on the stream without a name.
+      const byReason = new Map<DropReason, number>();
+      for (const row of report.dropped) byReason.set(row.reason, (byReason.get(row.reason) ?? 0) + 1);
+      const reasons = [...byReason]
+        .sort(([a], [b]) => (a < b ? -1 : 1))
+        .map(([reason, count]) => `${count} ${reason}`);
+      return (
+        `content: ${discovered} discovered, ${published} published, ${dropped} dropped` +
+        (reasons.length === 0 ? '' : ` (${reasons.join(', ')})`)
+      );
     },
     discovered(counts, dropped, links): void {
       report.status = 'complete';

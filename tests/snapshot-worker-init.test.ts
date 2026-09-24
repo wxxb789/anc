@@ -118,7 +118,7 @@ function contractRows(sql: string): Record<string, unknown>[] {
     // The writer's UNIQUE constraints each get an implicit index SQLite names
     // `sqlite_autoindex_<table>_<n>`; the fake derives them from the same
     // declaration the contract validates, so the two cannot drift.
-    const implicit = (SNAPSHOT_TABLE_SHAPES[indexTable]?.uniqueConstraints ?? []).map((columns, index) => ({
+    const implicit = (SNAPSHOT_TABLE_SHAPES[indexTable]?.uniqueConstraints ?? []).map((_columns, index) => ({
       seq: index,
       name: `sqlite_autoindex_${indexTable}_${index + 1}`,
       unique: 1,

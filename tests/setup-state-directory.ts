@@ -34,10 +34,20 @@
  */
 
 import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const state = mkdtempSync(join(tmpdir(), 'publish-suite-state-'));
+
+// On win32 Playwright derives its browser cache from LOCALAPPDATA
+// (`%LOCALAPPDATA%\ms-playwright`), so redirecting LOCALAPPDATA below would hide
+// an installed Chromium from every browser gate. Pin the cache to the original
+// location first. Other platforms read XDG_CACHE_HOME or ~/Library/Caches,
+// which this file does not touch, so they are left alone.
+if (process.platform === 'win32' && process.env['PLAYWRIGHT_BROWSERS_PATH'] === undefined) {
+  const original = process.env['LOCALAPPDATA'] || join(homedir(), 'AppData', 'Local');
+  process.env['PLAYWRIGHT_BROWSERS_PATH'] = join(original, 'ms-playwright');
+}
 
 process.env['XDG_STATE_HOME'] = state;
 process.env['LOCALAPPDATA'] = state;

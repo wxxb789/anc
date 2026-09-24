@@ -11,21 +11,34 @@
 # build step is the Action and nothing else — no parallel command the Action
 # does not run. Nothing here deploys, pushes, or needs a secret; `permissions`
 # is narrowed so the token the job receives cannot write.
+#
+# It also runs on every push to main, so the Action a stranger pins by commit
+# SHA has parity evidence at that commit rather than at an older pull request.
+# Third-party actions are SHA-pinned, as in `verify.yml`.
 
 name: action-parity
 
 on:
+  push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  ASTRO_TELEMETRY_DISABLED: 1
+
 jobs:
   foreign-notes:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-foreign-notes-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: generator
 
@@ -33,7 +46,7 @@ jobs:
       # pins the same runtime the repository and the action's floor are written
       # against. `node-version-file` rather than a literal keeps `.nvmrc` the
       # one version pin, which is what `tests/deployment.test.ts` gates.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: generator/.nvmrc
 
@@ -80,12 +93,16 @@ jobs:
   # red instead of passing for the wrong reason.
   shallow-clone-refusal:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-shallow-clone-refusal-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           path: generator
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: generator/.nvmrc
 

@@ -196,8 +196,8 @@ test('two Load more clicks before the first reply cannot duplicate a page', asyn
   await page.waitForSelector('#tag-browser-results a');
   assert.equal(await dispatches(), 1, 'the first page should be one byTag request');
 
-  // Two synchronous clicks, the way a double click arrives: the button disables
-  // itself inside the first handler, so the second click hits a disabled control
+  // Two synchronous clicks, the way a double click arrives: the button marks
+  // itself busy inside the first handler, so the second click hits a busy control
   // and dispatches nothing. Neither reply can be handled until this turn ends,
   // so the dispatch count is final here rather than racing the Worker.
   await page.evaluate(() => {
@@ -385,6 +385,26 @@ test('the first and next pages are operable from the keyboard alone', async () =
   await page.waitForFunction(
     (count) => document.querySelectorAll('#tag-browser-results a').length === count,
     PAGE_SIZE * 2,
+  );
+  // Focus stays on the control the reader pressed. Disabling the focused
+  // button while the reply is in flight drops focus to <body>, which sends a
+  // keyboard reader back to the top of the page on every continuation.
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id ?? document.activeElement?.tagName),
+    'tag-browse-more',
+    'a continuation took keyboard focus away from Load more',
+  );
+  // The last page hides the button; focus moves to the first result it added
+  // rather than falling to <body>.
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(
+    (count) => document.querySelectorAll('#tag-browser-results a').length === count,
+    EXPECTED.length,
+  );
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.getAttribute('href') ?? document.activeElement?.tagName),
+    `/notes/${EXPECTED[PAGE_SIZE * 2]}/`,
+    'the last continuation hid Load more and dropped focus instead of moving it to the first new result',
   );
   await page.close();
 }, 120_000);

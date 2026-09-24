@@ -62,6 +62,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { WITHHELD_ROUTE, noteRoute } from '../src/lib/routes.ts';
+import { SLUG_CHARACTERS } from '../src/lib/route-path.ts';
 import { translate } from '../src/lib/translations.ts';
 import { snapshotSlugs } from './support/snapshot.ts';
 
@@ -150,7 +151,7 @@ const HUB_LINKS: readonly (readonly [string, string])[] = [
   // Written NFC, against a filename stored decomposed. The two are canonically
   // equivalent and unequal as strings, so this resolves only because
   // `indexCorpus` normalises the corpus side as well as the link side.
-  [`An NFC link to a decomposed filename: [[zzqcafe-${NFC_NAME}]].`, 'zzqcafe-cafe'],
+  [`An NFC link to a decomposed filename: [[zzqcafe-${NFC_NAME}]].`, `zzqcafe-${NFC_NAME}`],
 ];
 
 /**
@@ -367,10 +368,11 @@ test('the article hrefs are exactly the artifact edge set, over all five forms',
     const html = page(out, 'hub');
 
     // Hand-written from the corpus. Six link forms reach five distinct notes;
-    // `one-shared` is the ambiguous target's winner and `zzqcafe-cafe` is the
-    // decomposed filename an NFC link found, and both render like any other
+    // `one-shared` is the ambiguous target's winner and `zzqcafe-café` is the
+    // decomposed filename an NFC link found — its slug is the NFC Unicode form
+    // since slugs stopped being ASCII-only — and both render like any other
     // resolved link.
-    const expected = ['alpha', 'deep-beta', 'delta', 'gamma', 'one-shared', 'zzqcafe-cafe'];
+    const expected = ['alpha', 'deep-beta', 'delta', 'gamma', 'one-shared', `zzqcafe-${NFC_NAME}`];
 
     // **This page's own slug is excluded, and that is the property rather than
     // a convenience.** `[[hub#Hub]]` renders a real anchor *inside the article*
@@ -926,7 +928,8 @@ test('a backlink names its source by title and route, and carries nothing else',
     const shapes: Readonly<Record<string, RegExp>> = {
       // A note route, and the section's own links are checked against the edge
       // set separately — this bounds the syntax so free text cannot pass.
-      href: /^\/notes\/[a-z0-9]+(?:-[a-z0-9]+)*\/$/,
+      // The slug vocabulary is the shared Unicode one (`SLUG_CHARACTERS`).
+      href: new RegExp(`^/notes/[${SLUG_CHARACTERS}]+(?:-[${SLUG_CHARACTERS}]+)*/$`, 'u'),
       // Space-separated class tokens, as the stylesheet spells them.
       class: /^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/,
       // The ids this template constructs are `<region>-title`, and

@@ -28,6 +28,7 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -379,7 +380,9 @@ test('slug language and description come from frontmatter', async () => {
     const introduction = found.entries.find((entry) => entry.slug === 'zh-introduction');
     assert.equal(introduction?.language, 'zh-CN');
     assert.equal(introduction?.description, 'A concise public summary.');
-    assert.equal(introduction?.collection, undefined);
+    // A CJK first folder is a collection now that folder keys use the Unicode
+    // slug grammar; it was uncollected under the ASCII-only rule.
+    assert.equal(introduction?.collection, '研究');
     assert.equal(found.entries.find((entry) => entry.slug === 'alternate')?.language, 'en-GB');
   });
 });
@@ -471,12 +474,18 @@ test('lang and language must agree when both are present', async () => {
   });
 });
 
-test('a non-ASCII first folder stays publishable and uncollected', async () => {
+test('a non-ASCII first folder is part of the slug and names the collection', async () => {
+  // Deliberately moved from "publishable and uncollected": under the ASCII-only
+  // grammar the folder vanished, so `研究/note.md` took the bare slug `note`
+  // and collided with any other folder's `note.md`.
   await scratch('producer-cjk-collection-', async (root) => {
     put(root, '研究/note.md', '# Note\n');
+    put(root, '🌱/other.md', '# Other\n');
     const found = await discover(root);
-    assert.deepEqual(found.entries.map((entry) => entry.slug), ['note']);
-    assert.equal(found.entries[0]?.collection, undefined);
+    assert.deepEqual(found.entries.map((entry) => entry.slug).sort(), ['other', '研究-note']);
+    assert.equal(found.entries.find((entry) => entry.slug === '研究-note')?.collection, '研究');
+    // A folder with no addressable key leaves its notes uncollected.
+    assert.equal(found.entries.find((entry) => entry.slug === 'other')?.collection, undefined);
   });
 });
 
@@ -580,6 +589,71 @@ test('the same alias may belong to two notes, and an alias may equal another not
   });
 });
 
+test('an opt-out publishes nowhere whatever spelling its frontmatter block uses', async () => {
+  // Measured before the fix: each variant below published its note, body and
+  // title, because the anchored delimiter did not match and the whole block
+  // became prose. The canary is the body a withheld note must never carry out.
+  const BOM = String.fromCharCode(0xfeff);
+  const variants: Record<string, string> = {
+    bom: `${BOM}---\npublish: false\n---\n\n# Withheld\n\nCANARY-BODY\n`,
+    'bom-crlf': `${BOM}---\r\npublish: false\r\n---\r\n\r\n# Withheld\r\n\r\nCANARY-BODY\r\n`,
+    'padded-open': '---  \npublish: false\n---\n\n# Withheld\n\nCANARY-BODY\n',
+    'padded-both': '--- \t\npublish: false\n--- \n\n# Withheld\n\nCANARY-BODY\n',
+    'yaml-document-end': '---\npublish: false\n...\n\n# Withheld\n\nCANARY-BODY\n',
+  };
+  for (const [name, source] of Object.entries(variants)) {
+    await scratch(`producer-optout-${name}-`, async (root) => {
+      put(root, 'withheld.md', source);
+      put(root, 'open.md', '# Open\n\nprose\n');
+      const found = await discover(root);
+      assert.deepEqual(found.entries.map((entry) => entry.slug), ['open'], `${name}: the opt-out was ignored`);
+      assert.deepEqual(found.dropped, [{ path: 'withheld.md', reason: 'excluded-by-frontmatter' }], name);
+      assert.ok(!JSON.stringify(found.entries).includes('CANARY-BODY'), `${name}: the body escaped`);
+    });
+  }
+
+  // Non-vacuity: a BOM-prefixed note that is *published* keeps its title and
+  // loses the block, so the strip is not merely discarding the file.
+  await scratch('producer-optout-bom-published-', async (root) => {
+    put(root, 'kept.md', `${BOM}---\ntitle: Kept\n---\n\nbody\n`);
+    const [entry] = (await discover(root)).entries;
+    assert.equal(entry?.title, 'Kept');
+    assert.ok(!entry?.markdown.includes('title:'), 'the frontmatter leaked into the body');
+  });
+});
+
+test('an unterminated block carrying publish fails rather than publishing as prose', async () => {
+  await scratch('producer-optout-unterminated-', async (root) => {
+    put(root, 'withheld.md', '---\ntitle: Plan\npublish: false\n\n# Withheld\n\nCANARY-BODY\n');
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as { code: string; message: string; detail: string },
+    );
+    assert.ok(failure, 'an unterminated opt-out block was published');
+    assert.equal(failure.code, 'unrecognised-frontmatter');
+    assert.match(failure.detail, /withheld\.md/);
+    assert.ok(!failure.message.includes('withheld.md'), `the public message named the file: ${failure.message}`);
+  });
+
+  // A note that opens with a rule and never mentions `publish:` still builds.
+  await scratch('producer-optout-rule-', async (root) => {
+    put(root, 'note.md', '---\n\nOpens with a break and never closes it.\n');
+    assert.equal((await discover(root)).entries.length, 1);
+  });
+
+  // No line bound: long frontmatter is valid, so an opt-out below any fixed
+  // window must still fail closed rather than publish.
+  await scratch('producer-optout-long-', async (root) => {
+    const keys = Array.from({ length: 200 }, (_, index) => `key${index}: value`).join('\n');
+    put(root, 'withheld.md', `---\n${keys}\npublish: false\n\n# Withheld\n\nCANARY-BODY\n`);
+    const failure = await discover(root).then(
+      () => undefined,
+      (error: unknown) => error as { code: string },
+    );
+    assert.equal(failure?.code, 'unrecognised-frontmatter', 'an opt-out on line 202 was published');
+  });
+});
+
 test('aliases remain metadata rather than wikilink targets', async () => {
   await scratch('producer-alias-link-', async (root) => {
     put(root, 'target.md', '---\naliases: ["Old Name"]\n---\n\n# Target\n');
@@ -591,13 +665,143 @@ test('aliases remain metadata rather than wikilink targets', async () => {
   });
 });
 
-test('a path that derives no slug is dropped rather than published or failed', async () => {
-  await scratch('producer-empty-slug-', async (root) => {
+// --- Unicode slugs and the hash fallback --------------------------------------
+
+/** The documented hash slug, restated so the gate pins the formula rather than the code. */
+function expectedHash(path: string): string {
+  return `note-${createHash('sha256').update(path.normalize('NFC'), 'utf8').digest('hex').slice(0, 10)}`;
+}
+
+test('a path that derives no slug publishes under a hash of its own path', async () => {
+  // Deliberately moved from `empty-slug`: that drop silently lost a note the
+  // author never excluded. Red before the change: `___.md` was absent from
+  // `entries` and present in `dropped`.
+  await scratch('producer-hash-slug-', async (root) => {
     put(root, '___.md', '# No route key\n');
+    put(root, '🌱.md', '# Seedling\n');
+    put(root, '---.md', '# Dashes\n');
     put(root, 'note.md', '# Note\n');
     const found = await discover(root);
-    assert.deepEqual(found.entries.map((entry) => entry.slug), ['note']);
-    assert.deepEqual(found.dropped, [{ path: '___.md', reason: 'empty-slug' }]);
+    assert.deepEqual(
+      found.entries.map((entry) => entry.slug).sort(),
+      [expectedHash('---.md'), expectedHash('___.md'), expectedHash('🌱.md'), 'note'].sort(),
+    );
+    assert.deepEqual(found.dropped, []);
+    assert.match(expectedHash('🌱.md'), /^note-[0-9a-f]{10}$/);
+  });
+});
+
+test('a hash slug is stable across runs and independent of sibling files', async () => {
+  const slugOf = async (siblings: readonly string[]): Promise<string | undefined> =>
+    scratch('producer-hash-stable-', async (root) => {
+      put(root, 'garden/🌱.md', '# Seedling\n');
+      for (const sibling of siblings) put(root, sibling, '# Sibling\n');
+      const found = await discover(root);
+      return found.entries.find((entry) => entry.title === 'Seedling')?.slug;
+    });
+  const alone = await slugOf([]);
+  assert.equal(alone, expectedHash('garden/🌱.md'));
+  assert.equal(await slugOf([]), alone, 'two runs of one corpus disagree');
+  assert.equal(
+    await slugOf(['garden/🌻.md', 'a.md', 'garden/zz.md', '🌱.md']),
+    alone,
+    'adding files around the note moved its URL',
+  );
+});
+
+test('CJK-only filenames publish under Unicode slugs and do not collide', async () => {
+  // Red against the ASCII grammar: `日记/今天.md` and `日记/明天.md` both slugged
+  // to nothing and were dropped, and `工作/2024.md` and `日记/2024.md` collided.
+  await scratch('producer-cjk-slug-', async (root) => {
+    put(root, '日记/今天.md', '# 今天\n');
+    put(root, '日记/明天.md', '# 明天\n');
+    put(root, '工作/2024.md', '# 工作\n');
+    put(root, '日记/2024.md', '# 日记\n');
+    put(root, 'Projects/观点.md', '# 观点\n');
+    const found = await discover(root);
+    assert.deepEqual(
+      found.entries.map((entry) => entry.slug).sort(),
+      ['projects-观点', '工作-2024', '日记-2024', '日记-今天', '日记-明天'],
+    );
+    assert.deepEqual(found.dropped, []);
+    assert.equal(found.entries.find((entry) => entry.slug === '日记-今天')?.collection, '日记');
+  });
+});
+
+test('decomposed and composed spellings of one filename derive one slug', async () => {
+  const nfd = 'Café'.normalize('NFD');
+  assert.notEqual(nfd, 'Café'.normalize('NFC'), 'the fixture is not actually decomposed');
+  for (const spelling of [nfd, 'Café'.normalize('NFC')]) {
+    await scratch('producer-nfd-slug-', async (root) => {
+      put(root, `${spelling}.md`, '# Cafe\n');
+      const [entry] = (await discover(root)).entries;
+      assert.equal(entry?.slug, 'café'.normalize('NFC'));
+    });
+  }
+});
+
+test('an over-long derived slug falls back to the hash rather than failing', async () => {
+  // 50 CJK characters are 150 UTF-8 bytes: within 128 UTF-16 units, over the
+  // 128-byte filesystem-safe limit. The ASCII case is past both.
+  const cjk = '长'.repeat(50);
+  const ascii = 'a'.repeat(129);
+  await scratch('producer-long-slug-', async (root) => {
+    put(root, `${cjk}.md`, '# Long CJK\n');
+    put(root, `${ascii}.md`, '# Long ASCII\n');
+    put(root, `${'长'.repeat(42)}.md`, '# Fits\n');
+    const found = await discover(root);
+    const slugOf = (title: string) => found.entries.find((entry) => entry.title === title)?.slug;
+    assert.equal(slugOf('Long CJK'), expectedHash(`${cjk}.md`));
+    assert.equal(slugOf('Long ASCII'), expectedHash(`${ascii}.md`));
+    assert.equal(slugOf('Fits'), '长'.repeat(42), '42 CJK characters (126 bytes) should fit');
+  });
+});
+
+test('a frontmatter slug override accepts the Unicode grammar', async () => {
+  await scratch('producer-unicode-override-', async (root) => {
+    put(root, 'a.md', `---\nslug: ${'笔记-一'.normalize('NFD')}\n---\n\n# A\n`);
+    const [entry] = (await discover(root)).entries;
+    assert.equal(entry?.slug, '笔记-一');
+  });
+  for (const bad of ['笔记--一', 'Café', '长'.repeat(43)]) {
+    await scratch('producer-unicode-override-bad-', async (root) => {
+      put(root, 'a.md', `---\nslug: ${bad}\n---\n\n# A\n`);
+      const failure = await discover(root).then(
+        () => undefined,
+        (error: unknown) => error as BuildFailure,
+      );
+      assert.equal(failure?.code, 'invalid-slug-frontmatter', bad);
+    });
+  }
+});
+
+test('wikilinks and relative links to CJK-named notes resolve to their slugs', async () => {
+  // Red against the ASCII grammar: the target had no slug, so every link went
+  // to `/private/` as "not published".
+  await scratch('producer-cjk-links-', async (root) => {
+    put(root, '日记/今天.md', '# 今天\n');
+    put(root, 'Projects/观点.md', '# 观点\n\n见 [[今天]]，[x](../日记/今天.md)，[[日记/今天]]。\n');
+    const found = await discover(root);
+    const findings = await resolveCorpusLinks(found);
+    const source = found.entries.find((entry) => entry.slug === 'projects-观点')!;
+    assert.deepEqual(source.outgoing, ['日记-今天']);
+    assert.deepEqual(findings, []);
+    assert.equal((source.markdown.match(/\/日记-今天\//g) ?? []).length, 3, source.markdown);
+  });
+});
+
+test('the configured site language fills in only the notes that declare none', async () => {
+  await scratch('producer-site-language-', async (root) => {
+    put(root, 'publish.config.yaml', 'language: zh-CN\n');
+    put(root, 'plain.md', '# 园艺\n\n今天我们讨论番茄。\n');
+    put(root, 'english.md', '---\nlanguage: en\n---\n\n# English\n');
+    const found = await discover(root, exclusionOptions(loadConfig(root)));
+    const languageOf = (slug: string) => found.entries.find((entry) => entry.slug === slug)?.language;
+    assert.equal(languageOf('plain'), 'zh-CN');
+    assert.equal(languageOf('english'), 'en');
+    // Unconfigured, an undeclared note stays undeclared.
+    const bare = await discover(root);
+    assert.equal(bare.entries.find((entry) => entry.slug === 'plain')?.language, undefined);
   });
 });
 
@@ -658,6 +862,31 @@ test('a symlinked note is discovered rather than vanishing from both columns', a
     );
     assert.equal(found.counts.discovered, 2, 'the symlinked note was not discovered');
     assert.deepEqual(found.entries.map((entry) => entry.slug).sort(), ['link', 'real']);
+  });
+});
+
+test('a symlink whose target leaves the content root is dropped unread', async (context) => {
+  // `readFile` follows a link, so a `.md` link to a file outside the content
+  // directory published that file under the link's name — and a release ledger
+  // records only the slug, while git never sees the target change.
+  await scratch('producer-symlink-escape-', async (workspace) => {
+    const root = join(workspace, 'notes');
+    put(workspace, 'outside/secret.md', '# Secret\n\nCANARY-OUTSIDE\n');
+    put(root, 'inside.md', '# Inside\n\nprose\n');
+    put(root, 'real.md', '# Real\n\nprose\n');
+    try {
+      symlinkSync(join(workspace, 'outside', 'secret.md'), join(root, 'escape.md'), 'file');
+      symlinkSync('real.md', join(root, 'kept.md'), 'file');
+    } catch {
+      context.skip(true, 'this host cannot create a symlink');
+      return;
+    }
+
+    const found = await discover(root);
+    assert.deepEqual(found.entries.map((entry) => entry.slug).sort(), ['inside', 'kept', 'real']);
+    assert.deepEqual(found.dropped, [{ path: 'escape.md', reason: 'link-outside-content' }]);
+    assert.equal(found.counts.discovered, found.counts.published + found.counts.dropped, 'the partition broke');
+    assert.ok(!JSON.stringify(found.entries).includes('CANARY-OUTSIDE'), 'the outside file was published');
   });
 });
 

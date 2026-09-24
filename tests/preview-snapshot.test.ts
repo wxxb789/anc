@@ -45,7 +45,7 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'vitest';
@@ -123,7 +123,7 @@ test('the marker is refused when its bytes do not hash to the digest in its name
   assert.equal(resolveArtifactDirectory(directory, ROOT), directory, 'the fixture was refused before it was mutated');
 
   const marker = snapshotPath(directory);
-  const match = SNAPSHOT_FILE_PATTERN.exec(marker.split('/').at(-1)!);
+  const match = SNAPSHOT_FILE_PATTERN.exec(basename(marker));
   assert.ok(match, 'the built marker is not named site.<digest>.sqlite, so this gate measured nothing');
   const digest = match[1]!;
   // The first hex character moves to a different value, so the new name is
@@ -190,7 +190,7 @@ test('a directory holding two snapshot candidates is refused as a count, and one
   assert.equal(resolveArtifactDirectory(directory, ROOT), directory, 'the fixture was refused before it was doubled');
 
   const marker = snapshotPath(directory);
-  const match = SNAPSHOT_FILE_PATTERN.exec(marker.split('/').at(-1)!);
+  const match = SNAPSHOT_FILE_PATTERN.exec(basename(marker));
   assert.ok(match, 'the built marker is not named site.<digest>.sqlite, so this gate measured nothing');
   const digest = match[1]!;
   // A second digest-shaped name, whichever bytes the first candidate holds.

@@ -116,7 +116,7 @@
  */
 
 import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { existsSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { pruneStaleBuildWorkspaces, removeBuildWorkspace } from '../scripts/build-workspace.ts';
@@ -145,8 +145,19 @@ Options for preview
   --dist <dir>     the built site to serve (default: <working directory>/dist)
   --port <number>  the port to listen on (default: 4321)
 
-  --help           show this message
+  --help, -h       show this message
+  --version, -v    print the version and exit
 `;
+
+/**
+ * The version a user reports in an issue. Read from this package's own
+ * `package.json`, which sits at the same relative path in a checkout and in the
+ * installed tarball, so there is no second spelling of it to drift.
+ */
+function packageVersion() {
+  const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  return String(manifest.version);
+}
 
 /**
  * Parse `--flag value` pairs, rejecting anything unrecognised.
@@ -695,6 +706,10 @@ async function main(argv) {
   if (command === undefined || command === '--help' || command === '-h') {
     console.log(USAGE);
     return command === undefined ? 1 : 0;
+  }
+  if (command === '--version' || command === '-v') {
+    console.log(packageVersion());
+    return 0;
   }
   if (command === 'init' || command === 'review' || command === 'preview') {
     const rest = argv.slice(1);

@@ -45,6 +45,47 @@ const DIAGRAMS: readonly (readonly [string, string])[] = [
   ['c4', ['C4Context', '  title System', '  Person(u, "User", "a user")'].join(NL)],
 ];
 
+/**
+ * Diagrams whose labels and directives try every way out of the SVG.
+ *
+ * Client mode renders diagram source in the reader's browser, so what Mermaid
+ * and `renderInto` let through is live DOM on a published page. One diagram
+ * per escape route, because a void HTML element in a label (`<img>`, `<embed>`,
+ * `<base>`, `<link>`) can make Mermaid's serialized SVG ill-formed XML, and the
+ * figure then falls back to source — safe, but it would mask every other
+ * payload in the same diagram. Every payload that runs sets `window.__pwned`,
+ * and every off-site one names `evil.example`.
+ *
+ * `click` is the positive control: its labels are plain, so a fall-back there
+ * is a broken renderer, not a sanitizer.
+ */
+const HOSTILE: readonly (readonly [string, string])[] = [
+  [
+    'click',
+    [
+      'graph TD',
+      '  A[first] --> B[second]',
+      '  B --> C[third]',
+      '  click A href "javascript:window.__pwned=3"',
+      '  click B "https://evil.example/c" _blank',
+      '  click C call alert(4)',
+    ].join(NL),
+  ],
+  ['img', ['graph TD', '  A["<img src=x onerror=window.__pwned=1>"] --> B[plain]'].join(NL)],
+  [
+    'object',
+    ['graph TD', '  A["<object data=https://evil.example/o></object><embed src=https://evil.example/e>"] --> B[plain]'].join(NL),
+  ],
+  [
+    'base',
+    ['graph TD', '  A["<base href=https://evil.example/><link rel=stylesheet href=https://evil.example/s.css>"] --> B[plain]'].join(NL),
+  ],
+  [
+    'iframe',
+    ['graph TD', '  A["<iframe src=https://evil.example/f></iframe><script>window.__pwned=2</script>"] --> B[plain]'].join(NL),
+  ],
+];
+
 let server: Server | undefined;
 let origin = '';
 let scratch = '';
@@ -134,6 +175,25 @@ beforeAll(async () => {
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>diagram probe</title>` +
       `<link rel="stylesheet" href="/probe.css">` +
       `</head><body>${figures}` +
+      `<script type="module" src="/diagram.js"></script></body></html>`,
+    'utf8',
+  );
+
+  // The hostile page is separate so the render gates above keep their exact
+  // figure count. Each source is escaped: the `<pre>` must carry the diagram
+  // text, not parse it as the markup it contains.
+  const escape = (text: string): string =>
+    text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  writeFileSync(
+    join(site, 'hostile.html'),
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>hostile diagram probe</title>` +
+      `<link rel="stylesheet" href="/probe.css">` +
+      `</head><body>` +
+      HOSTILE.map(
+        ([name, source]) =>
+          `<figure class="diagram" data-diagram="mermaid"><pre class="diagram-source">${escape(source)}</pre>` +
+          `<figcaption>${name}</figcaption></figure>`,
+      ).join('') +
       `<script type="module" src="/diagram.js"></script></body></html>`,
     'utf8',
   );
@@ -334,6 +394,119 @@ test('a drawn diagram re-renders when the theme changes', async (context) => {
     // the lengths match.
     const fellBack = await page.evaluate(() => document.querySelectorAll('figure.diagram .diagram-source').length);
     assert.equal(fellBack as unknown as number, 0, 'a figure fell back to its source during the re-render');
+  } finally {
+    await page.close();
+  }
+}, BROWSER_TIMEOUT);
+
+/**
+ * Nothing hostile in a diagram reaches the live page.
+ *
+ * Every figure ends in one of two states, and both are checked: drawn, with no
+ * forbidden element, handler, non-local URL, or `javascript:` anywhere in the
+ * SVG; or fallen back, where the source is text in a `<pre>`. The `click`
+ * figure must be drawn, so the walk cannot pass by measuring only fall-backs.
+ *
+ * **CSP violations are not asserted, and that is measured, not skipped.** The
+ * `<base>` label produces one `base-uri` report under both security levels, and
+ * its source is DOMPurify's own `DOMParser` call inside Mermaid — an inert
+ * document that never becomes the page's. What would matter is the live
+ * document's base moving, and that is asserted directly below.
+ */
+test('a hostile diagram label or directive never reaches the live page', async (context) => {
+  assert.ok(launched !== undefined, 'the suite setup did not run');
+  if ('unavailable' in launched) return context.skip(launched.unavailable);
+  const browser = launched.browser as import('playwright').Browser;
+  const page = await browser.newPage({ colorScheme: 'light' });
+  const offsite: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('evil.example')) offsite.push(request.url());
+  });
+  page.on('dialog', (dialog) => {
+    offsite.push(`dialog: ${dialog.message()}`);
+    void dialog.dismiss();
+  });
+  try {
+    await page.goto(`${origin}/hostile.html`, { waitUntil: 'networkidle' });
+    await page.waitForFunction(
+      () => document.querySelector('figure.diagram .diagram-canvas svg') !== null,
+      undefined,
+      { timeout: 90_000 },
+    );
+    // The other figures render in the same pass; give them time to finish.
+    await page.waitForTimeout(3_000);
+    // Every drawn node clicked, so a surviving handler or `javascript:` anchor
+    // has its chance to run.
+    for (const node of await page.locator('figure.diagram .diagram-canvas svg .node').all()) {
+      await node.click({ force: true, timeout: 5_000 }).catch(() => {});
+    }
+    await page.waitForTimeout(500);
+
+    const figures = (await page.evaluate(() =>
+      [...document.querySelectorAll('figure.diagram')].map((figure) => {
+        const svg = figure.querySelector('.diagram-canvas svg');
+        const all = svg === null ? [] : [svg, ...svg.querySelectorAll('*')];
+        const forbidden = ['script', 'object', 'embed', 'iframe', 'base', 'link', 'img', 'frame', 'meta', 'form'];
+        return {
+          name: figure.querySelector('figcaption')?.textContent ?? '?',
+          drawn: svg !== null,
+          elements: [...figure.querySelectorAll('*')]
+            .map((element) => element.localName)
+            .filter((name) => forbidden.includes(name.toLowerCase())),
+          handlers: all.flatMap((element) =>
+            [...element.attributes]
+              .filter((attribute) => /^on/i.test(attribute.name))
+              .map((attribute) => `${element.localName}[${attribute.name}]`),
+          ),
+          urls: all.flatMap((element) =>
+            ['href', 'xlink:href', 'src', 'data', 'action', 'formaction']
+              .map((name) => element.getAttribute(name))
+              .filter((value): value is string => value !== null)
+              .filter(
+                (value) => !value.startsWith('#') && !/^data:image\/(?:png|jpe?g|gif|webp|avif);base64,/i.test(value),
+              ),
+          ),
+          targets: all.filter((element) => element.hasAttribute('target')).map((element) => element.getAttribute('target')),
+          javascript: all.some((element) =>
+            [...element.attributes].some((attribute) => /javascript:/i.test(attribute.value)),
+          ),
+        };
+      }),
+    )) as unknown as {
+      name: string;
+      drawn: boolean;
+      elements: string[];
+      handlers: string[];
+      urls: string[];
+      targets: (string | null)[];
+      javascript: boolean;
+    }[];
+    const state = (await page.evaluate(() => ({
+      documentBase: document.querySelectorAll('base').length,
+      baseURI: document.baseURI,
+      pwned: (window as unknown as { __pwned?: unknown }).__pwned ?? null,
+    }))) as unknown as { documentBase: number; baseURI: string; pwned: unknown };
+
+    console.log(`hostile figures drawn: ${figures.map((figure) => `${figure.name}=${figure.drawn}`).join(', ')}`);
+    assert.equal(figures.length, HOSTILE.length, 'the hostile fixture did not reach the browser');
+    assert.ok(
+      figures[0]!.name === 'click' && figures[0]!.drawn,
+      'the click diagram did not render, so the walk over it is vacuous',
+    );
+    for (const figure of figures) {
+      assert.deepEqual(figure.elements, [], `${figure.name}: a hostile element reached the page`);
+      assert.deepEqual(figure.handlers, [], `${figure.name}: an event handler survived into the SVG`);
+      assert.deepEqual(figure.urls, [], `${figure.name}: a non-local URL survived into the SVG`);
+      assert.equal(figure.javascript, false, `${figure.name}: a javascript: URL survived into the SVG`);
+      // `'loose'` keeps a `click ... _blank` directive's target on the anchor;
+      // `'strict'` drops it. Measured both ways — this is the assertion that
+      // fails if the client falls back to `'loose'`.
+      assert.deepEqual(figure.targets, [], `${figure.name}: a link target from the diagram source survived`);
+    }
+    assert.equal(state.documentBase, 0, 'a <base> element reached the document');
+    assert.ok(state.baseURI.startsWith(origin), `the document base moved to ${state.baseURI}`);
+    assert.equal(state.pwned, null, 'a hostile payload executed');
+    assert.deepEqual(offsite, [], 'the page contacted the hostile origin or opened a dialog');
   } finally {
     await page.close();
   }

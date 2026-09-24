@@ -12,7 +12,8 @@
  * disagreement — `checkCorpus` proves `backlinks` is the exact inverse of
  * `outgoing`, which says nothing at all about the page.
  *
- * So each `link` and `image` node is resolved **exactly once**, and that single
+ * So each `link` and `image` node, and each `linkReference` and `imageReference`
+ * through its definition, is resolved **exactly once**, and that single
  * {@link LinkResolution} does both jobs: it decides the text written back into
  * the body, and, when it resolved to a published note, it appends to `outgoing`.
  * The two cannot disagree because one value produced both. That is a property of
@@ -84,7 +85,8 @@ const CONTAINS_LINK: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Every `link` and `image` node, in document order, including nested ones.
+ * Every link-bearing node, in document order, including nested ones, and every
+ * `definition` node beside them.
  *
  * **Nesting is real and both halves of it matter.** `[![logo](logo.png)](index.md)`
  * — the badge idiom every README opens with — is an image inside a link, and
@@ -114,19 +116,69 @@ const CONTAINS_LINK: ReadonlySet<string> = new Set([
  * one unmarked. Measured through the shipped renderer: it emitted
  * `<p>Badge: [<a href="/private/">build</a>]<a href="https://ci.example/">ci</a></p>`
  * — the nested anchor this set exists to prevent, the outer reference link
- * destroyed, and its label `ci` rendered as prose. The reference forms are not
- * *pushed* into `into`, because this walk does not resolve them; they only have
- * to be recognised as things a rewrite may not open an anchor inside.
+ * destroyed, and its label `ci` rendered as prose.
+ *
+ * **The reference forms are now resolved as well, and were not until
+ * 2026-09-23.** Skipping them was a bypass rather than a neutral choice: with
+ * `[x]: drafts/secret.md` a withheld note, `[s][x]` rendered
+ * `<a href="drafts/secret.md">s</a>` — neither `/private/` nor text — and with
+ * `[y]: b.md` published, `[b][y]` rendered a live anchor that contributed no
+ * edge, breaking "article hrefs equal DB edges". Each reference is now resolved
+ * through the first definition for its identifier and rewritten inline, exactly
+ * as `[s](drafts/secret.md)` would be; `tests/reference-links.test.ts` gates it.
  */
-function collectLinkNodes(node: MdastNode, into: MdastNode[], nested: Set<MdastNode>, inside = false): void {
-  const isLinkNode = node.type === 'link' || node.type === 'image';
-  if (isLinkNode) {
+function collectLinkNodes(
+  node: MdastNode,
+  into: MdastNode[],
+  nested: Set<MdastNode>,
+  definitions: MdastNode[],
+  inside = false,
+): void {
+  if (CONTAINS_LINK.has(node.type)) {
     into.push(node);
     if (inside) nested.add(node);
+  } else if (node.type === 'definition') {
+    definitions.push(node);
   }
   for (const child of ('children' in node ? node.children : []) as MdastNode[]) {
-    collectLinkNodes(child, into, nested, inside || CONTAINS_LINK.has(node.type));
+    collectLinkNodes(child, into, nested, definitions, inside || CONTAINS_LINK.has(node.type));
   }
+}
+
+/**
+ * The first definition for each identifier, which is the one CommonMark uses.
+ *
+ * Measured against the installed parser: `[b]: first.md` followed by
+ * `[B]: second.md` renders `[t][b]` as `href="first.md"`, and both nodes carry
+ * the normalised identifier `b`. The walk is in document order, so the first
+ * one seen is the one kept.
+ */
+function definitionsById(definitions: readonly MdastNode[]): Map<string, MdastNode> {
+  const byId = new Map<string, MdastNode>();
+  for (const definition of definitions) {
+    if (definition.type !== 'definition') continue;
+    if (!byId.has(definition.identifier)) byId.set(definition.identifier, definition);
+  }
+  return byId;
+}
+
+/**
+ * A definition rewritten to point at `destination`, its label bytes kept.
+ *
+ * The label ends at its first unescaped `]` — a link label cannot contain one —
+ * and everything after it (the destination, an optional title, and whatever
+ * line breaks or container prefixes sit between them) is replaced. The title is
+ * dropped for the same reason an inline link's is: every reference to this
+ * definition has already been rewritten inline, so nothing reads it.
+ */
+function rewriteDefinition(written: string, destination: string): string | undefined {
+  let slashes = 0;
+  for (let index = 1; index < written.length; index += 1) {
+    const character = written[index];
+    if (character === ']' && slashes % 2 === 0) return `${written.slice(0, index + 1)}: ${destination}`;
+    slashes = character === '\\' ? slashes + 1 : 0;
+  }
+  return undefined;
 }
 
 /**
@@ -151,7 +203,7 @@ function collectLinkNodes(node: MdastNode, into: MdastNode[], nested: Set<MdastN
  * changed and what it cost.
  */
 function displayText(node: MdastNode, source: string): string {
-  if (node.type === 'image') return node.alt ?? '';
+  if (node.type === 'image' || node.type === 'imageReference') return node.alt ?? '';
   const children = 'children' in node ? node.children : [];
   const first = spanOf(children[0] as MdastNode | undefined);
   const last = spanOf(children.at(-1) as MdastNode | undefined);
@@ -404,7 +456,9 @@ export function resolveLinksIn(
   const tree = markdownToMdast(markdown, { features: { wikilinks: true, gfm: true } });
   const nodes: MdastNode[] = [];
   const nestedNodes = new Set<MdastNode>();
-  collectLinkNodes(tree as MdastNode, nodes, nestedNodes);
+  const definitionNodes: MdastNode[] = [];
+  collectLinkNodes(tree as MdastNode, nodes, nestedNodes, definitionNodes);
+  const definitions = definitionsById(definitionNodes);
 
   const edits: Edit[] = [];
   const findings: LinkFindingRow[] = [];
@@ -412,7 +466,19 @@ export function resolveLinksIn(
   const seen = new Set<string>();
 
   for (const node of nodes) {
-    if (node.type !== 'link' && node.type !== 'image') continue;
+    // A reference resolves through its definition's destination, and is then
+    // rewritten exactly as the inline form with that destination would be — see
+    // {@link rewriteDefinition} for the definition's own half.
+    let url: string;
+    if (node.type === 'link' || node.type === 'image') url = node.url;
+    else if (node.type === 'linkReference' || node.type === 'imageReference') {
+      const definition = definitions.get(node.identifier);
+      // The parser only emits a reference node when a matching definition
+      // exists, so this is unreachable; a reference with nothing to resolve is
+      // left as authored rather than guessed at.
+      if (definition?.type !== 'definition') continue;
+      url = definition.url;
+    } else continue;
     // A node with no span cannot be edited and cannot be located in a report,
     // so it is left exactly as authored. `offset` is optional in unist —
     // `column` and `line` are the required pair — and every construct measured
@@ -421,7 +487,9 @@ export function resolveLinksIn(
     const span = spanOf(node);
     if (span === undefined) continue;
 
-    const isWikilink = isWikilinkNode(node, markdown);
+    // A reference's destination is a definition's, which is always Markdown
+    // syntax — and `[[a] b][x]` starts with `[[` without being a wikilink.
+    const isWikilink = (node.type === 'link' || node.type === 'image') && isWikilinkNode(node, markdown);
     const written = markdown.slice(span.start, span.end);
     const label = displayText(node, markdown);
     const nested = nestedNodes.has(node);
@@ -429,7 +497,7 @@ export function resolveLinksIn(
     // **The single resolution.** Everything below reads this one value: the
     // replacement text, the edge, and the finding. There is no second call and
     // no second decision.
-    const resolution = resolveLink(node.url, sourcePath, index, isWikilink);
+    const resolution = resolveLink(url, sourcePath, index, isWikilink);
 
     if (resolution.kind === 'external') {
       // Left byte-for-byte, including a wikilink that turned out to be a bare
@@ -453,7 +521,7 @@ export function resolveLinksIn(
     // form escapes its label separately, in edits scoped to the label's own text
     // nodes — see {@link escapeLabelEdits}, which is where that had been missing
     // for as long as the split form existed.
-    const inner = node.type === 'link' ? labelSpan(node) : undefined;
+    const inner = node.type === 'link' || node.type === 'linkReference' ? labelSpan(node) : undefined;
     const rewrite = (before: string, after: string, fallbackLabel = label): void => {
       if (inner === undefined) {
         edits.push({
@@ -546,7 +614,7 @@ export function resolveLinksIn(
     // discover a missing image. An embed of a *file* — the ordinary
     // `![[diagram.png]]` — never reaches here: an image is not a published note,
     // so it left as `unpublished` above.
-    const embedDemoted = node.type === 'image';
+    const embedDemoted = node.type === 'image' || node.type === 'imageReference';
     const href = `${routeFor(resolution.slug)}${resolution.anchor}`;
     // The slug is the fallback name for a node with no label at all — `[](x)`
     // and an image whose alt is empty — because `[](/route/)` renders an anchor
@@ -581,6 +649,27 @@ export function resolveLinksIn(
         resolvedTo: resolution.path,
       });
     }
+  }
+
+  // **Every internal definition is rewritten too, used or not.** No reference
+  // reads it any more — each one was rewritten inline above — so this changes
+  // nothing a reader sees; it keeps the author's withheld destination out of the
+  // body handed onward, which has no reason to carry a path nothing renders.
+  // It contributes no edge and no finding: a definition renders nothing, and an
+  // edge exists exactly where a rendered anchor does. An unresolved destination
+  // names no file this build knows of, so it is left as written.
+  for (const definition of definitionNodes) {
+    if (definition.type !== 'definition') continue;
+    const span = spanOf(definition);
+    if (span === undefined) continue;
+    const resolution = resolveLink(definition.url, sourcePath, index, false);
+    let destination: string;
+    if (resolution.kind === 'resolved' || resolution.kind === 'ambiguous') {
+      destination = `${routeFor(resolution.slug)}${resolution.anchor}`;
+    } else if (resolution.kind === 'unpublished') destination = WITHHELD_ROUTE;
+    else continue;
+    const text = rewriteDefinition(markdown.slice(span.start, span.end), destination);
+    if (text !== undefined) edits.push({ start: span.start, end: span.end, text });
   }
 
   return { markdown: applyEdits(markdown, edits), outgoing, findings };

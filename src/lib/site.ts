@@ -24,7 +24,7 @@
  */
 
 import type { ContentEntry } from './schema.ts';
-import { WITHHELD_ROUTE, noteRoute } from './route-path.ts';
+import { WITHHELD_ROUTE, compareSlugs, noteRoute } from './route-path.ts';
 import { NAV_LANGUAGE, translate } from './translations.ts';
 import {
   FIXED_ROUTES,
@@ -517,7 +517,8 @@ export function publicRoutes(
   // See `isPublished`.
   const notes = entries
     .filter(isPublished)
-    .sort((a, b) => (a.slug < b.slug ? -1 : 1))
+    // Canonical slug order (code points), the order the snapshot assigns IDs in.
+    .sort((a, b) => compareSlugs(a.slug, b.slug))
     .map((entry) => ({ path: noteRoute(entry.slug), lastmod: entry.updated ?? entry.created }));
 
   return [

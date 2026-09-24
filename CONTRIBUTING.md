@@ -32,15 +32,50 @@ Report a security problem through [`SECURITY.md`](SECURITY.md), not a public iss
 
 ## Releasing
 
-Registry publication is enabled for the scoped name `@wxxb789/anc`. The supported
-release publishes the compiled tarball, never the repository root:
+The package is named `@wxxb789/anc` and registry publication is enabled in
+`package.json`, but no version has been published yet and no release tag exists.
+The unscoped `anc` on npm is an unrelated third-party package; never document or
+run bare `npx anc` outside a project that has this package installed.
 
-```bash
-npm login --scope=@wxxb789
-pnpm run verify
-pnpm run smoke:tarball                       # writes wxxb789-anc-<version>.tgz
-npm publish wxxb789-anc-<version>.tgz        # access: public is in publishConfig
-```
+A release is one frozen commit that passes every gate, recorded in
+[`CHANGELOG.md`](CHANGELOG.md), tagged, and then published from the compiled
+tarball — never from the repository root. Tagging and publishing are external
+side effects and need the owner's explicit approval.
+
+1. Move the `Unreleased` entries in `CHANGELOG.md` under a heading for the new
+   version and date, set `version` in `package.json` to match, and commit.
+2. On that commit, with a clean tree, run the gates:
+
+   ```bash
+   pnpm run verify
+   pnpm run build:fixture
+   pnpm run smoke:tarball                     # writes wxxb789-anc-<version>.tgz
+   gh workflow run action-parity --ref main   # read the run; it is not in verify
+   ```
+
+3. Tag the commit. The immutable tag names the exact version and is never moved;
+   the major tag is the moving pointer an Action user may follow, and for 0.x
+   that is `v0`:
+
+   ```bash
+   git tag -a vX.Y.Z -m "vX.Y.Z"
+   git tag -f v0 "vX.Y.Z^{commit}"
+   git push origin vX.Y.Z
+   git push -f origin v0
+   ```
+
+   Documentation recommends pinning the Action to a full commit SHA; `@vX.Y.Z`
+   is the readable exact pin and `@v0` is the convenience pointer.
+
+4. Publish the tarball the smoke test wrote:
+
+   ```bash
+   npm login --scope=@wxxb789
+   npm publish wxxb789-anc-<version>.tgz      # access: public is in publishConfig
+   ```
+
+5. Create the GitHub release from the tag, with that version's `CHANGELOG.md`
+   section as its notes.
 
 A bare `npm publish` or `npm pack` at the repository root is refused by the `prepack`
 hook, because those ship TypeScript that Node cannot strip under `node_modules`.

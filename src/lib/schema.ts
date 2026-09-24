@@ -7,6 +7,8 @@
  * loud build failure rather than a silent privacy leak.
  */
 
+import { compareSlugs, isNoteSlug, SLUG_MAX_BYTES } from './route-path.ts';
+
 export interface ContentEntry {
   slug: string;
   title: string;
@@ -59,20 +61,19 @@ export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Lowercase `[a-z0-9-]`, no leading, trailing, or doubled hyphen.
+ * A note slug: `isNoteSlug` from `route-path.ts`, the one definition every
+ * consumer shares.
  *
- * The doubled-hyphen rule exists because a slug and a collection are used
- * *verbatim* as public route segments, and `src/lib/routes.ts` rejects a
- * doubled separator in any route key — a tag of `Ops & SRE` slugs to `ops--sre`
- * and is collapsed to `ops-sre` before it is addressable. Admitting `a--b` here
- * while routing refuses it would let a schema-valid artifact fail the build at
- * a later stage, which is the one failure mode this contract exists to prevent.
- * The two rules are asserted to agree in `tests/route-model.test.ts`.
+ * Unicode letters, numbers, and marks in hyphen-separated runs — `日记-今天`,
+ * `projects-观点`, `three-laws` — lowercase, NFC, with no invisible code point,
+ * no leading, trailing, or doubled hyphen, and at most `SLUG_MAX_BYTES` UTF-8
+ * bytes. The doubled-hyphen rule exists because a slug and a collection are used
+ * *verbatim* as public route segments, and `src/lib/routes.ts` rejects a doubled
+ * separator in any route key. The two rules are asserted to agree in
+ * `tests/route-model.test.ts`.
  */
-const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
 export function isSlug(value: string): boolean {
-  return SLUG.test(value);
+  return isNoteSlug(value);
 }
 
 /** ISO 8601 calendar date, optionally with a time and explicit offset. */
@@ -136,9 +137,10 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
  * produces, so it catches a runaway producer rather than constraining an author.
  */
 const STRING_LIMITS = {
-  // A path segment, and part of every redirect rule; Cloudflare caps a rule
-  // line at 1,000 characters and a rule carries the slug twice.
-  slug: 128,
+  // A path segment. The binding bound is `SLUG_MAX_BYTES` (UTF-8 bytes, a
+  // filesystem name limit), enforced by `isSlug`; this UTF-16 ceiling is the
+  // same number and can never be the tighter of the two.
+  slug: SLUG_MAX_BYTES,
   // A `<title>`, a card heading, and a search result. Search engines truncate a
   // title well below this.
   title: 300,
@@ -449,7 +451,9 @@ function checkStringArray(
   if (clean.length !== value.length) return false;
 
   if (new Set(clean).size !== clean.length) issues.push(`${label}: must not contain duplicates`);
-  if (options.sorted && clean.some((item, index) => index > 0 && clean[index - 1]! > item)) {
+  // Slug lists are in canonical slug order (code points, the order SQLite's
+  // BINARY collation uses), not JavaScript's UTF-16 `<`; see `compareSlugs`.
+  if (options.sorted && clean.some((item, index) => index > 0 && compareSlugs(clean[index - 1]!, item) > 0)) {
     issues.push(`${label}: must be sorted in ascending order`);
   }
   return true;
@@ -477,7 +481,10 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
 
   if (typeof slug === 'string') {
     if (!isSlug(slug)) {
-      issues.push(`${label}.slug: must be lowercase [a-z0-9-] without a leading or trailing hyphen`);
+      issues.push(
+        `${label}.slug: must be lowercase letters, digits, or marks in single-hyphen runs, ` +
+          `NFC, at most ${SLUG_MAX_BYTES} UTF-8 bytes`,
+      );
     } else if (RESERVED_SLUGS.has(slug)) {
       issues.push(`${label}.slug: collides with reserved route segment "${slug}"`);
     }
@@ -496,7 +503,10 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
     }
   }
   if (typeof value['collection'] === 'string' && !isSlug(value['collection'])) {
-    issues.push(`${label}.collection: must be lowercase [a-z0-9-] without a leading or trailing hyphen`);
+    issues.push(
+      `${label}.collection: must be lowercase letters, digits, or marks in single-hyphen runs, ` +
+        `NFC, at most ${SLUG_MAX_BYTES} UTF-8 bytes`,
+    );
   }
 
   for (const field of ['created', 'updated'] as const) {
@@ -579,8 +589,8 @@ function checkCorpus(entries: readonly ContentEntry[], issues: string[], edges: 
   }
 
   for (const entry of entries) {
-    const expected = (expectedBacklinks.get(entry.slug) ?? []).sort();
-    const actual = [...entry.backlinks].sort();
+    const expected = (expectedBacklinks.get(entry.slug) ?? []).sort(compareSlugs);
+    const actual = [...entry.backlinks].sort(compareSlugs);
     if (expected.length !== actual.length || expected.some((slug, index) => slug !== actual[index])) {
       issues.push(
         `entries (slug "${entry.slug}").backlinks: must be the exact inverse of outgoing links ` +

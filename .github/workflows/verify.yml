@@ -17,6 +17,11 @@
 # secrets and never gains private-vault access — it checks out this public
 # repository and nothing else. `permissions` is narrowed rather than left to the
 # repository default, so the token handed to the job cannot write.
+#
+# Third-party actions are pinned to full commit SHAs with the release they were
+# resolved from in a trailing comment: a tag can be moved, a SHA cannot, and
+# Dependabot (`.github/dependabot.yml`) proposes the updates as reviewable diffs.
+# The corpus-dependent gates `verify` skips run nightly in `fixture.yml`.
 name: verify
 
 on:
@@ -27,11 +32,23 @@ on:
 permissions:
   contents: read
 
+# Astro's anonymous usage telemetry has no business in a CI log or on the wire.
+env:
+  ASTRO_TELEMETRY_DISABLED: 1
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    # A normal run takes about five minutes; a hung browser or install should
+    # fail in bounded time rather than hold a runner for the six-hour default.
+    timeout-minutes: 30
+    # One run per ref. A newer push to a pull request supersedes the older run;
+    # pushes to main are never cancelled, so every main commit gets a result.
+    concurrency:
+      group: ${{ github.workflow }}-verify-${{ github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # `pnpm/setup` rather than the older `pnpm/action-setup`: pnpm documents
       # the latter as the action for pnpm v10 and older, and `packageManager`
@@ -41,7 +58,7 @@ jobs:
       #
       # `install: false` because the install belongs after Node is pinned, as
       # its own step, against `pnpm-lock.yaml` with `--frozen-lockfile`.
-      - uses: pnpm/setup@v2
+      - uses: pnpm/setup@84cb39b217b10273981911c288cd62326dc7c6d2 # v2.0.2
         with:
           install: false
 
@@ -53,7 +70,7 @@ jobs:
       # `node-version-file` rather than a literal version: `.nvmrc` is the
       # existing pin, and `tests/deployment.test.ts` already gates it against
       # `engines.node`.
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version-file: .nvmrc
           cache: pnpm

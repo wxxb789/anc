@@ -43,6 +43,14 @@ interface Workflow {
 }
 
 const WORKFLOW = parse(TEXT) as Workflow;
+
+/**
+ * The third-party actions the parity path may call, each pinned to the full
+ * commit SHA its release tag resolved to. A tag can be moved after review; a
+ * SHA cannot, so the pin is what makes this allowlist mean what it says.
+ */
+const CHECKOUT = 'actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09';
+const SETUP_NODE = 'actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444';
 const JOBS = Object.entries(WORKFLOW.jobs ?? {});
 
 /** Every step, tagged with the job that owns it. */
@@ -55,11 +63,18 @@ const CODE = TEXT.split('\n')
   .filter((line) => !line.trimStart().startsWith('#'))
   .join('\n');
 
-test('the workflow runs on pull requests and on demand', () => {
+test('the workflow runs on pushes to main, on pull requests, and on demand', () => {
   assert.deepEqual(
     Object.keys(WORKFLOW.on ?? {}).sort(),
-    ['pull_request', 'workflow_dispatch'],
-    `${WORKFLOW_PATH}: the evidence must be reachable from a pull request and by hand`,
+    ['pull_request', 'push', 'workflow_dispatch'],
+    `${WORKFLOW_PATH}: the evidence must be reachable from main, a pull request, and by hand`,
+  );
+  // On main, so the commit a stranger pins by SHA has parity evidence at that
+  // commit rather than only at the pull request that preceded it.
+  assert.deepEqual(
+    (WORKFLOW.on?.['push'] as { branches?: unknown } | undefined)?.branches,
+    ['main'],
+    `${WORKFLOW_PATH}: push must be scoped to main`,
   );
 });
 
@@ -124,11 +139,11 @@ test('the Action’s own install and scanner steps are the ones exercised', () =
   for (const { step } of STEPS) {
     if (step.uses === undefined) continue;
     assert.ok(
-      ['actions/checkout@v5', 'actions/setup-node@v5', './generator'].includes(step.uses),
+      [CHECKOUT, SETUP_NODE, './generator'].includes(step.uses),
       `${WORKFLOW_PATH}: unexpected action ${step.uses}; anything else can deploy or change the chain`,
     );
   }
-  const checkout = STEPS.filter(({ step }) => step.uses === 'actions/checkout@v5');
+  const checkout = STEPS.filter(({ step }) => step.uses === CHECKOUT);
   assert.ok(checkout.length > 0, `${WORKFLOW_PATH}: the generator is never checked out`);
   for (const { step } of checkout) {
     assert.equal(
@@ -138,7 +153,7 @@ test('the Action’s own install and scanner steps are the ones exercised', () =
     );
   }
   for (const { step } of STEPS) {
-    if (step.uses !== 'actions/setup-node@v5') continue;
+    if (step.uses !== SETUP_NODE) continue;
     assert.equal(
       step.with?.['node-version-file'],
       'generator/.nvmrc',

@@ -179,6 +179,25 @@ async function waitForStatus(page: Page, expected: string, timeout = 20_000): Pr
   );
 }
 
+/**
+ * Wait until the status region holds a reply's sentence.
+ *
+ * A cold load first announces the loading sentence in the same polite region,
+ * so "the status is non-empty" is no longer "a reply arrived": the wait has to
+ * see a sentence other than the loading one, with the controls no longer busy.
+ */
+async function waitForAnswer(page: Page, timeout = 20_000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const status = document.querySelector('[data-graph-status]')?.textContent ?? '';
+      const controls = document.querySelector<HTMLElement>('[data-graph-controls]');
+      return status !== '' && status !== controls?.dataset['graphLoading'] && !controls?.hasAttribute('aria-busy');
+    },
+    undefined,
+    { timeout },
+  );
+}
+
 /** Wait until the first drawn node is `slug`; a redraw replaces the group. */
 async function waitForCenter(page: Page, slug: string, timeout = 20_000): Promise<void> {
   await page.waitForFunction(
@@ -335,8 +354,27 @@ function assertFrameCovers(frame: FigureFrame): void {
   }
 }
 
+/**
+ * The garden tag's display label, deliberately not its route key.
+ *
+ * The chooser's option value is the key and its text is the label, and the
+ * filtered status sentence has to name the tag the reader chose — the label.
+ * The shared fixture spells every tag in lowercase, where key and label
+ * coincide and a status filled with the key would pass unnoticed, so the
+ * garden members are relabelled here. `Garden` still has the route key
+ * `garden`, so every membership oracle in the fixture is unchanged.
+ */
+const GARDEN_LABEL = 'Garden';
+
 beforeAll(async () => {
-  const corpus = graphCorpus();
+  const corpus = Object.fromEntries(
+    Object.entries(graphCorpus()).map(([name, text]) => [name, text.replace('tags: [garden]', `tags: [${GARDEN_LABEL}]`)]),
+  );
+  assert.equal(
+    Object.values(corpus).filter((text) => text.includes(`tags: [${GARDEN_LABEL}]`)).length,
+    3,
+    'the garden relabel did not reach the three garden members',
+  );
   assert.equal(Object.keys(corpus).length, CORPUS_SIZE, 'the corpus is not the 65 notes the oracles assume');
   const buildStarted = Date.now();
   site = await buildAndServe(corpus);
@@ -710,7 +748,7 @@ test('the global graph ranks 60 of 65, filters team and garden exactly, depicts 
   const staticFrame = await figureFrame(page);
   const region = page.locator('[data-graph-region="site-graph"]');
   await page.locator('[data-graph-activate]').click();
-  await page.waitForFunction(() => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0);
+  await waitForAnswer(page);
 
   const unfiltered = await drawnSlugs(page);
   assert.deepEqual(unfiltered, [...GLOBAL_DRAWN], 'the unfiltered ranking or the drawn set is wrong');
@@ -765,7 +803,7 @@ test('the global graph ranks 60 of 65, filters team and garden exactly, depicts 
   );
   assert.equal(
     (await page.locator('[data-graph-status]').textContent()) ?? '',
-    filled(translate('en').graphExplorerStatusFiltered, { tag: 'garden', shown: 3, total: 3 }),
+    filled(translate('en').graphExplorerStatusFiltered, { tag: GARDEN_LABEL, shown: 3, total: 3 }),
   );
 
   // The filtered top-ranked note is not the unfiltered one, which is what makes
@@ -1033,7 +1071,7 @@ test('a live redraw preserves the static lang attributes of both pages', async (
     assert.deepEqual(await anchorLanguages(page, tableScope), [...expected.table], `static table langs on ${url}`);
 
     await page.locator('[data-graph-activate]').click();
-    await page.waitForFunction(() => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0);
+    await waitForAnswer(page);
     assert.deepEqual(await drawnSlugs(page), [...expected.drawn], `the drawn set on ${url}`);
 
     const liveFigure = await anchorLanguages(page, figureScope);
@@ -1102,7 +1140,7 @@ test('a Worker that stops replying is terminated at its deadline and the next in
   await recordWorkerActivity(page);
   await page.goto(`${site.origin}/notes/hub/`, { waitUntil: 'load' });
   await page.locator('[data-graph-activate]').click();
-  await page.waitForFunction(() => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0);
+  await waitForAnswer(page);
   const drawn = await drawnSlugs(page);
   assert.equal(drawn.length, HUB_STATIC.figureNodes);
 
@@ -1153,7 +1191,7 @@ test('a released stale filter reply cannot overwrite the newer filter', async ()
   await recordWorkerActivity(page);
   await page.goto(`${site.origin}/graph/`, { waitUntil: 'load' });
   await page.locator('[data-graph-activate]').click();
-  await page.waitForFunction(() => (document.querySelector('[data-graph-status]')?.textContent ?? '').length > 0);
+  await waitForAnswer(page);
   assert.equal((await drawnSlugs(page)).length, GLOBAL_DRAWN.length, 'the unfiltered graph did not draw first');
 
   // Hold the next globalGraph request: the Worker never sees it until the
@@ -1229,7 +1267,7 @@ test('a released stale filter reply cannot overwrite the newer filter', async ()
   assert.deepEqual(await drawnSlugs(page), gardenDrawn, 'the stale team reply overwrote the garden drawing');
   assert.equal(
     (await page.locator('[data-graph-status]').textContent()) ?? '',
-    filled(translate('en').graphExplorerStatusFiltered, { tag: 'garden', shown: 3, total: 3 }),
+    filled(translate('en').graphExplorerStatusFiltered, { tag: GARDEN_LABEL, shown: 3, total: 3 }),
     'the stale team reply overwrote the garden status',
   );
   await page.close();
@@ -1359,10 +1397,46 @@ test('a blocked snapshot leaves the static figure, table, and links intact', asy
   const staticNodes = await page.locator('.graph-region .graph-nodes a.graph-node').count();
   const staticRows = await page.locator('.graph-region .graph-table tbody tr').count();
   await page.locator('[data-graph-activate]').click();
-  await page.waitForTimeout(800);
-  assert.match((await page.locator('[data-graph-status]').textContent()) ?? '', /could not|失败|complete/i);
+  await waitForStatus(page, translate('en').graphExplorerFailed);
   assert.equal(await page.locator('.graph-region .graph-nodes a.graph-node').count(), staticNodes, 'the static figure was lost');
   assert.equal(await page.locator('.graph-region .graph-table tbody tr').count(), staticRows, 'the static table was lost');
   assert.equal(await page.locator('.graph-region .graph-nodes a[href="/notes/peer-01/"]').count(), 1, 'a static node link was lost');
+  await page.close();
+}, 120_000);
+
+/**
+ * A cold load announces itself.
+ *
+ * Activation downloads the Worker, the WASM, and the snapshot before any reply,
+ * and `aria-busy` on the controls announces nothing, so a screen-reader user
+ * who pressed "Explore interactively" heard silence until the drawing landed.
+ * The snapshot is held here so the loading state is observable rather than a
+ * race; the sentence has to be in the polite status region, and the reply's
+ * own sentence has to replace it.
+ */
+test('a cold load announces the loading state in the polite status region', async () => {
+  const page = await browser.newPage();
+  let release: () => void = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route('**/data/site.*', async (route) => {
+    await held;
+    await route.continue();
+  });
+  await page.goto(`${site.origin}/notes/hub/`, { waitUntil: 'load' });
+  const status = page.locator('[data-graph-status]');
+  assert.equal(await status.getAttribute('role'), 'status', 'the graph status is not a status region');
+  assert.equal(await status.getAttribute('aria-live'), 'polite', 'the graph status is not a polite live region');
+  assert.equal((await status.textContent()) ?? '', '', 'the status announced something before any intent');
+
+  await page.locator('[data-graph-activate]').click();
+  const loading = translate('en').graphExplorerLoading;
+  assert.ok(loading !== '', 'the loading sentence is empty, so this gate would compare nothing');
+  await waitForStatus(page, loading, 10_000);
+  release();
+  await waitForStatus(
+    page,
+    filled(translate('en').graphExplorerStatusLocal, { shown: HUB_STATIC.shown, total: HUB_STATIC.total }),
+    30_000,
+  );
   await page.close();
 }, 120_000);

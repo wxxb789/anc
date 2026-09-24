@@ -108,10 +108,11 @@ makes sense to this repository's owner is a defect — see
   published nodes and public metadata, and is downloaded lazily. It is not an inventory
   of excluded paths. The retained authored label is the accepted disclosure; the target's
   own metadata and body remain withheld. The reasoning the old rule
-  rested on is in `.tmp/tk-27-report.md` §7.1 and in the superseded-gate notes in
-  `tests/link-traversal.test.ts` and `tests/backlink-surfaces.test.ts`; what it bought was
-  that a reader could not learn the shape of the author's private tree, and that is what was
-  spent.
+  rested on is in the superseded-gate notes in `tests/link-traversal.test.ts` and
+  `tests/backlink-surfaces.test.ts`: a directory path is itself content (`clients/acme/`
+  names a client), so reducing the target to its last segment kept every withheld
+  directory name off the host. What it bought was that a reader could not learn the shape
+  of the author's private tree, and that is what was spent.
 
   Two things follow that are easy to get wrong. The `private` slug is **reserved**
   (`src/lib/schema.ts`), because `markdown.ts` rewrites every single-segment `/<slug>/` href
@@ -244,10 +245,9 @@ deployment step. Read its run for 0007, not as a substitute for `verify`.
 - Release mode requires a public origin and a committed ledger exactly equal to the computed
   public slugs; missing, dirty, added, and removed states fail, and shrink-then-re-include fails
   as a new addition rather than inheriting stale approval.
-- Removing a note and rebuilding removes its route, public index entry, feed/sitemap
-  entry, and Pagefind record while retaining other notes. During the SQLite migration,
-  the public-index gate must check the DB row and incident relations instead of the
-  legacy content-index entry, including any no-longer-used aliases and tags.
+- Removing a note and rebuilding removes its route, its SQLite node row and incident
+  relations (including any aliases and tags no longer used by another note), its
+  feed/sitemap entry, and its Pagefind record, while retaining other notes.
 - No horizontal overflow, browser console error, or broken internal link.
 - Search opens and indexes published pages.
 - Backlinks carry only the linked note's title and route, checked against an allowlist of both
@@ -316,7 +316,8 @@ completed outcomes; [goal 0008](docs/goals/0008-acceptable-browser-cost.md) is s
 progress, and the older note here that the design was "not yet implemented" predates
 that landing. Neither 0.1.0 nor 1.0.0 is ready. Registry publication, deployment, and
 post-deploy smoke tests are separate external actions. Version 0.1 intentionally adds no
-non-Markdown asset pipeline or corpus redirects.
+non-Markdown asset pipeline or corpus redirects. The `0.0.1` in `package.json` reserves the
+`@wxxb789/anc` name; it is not a 0.1.0 candidate and records no release evidence.
 
 ## Documentation
 
@@ -332,5 +333,5 @@ non-Markdown asset pipeline or corpus redirects.
 - [`docs/plans/ssg-generalisation-plan.md`](docs/plans/ssg-generalisation-plan.md) — the
   general-purpose turn, its tickets, and what its own drafting got wrong.
 
-Astro documentation: https://docs.astro.build
-Pagefind documentation: https://pagefind.app/docs/
+Astro documentation: <https://docs.astro.build>
+Pagefind documentation: <https://pagefind.app/docs/>

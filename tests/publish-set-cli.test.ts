@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -30,6 +30,26 @@ function run(
     env: environment,
   });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+/**
+ * The inherited environment with every PATH directory holding a gitleaks
+ * executable removed. Windows spells the key `Path` and resolves `.exe`/`.cmd`,
+ * so every key spelling is replaced and every extension is checked.
+ */
+function withoutGitleaksOnPath(): NodeJS.ProcessEnv {
+  const names = ['gitleaks', 'gitleaks.exe', 'gitleaks.cmd', 'gitleaks.bat', 'gitleaks.com'];
+  const environment: NodeJS.ProcessEnv = {};
+  let search = '';
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.toUpperCase() === 'PATH') search = value ?? '';
+    else environment[key] = value;
+  }
+  environment['PATH'] = search
+    .split(delimiter)
+    .filter((directory) => directory !== '' && !names.some((name) => existsSync(join(directory, name))))
+    .join(delimiter);
+  return environment;
 }
 
 function git(root: string, args: string[]): void {
@@ -156,9 +176,9 @@ test('release refuses a missing pinned scanner without naming a path or a secret
     // stderr exactly "secret scan requires Gitleaks 8.30.1". The version comes
     // from the one pinned constant rather than a third literal, so a version
     // bump cannot red this test as a message change. This process's node is
-    // invoked by absolute path, so /usr/bin:/bin keeps node and git reachable
-    // while leaving the scanner's own directory off PATH.
-    const missing = run(root, ['build', '--release'], { ...process.env, PATH: '/usr/bin:/bin' });
+    // invoked by absolute path, so dropping only the directories that hold a
+    // gitleaks executable keeps git reachable on every platform.
+    const missing = run(root, ['build', '--release'], withoutGitleaksOnPath());
     assert.equal(missing.status, 1);
     assert.equal(missing.stderr, `secret scan requires Gitleaks ${GITLEAKS_VERSION}\n`);
     const streams = missing.stdout + missing.stderr;

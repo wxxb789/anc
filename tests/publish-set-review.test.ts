@@ -59,6 +59,23 @@ test('review writes one sorted public-slug ledger and a committed exact set pass
   assert.doesNotThrow(() => assertPublishSetReviewed(root, ['zeta', 'alpha']));
 });
 
+test('the ledger accepts Unicode slugs and stores them in canonical code point order', () => {
+  // Red against the ASCII-only ledger grammar: `日记-今天` was refused as an
+  // invalid slug, so a CJK note could never pass release review.
+  const root = repository();
+  const astral = '\u{20000}';
+  assert.equal(writePublishSetReview(root, ['日记-今天', 'ａ', astral, 'projects-观点', 'alpha']), 5);
+  assert.deepEqual(JSON.parse(readFileSync(join(root, PUBLISH_SET_REVIEW_FILE), 'utf8')).slugs, [
+    'alpha',
+    'projects-观点',
+    '日记-今天',
+    'ａ',
+    astral,
+  ]);
+  commitReview(root);
+  assert.doesNotThrow(() => assertPublishSetReviewed(root, [astral, '日记-今天', 'ａ', 'projects-观点', 'alpha']));
+});
+
 test('release fails closed when the ledger is missing, untracked, staged, or modified', () => {
   const root = repository();
   assert.equal(failure(() => assertPublishSetReviewed(root, ['alpha'])).code, 'publish-set-review-missing');

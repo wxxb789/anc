@@ -27,14 +27,14 @@ body:
         ---
         Body with [[a link]].
 
-        $ npx anc build
+        $ pnpm exec anc build   # or: npx --no anc build, or node /path/to/anc/bin/anc.mjs build
     validations:
       required: true
   - type: input
     id: version
     attributes:
       label: Version or commit
-      description: The package version, or the commit you ran.
+      description: The output of `anc --version`, or the commit you ran.
     validations:
       required: true
   - type: textarea

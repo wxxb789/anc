@@ -56,7 +56,7 @@ const CONTENT_TYPES: Record<string, string> = {
 export const WORKER_CHUNK_PATTERN = /\/_astro\/snapshot-worker-[\w-]+\.js$/;
 
 /** One `_headers` rule: a path pattern and the headers it sets. */
-interface HeaderRule {
+export interface HeaderRule {
   matcher: RegExp;
   headers: Record<string, string>;
 }
@@ -69,7 +69,7 @@ interface HeaderRule {
  * response would make the harness stricter about caching than the deployment it
  * stands in for.
  */
-function headerRules(text: string): HeaderRule[] {
+export function headerRules(text: string): HeaderRule[] {
   const rules: HeaderRule[] = [];
   for (const line of text.split(/\r?\n/)) {
     if (line.trim() === '' || line.trimStart().startsWith('#')) continue;
@@ -98,7 +98,7 @@ function headerRules(text: string): HeaderRule[] {
  * `tests/deployment.test.ts` forbids the shipped file from relying on that, so
  * this merge is indistinguishable for the file actually served.
  */
-function applyRules(rules: readonly HeaderRule[], pathname: string): Record<string, string> {
+export function applyRules(rules: readonly HeaderRule[], pathname: string): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const rule of rules) {
     if (!rule.matcher.test(pathname)) continue;

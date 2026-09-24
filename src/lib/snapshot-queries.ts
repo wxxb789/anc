@@ -12,6 +12,8 @@
  * lookahead row, and graph selection happens **before** induced-edge extraction.
  */
 
+import { isNoteSlug } from './route-path.ts';
+
 /** A note as it appears in a relationship list: the fields a label needs. */
 export interface NoteSummary {
   slug: string;
@@ -248,19 +250,16 @@ export function pageOf<T extends { slug: string }>(rows: readonly T[], pageSize:
   return { items, nextCursor };
 }
 
-/** A canonical note slug: lowercase, hyphen-separated, no traversal or dot. */
-const LOOKUP_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
 /**
  * Whether a slug is a plausible lookup key before a query is attempted.
  *
- * Uses the note-slug grammar rather than only a length bound: SQL binds the
- * value as a parameter, so a traversal string cannot escape, but a request that
- * is not a slug is a caller defect that should fail as `bad-argument` rather
- * than silently return "no match".
+ * Uses the shared note-slug grammar (`isNoteSlug`) rather than only a length
+ * bound: SQL binds the value as a parameter, so a traversal string cannot
+ * escape, but a request that is not a slug is a caller defect that should fail
+ * as `bad-argument` rather than silently return "no match".
  */
 export function isLookupSlug(value: unknown): value is string {
-  return typeof value === 'string' && value.length > 0 && value.length <= 128 && LOOKUP_SLUG.test(value);
+  return typeof value === 'string' && value.length > 0 && isNoteSlug(value);
 }
 
 /** Route-key characters a canonical tag key may carry; no separators or controls. */

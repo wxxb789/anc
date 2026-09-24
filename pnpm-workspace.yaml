@@ -12,3 +12,12 @@
 # scripts unnoticed.
 allowBuilds:
   esbuild: false
+
+# rolldown 1.2.2 — what vite 8.2's `~1.2.0` resolved to — folds a string
+# concatenation containing a lone-surrogate escape into U+FFFD, which broke
+# temml's lexer in the shipped chunk: every client-rendered `\command` came out
+# as letters. 1.2.9 writes the escape back correctly. Drop this once the vite
+# Astro resolves requires a fixed rolldown itself.
+# `tests/built-output.test.ts` 'the bundled math renderer still reads control words'.
+overrides:
+  rolldown: 1.2.9

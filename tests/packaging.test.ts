@@ -1,7 +1,7 @@
 /**
  * The gate over the package boundary.
  *
- * TK-24's premise is that `npx anc build` runs in a stranger's
+ * TK-24's premise is that the installed `anc build` runs in a stranger's
  * repository. npm installs a package's `dependencies` and **none of its
  * `devDependencies`**, so a module the build reaches at runtime that imports a
  * devDependency is not a lint violation — it is a build that dies at import,
@@ -62,9 +62,9 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
  * `src/scripts/diagram-disabled.ts` is the third case: it is reached by neither
  * convention nor import, but by `astro.config.mjs`'s `resolveId` plugin, which
  * names it as a `fileURLToPath(new URL(…))` string and substitutes it for
- * `diagram.ts` whenever `DIAGRAM_MODE` is `build-time`. Since that is the mode
- * that ships, it is the module actually in the bundle — and a parser cannot see
- * a path built out of a string. Verified by planting an unresolvable import in
+ * `diagram.ts` whenever `DIAGRAM_MODE` is `build-time`. The mode that ships is
+ * `client` (`src/lib/diagram-mode.ts`), but flipping that one constant puts this
+ * module in the bundle — and a parser cannot see a path built out of a string. Verified by planting an unresolvable import in
  * it: `astro build` died and this gate stayed green until the file was listed
  * here.
  */
@@ -108,7 +108,7 @@ function specifiersIn(source: string, filename: string): string[] {
       // type stripper, so they are not runtime dependencies. `src/lib/*` uses
       // this form heavily for `ContentEntry`.
       const isTypeOnly = ts.isImportDeclaration(node)
-        ? (node.importClause?.isTypeOnly ?? false)
+        ? node.importClause?.phaseModifier === ts.SyntaxKind.TypeKeyword
         : node.isTypeOnly;
       if (specifier !== undefined && ts.isStringLiteral(specifier) && !isTypeOnly) {
         found.push(specifier.text);
@@ -470,11 +470,15 @@ test('the tarball carries what the build reads and none of this owner\'s content
   // Release and repository-only scripts either import devDependencies or operate
   // on this checkout. Shipping one gives a consumer dead commands at best and a
   // devDependency import failure at worst, so every exclusion is named here.
+  // The goal-0008 benchmark instrument is read from `scripts/` rather than
+  // listed, so a newly split benchmark module cannot ship by being forgotten;
+  // `compile-package.ts` matches exclusions by exact path, not by glob.
+  const benchmarkScripts = readdirSync(join(ROOT, 'scripts'))
+    .filter((name) => /^benchmark-.*\.ts$/.test(name))
+    .map((name) => `scripts/${name}`);
+  assert.ok(benchmarkScripts.length > 0, 'no benchmark scripts were found to hold to the exclusion');
   for (const excluded of [
-    'scripts/benchmark-limits.ts',
-    'scripts/benchmark-browser.ts',
-    'scripts/benchmark-identity.ts',
-    'scripts/benchmark-snapshot.ts',
+    ...benchmarkScripts,
     'scripts/build-fixture.ts',
     'scripts/build-site.ts',
     'scripts/compile-package.ts',
@@ -504,7 +508,7 @@ test('the tarball carries what the build reads and none of this owner\'s content
 });
 
 test('a bare pack is refused, and the refusal names the script that works', () => {
-  // The second publication guard, beside `private: true` above. A bare `npm
+  // The publication guard that remains now `private: true` is gone. A bare `npm
   // pack` in this repository ships `.ts` files Node refuses to strip under
   // `node_modules` — so the tarball dies at its first import in a consumer's
   // repository — and runtime scripts still naming uncompiled sources. The
@@ -657,6 +661,16 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
   try {
     const { compiled } = compilePackage(staging);
     assert.ok(compiled > 0, 'nothing was compiled, so the absences below hold vacuously');
+
+    // The MIT notice has to travel with every copy, and the staging step skips
+    // an entry that is missing rather than failing, so its presence is asserted
+    // here, byte for byte, instead of being assumed.
+    assert.ok(existsSync(join(staging, 'LICENSE')), 'the tarball carries no LICENSE, which MIT requires');
+    assert.equal(
+      readFileSync(join(staging, 'LICENSE'), 'utf8'),
+      readFileSync(join(ROOT, 'LICENSE'), 'utf8'),
+      'the tarball LICENSE differs from the repository LICENSE',
+    );
 
     const forbidden: Record<string, string[]> = { '.ts': [], '.map': [], '.d.ts': [] };
     for (const file of sourceFilesUnder(staging, () => true)) {

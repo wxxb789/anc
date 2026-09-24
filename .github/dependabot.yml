@@ -1,0 +1,30 @@
+# Weekly update proposals for the two dependency surfaces this repository pins.
+#
+# npm: minor and patch updates arrive as one grouped pull request so a routine
+# week is one review, while a major update arrives alone because it can change
+# behaviour. Security updates are raised as they are published, regardless of
+# this schedule. Every proposal still has to pass `verify` like any other change.
+#
+# github-actions: the workflows pin third-party actions to commit SHAs with a
+# `# vX.Y.Z` comment; Dependabot updates both together.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - '*'

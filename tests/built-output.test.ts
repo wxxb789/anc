@@ -12,7 +12,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
 import { test, type TestContext } from 'vitest';
@@ -406,6 +406,31 @@ test('no page requests a search asset before the reader opens search', () => {
       );
     }
   }
+});
+
+/**
+ * The bundler must not corrupt what it minifies.
+ *
+ * Measured with rolldown 1.2.2: temml's lexer builds its token regex by
+ * concatenating template literals with a `"[\uD800-\uDBFF]"` string, and
+ * constant folding wrote each lone-surrogate escape out as U+FFFD followed by
+ * `d800`. The regex then matched no control word, so every `\sum`, `\frac`, and
+ * `\alpha` in client-mode math rendered as separate letters, while the Node
+ * build that validated the expression at build time was correct. Only the
+ * shipped chunk showed it, so this reads the shipped chunk: no U+FFFD in any
+ * script of ours, and temml's own chunk turning a control word into its symbol.
+ */
+test('the bundled math renderer still reads control words', async () => {
+  const scripts = builtFiles('.js').filter(OURS);
+  for (const file of scripts) {
+    assert.ok(!read(file).includes('�'), `${file}: carries U+FFFD, a character the bundler failed to write`);
+  }
+  const temml = scripts.filter((file) => /[\\/]temml\.[^\\/]+\.js$/.test(file));
+  assert.equal(temml.length, 1, `expected one shipped temml chunk, found ${temml.length}`);
+  const module = (await import(pathToFileURL(temml[0]!).href)) as {
+    default: { renderToString(tex: string): string };
+  };
+  assert.match(module.default.renderToString('\\alpha'), /<mi>α<\/mi>/);
 });
 
 /*

@@ -10,6 +10,14 @@ configuration exclusions apply next; `publish: true` cannot override exclusion.
 Malformed configuration and zero-match exclusion patterns fail. Existing built-in
 exclusions and the absence of a non-Markdown asset-copy pipeline remain in force.
 
+Publication reads only what lies inside the content root. A `.md` symbolic link
+whose resolved target is outside it is dropped unread as `link-outside-content`,
+after both exclusion ranks. A release ledger records slugs, and git does not see
+an external target change, so following such a link would let an approved slug
+carry different private text on each build. A link to a file inside the root
+publishes under the link's own path. A leading `---` block that carries a
+`publish:` key but has no closing delimiter fails the build, whatever its length.
+
 `review` produces the exact public slug set. Release builds require the committed,
 unchanged ledger to equal the newly computed set, including removals. A successful
 build is not a deployment action. Reports retain names privately; stdout/stderr
@@ -33,9 +41,53 @@ deletion from a crawler, cache, or a visitor's previous download.
 
 ## Notes, routes, and identity
 
-- Preserve the existing validated slug grammar and reserved routes in
-  `src/lib/schema.ts`. Derive note URLs through `src/lib/route-path.ts` rather than
-  storing another URL/path column.
+- Preserve the validated slug grammar and reserved routes in `src/lib/schema.ts`,
+  whose `isSlug` is `isNoteSlug` in `src/lib/route-path.ts` — the one definition
+  the producer, the content contract, the renderer's href rewrite, the Worker's
+  lookup guard, the browser's pathname parser, and the publish-set ledger share.
+  Derive note URLs through `src/lib/route-path.ts` rather than storing another
+  URL/path column.
+- **Slugs are Unicode.** A slug is hyphen-separated runs of Unicode letters,
+  numbers, and marks (`\p{L}\p{N}\p{M}`), lowercase under JavaScript
+  `toLowerCase()`, NFC, with no Default_Ignorable code point, at least one letter
+  or digit, and no leading, trailing, or doubled hyphen. Underscore is not a slug
+  character (it is one in a tag key). The producer derives it per path segment —
+  NFC, lowercase, strip invisible code points, replace each run of anything else
+  with one hyphen, trim — and joins segments with `-`: `日记/今天.md` → `日记-今天`,
+  `Projects/观点.md` → `projects-观点`. No transliteration. A folder segment that
+  derives nothing is omitted; the first folder's derived key is the collection.
+- **Hash fallback.** When the stem derives nothing (`___.md`, `🌱.md`, `---.md`) or
+  the joined slug is not a valid slug (too long, marks only), the slug is `note-`
+  plus the first ten hex digits of SHA-256 over the NFC repo-relative path. It is
+  a pure function of that one path, so adding or removing another file never moves
+  it. The former `empty-slug` drop is removed: under default-publish it silently
+  lost a note the author never excluded. A frontmatter `slug:` override uses the
+  same grammar after NFC and fails, rather than hashing, when invalid or too long.
+- **Length.** At most 128 UTF-8 **bytes** (`SLUG_MAX_BYTES`), not UTF-16 units: a
+  slug is an output directory name, and ext4/APFS cap a name at 255 bytes, which a
+  128-character CJK slug (384 bytes) exceeds. 128 bytes is about 42 CJK characters.
+- **Collisions.** Two distinct files deriving one slug keep the explicit behavior:
+  the first in sorted walk order wins and the other is dropped with
+  `slug-collision`, naming the winner in the private report. Stdout carries every
+  drop reason as a nameless count, e.g. `content: 5 discovered, 3 published,
+  2 dropped (1 not-markdown, 1 slug-collision)`; reasons are literals of the
+  closed set, so the line is rename-invariant.
+- **Encoding.** HTML hrefs carry the raw slug (`/notes/日记-今天/`). Canonical
+  links, `og:url`, sitemap `<loc>`, and feed URLs are percent-encoded valid URIs
+  (`new URL`). The Markdown renderer emits body hrefs percent-encoded, so the href
+  rewrite and the browser's `noteSlugFromPath` decode first (a malformed escape is
+  not a slug), NFC-normalize, then validate.
+- **Order.** Canonical slug order is Unicode code point order (`compareSlugs`),
+  which equals SQLite `BINARY` (UTF-8 byte) order. JavaScript `<` compares UTF-16
+  units and disagrees for astral characters versus U+E000–U+FFFF, so it is not
+  used for IDs, artifact edge lists, the sitemap, or the publish-set ledger.
+  Title-then-slug presentation order is a display comparator and stays as it is.
+  *Consumer:* `ORDER BY id` must equal `ORDER BY slug` and the cursor order.
+  *Ablation:* with JS `<`, a corpus holding `𠀀` and `ａ` assigns IDs in one order
+  and pages in the other (`tests/route-model.test.ts`).
+  *Consumer and ablation for the grammar as a whole:* a CJK-named repository.
+  Under the ASCII grammar its notes were dropped and links to them went to
+  `/private/`; `tests/unicode-slugs.test.ts` builds one end to end.
 - `nodes.id` is a positive integer assigned in canonical slug order within one
   snapshot. It is not a durable ID across builds or a public API identity.
 - Lookup and navigation use slugs. Browser responses containing integer IDs belong
@@ -51,6 +103,16 @@ deletion from a crawler, cache, or a visitor's previous download.
   Every browser result carrying note text includes that language. Apply the shared
   `partLanguage` semantics against the current page to title, excerpt, aliases and
   graph/list note labels; UI chrome keeps the surrounding page’s language.
+- **Site language default.** `publish.config.yaml` may carry `language`, validated
+  exactly as a note's. The producer writes it into every entry that declares none,
+  so `<html lang>`, `nodes.language`, and the Pagefind index a page lands in read
+  one effective value. It also becomes `NAV_LANGUAGE`, the chrome language of
+  non-note routes (crossing into page modules on `PUBLISH_SITE_LANGUAGE`, like the
+  title). Unconfigured, it is `en`. The English prose pages `/about/` and
+  `/privacy/` keep `lang="en"`. *Consumer:* a Chinese site without per-note
+  `language:` was indexed by Pagefind as English, one token per sentence.
+  *Ablation:* remove the fallback and such a note renders `<html lang="en">` and
+  lands in the `en` index (`tests/unicode-slugs.test.ts`).
 
 ## Edges
 

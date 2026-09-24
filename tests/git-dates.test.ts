@@ -48,7 +48,7 @@ test('full history supplies first and last commit dates in one repository or sub
 
     const full = await discover(source);
     const tracked = full.entries.find((entry) => entry.slug === 'notes-a');
-    const nonAscii = full.entries.find((entry) => entry.slug === 'notes-b');
+    const nonAscii = full.entries.find((entry) => entry.slug === 'notes-日-b');
     const untracked = full.entries.find((entry) => entry.slug === 'untracked');
     assert.equal(tracked?.created, '2024-01-02T03:04:05Z');
     assert.equal(tracked?.updated, '2024-03-04T05:06:07Z');
@@ -61,7 +61,7 @@ test('full history supplies first and last commit dates in one repository or sub
 
     const nested = await discover(join(source, 'notes'));
     const nestedTracked = nested.entries.find((entry) => entry.slug === 'a');
-    const nestedNonAscii = nested.entries.find((entry) => entry.slug === 'b');
+    const nestedNonAscii = nested.entries.find((entry) => entry.slug === '日-b');
     assert.equal(nestedTracked?.created, '2024-01-02T03:04:05Z');
     assert.equal(nestedTracked?.updated, '2024-03-04T05:06:07Z');
     assert.equal(nestedNonAscii?.created, '2024-01-02T03:04:05Z');
@@ -73,6 +73,24 @@ test('full history supplies first and last commit dates in one repository or sub
     assert.equal(shallowEntry?.updated, '2024-03-04T05:06:07Z');
   } finally {
     rmSync(workspace, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+
+test('a committer offset is normalised to UTC rather than published', async () => {
+  // `%cI` spells the committer's local offset, which says where they were when
+  // they committed. The instant survives; the location does not.
+  const directory = mkdtempSync(join(tmpdir(), 'producer-git-offset-'));
+  try {
+    git(directory, ['init', '--quiet']);
+    git(directory, ['config', 'user.name', 'Fixture']);
+    git(directory, ['config', 'user.email', 'fixture@example.invalid']);
+    writeFileSync(join(directory, 'note.md'), '# Note\n', 'utf8');
+    commit(directory, 'first', '2024-01-02T11:04:05+08:00');
+    const [entry] = (await discover(directory)).entries;
+    assert.equal(entry?.created, '2024-01-02T03:04:05Z');
+    assert.equal(entry?.updated, '2024-01-02T03:04:05Z');
+  } finally {
+    rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }
 });
 

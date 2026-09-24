@@ -14,7 +14,6 @@ import {
   assertSaturatedPage,
   createLimitsReportSkeleton,
   elapsedFromIntent,
-  listenServer,
   loadSiteHeaders,
   parseLimitsOptions,
   parseVitestJsonResult,
@@ -23,6 +22,7 @@ import {
   scrubBenchmarkFailure,
   startSite,
 } from '../scripts/benchmark-limits.ts';
+import { listenServer } from '../scripts/benchmark-server.ts';
 
 describe('benchmark-limits exit status', () => {
   it('requires the exact unique browser control set and the client-bound test to pass', () => {

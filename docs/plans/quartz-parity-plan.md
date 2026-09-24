@@ -8,7 +8,7 @@
 
 **Status:** Active planning baseline
 **Document type:** Competitive analysis + revised backlog
-**Derived from:** a read of Quartz v5 at commit `74b3fc9` (`Q:/repos/quartz`), an audit of this repository, and three adversarial review passes over the resulting proposals
+**Derived from:** a read of [Quartz](https://github.com/jackyzha0/quartz) v5 at commit `74b3fc9`, an audit of this repository, and three adversarial review passes over the resulting proposals
 **Describes:** `main` at `04f8d9c`, 210 tests passing
 **Supersedes:** the ticket ordering in [`p0-implementation-tickets.md`](p0-implementation-tickets.md), which remains canonical for TK-01 through TK-10 scope text
 
@@ -135,7 +135,7 @@ someone took, not estimates.
 | Claim | Why it fails |
 | --- | --- |
 | "11 direct dependencies versus Quartz's 79" | 45 of Quartz's 79 are first-party `@quartz-community/*` feature packages. We have 11 deps because we have roughly 15% of the features. This is earliness, not restraint |
-| "Faster than Quartz" | **Unmeasured.** No Lighthouse run, no LCP/INP/CLS, no build-time comparison. `.tmp/tk-02-report.md:243-248` says so itself about the 320 px criterion. Both repos are on this disk and `Q:/repos/quartz/docs/` is 111 markdown files; until that corpus goes through both pipelines, "faster" is a preference |
+| "Faster than Quartz" | **Unmeasured.** No Lighthouse run, no LCP/INP/CLS, no build-time comparison. `.tmp/tk-02-report.md:243-248` says so itself about the 320 px criterion. [Quartz's](https://github.com/jackyzha0/quartz) own `docs/` directory is 111 markdown files; until that corpus goes through both pipelines, "faster" is a preference |
 | "210 tests passing" as a robustness claim | Roughly 118 test pure functions against synthetic fixtures. Only ~25 (`built-output` 13, `built-routes` 12) touch real built output, and those run against a one-note corpus with zero optional fields |
 | "Lightning CSS is idle capacity waiting to be unlocked" | False. Vite's `cssMinify ?? !!minify` path already routes our CSS through Lightning CSS — the built `--color-shadow:#1b1f2424` is the `#RRGGBBAA` shortening only Lightning CSS performs. There is no dormant win here |
 | "Lightning CSS lowers our `light-dark()` today" | False. Every `light-dark()` in `src/styles/tokens.css:59` sits inside `@supports (color: light-dark(#000,#fff))`. Nothing lowers unless that guard is deleted **and** `targets` is set, and the two critics who costed it disagree by 543 gz bytes in opposite directions. Treat as unmeasured |
@@ -189,8 +189,8 @@ text.
 **The gate that closes this is a realistic multi-note fixture corpus built in CI, and it
 must land before TK-05 writes a single new component.** Every week it waits, more code is
 written against an artifact shape nobody has ever seen. It is also the only way "faster
-than Quartz" becomes a claim rather than a preference: `Q:/repos/quartz/docs/` is 111
-markdown files, Quartz is MIT-licensed, and both repositories are on this disk.
+than Quartz" becomes a claim rather than a preference: Quartz's own `docs/` directory is 111
+markdown files and [Quartz](https://github.com/jackyzha0/quartz) is MIT-licensed.
 
 ### 4.2 The boundary decision that gates more than any ticket
 
@@ -835,8 +835,8 @@ runtime code.
 
 **Problem.** No ticket's success condition is "better than Quartz at X". "Faster than
 Quartz" is currently a preference, not a claim: there has been no Lighthouse run, no
-LCP/INP/CLS measurement, and no build-time comparison. Both repositories are on this disk,
-`Q:/repos/quartz/docs/` is 111 Markdown files, and Quartz is MIT-licensed — the comparison
+LCP/INP/CLS measurement, and no build-time comparison. [Quartz's](https://github.com/jackyzha0/quartz) own
+`docs/` directory is 111 Markdown files, and Quartz is MIT-licensed — the comparison
 is available and nobody has run it.
 
 **Scope.**

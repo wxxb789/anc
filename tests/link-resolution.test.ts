@@ -31,6 +31,7 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { indexCorpus, resolveLink, type CorpusFile, type LinkResolution } from '../src/lib/link-resolution.ts';
+import { slugSegment } from '../src/lib/route-path.ts';
 
 /**
  * A corpus from paths, publishing every `.md` under a slug derived from its
@@ -51,7 +52,7 @@ function corpus(...paths: readonly string[]): readonly CorpusFile[] {
             .replace(/\.md$/, '')
             .toLowerCase()
             .split('/')
-            .map((segment) => segment.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''))
+            .map((segment) => slugSegment(segment))
             .filter((segment) => segment !== '')
             .join('-')
         : undefined,
@@ -73,6 +74,23 @@ function md(paths: readonly string[], href: string, source: string): LinkResolut
 function target(resolution: LinkResolution): string {
   return 'path' in resolution ? resolution.path : resolution.kind;
 }
+
+test('a CJK-named note resolves by wikilink and by encoded Markdown href, to its Unicode slug', () => {
+  const files = ['日记/今天.md', 'Projects/观点.md'];
+  for (const resolution of [
+    wiki(files, '今天', 'Projects/观点.md'),
+    wiki(files, '日记/今天', 'Projects/观点.md'),
+    md(files, '../日记/今天.md', 'Projects/观点.md'),
+    md(files, `../${encodeURI('日记/今天.md')}`, 'Projects/观点.md'),
+  ]) {
+    assert.equal(resolution.kind, 'resolved');
+    assert.equal('slug' in resolution ? resolution.slug : undefined, '日记-今天');
+  }
+  // A composed link against a decomposed filename resolves to the NFC slug.
+  const decomposed = ['Café.md'.normalize('NFD')];
+  const resolved = wiki(decomposed, 'café'.normalize('NFC'), 'x.md');
+  assert.equal('slug' in resolved ? resolved.slug : undefined, 'café');
+});
 
 test('form 1 — an Obsidian shortest-path wikilink resolves to the one file carrying that name', () => {
   // Tier 0 → 1. The dominant form, and the only tier requiring uniqueness.

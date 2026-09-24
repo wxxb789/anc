@@ -49,10 +49,16 @@ let runtime: Promise<typeof import('mermaid').default> | undefined;
 function configure(mermaid: typeof import('mermaid').default): void {
   mermaid.initialize({
     startOnLoad: false,
-    // Matches the build-time renderer, which documents why: both stricter
-    // levels run the output through DOMPurify, and the theme is supplied
-    // here rather than by the diagram.
-    securityLevel: 'loose',
+    // **Deliberately not the build-time renderer's `'loose'`.** That level is
+    // forced there by happy-dom, under which DOMPurify returns an empty string
+    // (`src/lib/mermaid-render.ts`). A real browser has no such defect, so this
+    // path takes Mermaid's own label sanitizing, drops `click ... call`
+    // callbacks and `_blank` targets, and keeps the post-render pass below as
+    // a second boundary rather than the only one. Measured in Chromium: all
+    // four diagram types and the theme re-render still draw, and
+    // `tests/diagram-client.test.ts` gates a hostile label and `click`
+    // directive set against the rendered SVG.
+    securityLevel: 'strict',
     deterministicIds: true,
     handDrawnSeed: 42,
     theme: 'base',
