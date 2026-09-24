@@ -88,6 +88,7 @@ export const CLIENT_RUNTIME_PACKAGES: ReadonlySet<string> = new Set([
   'dagre-d3-es',
   'dayjs',
   'dompurify',
+  'elkjs',
   'es-toolkit',
   'internmap',
   'katex',
