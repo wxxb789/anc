@@ -293,7 +293,7 @@ test('a search result inside the modal dialog starts no preview and no SQLite ru
   const previewState = (): Promise<{ describedby: number; panelHidden: boolean }> =>
     page.evaluate(() => ({
       describedby: document.querySelectorAll('#search-dialog a[aria-describedby]').length,
-      panelHidden: document.querySelector<HTMLElement>('#link-preview')?.hidden ?? true,
+      panelHidden: document.querySelector<HTMLElement>('#link-preview')?.hidden !== false,
     }));
   // Long enough for a cold Worker, snapshot, and WASM to answer, which is what
   // an unguarded preview waits for before it shows.
