@@ -10,10 +10,12 @@
  *
  * - `social-preview.png` — uploaded by hand in GitHub Settings → Social preview,
  *   which the API does not expose.
- * - `readme-banner.png` — embedded at the top of both READMEs by raw URL.
+ * - `readme-banner.webp` — embedded at the top of both READMEs. WebP, re-encoded
+ *   by Chromium's canvas the way `make-screenshots.mjs` does, at a fifth of the
+ *   PNG's size; the social preview stays PNG because GitHub's upload takes no WebP.
  */
 import { chromium } from 'playwright';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const OUT = fileURLToPath(new URL('./', import.meta.url));
@@ -121,7 +123,20 @@ const browser = await chromium.launch({ args: ['--no-sandbox'] });
 async function shot(file, html, width, height, scale) {
   const p = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: scale });
   await p.setContent(html, { waitUntil: 'load' });
-  await p.screenshot({ path: `${OUT}${file}` });
+  const png = await p.screenshot();
+  if (file.endsWith('.webp')) {
+    const data = await p.evaluate(async (base64) => {
+      const image = new Image();
+      image.src = `data:image/png;base64,${base64}`;
+      await image.decode();
+      const canvas = Object.assign(document.createElement('canvas'), { width: image.naturalWidth, height: image.naturalHeight });
+      canvas.getContext('2d').drawImage(image, 0, 0);
+      return canvas.toDataURL('image/webp', 0.9).split(',')[1];
+    }, png.toString('base64'));
+    writeFileSync(`${OUT}${file}`, Buffer.from(data, 'base64'));
+  } else {
+    writeFileSync(`${OUT}${file}`, png);
+  }
   await p.close();
   console.log(`wrote ${file} at ${width * scale}x${height * scale}`);
 }
@@ -132,7 +147,7 @@ await shot(
   1280, 640, 1,
 );
 await shot(
-  'readme-banner.png',
+  'readme-banner.webp',
   page('A privacy-preserving static site generator for <em>Markdown</em>', { compact: true }),
   1280, 360, 2,
 );

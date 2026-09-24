@@ -1,4 +1,4 @@
-# anc —— 面向 Markdown 的隐私优先静态网站生成器
+# anc —— 面向 Markdown 笔记与数字花园的隐私优先静态网站生成器
 
 [![状态：预发布](https://img.shields.io/badge/status-pre--release-orange)](#状态)
 [![node: >=22.18](https://img.shields.io/badge/node-%E2%89%A522.18-brightgreen)](#参与开发)
@@ -8,18 +8,22 @@
 
 [English](README.md) · [简体中文](README_zh-cn.md)
 
-![anc —— 面向 Markdown 的隐私优先静态网站生成器](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.png)
+![anc：把存放 Markdown 笔记的 Git 仓库发布为数字花园的隐私优先静态网站生成器](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.webp)
 
 **anc 把一个存放 Markdown 的 Git 仓库构建成可自托管的静态知识花园**：文章、反向链接、链接图谱、面包屑、标签、合集、目录、全文搜索、订阅源与站点地图，全部预先渲染为纯静态文件，任何静态主机都能托管。
 
-每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
+它直接读取你已有的笔记，包括 Obsidian 风格的 `[[wikilinks]]`，不需要数据库、服务器或账号。每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
+
+![anc 构建的笔记页面：面包屑、来自 Git 的发布与更新日期、标签、别名、目录与 callout，深色主题](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-note.webp)
 
 *anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`，目前尚未发布到 npm。
 
 ## 目录
 
 - [状态](#状态)
+- [为什么选择 anc](#为什么选择-anc)
 - [功能](#功能)
+- [截图](#截图)
 - [快速开始](#快速开始)
 - [发布与否如何决定](#发布与否如何决定)
 - [链接、标签与元数据](#链接标签与元数据)
@@ -32,6 +36,13 @@
 ## 状态
 
 **预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。包名为 `@wxxb789/anc`，因为 npm 上的非 scoped 名称 `anc` 已被占用；目前尚未发布到 registry，请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
+
+## 为什么选择 anc
+
+- **笔记始终属于你。** Git 里的 Markdown 就是唯一数据源：没有导入步骤，没有私有格式，也没有需要订阅的托管服务。
+- **隐私在发布时决定。** `publish: false` 与排除 glob 可以撤回笔记；写错的模式会让构建失败而不是泄露草稿；构建日志从不打印被撤回文件的名称。
+- **是数字花园，而不是博客。** 反向链接与链接图谱在构建时根据笔记之间的链接计算；悬停预览与图谱探索按需读取同一份公开快照。
+- **静态且可迁移。** 产物是一个 `dist/` 目录，包含 HTML、CSS、Pagefind 索引和一个 SQLite 文件。GitHub Pages、Cloudflare Pages、Netlify 或任何 Web 服务器都能在域名根路径托管它。
 
 ## 功能
 
@@ -48,6 +59,16 @@
 | 隐私 | 默认发布、显式撤回；撤回的文件名不进日志 |
 | 交付 | 默认静态 HTML；公开的 SQLite/WASM 快照用于懒加载预览 |
 | 安全 | `dist/_headers` 提供严格 CSP；没有追踪器与分析脚本 |
+
+## 截图
+
+下列图片均为 anc 用一个小型合成花园真实构建出的页面，可用 [`docs/assets/make-screenshots.mjs`](docs/assets/make-screenshots.mjs) 重新生成。
+
+| 反向链接与出链 | 局部链接图谱 |
+| --- | --- |
+| ![笔记页面上的「Links to」与「Linked from」列表，均为静态 HTML](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-relationships.webp) | ![围绕一篇笔记的「Nearby notes」图谱，在构建时布局，并附表格回退](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-graph.webp) |
+| **悬停预览** | **全文搜索** |
+| ![悬停链接时显示目标笔记标题与摘要的预览卡片](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-preview.webp) | ![Pagefind 搜索对话框，跨笔记高亮匹配结果](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-search.webp) |
 
 ## 快速开始
 
@@ -91,6 +112,8 @@ pnpm run release   # 精确发布集 + PATH 上固定版本的 Gitleaks
 ## 发布与否如何决定
 
 **所有文件默认发布，除非你排除它。** 没有白名单，也没有用于「选择加入」的 `publish: true`。两种机制可以撤回一个文件，当二者冲突时，指向「不发布」的一方获胜：
+
+![anc 如何决定发布：仓库中每个 Markdown 文件默认发布，publish: false 与 exclude glob 撤回笔记，公开的 dist/ 接收站点，而位于 .git/ 下的私有 content-report.json 接收被撤回的文件名](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/publication-flow.webp)
 
 ```markdown
 ---
