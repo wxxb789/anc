@@ -799,6 +799,13 @@ test('every workflow job is bounded, deduplicated, and calls third-party actions
     for (const [name, job] of jobs) {
       assert.equal(typeof job['timeout-minutes'], 'number', `${file}: job ${name} has no timeout-minutes`);
       assert.ok(job.concurrency, `${file}: job ${name} has no concurrency group`);
+      // Spelled per job rather than through `github.job`, which job-level
+      // `concurrency` cannot read: measured on PR #12, both action-parity jobs
+      // resolved one group and `shallow-clone-refusal` was cancelled at 0 steps
+      // by its sibling. The job's own name in the group is what keeps them apart.
+      const group = (job.concurrency as { group?: string }).group ?? '';
+      assert.ok(!group.includes('github.job'), `${file}: job ${name} keys its concurrency group on github.job`);
+      assert.ok(group.includes(name), `${file}: job ${name}'s concurrency group does not name the job`);
       for (const step of job.steps ?? []) {
         if (step.uses === undefined || step.uses.startsWith('./')) continue;
         usesSeen += 1;

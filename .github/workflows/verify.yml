@@ -45,7 +45,7 @@ jobs:
     # One run per ref. A newer push to a pull request supersedes the older run;
     # pushes to main are never cancelled, so every main commit gets a result.
     concurrency:
-      group: ${{ github.workflow }}-${{ github.job }}-${{ github.ref }}
+      group: ${{ github.workflow }}-verify-${{ github.ref }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
