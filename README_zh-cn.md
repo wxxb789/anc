@@ -8,13 +8,13 @@
 
 [English](README.md) · [简体中文](README_zh-cn.md)
 
-![anc：把存放 Markdown 笔记的 Git 仓库发布为数字花园的隐私优先静态网站生成器](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.webp)
+![anc，隐私优先的静态网站生成器：把 Git 中的 Markdown 笔记发布为静态数字花园，支持 wikilinks、反向链接、链接图谱与 Pagefind 全文搜索](docs/assets/readme-banner.zh-cn.webp)
 
 **anc 把一个存放 Markdown 的 Git 仓库构建成可自托管的静态知识花园**：文章、反向链接、链接图谱、面包屑、标签、合集、目录、全文搜索、订阅源与站点地图，全部预先渲染为纯静态文件，任何静态主机都能托管。
 
 它直接读取你已有的笔记，包括 Obsidian 风格的 `[[wikilinks]]`，不需要数据库、服务器或账号。每个文件默认发布，除非你主动排除。普通阅读无需 JavaScript，数据不经过任何第三方服务。
 
-![anc 构建的笔记页面：面包屑、来自 Git 的发布与更新日期、标签、别名、目录与 callout，深色主题](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-note.webp)
+![anc 构建的笔记页面：面包屑、来自 Git 的发布与更新日期、标签、别名、目录与 callout，深色主题](docs/assets/screenshot-note.webp)
 
 *anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`，目前尚未发布到 npm。
 
@@ -23,6 +23,7 @@
 - [状态](#状态)
 - [为什么选择 anc](#为什么选择-anc)
 - [功能](#功能)
+- [工作原理](#工作原理)
 - [截图](#截图)
 - [快速开始](#快速开始)
 - [发布与否如何决定](#发布与否如何决定)
@@ -30,6 +31,7 @@
 - [架构](#架构)
 - [参与开发](#参与开发)
 - [接入与托管](#接入与托管)
+- [常见问题](#常见问题)
 - [文档](#文档)
 - [许可证](#许可证)
 
@@ -60,15 +62,23 @@
 | 交付 | 默认静态 HTML；公开的 SQLite/WASM 快照用于懒加载预览 |
 | 安全 | `dist/_headers` 提供严格 CSP；没有追踪器与分析脚本 |
 
+## 工作原理
+
+![anc 的工作原理：Git 仓库中的 Markdown 笔记经过 anc build，先应用排除规则，再解析 wikilinks 与反向链接并预先渲染全部页面，生成包含静态 HTML、Pagefind 索引与一个 SQLite 快照的 dist/ 目录，由任意静态主机托管](docs/assets/build-pipeline.zh-cn.webp)
+
+1. **写作**：在你已有的 Git 仓库里用任意编辑器写 Markdown——Obsidian、VS Code 或 `vim` 都行。
+2. **构建**：运行 `anc build`。先应用排除规则，再解析所有链接并预先渲染每个页面。
+3. **托管**：把生成的 `dist/` 目录放到任意静态文件主机上。
+
 ## 截图
 
 下列图片均为 anc 用一个小型合成花园真实构建出的页面，可用 [`docs/assets/make-screenshots.mjs`](docs/assets/make-screenshots.mjs) 重新生成。
 
 | 反向链接与出链 | 局部链接图谱 |
 | --- | --- |
-| ![笔记页面上的「Links to」与「Linked from」列表，均为静态 HTML](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-relationships.webp) | ![围绕一篇笔记的「Nearby notes」图谱，在构建时布局，并附表格回退](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-graph.webp) |
+| ![笔记页面上的「Links to」与「Linked from」列表，均为静态 HTML](docs/assets/screenshot-relationships.webp) | ![围绕一篇笔记的「Nearby notes」图谱，在构建时布局，并附表格回退](docs/assets/screenshot-graph.webp) |
 | **悬停预览** | **全文搜索** |
-| ![悬停链接时显示目标笔记标题与摘要的预览卡片](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-preview.webp) | ![Pagefind 搜索对话框，跨笔记高亮匹配结果](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-search.webp) |
+| ![悬停链接时显示目标笔记标题与摘要的预览卡片](docs/assets/screenshot-preview.webp) | ![Pagefind 搜索对话框，跨笔记高亮匹配结果](docs/assets/screenshot-search.webp) |
 
 ## 快速开始
 
@@ -113,7 +123,7 @@ pnpm run release   # 精确发布集 + PATH 上固定版本的 Gitleaks
 
 **所有文件默认发布，除非你排除它。** 没有白名单，也没有用于「选择加入」的 `publish: true`。两种机制可以撤回一个文件，当二者冲突时，指向「不发布」的一方获胜：
 
-![anc 如何决定发布：仓库中每个 Markdown 文件默认发布，publish: false 与 exclude glob 撤回笔记，公开的 dist/ 接收站点，而位于 .git/ 下的私有 content-report.json 接收被撤回的文件名](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/publication-flow.webp)
+![anc 如何决定发布：仓库中每个 Markdown 文件默认发布，publish: false 与 exclude glob 撤回笔记，匹配不到文件的 glob 会让构建失败，公开的 dist/ 接收站点，而位于 .git/ 下的私有 content-report.json 接收被撤回的文件名](docs/assets/publication-flow.zh-cn.webp)
 
 ```markdown
 ---
@@ -174,6 +184,23 @@ pnpm run smoke:tarball   # 在外部仓库中安装该 tarball 并读取结果
 仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。任何静态主机都能托管该目录，但必须部署在域名根路径下：不支持 `https://<user>.github.io/<repo>/` 这类带路径的站点。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；忽略该文件的主机仍会通过每个页面的 `<meta>` 标签获得该策略（`frame-ancestors` 除外），其余响应头则需要自行配置。
 
 发布是显式的外部副作用。构建不会部署，本仓库也无法部署。[`docs/adoption.md`](docs/adoption.md) 同时给出了 Action 用法与手工搭建的 GitHub Pages 示例，二者都不需要任何密钥。
+
+## 常见问题
+
+**anc 能发布 Obsidian 仓库（vault）吗？**
+可以：把 `--content` 指向该 vault 即可。anc 读取 Obsidian 风格的 `[[wikilinks]]`、`[[note|显示文字]]`、笔记嵌入与 callout；把 vault 放在 Git 中还能为每个页面提供创建与更新日期。插件与非 Markdown 附件不会被处理。
+
+**需要服务器、数据库或账号吗？**
+不需要。产物是静态文件。搜索来自 Pagefind 索引，关系数据来自一个 SQLite 文件，二者都只在读者使用时才由浏览器获取。
+
+**如何让一篇笔记保持私密？**
+在 frontmatter 中加上 `publish: false`，或在 `publish.config.yaml` 中用 `exclude:` glob 匹配它的路径。见[发布与否如何决定](#发布与否如何决定)。
+
+**不开 JavaScript 能用吗？**
+阅读、导航、反向链接以及链接图谱的表格回退都是纯 HTML。搜索、悬停预览、数学公式与图表需要 JavaScript。
+
+**可以托管在哪里？**
+任意支持域名根路径的静态主机：GitHub Pages、Cloudflare Pages、Netlify 或你自己的 Web 服务器。见[接入与托管](#接入与托管)。
 
 ## 文档
 

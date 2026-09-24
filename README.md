@@ -8,7 +8,7 @@
 
 [English](README.md) · [简体中文](README_zh-cn.md)
 
-![anc: a privacy-preserving static site generator that publishes a git repository of Markdown notes as a digital garden](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/readme-banner.webp)
+![anc, a privacy-preserving static site generator: publish your Markdown notes from git as a static digital garden with wikilinks, backlinks, a link graph, and Pagefind full-text search](docs/assets/readme-banner.webp)
 
 **anc turns a git repository of Markdown into a self-hosted static knowledge
 garden**: articles, backlinks, a link graph, breadcrumbs, tags, collections, a table
@@ -19,7 +19,7 @@ It reads the notes you already have, including Obsidian-style `[[wikilinks]]`, a
 needs no database, server, or account. Every note publishes unless you exclude it.
 Ordinary reading needs no JavaScript, and nothing is sent to a third party.
 
-![A note page built by anc: breadcrumbs, published and updated dates from git, tags, aliases, a table of contents, and a callout, in the dark theme](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-note.webp)
+![A note page built by anc: breadcrumbs, published and updated dates from git, tags, aliases, a table of contents, and a callout, in the dark theme](docs/assets/screenshot-note.webp)
 
 *anc* is short for **A**ctive **N**oise **C**ancelling. The command it installs is
 `anc`; the package is named `@wxxb789/anc` and is not yet published to npm.
@@ -29,6 +29,7 @@ Ordinary reading needs no JavaScript, and nothing is sent to a third party.
 - [Status](#status)
 - [Why anc](#why-anc)
 - [Features](#features)
+- [How it works](#how-it-works)
 - [Screenshots](#screenshots)
 - [Quick start](#quick-start)
 - [How publication is decided](#how-publication-is-decided)
@@ -36,6 +37,7 @@ Ordinary reading needs no JavaScript, and nothing is sent to a third party.
 - [Architecture](#architecture)
 - [Working on the tool](#working-on-the-tool)
 - [Adoption and hosting](#adoption-and-hosting)
+- [FAQ](#faq)
 - [Documentation](#documentation)
 - [License](#license)
 
@@ -78,6 +80,16 @@ configuration, exclusion, links, and hosting. ANC is not yet 0.1.0-ready or
 | Delivery | Static HTML by default; a public SQLite/WASM snapshot for lazy previews |
 | Security | A strict Content-Security-Policy in `dist/_headers`; no trackers or analytics |
 
+## How it works
+
+![How anc works: Markdown notes in a git repository go through anc build, which applies exclusion gates, resolves wikilinks and backlinks, and renders every page ahead of time into a dist/ folder of static HTML, a Pagefind index, and one SQLite snapshot, which any static host serves](docs/assets/build-pipeline.webp)
+
+1. **Write** Markdown in the git repository you already keep, in any editor —
+   Obsidian, VS Code, or plain `vim`.
+2. **Build** with `anc build`. Exclusions are applied first, then every link is
+   resolved and every page is rendered ahead of time.
+3. **Host** the resulting `dist/` folder anywhere that serves static files.
+
 ## Screenshots
 
 Every image below is a real page built by anc from a small synthetic garden;
@@ -85,9 +97,9 @@ Every image below is a real page built by anc from a small synthetic garden;
 
 | Backlinks and outgoing links | Local link graph |
 | --- | --- |
-| ![Links to and Linked from lists on a note page, each rendered as static HTML](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-relationships.webp) | ![The Nearby notes graph around one note, laid out at build time with a table fallback](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-graph.webp) |
+| ![Links to and Linked from lists on a note page, each rendered as static HTML](docs/assets/screenshot-relationships.webp) | ![The Nearby notes graph around one note, laid out at build time with a table fallback](docs/assets/screenshot-graph.webp) |
 | **Hover preview** | **Full-text search** |
-| ![A link preview card showing the target note's title and excerpt on hover](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-preview.webp) | ![The Pagefind search dialog with highlighted matches across notes](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/screenshot-search.webp) |
+| ![A link preview card showing the target note's title and excerpt on hover](docs/assets/screenshot-preview.webp) | ![The Pagefind search dialog with highlighted matches across notes](docs/assets/screenshot-search.webp) |
 
 ## Quick start
 
@@ -140,7 +152,7 @@ unrelated third-party package that `npx` would offer to download and run.
 `publish: true` to opt in with. Two mechanisms withhold a note, and when they
 disagree the one pointing at *not publishing* wins:
 
-![How anc decides publication: every Markdown file in the repository publishes by default, publish: false and exclude globs withhold notes, the public dist/ receives the site, and a private content-report.json under .git/ receives the withheld names](https://raw.githubusercontent.com/wxxb789/anc/main/docs/assets/publication-flow.webp)
+![How anc decides publication: every Markdown file in the repository publishes by default, publish: false and exclude globs withhold notes, a glob matching nothing fails the build, the public dist/ receives the site, and a private content-report.json under .git/ receives the withheld names](docs/assets/publication-flow.webp)
 
 ```markdown
 ---
@@ -237,6 +249,30 @@ except `frame-ancestors`, and serves the other headers only if configured to.
 Publication is an explicit external side effect. Building does not deploy, and nothing
 in this repository can. [`docs/adoption.md`](docs/adoption.md) covers both the Action
 and a hand-assembled GitHub Pages example, with no secrets required.
+
+## FAQ
+
+**Can anc publish an Obsidian vault?**
+Yes: point `--content` at the vault. anc reads Obsidian-style `[[wikilinks]]`,
+`[[note|shown text]]`, note embeds, and callouts; keeping the vault in git also gives
+each page its created and updated dates. Plugins and non-Markdown attachments are not
+processed.
+
+**Do I need a server, a database, or an account?**
+No. The output is static files. Search runs from a Pagefind index and relationships
+from one SQLite file, both fetched by the reader's browser only when used.
+
+**How do I keep a note private?**
+Add `publish: false` to its frontmatter, or match its path with an `exclude:` glob in
+`publish.config.yaml`. See [How publication is decided](#how-publication-is-decided).
+
+**Does the site work without JavaScript?**
+Reading, navigation, backlinks, and the link graph's table fallback are plain HTML.
+Search, hover previews, math, and diagrams need JavaScript.
+
+**Where can I host it?**
+Any static host at the root of a domain: GitHub Pages, Cloudflare Pages, Netlify, or
+your own web server. See [Adoption and hosting](#adoption-and-hosting).
 
 ## Documentation
 
