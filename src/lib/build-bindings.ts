@@ -17,5 +17,3 @@ declare global {
   const __ANC_WASM_BINDING__: WasmBinding | null;
   const __ANC_WASM_MODULE_URL__: string;
 }
-
-export {};

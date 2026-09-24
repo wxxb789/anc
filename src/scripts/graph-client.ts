@@ -21,8 +21,6 @@ import { noteSlugFromPath } from '../lib/route-path.ts';
 import { drawFigure, drawTable, fillTemplate, type TemplateLookup } from './graph-draw.ts';
 import { requestGlobalGraph, requestLocalGraph } from './snapshot-client.ts';
 
-export {};
-
 interface SelectionAnswer {
   center: SelectionNode | null;
   nodes: SelectionNode[];

@@ -31,11 +31,6 @@ import { placePreview, previewFragment, previewTitle } from '../lib/preview-mode
 import type { NotePreview } from '../lib/snapshot-queries.ts';
 import { requestPreview } from './snapshot-client.ts';
 
-/* Astro concatenates these scripts into one bundle. `export {}` makes this file
-   a module with its own top-level scope, so TK-06 and TK-07 can each declare
-   `root`, `dialog`, or `preview` without colliding with the other's file. */
-export {};
-
 /**
  * Hover intent. Long enough that crossing a link on the way somewhere else costs
  * nothing, short enough that a reader who paused is not kept waiting.

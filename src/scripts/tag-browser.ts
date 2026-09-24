@@ -17,8 +17,6 @@ import { classifyTagPage, TAG_PAGE_SIZE, type TagBrowseState } from '../lib/tag-
 import { partLanguage, TAG_BROWSE_DATASET } from '../lib/translations.ts';
 import { requestByTag } from './snapshot-client.ts';
 
-export {};
-
 const root = document.querySelector<HTMLElement>('#tag-browser');
 if (root) install(root);
 

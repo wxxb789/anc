@@ -115,7 +115,7 @@ function filesUnder(directory: string, predicate: (path: string) => boolean): st
 }
 
 /**
- * Rewrite every quoted `…​.ts` path naming one of this package's own files to
+ * Rewrite every quoted `….ts` path naming one of this package's own files to
  * `.js`, in a file `tsc` does not compile.
  *
  * Two forms occur and both must be caught, which is why the pattern is not
