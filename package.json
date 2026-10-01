@@ -100,7 +100,7 @@
   "dependencies": {
     "@astrojs/prism": "^4.0.2",
     "@sqlite.org/sqlite-wasm": "3.53.4-build1",
-    "astro": "^7.3.3",
+    "astro": "^7.3.5",
     "github-slugger": "^2.0.0",
     "happy-dom": "20.14.5",
     "mermaid": "12.0.0",
@@ -113,11 +113,11 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "@types/sanitize-html": "^2.16.1",
-    "oxlint": "^1.83.0",
+    "oxlint": "^1.86.0",
     "playwright": "^1.63.0",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.1"
+    "vitest": "^5.0.2"
   }
 }
