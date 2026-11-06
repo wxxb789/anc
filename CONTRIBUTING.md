@@ -37,20 +37,63 @@ The package is named `@wxxb789/anc` and registry publication is enabled in
 never document or run bare `npx anc` outside a project that has this package
 installed.
 
-Publication runs in CI. Pushing a `vX.Y.Z` tag starts
+Publication runs in CI. [`release.yml`](.github/workflows/release.yml) computes
+a version, commits it, tags the commit, and hands the tag to
 [`release-npm.yml`](.github/workflows/release-npm.yml), which re-runs the release
-gates and publishes the tarball the adoption smoke test installed. The job stores
-no npm token: it exchanges a GitHub Actions OIDC identity for a short-lived
-publish token ("trusted publishing"), so the repository holds no credential that
-can publish, and npm records which repository and commit produced each tarball.
+gates and publishes the tarball the adoption smoke test installed. Neither job
+stores an npm token: publishing exchanges a GitHub Actions OIDC identity for a
+short-lived token ("trusted publishing"), so the repository holds no credential
+that can publish, and npm records which repository and commit produced each
+tarball.
 
 A release is one frozen commit that passes every gate, recorded in
 [`CHANGELOG.md`](CHANGELOG.md), tagged, and published from the compiled tarball —
 never from the repository root. Tagging and publishing are external side effects
 and need the owner's explicit approval.
 
+### One click
+
+GitHub → **Actions** → **release** → **Run workflow**, then choose `patch`,
+`minor`, or `major`. The run refuses to start unless `verify` for `main`'s head
+is green, and then:
+
+1. computes the next version and refuses a tag that already exists;
+2. moves `CHANGELOG.md`'s `[Unreleased]` section under `## [X.Y.Z] - <UTC date>`;
+3. commits exactly `package.json` and `CHANGELOG.md`, tags `vX.Y.Z`, moves `v0`,
+   and pushes both refs in one atomic push;
+4. dispatches `release-npm.yml` on the tag, which re-runs `verify`,
+   `build:fixture`, and `smoke:tarball` and publishes the tarball that smoke run
+   installed.
+
+Two of those properties are deliberate. The release commit changes only those two
+files — the job fails otherwise — so a release cannot carry code that skipped
+review. And a version whose publish fails is not retried: the registry refuses a
+version twice, so the fix goes into the next release.
+
+A run that stops before step 3 costs nothing: nothing was pushed and nothing was
+published. One commit after a release has no `verify` run, because the bot's own
+push starts no workflow, so land the next change before the next release.
+
+When the dispatched run is green, write the GitHub release from the section the
+job promoted:
+
+```bash
+gh release create vX.Y.Z --title vX.Y.Z --notes-file <(sed -n '/^## \[X\.Y\.Z\]/,/^## \[/p' CHANGELOG.md)
+```
+
+That stays manual on purpose: generated notes would describe whatever GitHub
+infers between tags, and the moving `v0` pointer makes "the previous tag"
+ambiguous, so the reviewed section is the only notes file worth publishing.
+
+### By hand
+
+The tag push still triggers `release-npm.yml`, so a clone can release without the
+dispatch. Do the same work in the same order, and run the gates before the tag
+exists:
+
 1. Move the `Unreleased` entries in `CHANGELOG.md` under a heading for the new
    version and date, set `version` in `package.json` to match, and commit.
+   `node scripts/release-changelog.ts <version>` does the CHANGELOG half.
 2. On that commit, with a clean tree, run the gates:
 
    ```bash
@@ -60,12 +103,9 @@ and need the owner's explicit approval.
    gh workflow run action-parity --ref main   # read the run; it is not in verify
    ```
 
-   The tag workflow repeats the first three at the tagged commit, because a tag
-   can point at a commit that never ran them. Running them locally first is what
-   keeps a failure off the tag, where it costs the version rather than a re-run.
-3. Tag the commit. The immutable tag names the exact version and is never moved;
-   the major tag is the moving pointer an Action user may follow, and for 0.x
-   that is `v0`:
+3. Tag the commit and push both tags. The immutable tag names the exact version
+   and is never moved; the major tag is the moving pointer an Action user may
+   follow, and for 0.x that is `v0`:
 
    ```bash
    git tag -a vX.Y.Z -m "vX.Y.Z"
@@ -76,23 +116,9 @@ and need the owner's explicit approval.
 
    Documentation recommends pinning the Action to a full commit SHA; `@vX.Y.Z`
    is the readable exact pin and `@v0` is the convenience pointer.
-4. That push is the approval. The workflow publishes and stops; it holds a
-   read-only repository token and no npm credential beyond the exchange. Do not
-   also run `npm publish` for the same version — the registry refuses the second
-   one, and the workflow's is the one that carries provenance.
-
-   If the job fails after the registry accepted the version, do not re-run it:
-   republishing is refused. Fix forward with the next version.
-5. Create the GitHub release from the tag, with that version's `CHANGELOG.md`
-   section as its notes:
-
-   ```bash
-   gh release create vX.Y.Z --title vX.Y.Z --notes-file <(sed -n '/^## \[X\.Y\.Z\]/,/^## \[/p' CHANGELOG.md)
-   ```
-
-   That stays manual on purpose: generated notes would describe whatever GitHub
-   infers between tags, and the moving `v0` pointer makes "the previous tag"
-   ambiguous, so the reviewed section is the only notes file worth publishing.
+4. That push is the approval. The workflow publishes and stops; do not also run
+   `npm publish` for the same version — the registry refuses the second one, and
+   the workflow's is the one that carries provenance.
 
 ### The first publish
 

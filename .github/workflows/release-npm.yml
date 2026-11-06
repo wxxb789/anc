@@ -1,9 +1,11 @@
-# Publishes `@wxxb789/anc` to npm when a release tag is pushed.
+# Publishes `@wxxb789/anc` to npm when a release tag exists: from a pushed tag, or
+# dispatched on one by `release.yml`'s one-click path.
 #
 # This is the one thing `verify.yml` deliberately cannot do. Verification holds
 # a read-only token on purpose, so a green build can never become publication
 # authority; publication is a separately approved external action, and the
-# approval is the act of pushing the tag. The job therefore carries a credential
+# approval is the act of starting a release — pushing a tag, or starting the
+# one-click `release` run. The job therefore carries a credential
 # — but not a stored one. It exchanges a GitHub Actions OIDC identity for a
 # short-lived npm publish token ("trusted publishing"), so this repository keeps
 # no npm token, and every publish is bound to this workflow file at this commit.
@@ -32,12 +34,17 @@
 #
 # This publishes a package; it deploys nothing. Deployment remains a separate,
 # explicitly approved step, and this job has no access to a site origin.
-name: release
+name: release-npm
 
 on:
   push:
     tags:
       - 'v*.*.*'
+  # Dispatched on a `vX.Y.Z` tag by `release.yml`, which is the one-click path;
+  # also re-runnable by hand on a tag. A tag pushed with this repository's own
+  # `GITHUB_TOKEN` starts no `push` workflow, so the dispatch is what makes the
+  # automated release reach this file at all.
+  workflow_dispatch:
 
 # `id-token: write` is the trusted-publishing credential described above.
 # `contents: read` is checkout and nothing else: this job pushes no tag, creates
@@ -88,7 +95,7 @@ jobs:
             console.log('releasing ' + tag);
           "
 
-      - uses: pnpm/setup@fbda4c85fc2e1e08721cd8763afea8f48d60f024 # v3.0.0
+      - uses: pnpm/setup@a0881977cd8ea73b1ed212236c99ca10dcc80cf4 # v3.1.1
         with:
           install: false
 
@@ -100,7 +107,7 @@ jobs:
       #
       # `node-version-file` rather than a literal version, for the same reason
       # `verify.yml` gives: `.nvmrc` is the existing pin.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: pnpm

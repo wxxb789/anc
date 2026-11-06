@@ -56,6 +56,10 @@ project makes no backward-compatibility promise.
   publishes the compiled tarball through npm trusted publishing, so the
   repository stores no npm token. Release notes stay a maintainer step, written
   from the `CHANGELOG.md` section.
+- A one-click `release` workflow bumps the version, moves the `Unreleased`
+  CHANGELOG section under it, tags the commit, and dispatches publishing. It
+  refuses a release commit that changes anything besides `package.json` and
+  `CHANGELOG.md`.
 
 ## [0.0.1] - 2026-09-20
 

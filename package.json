@@ -73,6 +73,7 @@
     "!scripts/benchmark-workload-report.ts",
     "!scripts/benchmark-workload-ui.ts",
     "!scripts/benchmark-workload.ts",
+    "!scripts/release-changelog.ts",
     "!scripts/smoke-tarball.ts"
   ],
   "scripts": {
