@@ -42,6 +42,10 @@ project makes no backward-compatibility promise.
 - Client-rendered math parses TeX commands again: the bundler had corrupted the
   shipped renderer, so `\sum` or `\alpha` rendered as separate letters.
 - The test suite runs on a Windows development host.
+- Build-time gantt diagrams no longer draw a "today" line from the wall clock.
+  It moved a pixel between two renders of identical Markdown, which made the
+  determinism gate fail intermittently on `main` and would have changed the
+  bytes of a rebuilt page.
 
 ### Changed
 

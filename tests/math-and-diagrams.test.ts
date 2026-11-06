@@ -410,6 +410,27 @@ test('diagram rendering is deterministic within a process', async () => {
   }
 });
 
+test('a build-time diagram carries no wall-clock output', async () => {
+  // Mermaid's gantt draws a "today" line at the current time, which is the one
+  // part of a render that changes while its source does not. It made the
+  // determinism gate above fail on a main build for a one-pixel difference, and
+  // it would freeze the build date into a published page. The build-time
+  // renderer turns the line off; the client renderer keeps it, because there
+  // "today" is the reader's today rather than the build's.
+  const gantt = await renderDiagram(DIAGRAM_TYPES['gantt']!, 't-gantt', 'gantt diagram');
+
+  assert.doesNotMatch(gantt, /class="today"/, 'the gantt renderer drew a today line from the wall clock');
+
+  // And the removal is scoped to the marker rather than to the class name. A
+  // flowchart node may carry an author's `:::today` class, which Mermaid
+  // renders as `<g class="node default today">`; an unscoped `g.today`
+  // selector deleted that node's shape and label and left its edge behind.
+  const classed = await renderDiagram('graph TD\n  A[Today]:::today --> B[Next]', 't-today-class', 'today class');
+
+  assert.match(classed, /class="node default today/, 'the wall-clock pass ate a flowchart node classed today');
+  assert.match(classed, /nodeLabel[^>]*>Today</, 'the classed node lost its label');
+});
+
 test('diagram rendering is deterministic across processes', () => {
   // The stronger property, and the one that matters for a content hash: a fresh
   // process must produce the same bytes. Mermaid's module-level counters and its

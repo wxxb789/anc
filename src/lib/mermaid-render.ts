@@ -417,6 +417,41 @@ function convertInlineStyles(root: Element): void {
  * handlers across the corpus — which is exactly why a *failure* is the right
  * response to finding one: it would mean the renderer changed under us.
  */
+/**
+ * Remove Mermaid's gantt "today" marker: the one part of a render that reads the
+ * wall clock.
+ *
+ * The marker is positioned from `new Date()`, so two renders of the same note
+ * seconds apart differ by a pixel — measured on a `main` build, where the
+ * determinism gate went red on `x1="35387"` against `x1="35388"` — and the same
+ * note would hash differently on every rebuild, which
+ * `src/lib/markdown.ts` says cannot happen. A build also freezes the build date
+ * into content that outlives it, which is nobody's today.
+ *
+ * There is no configuration for this. Mermaid's `drawToday` reads
+ * `db.getTodayMarker()`, which only the in-source `todayMarker` directive sets;
+ * `gantt.todayMarker` in `initialize()` is never consulted, verified by setting
+ * it and watching the line survive. Removing the group after the render is
+ * therefore what makes the output a function of its source alone, and it holds
+ * whether or not a diagram spelled the directive itself.
+ *
+ * The client renderer keeps the marker: it draws at read time, where "today" is
+ * the reader's today rather than the build's.
+ *
+ * Scoped to gantt charts, and that scope is load-bearing rather than tidy: a
+ * flowchart node can carry an author's `:::today` class, which Mermaid renders
+ * as `<g class="node default today">`, so an unscoped `g.today` selector
+ * deletes that node's shape and label and leaves its edges dangling. Gantt has
+ * no author-supplied classes, and `aria-roledescription` is the renderer's own
+ * statement of the diagram type rather than a guess at its markup.
+ */
+function dropWallClockOutput(root: Element): void {
+  if (root.getAttribute('aria-roledescription') !== 'gantt') return;
+  for (const marker of [...root.querySelectorAll('g.today')] as unknown as Element[]) {
+    marker.remove();
+  }
+}
+
 function sanitizeDiagram(root: Element, source: string): void {
   if (root.querySelector('script') !== null) {
     throw new DiagramError(source, 'the renderer emitted a <script> element');
@@ -731,6 +766,7 @@ async function renderOne(source: string, diagramId: string, accessibleName: stri
   const dark = parse(rendered.dark!);
 
   for (const root of [light, dark]) {
+    dropWallClockOutput(root);
     const style = root.querySelector('style');
     flattenStylesheet(root, style?.textContent ?? '');
     convertInlineStyles(root);
