@@ -410,6 +410,18 @@ test('diagram rendering is deterministic within a process', async () => {
   }
 });
 
+test('a build-time diagram carries no wall-clock output', async () => {
+  // Mermaid's gantt draws a "today" line at the current time, which is the one
+  // part of a render that changes while its source does not. It made the
+  // determinism gate above fail on a main build for a one-pixel difference, and
+  // it would freeze the build date into a published page. The build-time
+  // renderer turns the line off; the client renderer keeps it, because there
+  // "today" is the reader's today rather than the build's.
+  const gantt = await renderDiagram(DIAGRAM_TYPES['gantt']!, 't-gantt', 'gantt diagram');
+
+  assert.doesNotMatch(gantt, /class="today"/, 'the gantt renderer drew a today line from the wall clock');
+});
+
 test('diagram rendering is deterministic across processes', () => {
   // The stronger property, and the one that matters for a content hash: a fresh
   // process must produce the same bytes. Mermaid's module-level counters and its
