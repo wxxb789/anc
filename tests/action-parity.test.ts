@@ -48,9 +48,24 @@ const WORKFLOW = parse(TEXT) as Workflow;
  * The third-party actions the parity path may call, each pinned to the full
  * commit SHA its release tag resolved to. A tag can be moved after review; a
  * SHA cannot, so the pin is what makes this allowlist mean what it says.
+ *
+ * The SHAs are read from `verify.yml` rather than repeated here, because a
+ * Dependabot bump moves every workflow at once and cannot move a constant in
+ * this file. Written down literally, the allowlist failed on a correct update —
+ * the one failure mode a gate must not have (`docs/gate-reading.md`). Deriving
+ * keeps both halves of the rule: only `actions/checkout`, `actions/setup-node`
+ * and this repository's own Action may appear, and the parity path runs exactly
+ * the versions verification runs.
  */
-const CHECKOUT = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1';
-const SETUP_NODE = 'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020';
+function pinFromVerify(action: string): string {
+  const verify = readFileSync(join(ROOT, '.github/workflows/verify.yml'), 'utf8');
+  const match = new RegExp(`uses: (${action}@[0-9a-f]{40})\\b`).exec(verify);
+  assert.ok(match, `verify.yml no longer pins ${action}, so the parity allowlist has nothing to follow`);
+  return match[1]!;
+}
+
+const CHECKOUT = pinFromVerify('actions/checkout');
+const SETUP_NODE = pinFromVerify('actions/setup-node');
 const JOBS = Object.entries(WORKFLOW.jobs ?? {});
 
 /** Every step, tagged with the job that owns it. */
