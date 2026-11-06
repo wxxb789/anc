@@ -62,7 +62,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          conclusion="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow verify.yml --commit "$GITHUB_SHA" --event push --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')"
+          conclusion="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow verify.yml --commit "$GITHUB_SHA" --event push --limit 1 --json status,conclusion --jq '.[0] | (.conclusion // .status // "missing")')"
           if [ "$conclusion" != "success" ]; then
             echo "verify for $GITHUB_SHA is '$conclusion'." >&2
             echo "Release from a commit whose verify run is green; after a release, land the next change first." >&2
