@@ -52,6 +52,10 @@ project makes no backward-compatibility promise.
 - Documentation states the real distribution state: the package is not yet on
   npm, the Action is pinned by commit SHA until release tags exist, and a site
   must be served at a domain root.
+- Publication runs in CI: pushing a `vX.Y.Z` tag re-runs the release gates and
+  publishes the compiled tarball through npm trusted publishing, so the
+  repository stores no npm token. Release notes stay a maintainer step, written
+  from the `CHANGELOG.md` section.
 
 ## [0.0.1] - 2026-09-20
 
