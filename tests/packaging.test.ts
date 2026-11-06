@@ -484,6 +484,7 @@ test('the tarball carries what the build reads and none of this owner\'s content
     'scripts/compile-package.ts',
     'scripts/dist-lock.ts',
     'scripts/npm-command.ts',
+    'scripts/release-changelog.ts',
     'scripts/smoke-tarball.ts',
   ]) {
     assert.ok(
