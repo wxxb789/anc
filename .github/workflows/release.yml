@@ -58,14 +58,27 @@ jobs:
       # running or already red, so the `verify` run for this exact commit is the
       # authority. A missing run is normal one commit after a release: the bot's
       # push starts no workflow, so the next release needs the next human commit.
+      #
+      # The jq fallback is spelled out because `//` does not do this job: an
+      # in-progress run reports `conclusion: ""`, and an empty string is a value
+      # in jq, so `(.conclusion // .status)` yields the empty string. That is
+      # how a release came to refuse itself with `verify … is ''` and no way to
+      # tell whether it meant `in_progress` or `missing`.
       - name: Require a green verify run for this commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          conclusion="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow verify.yml --commit "$GITHUB_SHA" --event push --limit 1 --json status,conclusion --jq '.[0] | (.conclusion // .status // "missing")')"
+          conclusion="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow verify.yml --commit "$GITHUB_SHA" --event push --limit 1 --json status,conclusion --jq '.[0] | ((if (.conclusion // "") == "" then .status else .conclusion end) // "missing")')"
           if [ "$conclusion" != "success" ]; then
             echo "verify for $GITHUB_SHA is '$conclusion'." >&2
-            echo "Release from a commit whose verify run is green; after a release, land the next change first." >&2
+            case "$conclusion" in
+              in_progress | queued | waiting | requested | pending)
+                echo "That run is still going. Wait for it to finish, then start the release again." >&2
+                ;;
+              *)
+                echo "Release from a commit whose verify run is green; after a release, land the next change first." >&2
+                ;;
+            esac
             exit 1
           fi
 
