@@ -437,8 +437,16 @@ function convertInlineStyles(root: Element): void {
  *
  * The client renderer keeps the marker: it draws at read time, where "today" is
  * the reader's today rather than the build's.
+ *
+ * Scoped to gantt charts, and that scope is load-bearing rather than tidy: a
+ * flowchart node can carry an author's `:::today` class, which Mermaid renders
+ * as `<g class="node default today">`, so an unscoped `g.today` selector
+ * deletes that node's shape and label and leaves its edges dangling. Gantt has
+ * no author-supplied classes, and `aria-roledescription` is the renderer's own
+ * statement of the diagram type rather than a guess at its markup.
  */
 function dropWallClockOutput(root: Element): void {
+  if (root.getAttribute('aria-roledescription') !== 'gantt') return;
   for (const marker of [...root.querySelectorAll('g.today')] as unknown as Element[]) {
     marker.remove();
   }

@@ -420,6 +420,15 @@ test('a build-time diagram carries no wall-clock output', async () => {
   const gantt = await renderDiagram(DIAGRAM_TYPES['gantt']!, 't-gantt', 'gantt diagram');
 
   assert.doesNotMatch(gantt, /class="today"/, 'the gantt renderer drew a today line from the wall clock');
+
+  // And the removal is scoped to the marker rather than to the class name. A
+  // flowchart node may carry an author's `:::today` class, which Mermaid
+  // renders as `<g class="node default today">`; an unscoped `g.today`
+  // selector deleted that node's shape and label and left its edge behind.
+  const classed = await renderDiagram('graph TD\n  A[Today]:::today --> B[Next]', 't-today-class', 'today class');
+
+  assert.match(classed, /class="node default today/, 'the wall-clock pass ate a flowchart node classed today');
+  assert.match(classed, /nodeLabel[^>]*>Today</, 'the classed node lost its label');
 });
 
 test('diagram rendering is deterministic across processes', () => {
