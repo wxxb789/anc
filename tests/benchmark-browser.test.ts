@@ -18,10 +18,19 @@ describe('benchmark browser configuration', () => {
   it('records the complete Pixel 7 identity in the browser report', () => {
     const resolved = resolveBenchmarkBrowser('edge', 'Pixel 7', devices);
 
+    // The Chrome build inside Playwright's Pixel 7 user agent moves with the
+    // browser bundle, so it is read from the descriptor instead of repeated
+    // here. Pinned literally, this gate failed on the Playwright bump rather
+    // than on a regression. The identity is still asserted, and every other
+    // field stays literal, so a resolver reporting a different device is caught.
+    const pixel7 = devices['Pixel 7'];
+    if (!pixel7) throw new Error('Playwright no longer ships a Pixel 7 device profile');
+    const userAgent = pixel7.userAgent;
+    expect(userAgent).toMatch(/^Mozilla\/5\.0 \(Linux; Android \d+; Pixel 7\) .*Chrome\/[\d.]+ Mobile Safari\//);
+
     expect(resolved.launchOptions).toEqual({ channel: 'msedge' });
     expect(resolved.contextOptions).toEqual({
-      userAgent:
-        'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Mobile Safari/537.36',
+      userAgent,
       viewport: { width: 412, height: 839 },
       screen: { width: 412, height: 915 },
       deviceScaleFactor: 2.625,
@@ -31,8 +40,7 @@ describe('benchmark browser configuration', () => {
     expect(resolved.report).toEqual({
       channel: 'edge',
       device: 'Pixel 7',
-      userAgent:
-        'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.8010.12 Mobile Safari/537.36',
+      userAgent,
       viewport: { width: 412, height: 839 },
       screen: { width: 412, height: 915 },
       deviceScaleFactor: 2.625,
