@@ -22,28 +22,21 @@ reported as measured.
 Node 22.18 or newer — `package.json` `engines` pins it, and the shipped code is compiled
 JavaScript, so nothing needs a TypeScript toolchain.
 
-**And, today, a checkout of this repository.** The package is named `@wxxb789/anc`, and
-it is not yet published to npm. The name is scoped because the unscoped npm name `anc` is
-already taken by an unrelated third-party package — so **never type bare `npx anc`**: outside
-a project that has this package installed, `npx` falls back to the registry and offers to
-download and run that stranger's package. Until publication, there are two ways to run it.
-
-From a checkout, against your notes elsewhere:
+**The package is on the registry.** Install it as a dev dependency of your notes
+repository, then let it prepare the repository — it seeds `.gitignore` and writes a
+`publish.config.yaml` with every key commented out:
 
 ```bash
-node /path/to/anc/bin/anc.mjs build --content ~/notes --out ~/notes/dist
+npm install -D @wxxb789/anc        # or: pnpm add -D @wxxb789/anc
+npx @wxxb789/anc init
 ```
 
-Or install the tarball the repository builds as a dev dependency of your notes repository,
-with pnpm or npm:
+The name is scoped because the unscoped npm name `anc` is already taken by an unrelated
+third-party package — so **never type bare `npx anc`**: outside a project that has this
+package installed, `npx` falls back to the registry and offers to download and run that
+stranger's package.
 
-```bash
-cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes
-pnpm add -D /path/to/anc/wxxb789-anc-*.tgz     # or: npm install -D /path/to/anc/wxxb789-anc-*.tgz
-```
-
-then give the commands names in your notes repository's `package.json`, which work the same
+Then give the commands names in your notes repository's `package.json`, which work the same
 under both package managers:
 
 ```json
@@ -62,15 +55,20 @@ pnpm run build       # or: npm run build
 pnpm run preview     # or: npm run preview
 ```
 
-To call the binary directly instead, use `pnpm exec anc build`, or `npx --no anc build`
-under npm: `--no` makes `npx` refuse rather than fetch the unrelated registry `anc` when the
-local install is missing.
+To call the binary directly instead, use `pnpm exec anc`, or `npx @wxxb789/anc` under npm.
+Everything below is written as `anc <command>`, meaning whichever of those you use.
+`anc --version` prints the version you are running.
 
-Everything below is written as `anc <command>`, meaning whichever of those you use. After
-publication the registry form will be `npx @wxxb789/anc`, which runs the same binary.
-`anc --version` prints the version you are running; through `npx`, write
-`npx --no -- anc --version`, because without the `--` npm takes `--version` as its own flag
-and prints npm's version instead.
+To try an unreleased commit, run from a checkout against your notes elsewhere, or install the
+tarball the repository builds:
+
+```bash
+node /path/to/anc/bin/anc.mjs build --content ~/notes --out ~/notes/dist
+
+cd /path/to/anc && pnpm run pack:tarball
+cd ~/notes
+pnpm add -D /path/to/anc/wxxb789-anc-*.tgz     # or: npm install -D /path/to/anc/wxxb789-anc-*.tgz
+```
 
 ## The shortest thing that works
 
@@ -324,13 +322,12 @@ the two properties are yours to preserve either way.
 The Action is referenced by git coordinate — `uses: <owner>/<repo>@<ref>` — rather than by
 package name, and that is deliberate rather than temporary. The Action installs the generator
 from its own checkout with a frozen lockfile, so the ref you write pins the generator *and*
-its whole dependency tree; it does not use the registry, and will not after publication.
+its whole dependency tree; it does not use the registry, and publication does not change that.
 
-**Pin the ref to a full commit SHA.** No release tag exists yet, so a 40-character commit SHA
-from this repository is the only immutable pin available today. `@main` also works, but it is
-unpinned: every push to this repository changes what your next build runs. Once releases are
-tagged, `@vX.Y.Z` names one release exactly and `@v0` follows the latest 0.x release; a SHA
-stays the strongest pin for a deploy workflow.
+**Pin the ref.** Releases are tagged: `@v0.0.2` names one release exactly and `@v0` follows
+the latest 0.x release, while a full commit SHA stays the strongest pin for a deploy workflow.
+`@main` also works, but it is unpinned: every push to this repository changes what your next
+build runs.
 
 - **Clone at full depth.** `created` needs the first commit touching each current path. A
   shallow clone cannot prove that date, so the producer deliberately omits `created` there and

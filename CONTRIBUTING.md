@@ -120,23 +120,24 @@ exists:
    `npm publish` for the same version — the registry refuses the second one, and
    the workflow's is the one that carries provenance.
 
-### The first publish
+### The first publish (done)
 
 A trusted publisher is configured on an existing package's settings page, so the
-first version cannot come from CI: until `@wxxb789/anc` exists, the workflow's
-publish fails with `ENEEDAUTH`. Publish that first version once from a clean
-checkout, then configure the trusted publisher.
+first version could not come from CI. `0.0.1` was published by hand for exactly
+that reason: it reserved the name and created the page the trusted publisher is
+attached to. `0.0.2` was the first release cut by the tag workflow, and every
+release after it follows the one-click path above.
+
+This matters again only if the package has to be re-created under a new name:
 
 ```bash
 pnpm run pack:tarball
-npm login --scope=@wxxb789
+npm login
 npm publish wxxb789-anc-<version>.tgz      # access: public is in publishConfig
 ```
 
 The version published this way is not tagged: the registry refuses a version
-twice, so the first tag the workflow handles is the next version. `0.0.1` in
-`package.json` is the name reservation described in `AGENTS.md`, and it is the
-version this step publishes.
+twice, so the first tag the workflow handles is the next version.
 
 Then, npmjs.com → the package → Settings → Trusted publisher → GitHub Actions:
 

@@ -314,10 +314,12 @@ relationships render from it, and a lazy read-only Worker/WASM powers previews, 
 browsing, and graph exploration. [`docs/goals/archive/`](docs/goals/archive/) holds the
 completed outcomes; [goal 0008](docs/goals/0008-acceptable-browser-cost.md) is still in
 progress, and the older note here that the design was "not yet implemented" predates
-that landing. Neither 0.1.0 nor 1.0.0 is ready. Registry publication, deployment, and
-post-deploy smoke tests are separate external actions. Version 0.1 intentionally adds no
-non-Markdown asset pipeline or corpus redirects. The `0.0.1` in `package.json` reserves the
-`@wxxb789/anc` name; it is not a 0.1.0 candidate and records no release evidence.
+that landing. Neither 0.1.0 nor 1.0.0 is ready. Deployment and post-deploy smoke tests
+are separate external actions, and so is publication — it runs in
+`.github/workflows/release-npm.yml` and is started by hand from the `release` workflow.
+Version 0.1 intentionally adds no non-Markdown asset pipeline or corpus redirects.
+`0.0.1` was published by hand to reserve the `@wxxb789/anc` name and create the page a
+trusted publisher needs; `0.0.2` is the first release cut from a tag.
 
 ## Documentation
 
