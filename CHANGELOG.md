@@ -7,6 +7,8 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-11-07
+
 ### Security
 
 - Updated production dependencies to clear the critical and high advisories
@@ -74,4 +76,5 @@ project makes no backward-compatibility promise.
   not been published to npm.
 
 [Unreleased]: https://github.com/wxxb789/anc/commits/main
+[0.0.2]: https://github.com/wxxb789/anc/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/wxxb789/anc/commit/0fa2c75
