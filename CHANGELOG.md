@@ -7,6 +7,12 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation states the published state: `@wxxb789/anc` is on npm with provenance, the
+  quick start installs from the registry, and the Action can be pinned by release tag
+  (`@v0.0.2`, `@v0`) instead of only by commit SHA.
+
 ## [0.0.2] - 2026-11-07
 
 ### Security

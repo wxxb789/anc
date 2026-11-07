@@ -1,6 +1,7 @@
 # anc —— 面向 Markdown 笔记与数字花园的隐私优先静态网站生成器
 
 [![状态：预发布](https://img.shields.io/badge/status-pre--release-orange)](#状态)
+[![npm](https://img.shields.io/npm/v/@wxxb789/anc?label=npm)](https://www.npmjs.com/package/@wxxb789/anc)
 [![node: >=22.18](https://img.shields.io/badge/node-%E2%89%A522.18-brightgreen)](#参与开发)
 [![verify](https://github.com/wxxb789/anc/actions/workflows/verify.yml/badge.svg)](https://github.com/wxxb789/anc/actions/workflows/verify.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -16,7 +17,7 @@
 
 ![anc 构建的笔记页面：面包屑、来自 Git 的发布与更新日期、标签、别名、目录与 callout，深色主题](docs/assets/screenshot-note.webp)
 
-*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包名是 `@wxxb789/anc`，目前尚未发布到 npm。
+*anc* 是 **A**ctive **N**oise **C**ancelling（主动降噪）的缩写；它安装的命令是 `anc`，包已发布在 npm 上：[`@wxxb789/anc`](https://www.npmjs.com/package/@wxxb789/anc)。
 
 ## 目录
 
@@ -37,7 +38,7 @@
 
 ## 状态
 
-**预发布。** 工具可以构建、预览，并附带 GitHub Action 与 `init` 命令。包名为 `@wxxb789/anc`，因为 npm 上的非 scoped 名称 `anc` 已被占用；目前尚未发布到 registry，请从代码仓库检出，或使用仓库构建出的 tarball 安装。[`docs/adoption.md`](docs/adoption.md) 给出了两种方式，以及配置、排除、链接与托管说明。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
+**预发布。** 工具可以构建、预览，并附带 GitHub Action，且已发布到 registry：[`@wxxb789/anc`](https://www.npmjs.com/package/@wxxb789/anc) 由 `vX.Y.Z` tag 触发 `release` 工作流发布，每次发布都带有 npm trusted publishing 生成的 SLSA provenance。`0.0.1` 是手工发布的，原因只有一个：trusted publisher 必须配置在一个已经存在的包页面上。包名是 scoped 的，因为 npm 上的非 scoped 名称 `anc` 已被无关的第三方包占用。[`docs/adoption.md`](docs/adoption.md) 覆盖配置、排除、链接与托管。ANC 尚未达到 0.1.0 或 1.0.0 的完成状态，也不承诺向后兼容。
 
 ## 为什么选择 anc
 
@@ -82,22 +83,14 @@
 
 ## 快速开始
 
-在本仓库的检出目录中，针对你自己的笔记运行：
+在你想要发布的笔记仓库中安装：
 
 ```bash
-node /path/to/anc/bin/anc.mjs build --content ~/notes --out ~/notes/dist
-node /path/to/anc/bin/anc.mjs preview --dist ~/notes/dist
+npm install -D @wxxb789/anc       # 或：pnpm add -D @wxxb789/anc
+npx @wxxb789/anc init             # 写入 .gitignore 规则与 publish.config.yaml
 ```
 
-或安装本仓库构建出的 tarball：
-
-```bash
-cd /path/to/anc && pnpm run pack:tarball
-cd ~/notes
-pnpm add -D /path/to/anc/wxxb789-anc-*.tgz   # 或：npm install -D /path/to/anc/wxxb789-anc-*.tgz
-```
-
-然后在笔记仓库的 `package.json` 中为命令命名；同一组脚本在 pnpm 与 npm 下都能使用：
+然后在该仓库的 `package.json` 中为命令命名；同一组脚本在 pnpm 与 npm 下都能使用：
 
 ```json
 {
@@ -117,7 +110,15 @@ pnpm run review    # 生成 .publish-set.json 供检查
 pnpm run release   # 精确发布集 + PATH 上固定版本的 Gitleaks
 ```
 
-如需直接调用二进制，使用 `pnpm exec anc build`；npm 下使用 `npx --no anc build`：`--no` 让 `npx` 在本地未安装时直接拒绝，而不是从 registry 获取。发布之后，registry 形式将是 `npx @wxxb789/anc build`。**不要输入裸 `npx anc`：** 在未安装 tarball 的项目中它会回退到 registry，而 npm 上的非 scoped 包 `anc` 是一个无关的第三方包，`npx` 会提示下载并运行它。
+不安装也能运行已发布的版本：`npx @wxxb789/anc build --content ~/notes --out ~/notes/dist`，再用 `npx @wxxb789/anc preview --dist ~/notes/dist` 预览结果。**不要输入裸 `npx anc`：** npm 上的非 scoped 包 `anc` 是一个无关的第三方包，`npx` 会提示下载并运行它。
+
+如果想试用尚未发布的提交，可以从检出目录构建 tarball 再安装，上面的脚本同样适用：
+
+```bash
+cd /path/to/anc && pnpm run pack:tarball
+cd ~/notes
+pnpm add -D /path/to/anc/wxxb789-anc-*.tgz   # 或：npm install -D …
+```
 
 ## 发布与否如何决定
 
@@ -181,7 +182,7 @@ pnpm run smoke:tarball   # 在外部仓库中安装该 tarball 并读取结果
 
 ## 接入与托管
 
-仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。任何静态主机都能托管该目录，但必须部署在域名根路径下：不支持 `https://<user>.github.io/<repo>/` 这类带路径的站点。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；忽略该文件的主机仍会通过每个页面的 `<meta>` 标签获得该策略（`frame-ancestors` 除外），其余响应头则需要自行配置。
+仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。可以固定到 `@v0.0.2`（某个确切版本）、`@v0`（跟随最新 0.x）或完整 commit SHA（最强的固定方式）。任何静态主机都能托管该目录，但必须部署在域名根路径下：不支持 `https://<user>.github.io/<repo>/` 这类带路径的站点。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；忽略该文件的主机仍会通过每个页面的 `<meta>` 标签获得该策略（`frame-ancestors` 除外），其余响应头则需要自行配置。
 
 发布是显式的外部副作用。构建不会部署，本仓库也无法部署。[`docs/adoption.md`](docs/adoption.md) 同时给出了 Action 用法与手工搭建的 GitHub Pages 示例，二者都不需要任何密钥。
 
