@@ -1,29 +1,84 @@
-# 0013 — Optional managed image hosting
+# 0013 — Optional Cloudflare R2 media publishing
 
-Status: provisional. Created: 2026-11-08. Source: [media RFC #31](https://github.com/wxxb789/anc/issues/31).
+Status: ready. Created: 2026-11-08. Source: [media RFC #31](https://github.com/wxxb789/anc/issues/31).
 
-## Intended advance
+## Desired outcome
 
-An author who actually needs a separate image host can opt into a simple, reliable publishing workflow: write Markdown with local images, choose a supported storage/CDN provider, and publish without manually uploading or maintaining image URLs. The **default remains same-origin GitHub Pages / Cloudflare Pages static assets**, requiring no account, image key, provider SDK or additional configuration.
+An author who needs an independent image host can explicitly publish
+their already-authorized local images to **Cloudflare R2** and serve
+them through a public custom-domain CDN URL without manually uploading
+files or editing Markdown. Default GitHub Pages/Cloudflare Pages
+same-origin image delivery remains **zero configuration**.
 
-This is an optional publishing capability, not a mandate to introduce a media management system. Existing HTTPS remote-image URLs already work without a provider integration; simply preserving those URLs does **not** complete this goal.
+This is optional hosted publishing, not a new default and not a
+general media-host management system. Existing HTTPS image links
+already work without it.
 
-## Prerequisite
+## Prerequisite and accepted design
 
-Requires the accepted local-asset and publication-boundary outcome from [0009](0009-zero-config-static-images.md). Image optimization from [0011](0011-webp-first-image-delivery.md) can improve costs but need not block provider-independent publishing correctness. This is a later priority than local image display and automatic optimization.
+Requires [0009 — Zero-config static images](0009-zero-config-static-images.md)
+to be accepted. [0011 — WebP-first delivery](0011-webp-first-image-delivery.md)
+may reduce upload/storage cost but does not block R2 publishing correctness.
 
-## Material bounds already decided
+The [accepted media design](../core-design/media-pipeline.md#0013--opt-in-cloudflare-r2-image-publishing)
+already selects **Cloudflare R2**, **pinned `aws4fetch` 1.0.20**, S3
+signed operations, production custom-domain delivery, content-addressed
+immutable object keys, environment-only credentials, atomic conditional
+uploads and a publish-after-verification barrier. Implementation should
+not reopen provider or dependency selection.
 
-- No automatic upload, network request or cloud cost as a side effect of an ordinary local `anc build`. Remote publication must be an explicitly authorized publishing action and must not replace the existing release qualification, deployment ownership or review gate.
-- Only bytes authorized for publication may be uploaded. Publish an HTML version referencing remote media **after** the upload and accessibility/identity checks necessary to avoid broken links. A failed upload or remote verification must not silently publish broken image references or overwrite a valid previous site.
-- Credentials remain outside source content and public artifacts/logs. Preserve content-based identities, deduplication, safe retries and a documented withdrawal/retention contract. Removing a reference from a generated site must not be misrepresented as immediately deleting third-party cached copies.
-- Keep the integration narrow and dependency-light; do not mirror a vendor's media dashboard, transformation language or client SDK in ANC. S3-compatible storage / Cloudflare R2 is an initial candidate, with ImageKit, Cloudinary, OSS and COS considered based on real user demand—not a commitment to implement all providers.
-- The same-origin zero-configuration path remains fully usable when no optional provider is configured or when the provider service is unavailable.
+- Ordinary `anc build`, `anc preview`, `anc build --release`
+  and their standard GitHub Action path remain offline and free from
+  R2 dependencies, image-service accounts and surprise cloud charges.
+  Only a deliberate opt-in release action can upload.
+- First-provider scope is **R2 only**, not all S3-compatible services,
+  ImageKit, Cloudinary, OSS or COS. Existing R2 bucket and public
+  custom domain are required only for users who opt in; no default
+  account creation or extra deploy infrastructure.
+- Only public, explicitly permitted image content may cross the network.
+  Preserved publication review, exact output inventory, security scanning
+  and failed-output preservation must not be weakened.
+- The existing site deployment remains separate; ANC guarantees
+  correctly prepared media-bound static output, not one distributed
+  transaction across GitHub/Cloudflare Pages and R2. A failed
+  upload must never be mislabeled a successful deployable build.
+  Do not automatically delete immutable objects used by past releases.
 
-## Provisional completion basis
+## Done when
 
-A later run should show an end-to-end publish from a foreign notes repository to **one justified provider**, where an explicitly authorized action makes exactly the permitted images accessible by stable CDN URLs and publishes correct referencing HTML; duplicate and unchanged inputs do not trigger unnecessary uploading. Failure, revoked permission, missing remote object, credential leakage and withheld-asset controls must be demonstrated with actual provider behavior or a clearly bounded test substitute, with no unverified live-deployment claim.
+1. A foreign-repository installed ANC product offers a clear opt-in R2
+   release flow and documented bucket, account endpoint, custom domain
+   and CI/environment credential setup. With no opt-in, all ordinary
+   builds and previews remain offline, same-origin and unchanged.
+2. An end-to-end exercise uploads only referenced authorized images
+   under final-byte hash keys, verifies remote object identity and
+   public HTTPS media reachability, and emits actual static HTML
+   referencing correct remote URLs. Unchanged/repeated inputs reuse
+   existing objects; changed inputs receive new paths without overwrites.
+3. Concurrent writers, already-existing mismatched objects, rejected,
+   delayed or ambiguously completed uploads, wrong MIME/size/checksum,
+   missing public DNS/404 (including cached 404), lost credentials,
+   unsafe endpoint redirects and upload timeouts are exercised through
+   controlled failure tests. None may replace the preceding good
+   output, leak tokens or private names, upload withheld assets, or
+   publish a candidate with broken links.
+4. The real packaged result uses normal browser HTTPS image loading
+   with no new client JavaScript, DB/Worker/WASM work, public manifest,
+   image proxy, mandatory image encoder, or additional site-hosting
+   integration. Browser images work under the existing CSP.
+5. Repeatable evidence records the installed dependency footprint,
+   fresh/repeated API operations and bytes, orphan/withdrawal policy,
+   working static output, and checks through the existing verification
+   workflow. Claims about production R2 compatibility require a
+   **real authorized R2 + custom-domain exercise**; absent credentials
+   are a disclosed integration-evidence gap, not a fabricated test
+   success. Comprehensive failure testing must run without any
+   maintainer-owned cloud account.
 
-**Refine before activation:** establish real provider demand, the first provider/public URL contract, credentials or an authorized safe test environment, and the publication/rollback/withdrawal behavior that users expect. A product choice that only the maintainer can make must be resolved before marking this goal ready. Do not design a speculative generic adapter framework or create a second default publishing mode to satisfy a test.
-
-This goal is **not ready to run yet**. Refine the goal against earlier evidence before creating a definitive `Done when` contract.
+The agent should implement and verify the committed contract with
+reversible defaults. At the start, flag an indispensable
+maintainer-only input if one is required to complete live provider
+validation; otherwise use deterministic local protocol tests and
+report the independent implementation evidence. Stop for irreversible
+or out-of-scope choices. Report each completion item with measured
+evidence, limitations and failures.

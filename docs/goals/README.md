@@ -105,8 +105,8 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 ## Image publishing goals — Issue #31 (2026-11-08)
 
 The [accepted target media design](../core-design/media-pipeline.md) selects one
-sharp-based image engine for 0011/0012 and a fail-closed SVG/XML/CSS
-resource boundary. Dependency selection and security architecture belong there,
+sharp-based image engine for 0011/0012, a fail-closed SVG/XML/CSS
+resource boundary, and an opt-in R2 publishing contract for 0013. Dependency selection and security architecture belong there,
 not in an implementer's interpretation of a goal prompt.
 
 The user's agreed priority is **correct local-image display through the existing
@@ -123,7 +123,7 @@ cost acceptance is not a prerequisite for 0009.
 | [0010 — Readable image figures](0010-readable-image-figures.md) | Ready | Local images have truthful captions, accessibility and responsive layout without another authoring interface | 0009 |
 | [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md) | Ready | Automatic format choice improves typical image costs while protecting legibility, behavior and package simplicity | 0009; 0010 is nonblocking |
 | [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009, 0011 |
-| [0013 — Optional managed image hosting](0013-optional-managed-image-hosting.md) | Provisional | One justified provider can host authorized images under a safe opt-in publishing flow, without changing zero-config defaults | 0009; refine provider and publication contract |
+| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009; 0011 nonblocking |
 
 `Ready` here means a downstream agent can pursue the stated outcome once its
 prerequisite is accepted; it does **not** mean implemented, deployed or approved

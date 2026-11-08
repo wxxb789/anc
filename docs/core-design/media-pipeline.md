@@ -267,6 +267,120 @@ Windows, macOS), per-SVG processing, aggregate cold build, peak memory,
 source/output bytes, browser transfer, and quality comparisons. Do not add
 a second renderer or silently use system executables to make a benchmark pass.
 
+## 0013 — Opt-in Cloudflare R2 image publishing
+
+### First provider and dependency
+
+**The first managed provider is Cloudflare R2**, using its S3-compatible
+`HEAD`, `PUT` and `GET` operations. Compatibility with arbitrary S3
+providers, OSS, COS, ImageKit and Cloudinary is **not** implied. They require
+separate product demand and tests. Existing author-supplied HTTPS images
+remain unaffected.
+
+Use **pinned `aws4fetch` 1.0.20**, a lightweight dependency-free AWS SigV4
+signer supported by Cloudflare's R2 documentation, with Node's built-in
+`fetch` and WebCrypto. This is smaller than adding the AWS SDK v3 client
+tree, safer than inventing SigV4, and requires no installed `wrangler`,
+`rclone`, remote Worker, new server, or browser package. Load the signer
+only in the optional R2 publishing path. The published tarball must include
+the signer; quantify its actual installed footprint. No new dependency is
+added in this design PR.
+
+The default `anc build`, `anc preview` and `anc build --release`
+remain **same-origin, offline and unchanged**, even when R2 credentials are
+present. Only a clearly explicit action (proposed CLI:
+`anc build --release --media r2`) authorizes remote writes. Extend the
+existing `publish.config.yaml` only for that opted-in mode, with
+`provider: r2`, bucket, HTTPS account/jurisdiction S3 API endpoint and
+HTTPS R2 **public custom-domain base URL**. Choose one narrow validated
+shape, not a generic provider framework. Read access-key ID and secret
+from named environment variables or CI secrets, never YAML or the published
+site. A production custom domain is required: `r2.dev` is development-only,
+rate-limited and lacks normal CDN caching. Reject userinfo in URLs,
+insecure endpoints and signing-key exposure through redirects.
+
+### Media identity and idempotent uploads
+
+Only an already authorized asset from a published note may be uploaded.
+Reuse the local final-byte content hash and actual MIME type. The R2
+object key is the same stable relative path
+`_assets/<full-sha256>.<validated-extension>`; the configured CDN domain
+serves that key as its public path. No original source filename, local path,
+or private report becomes a remote key. The already accepted image pipeline
+determines the *only* published representation; R2 cannot transform bytes.
+
+Issue `PutObject` with `If-None-Match: *`, the correct `Content-Type`,
+immutable caching metadata, and verified request payload integrity.
+R2 explicitly guarantees this condition is atomic: concurrent publishes
+cannot overwrite the same key. A `412` means re-read and verify, not
+overwrite. For existing objects, establish actual byte identity against
+the expected digest: size, MIME or S3 multipart ETag **alone** is not a
+SHA-256 proof; an untrusted metadata claim alone is insufficient. Use
+a trustworthy checksum or read/hash the object. For an ambiguous timeout,
+retry only conditionally and verify the result; a 404 does not prove a
+possibly in-flight prior PUT will never commit. Deduplicate repeated
+references. Bound request concurrency, upload retries and object size
+by the existing validated-image workload.
+
+### Publication is ordered, not globally transactional
+
+An ordinary release still builds and qualifies a local, same-origin
+artifact. For **explicit R2 mode**, complete the private asset selection,
+normal publish-set/security gates and immutable candidate site first.
+Then make *all* referenced objects available and verify their identity
+and actual public custom-domain reachability **before promoting a
+remotely linked deployable site**. Never probe an absent CDN object
+before upload: Cloudflare may cache negative 404 responses and continue
+serving them after a later successful PUT. A private candidate can carry
+remote links while still being withheld from the promoted output; the
+final HTML and hosted bytes must agree.
+
+If any required upload, identity, public URL, or content-type check fails,
+the run fails, retains the last successful local output and does not
+present a candidate with broken remote links as ready. Uploads that
+precede a later failure may leave harmless immutable orphans. Do not
+try to delete them during automatic rollback: earlier deployed pages
+could reference those objects. ANC does **not** deploy HTML to GitHub
+Pages/Cloudflare Pages and cannot promise an atomic transaction across
+the CDN and static host. An R2/CDN outage after successful publishing
+is a separate availability risk willingly accepted by opt-in users.
+Removing a note/asset does not revoke previously cached copies or
+authorize automated remote deletion.
+
+Public HTML uses normal absolute HTTPS `img src` URLs under the existing
+`img-src https:` CSP; images need no browser-side R2 SDK, credentials,
+JavaScript, SQLite, CORS preflight, or public asset index. The storage API
+endpoint is never an image-serving URL; a successful signed `HEAD`
+alone does not prove the public CDN hostname is functional.
+
+### Required verification
+
+Demonstrate foreign-repository **packaged** adoption, exactly one
+authorized asset set, stable URLs, fresh/repeated publish costs,
+content-addressed deduplication, and actual browser image display.
+A local protocol fixture/fake is sufficient for repeatable fault
+injection (missing/revoked credentials, 403/404, wrong MIME/digest,
+concurrent conditional writers, uncertain write outcomes, partial
+upload, cached 404, domain misconfiguration and excluded/private
+asset leaks). A **live R2 bucket and public custom-domain round trip**
+is necessary before claiming production Cloudflare integration
+verified; if no authorized credentials are available, do not invent
+that evidence. CI secrets are optional for the normal build.
+
+Do not build a new upload manifest, upload daemon, generic S3 adapter,
+remote media dashboard, or multi-provider abstraction. The baseline
+survives ablation because removing the optional signer/publisher
+leaves 0009's zero-config publishing unaffected. Uploading images
+is not the default merely because the static host happens to be
+Cloudflare Pages.
+
+Provider references:
+- https://developers.cloudflare.com/r2/api/s3/api/
+- https://developers.cloudflare.com/r2/api/s3/extensions/
+- https://developers.cloudflare.com/r2/examples/aws/aws4fetch/
+- https://developers.cloudflare.com/r2/buckets/public-buckets/
+- https://developers.cloudflare.com/r2/reference/consistency/
+
 ## Change and ablation discipline
 
 The only justified extra public artifact is a **referenced, content-addressed
