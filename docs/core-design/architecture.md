@@ -52,6 +52,7 @@ Do not serialize those batches into a new public JSON file or corpus-sized JS ob
 | Capability | Owner | Reason |
 | --- | --- | --- |
 | Publication selection and link resolution | Producer | Requires source and exclusion context unavailable to the browser |
+| Referenced local media (target after Goal 0009) | Producer and static host | The producer authorizes and emits only referenced publishable bytes; the existing host serves them without a storage adapter or client runtime |
 | Article body, headings, footnotes, page language | IR and Astro | One content rendering path; effective language is also projected for browser labels |
 | Preview title, excerpt, author-ordered aliases and effective note language | SQLite | Shared lookup model including mixed-language accessibility |
 | Outgoing, backlinks, local/global graph | SQLite queries | One edge set and one relationship meaning |
@@ -79,6 +80,7 @@ It does forbid a second corpus index with the same lookup or adjacency facts.
 - Use the toolchain pinned in `.nvmrc` and the lockfile; align package engine
   declarations, CLI, CI, and adoption docs with the chosen runtime. There is no
   obligation to preserve a historical Node minimum or add a fallback SQLite driver.
+- Use the [media design](media-pipeline.md) for the accepted future local-image contract: no image host required, one sharp-based build-time encoder after 0011, and SVG converted to WebP only after SVG safety controls pass 0012. Until those goals ship, the existing no-asset-pipeline implementation remains in force.
 - Ship required JS/WASM within the package and generated site. A built site needs
   same-origin HTTP asset requests, not a CDN library import or runtime data service.
 

@@ -1,28 +1,82 @@
-# 0012 — Safe SVG input with static raster output
+# 0012 — Safe SVG rasterization with WebP output
 
-Status: provisional. Created: 2026-11-08. Source: [media RFC #31](https://github.com/wxxb789/anc/issues/31).
+Status: ready. Created: 2026-11-08. Source: [media RFC #31](https://github.com/wxxb789/anc/issues/31).
 
-## Intended advance
+## Desired outcome
 
-A technical author can embed a local, self-contained static SVG directly from Markdown, while ANC automatically turns it into an ordinary efficiently delivered **WebP** image during the build. Readers never need an SVG interpreter supplied by ANC, and the original active SVG document never enters the published site.
+An author embeds a local, self-contained **static SVG** as an ordinary Markdown
+image. ANC turns it into a high-fidelity **WebP** during its existing offline
+build. The original SVG and its potentially active XML never become public
+assets or browser runtime dependencies. The author does not install a separate
+SVG renderer, manage fonts manually for common supported diagrams, or choose
+conversion settings.
 
-This extends the successful local-image workflow instead of creating a standalone diagram service or a second media publishing route. Static technical diagrams with CJK labels, paths, gradients and transparent backgrounds are first-class subjects; unsupported dynamic SVG features are not silently promised.
+A complicated SVG that cannot be rendered safely and faithfully must fail
+clearly; a silently blank image or leaked host file is worse than a failed
+build.
 
-## Prerequisite
+## Prerequisite and accepted design
 
-Requires [0009 — Zero-config static images](0009-zero-config-static-images.md) and the measured image encoding/package behavior from [0011 — WebP-first delivery](0011-webp-first-image-delivery.md). It does not block either earlier outcome.
+Requires [0009 — Zero-config static images](0009-zero-config-static-images.md)
+and [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md).
+The [media core design](../core-design/media-pipeline.md#0012--svg-as-self-contained-build-time-source)
+has **already selected** the renderer and baseline security/format strategy:
+the **same pinned sharp 0.35.5** (bundled librsvg) operating on an in-memory,
+previously authorized SVG; **saxes 6.0.0** and **css-tree 3.2.1** enforce a
+syntax-aware, fail-closed XML/CSS policy. This is not a request to compare
+resvg, WASM, ImageMagick or a new Rust toolchain during implementation.
 
-## Material bounds already decided
+- The static subset accepts ordinary internal gradients, clip paths, masks,
+  filters and same-document fragment references, including common diagram
+  styles, but **never** external resource fetching, external file resolution,
+  active XML, unsafe embedded resources or unsupported dynamic content.
+- Render at useful high-density resolution within bounded output-pixel and
+  build-resource policies, retain transparency and aspect ratio, and use
+  **lossless WebP** for text/line fidelity. Do not publish a PNG intermediate
+  or the original SVG merely because conversion failed.
+- Reuse publication selection, content-addressed output, ordinary Markdown,
+  CSP, exact inventory, private diagnostics and atomic release preservation
+  from 0009 and 0011. No new public format, image CDN or client runtime.
+- Font policy is **host-font-first without bundled heavyweight CJK fonts**;
+  prove useful CJK label rendering on the actual packaged Linux CI host and
+  sampled Windows/macOS hosts. Missing glyphs are not success. If evidence
+  shows a minimal bundled fallback is essential, justify its measured cost
+  against the lightweight product boundary; do not introduce it silently.
+  Byte identity is claimed for repeated builds with the same pinned
+  engine/font environment, not for different operating systems' fonts.
 
-- SVG is build-time input only; the user has chosen **rasterization**, not sanitizing and hosting raw SVG. WebP is the preferred published format.
-- The build must not fetch remote resources or read arbitrary local files through an SVG's internal references. Reject or securely isolate external images, fonts, styles, scripts, XML entities and other resource loading, including attempted traversal outside the content root.
-- Prefer simple adoption and stable cross-platform packaging over the number of rendering features. Users should not need to install separate system tools or a large font/rendering toolchain just to publish a note.
-- Preserve meaningful visual quality for small text and fine lines, transparent backgrounds and reasonable resolutions, within bounded build-time resource usage. Existing publication, privacy, output-scanning, no-JS and deterministic-output principles remain in force.
+## Done when
 
-## Provisional completion basis
+1. A foreign-repository build and actual browser rendering show common
+   author-exported SVGs (line art, arrow labels, gradients, masks, clipping,
+   filters, transparent backgrounds, explicit sizes and viewBox-only cases,
+   Latin and CJK text) as **viewable, correctly referenced WebP** files with
+   readable small text, appropriate aspect ratios and no SVG source bytes
+   shipped to the site.
+2. A real packaged-build hostile corpus rejects DTDs/entities, XInclude,
+   scripts/events, foreignObject, CSS imports/escaped URLs, local/file/network
+   references, malicious embedded data, invalid XML, unsupported dynamic
+   features and excessive pixel/filter workloads. A controlled host-file
+   canary and network probe demonstrate that conversion cannot disclose
+   another file or initiate network requests. A parser-only test is not enough.
+3. Font tests demonstrate the accepted host-font-first policy on actual
+   supported execution environments. CJK/symbol text cannot silently turn
+   into blank or tofu labels; unavailable glyph coverage either fails
+   actionably or is addressed through a documented, measured minimal fallback.
+   Do not claim untested platform or cross-font byte identity.
+4. Repeat builds under an identified pinned environment yield stable final
+   WebP bytes/hashes and duplicate-asset behavior. Unsupported/hostile inputs
+   fail before publishing an incomplete site; previous valid output remains
+   usable, excluded assets remain excluded, and neither raw SVG nor a
+   second image source appears in the exact output inventory.
+5. Comparative evidence includes source and published sizes, conversion
+   latency, aggregate build time, peak memory, dependency/tarball installation
+   cost, quality and SVG-specific negative controls. The packaged result
+   serves on the existing GitHub Pages / Cloudflare Pages root-hosting
+   contracts with no author-side tools or browser runtime additions, and
+   user documentation describes the supported static subset accurately.
 
-A future run should demonstrate that representative local SVG diagrams are faithfully converted to linked, viewable WebP assets in the **actual packaged ANC site**, with repeatable output under named pinned fonts/toolchain, supported environment coverage and measured build/install costs. Negative controls must prove that scripts, network/file references, hostile SVG constructs, missing glyphs and resource-exhaustion attempts neither disclose local data nor produce seemingly valid empty images. The shipped static site must contain no original source SVG.
-
-**Refine before activation:** compare the actual packaged and quality evidence from 0011, then settle what bounded SVG feature set, font coverage, cross-platform identity guarantee and resource/failure budget can honestly be supported without disproportionate dependencies. The agreed rasterization direction is fixed; the rendering engine, executable form and font distribution are not. Do not promote a library recommendation or historical unmeasured timing into a completion guarantee.
-
-This goal is **not ready to run yet**. A receiving agent must first refine it into a stand-alone `Done when` contract with verifiable controls, then follow the normal stop/report rules of [define-goal](README.md).
+Stop for a genuinely unavailable maintainer-only input or an irreversible
+departure from the approved design; otherwise make reversible technical
+decisions from observed evidence and report all pass/fail controls. This
+goal is **ready after its prerequisites are accepted**, not already done.
