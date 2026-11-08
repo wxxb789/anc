@@ -13,6 +13,7 @@ accessible fallback remain available without JavaScript.
 | Document | Contract |
 | --- | --- |
 | [Architecture](architecture.md) | Product scope, ownership, source/IR/output boundaries |
+| [Media processing and delivery](media-pipeline.md) | Accepted target: same-origin images, sharp/WebP baseline, build-only SVG security and font policy; implementation remains goal-gated |
 | [Content semantics](content-semantics.md) | Publication, links, identity, aliases, tags |
 | [SQLite contract](sqlite-contract.md) | Exact schema, invariants, query semantics |
 | [Build and browser runtime](build-and-runtime.md) | Artifact binding, Worker protocol, loading, failure, caching |
@@ -56,6 +57,7 @@ for historical formats. Any future compatibility commitment needs its own decisi
   Browser queries are read-only in one lazy dedicated Worker.
 - Static relationship HTML and interactive queries use the same SQLite relation
   model. A query at build time does not make a page depend on a query at runtime.
+- Static image files are allowed as referenced, authorized and content-addressed outputs when the media-publishing goals ship. The [media design](media-pipeline.md) selects one sharp-based encoder and build-only SVG policy; it does not authorize an image index, extra browser runtime or image CDN requirement.
 - Every added structure must name its consumer and survive an ablation check.
   Fewer tables or fewer lines alone are not evidence of a better design.
 

@@ -1,7 +1,7 @@
 # Development goals
 
 These are separately addressable goal payloads for ANC's accepted SQLite/WASM
-initiative. [Core design](../core-design/README.md) owns long-term architecture;
+initiative and the later image-publishing initiative (Issue #31). [Core design](../core-design/README.md) owns long-term architecture;
 this directory owns finishable outcomes and completion evidence. No goal here
 executes a runtime command merely by existing.
 
@@ -102,6 +102,43 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 | --- | --- | --- |
 | [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md) | Measured packaged behavior meets the mobile target and accepted cold-preview/resource policies | 0007, including its functional prerequisites |
 
+## Image publishing goals — Issue #31 (2026-11-08)
+
+The [accepted target media design](../core-design/media-pipeline.md) selects one
+sharp-based image engine for 0011/0012, a fail-closed SVG/XML/CSS
+resource boundary, and an opt-in R2 publishing contract for 0013. Dependency selection and security architecture belong there,
+not in an implementer's interpretation of a goal prompt.
+
+The user's agreed priority is **correct local-image display through the existing
+GitHub Pages and Cloudflare Pages static hosting paths first**, with no new CDN
+account or image-specific setup. ANC builds and ships static bytes; it does not
+need a provider SDK merely to use a static host's CDN. Image presentation, WebP
+optimization, SVG rasterization and optional managed hosting are subsequent,
+separately assessable outcomes. Goal 0008 continues independently; its browser
+cost acceptance is not a prerequisite for 0009.
+
+| Goal | Status | Single completion judgment | Material prerequisites |
+| --- | --- | --- | --- |
+| [0009 — Zero-config static images](0009-zero-config-static-images.md) | Ready | An independently packaged build publishes only authorized referenced raster images and serves them correctly on supported GitHub Pages / Cloudflare Pages root-site contracts with no image configuration | 0007 (completed) |
+| [0010 — Readable image figures](0010-readable-image-figures.md) | Ready | Local images have truthful captions, accessibility and responsive layout without another authoring interface | 0009 |
+| [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md) | Ready | Automatic format choice improves typical image costs while protecting legibility, behavior and package simplicity | 0009; 0010 is nonblocking |
+| [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009, 0011 |
+| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009; 0011 nonblocking |
+
+`Ready` here means a downstream agent can pursue the stated outcome once its
+prerequisite is accepted; it does **not** mean implemented, deployed or approved
+as a release. `Provisional` goals preserve accepted direction but require
+refinement before activation. No goal in this new series has started or completed.
+
+**Scope boundary.** Current ANC deployment supports root-of-origin sites, not a
+GitHub Pages project site's `/<repo>/` prefix. Extending site-wide base-path
+support is a separate potential outcome, not an unmentioned obligation of 0009.
+Media RFC #31 also proposes external-link behavior, numbered captions,
+references sections and wide-table accessibility. This initiative does not
+silently commit those still-unresolved proposals; such choices can be evaluated
+as separate future goals. The implementation of 0009 must reconcile the accepted
+core design's present no-asset-pipeline stance before claiming completion.
+
 ## Completed goals
 
 | Goal | Completed | Record |
@@ -113,7 +150,8 @@ not a mandatory execution schedule. Numbers are stable identifiers.
 | [0006 — Safe release output](archive/0006-safe-release-output.md) | 2026-09-17 | Implementation commit `3e65a12`, PR #8, CI run `35231482566`; the reviewed-set failures, exact-output refusals, reconstructed-row scanner controls, withdrawal-after-rebuild, whole-tree failed-build preservation, and concurrent-build binding isolation are recorded in the file. |
 | [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md) | 2026-09-18 | Implementation commits `2c9772e`, `33aa0ae`, `12ff781`, `ebd02f9`, `c159802`, `65f89d4`, PR #10; local `pnpm run verify` and CI run `35253591403` (80 files / 952 passed / 34 skipped) green on `65f89d4`, Action-parity CI run `35253591383` green with the shallow-clone refusal, and the recorded `pack:tarball` digest plus `smoke:tarball` result — all six evaluation rows in the file. |
 
-One goal remains `in progress` and active. Schema creation, query-module code,
+One SQLite goal remains `in progress`. Media goals below are new and not started.
+Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
 separate judgments, with no circular dependency on final performance budgets.
@@ -178,8 +216,10 @@ hosting and post-deployment checks remain separately scoped external actions.
 
 - Active goal filenames are unique increasing `NNNN-short-name.md` numbers. Check
   active and archive directories before choosing the next number; never reuse one.
-- A goal starts `ready`, becomes `in progress` when executed, and becomes
-  `completed` only when its own evidence and stated acceptance authority are satisfied.
+- A goal starts `ready` (or `provisional` while its outcome contract still needs
+  refinement), becomes `in progress` when executed, and becomes `completed`
+  only when its own evidence and stated acceptance authority are satisfied.
+  Refine a provisional goal to ready before activation.
 - Move a completed goal, with date/commit/PR/results and material limitations, to
   `docs/goals/archive/` under the same filename. Update incoming links and relative
   links inside it. Do not move an unfinished goal into the completed archive.

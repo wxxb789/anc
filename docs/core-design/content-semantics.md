@@ -8,7 +8,11 @@ accepted product behavior, not backward compatibility with an old implementation
 Preserve discovery precedence: a note's `publish: false` is unconditional;
 configuration exclusions apply next; `publish: true` cannot override exclusion.
 Malformed configuration and zero-match exclusion patterns fail. Existing built-in
-exclusions and the absence of a non-Markdown asset-copy pipeline remain in force.
+exclusions remain in force. The implementation's **current** absence of a
+non-Markdown asset pipeline remains in force **until Goal 0009 ships**. The
+accepted **target** is the referenced-only, authorized same-origin image
+publication contract in [media design](media-pipeline.md), not copying all
+non-Markdown files; this design document does not itself claim image support.
 
 Publication reads only what lies inside the content root. A `.md` symbolic link
 whose resolved target is outside it is dropped unread as `link-outside-content`,
