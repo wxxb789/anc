@@ -1,8 +1,10 @@
 # Media processing and delivery
 
 Status: accepted **target design** for Goals 0009–0013, 2026-11-08.
-This is not evidence that those features have shipped. The current
-no-local-asset behavior remains until 0009 is implemented and verified.
+**Goal 0009 is implemented and verified**; [its completion record](../goals/archive/0009-zero-config-static-images.md)
+carries the evidence. 0010–0013 have not shipped, and this document is not
+evidence that they have: the sections below are the target for those outcomes,
+and the one for 0009 now describes the implemented contract.
 
 ## Product contract and ownership
 
@@ -14,9 +16,34 @@ encoder, configuration flag, Rust installation, or system image CLI.
 
 Order of outcomes:
 
-1. **0009:** authorized referenced PNG/JPEG/GIF/WebP/AVIF bytes are copied
-   unchanged and work on the existing *domain-root* static-hosting contract.
-   Local SVG is rejected explicitly. Correctness and publication safety first.
+1. **0009 — shipped:** authorized referenced PNG/JPEG/GIF/WebP/AVIF bytes are
+   copied unchanged and work on the existing *domain-root* static-hosting
+   contract. Local SVG is rejected explicitly. Correctness and publication safety
+   first. The implemented shape, stated here because the later goals build on it:
+   - Resolution is **note-relative, then content-root-relative**, with no basename
+     tier; an explicitly relative reference does not fall through to the root.
+     Markdown images, reference-style images, and image wikilinks all take it.
+   - A reference to a file the walk did not authorize — missing, excluded by a
+     configuration glob, outside the content root through `../` or a symlink, an
+     SVG, a non-raster, or a raw-HTML `<img>` — **fails the build**. It is never
+     dropped from the HTML and never becomes a `/private/` link.
+   - Public identity is the SHA-256 of the **emitted bytes**: the path is
+     `/_assets/<full-sha256>-<sanitized-source-name>`, identical bytes publish one
+     asset, and the name is decoration — the digest is what a consumer may rely
+     on. The extension is derived from the detected bytes, because a static host
+     infers `Content-Type` from it.
+   - Bytes are copied byte-identically: no transcoding, resize, or metadata
+     rewrite. An animated GIF or WebP keeps every frame. **This phase is not
+     metadata sanitization** — a passthrough photo keeps its EXIF/GPS, and a
+     later privacy policy that strips it is a separate product decision.
+   - The bytes are staged beside the private artifact and emitted after Astro
+     empties the output directory; the exact output inventory owns `/_assets/`
+     (a declared file must be present and hash to its digest, and an undeclared
+     one is an unexpected member), and residue/secret scanning runs over the
+     emitted bytes.
+   - Nothing else is added: no browser JavaScript, no SQLite table or column, no
+     public manifest, no image service, no `publish.config.yaml` key, and no
+     system CLI. The hosting shape remains a site at the domain root.
 2. **0010:** optional figure captions and image layout/accessibility improve
    reading; unrelated to which image encoder is installed.
 3. **0011:** automatic WebP-preferred optimization, without changing how an
@@ -303,10 +330,14 @@ insecure endpoints and signing-key exposure through redirects.
 
 Only an already authorized asset from a published note may be uploaded.
 Reuse the local final-byte content hash and actual MIME type. The R2
-object key is the same stable relative path
-`_assets/<full-sha256>.<validated-extension>`; the configured CDN domain
-serves that key as its public path. No original source filename, local path,
-or private report becomes a remote key. The already accepted image pipeline
+object key is the same stable relative path 0009 publishes — and the same
+`_assets/` namespace the output inventory owns — so an uploaded object and a
+local asset are one identity rather than two schemes that must be kept in step.
+The key carries the full SHA-256 and the emitted extension; the sanitized source
+basename after the digest is URL decoration, never identity. The configured CDN
+domain serves that key as its public path. No original source *path*, local
+directory, or private report becomes a remote key; the sanitized basename 0009
+already publishes after the digest is decoration, not identity. The already accepted image pipeline
 determines the *only* published representation; R2 cannot transform bytes.
 
 Issue `PutObject` with `If-None-Match: *`, the correct `Content-Type`,
@@ -403,5 +434,8 @@ The selected baseline is grounded in official upstream documents:
 
 The current documents select a technical direction; they do **not** claim
 completed benchmark evidence, a working SVG security sandbox, tested package
-installations, or shipped image support. Those belong to the goal completion
-records and real implementation PRs.
+installations, or shipped support for 0010–0013. Those belong to the goal
+completion records and real implementation PRs. 0009's record is the one already
+written: it claims byte-passthrough images, its negative controls, and its gate
+evidence, and it repeats here that nothing in this document is evidence for the
+goals after it.

@@ -7,6 +7,18 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+### Added
+
+- Local images referenced by a published note are published. PNG, JPEG, GIF, WebP, and AVIF
+  are copied byte-identically to `/_assets/<sha256>-<name>` and deduplicated by content, so
+  an animation keeps every frame and one picture is one file however many notes embed it.
+  A reference resolves relative to the note and then to the content root, with no basename
+  fallback. A missing, excluded, escaping, or unsupported image — an SVG included — fails
+  the build rather than shipping a broken picture, and the previously built site stays in
+  place. Remote images are left as written and never fetched. No new configuration key,
+  dependency, deployment step, or browser script is added; the bytes are passthrough, so
+  this is not metadata scrubbing.
+
 ### Changed
 
 - Documentation states the published state: `@wxxb789/anc` is on npm with provenance, the

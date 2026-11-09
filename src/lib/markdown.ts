@@ -134,6 +134,21 @@ export interface RenderOptions {
    * document in hand renders exactly what it did before.
    */
   chrome?: ArticleChrome;
+  /**
+   * Every image asset this build publishes, as public URLs.
+   *
+   * The renderer's `img` transform is the last gate over an image `src`, and it
+   * needs to know which local URLs exist. Without this, a local reference that
+   * the producer never authorized would ship as a broken `<img>` — and a
+   * hand-authored artifact could point `src` at a path this build never emits.
+   *
+   * Omitted means "this render published no assets": every local `src` is then
+   * refused. That is the safe default for a caller rendering one entry with no
+   * artifact in hand, and the note page is the caller that passes the real set.
+   * See `src/lib/media.ts` for why a local image is never inferred from the
+   * filesystem here.
+   */
+  publishedAssets?: ReadonlySet<string>;
 }
 
 /**
@@ -1303,6 +1318,7 @@ function sanitize(
   routeForSlug: (slug: string) => string | undefined,
   generatedIds: ReadonlySet<string>,
   rawIds: ReadonlyMap<string, number>,
+  publishedAssets: ReadonlySet<string>,
 ): string {
   // Each generated id survives exactly once. `headingPlugin` has already made
   // the generated set disjoint from every raw-HTML id, so this no longer
@@ -1382,8 +1398,50 @@ function sanitize(
       // only for the base64 raster types TK-01's artifact scanner allowlists.
       // The scheme allowlist alone is too coarse: it would also admit
       // `data:image/svg+xml`, which can carry a script, and `data:text/html`.
+      //
+      // **A local `src` must name an asset this build published.** The producer
+      // rewrites every image reference it authorizes to a `/_assets/<digest>-<name>`
+      // URL, and refuses an unauthorized one, so anything else local here is a
+      // reference that bypassed the pipeline — a raw-HTML `<img>` the producer
+      // missed, or an artifact path that names no emitted file. Shipping it would
+      // be a broken picture and, in the second case, a request for a file this
+      // build never wrote. It throws instead, which stops the build; the message
+      // names the source for the report and never reaches a stream, because a
+      // plain `Error` is not disclosure-checked.
+      //
+      // Remote and `data:` sources keep their existing treatment: they are never
+      // fetched, never mirrored, and their forms did not change in this goal.
       img: (tagName, attribs) => {
         const source = attribs['src'];
+        // The classification has to be the one the sanitizer will apply to this
+        // same value, or the two disagree about what a scheme is. `launder`,
+        // which `sanitize-html` uses to decide an attribute's fate, removes every
+        // character at or below U+0020 from a URL before looking for a scheme —
+        // measured, `java&#9;script:` arrives here as a literal tab and is
+        // rejected there as `javascript:`. Testing the raw bytes here would call
+        // that local, refuse the whole document, and report a scheme problem as
+        // an unpublished image.
+        // Every character at or below U+0020, dropped one at a time rather than
+        // with a control-character range: the intent is "what a URL parser
+        // ignores", and writing it as a filter keeps that readable and keeps the
+        // lint rule that bans raw control classes out of this file.
+        const cleaned =
+          typeof source === 'string'
+            ? Array.from(source, (character) => (character <= ' ' ? '' : character)).join('')
+            : '';
+        const external = /^[A-Za-z][A-Za-z0-9.\-+]*:/.test(cleaned) || /^[/\\]{2}/.test(cleaned);
+        // An `<img>` with no `src` at all is not a reference to anything, and the
+        // producer refuses that form outright (`html-form`); the renderer leaves
+        // the element as the allowlist always has. A *present* src that is not
+        // remote has to name a published asset.
+        if (source !== undefined && !external && !publishedAssets.has(source)) {
+          throw new Error(
+            'a local image reference reached the renderer without being published: ' +
+              JSON.stringify(source) +
+              '. The producer publishes an image by rewriting it to its /_assets/<digest>-<name> URL; ' +
+              'a local src anywhere else names no file this build emits.',
+          );
+        }
         const src =
           source !== undefined && /^data:/i.test(source) && !SAFE_IMAGE_DATA_URI.test(source)
             ? undefined
@@ -1658,6 +1716,7 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
     routeForSlug,
     new Set(collected.headings.map((heading) => heading.id)),
     collected.rawIds,
+    options.publishedAssets ?? new Set<string>(),
   );
 
   // Rendered after sanitization, at markers the sanitizer preserved. Both

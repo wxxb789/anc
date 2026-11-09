@@ -21,18 +21,20 @@
  * nothing it claims was executed.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
+import { resolveImageTarget, type ImagePublisher } from '../src/lib/media.ts';
 import { WITHHELD_LINK_TEXT, WITHHELD_ROUTE } from '../src/lib/route-path.ts';
 import { resolveLinksIn } from '../scripts/resolve-links.ts';
 import { discover, resolveCorpusLinks, writeArtifact } from '../scripts/markdown-to-artifact.ts';
 import { openReport } from '../scripts/write-report.ts';
 import { renderMarkdown } from '../src/lib/markdown.ts';
+import { PNG_SECOND } from './support/media.ts';
 
 /** A scratch directory removed when the callback returns, however it returns. */
 async function scratch<T>(prefix: string, body: (directory: string) => Promise<T>): Promise<T> {
@@ -71,9 +73,44 @@ const CORPUS: readonly CorpusFile[] = [
   { path: 'assets/diagram.png', slug: undefined },
 ];
 
+/** The digest a virtual asset publishes under; the walk never hashes it. */
+const DIAGRAM_URL = `/_assets/${'a'.repeat(64)}-diagram.png`;
+
+/**
+ * The corpus's one media file, and the URL it publishes as.
+ *
+ * A media map rather than a filesystem: these gates are about the traversal, and
+ * the bytes a real image would supply belong to `tests/media-pipeline.test.ts`.
+ * What is shared with the real path is {@link resolveImageTarget}, so a
+ * note-relative reference resolves note-relatively here too.
+ */
+const MEDIA: ReadonlyMap<string, string> = new Map([
+  ['assets/diagram.png', DIAGRAM_URL],
+  ['assets/badge.png', `/_assets/${'c'.repeat(64)}-badge.png`],
+  ['assets/chart.png', `/_assets/${'d'.repeat(64)}-chart.png`],
+]);
+
+/** The publisher the traversal is given: virtual paths in, URLs out. */
+function virtualPublisher(media: ReadonlyMap<string, string> = MEDIA): ImagePublisher {
+  return {
+    publish({ notePath, target, isWikilink }) {
+      const resolved = resolveImageTarget(
+        target,
+        notePath,
+        (path) => (media.has(path) ? path : undefined),
+        isWikilink,
+      );
+      if (resolved.kind === 'external') return { kind: 'external' };
+      if (resolved.kind !== 'local') return { kind: 'failed', reason: resolved.kind };
+      const url = media.get(resolved.path);
+      return url === undefined ? { kind: 'failed', reason: 'unsupported' } : { kind: 'published', url };
+    },
+  };
+}
+
 /** Resolve one body written at one path, against {@link CORPUS}. */
-function traverse(markdown: string, source = 'index.md', slug = 'index') {
-  return resolveLinksIn(markdown, source, indexCorpus(CORPUS), slug, (target) => `/${target}/`);
+function traverse(markdown: string, source = 'index.md', slug = 'index', media = virtualPublisher()) {
+  return resolveLinksIn(markdown, source, indexCorpus(CORPUS), slug, (target) => `/${target}/`, media);
 }
 
 test('a standard Markdown link contributes an edge, which it did not before', () => {
@@ -176,7 +213,7 @@ test('a percent sign in a wikilink is not decoded, and one in an href is', () =>
     { path: 'two words.md', slug: 'two-words' },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`);
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher());
 
   // The wikilink is used verbatim: `100% done` is a real filename.
   assert.equal(run('See [[100% done]].').markdown, 'See [100% done](/done/).');
@@ -213,16 +250,22 @@ test('a link to an excluded note is a publication-boundary event, not a broken l
   // The most useful line in the report: the user excluded a note that something
   // links to. It is the mistyped-exclusion hazard seen from the other side, and
   // merging it with `unresolved` would hide it.
-  const result = traverse('See [[secret]] and ![[diagram.png]].');
+  //
+  // **The image half of this fixture moved in Goal 0009.** It used to write
+  // `![[diagram.png]]` and assert the same `unpublished` finding as the note
+  // link — because an image was "a file this build did not publish". An image
+  // reference is now the media pipeline's, so it publishes (`assets/diagram.png`
+  // is the corpus's one media file) or stops the build; it is never a `/private/`
+  // link. Keeping the old assertion would have pinned the behaviour the goal
+  // replaced.
+  const result = traverse('See [[secret]] and ![[assets/diagram.png]].');
 
   assert.deepEqual(result.outgoing, []);
   assert.deepEqual(
     result.findings.map((finding) => [finding.outcome, finding.candidates]),
-    [
-      ['unpublished', ['drafts/secret.md']],
-      ['unpublished', ['assets/diagram.png']],
-    ],
+    [['unpublished', ['drafts/secret.md']]],
   );
+  assert.deepEqual(result.mediaFailures, []);
 
   // **The excluded note's path enters the body, and the link is live.** Owner
   // decision 2026-08-17, reversing the rule this gate's last three assertions
@@ -230,7 +273,7 @@ test('a link to an excluded note is a publication-boundary event, not a broken l
   // `!markdown.includes('secret.md')`, and `equal(markdown, 'See secret and
   // diagram.png.')`. The finding half above is untouched: the *report* was
   // never the surface that decision was about.
-  assert.equal(result.markdown, 'See [secret](/private/) and [diagram.png](/private/).');
+  assert.equal(result.markdown, `See [secret](/private/) and ![assets/diagram.png](${DIAGRAM_URL}).`);
 });
 
 test('an ambiguous link renders, and the finding names every candidate and the winner', () => {
@@ -363,6 +406,9 @@ test('a repository resolves end to end, and the artifact it produces validates',
     put(root, 'notes/alpha.md', '# Alpha\n\nBack to [[index]] and out to [[nowhere]].\n');
     put(root, 'notes/beta.md', '# Beta\n\nA [[../index]] relative link.\n');
     put(root, 'drafts/held.md', '---\npublish: false\n---\n\n# Held\n\nprose\n');
+    // A file with an image name and no image bytes. Nothing here embeds it — the
+    // fixture links to it — so the media pipeline never reads it and its contents
+    // are irrelevant; what matters is that it exists and is not published.
     put(root, 'assets/logo.png', 'not really a png\n');
     // A link *to* the excluded note and *to* the asset, which is what makes the
     // `unpublished` outcome reachable over a real directory. Without these the
@@ -521,58 +567,50 @@ test('a report with nothing to say still has a links array', () => {
 });
 
 test('a linked image builds, which is the badge every README opens with', () => {
-  // Measured across three drafts, and each fixed one defect by introducing the
-  // next:
+  // Measured across three drafts of the link traversal, and each fixed one
+  // defect by introducing the next:
   //
   // 1. Both nodes edited as whole-span replacements — `applyEdits` refused the
   //    overlap, `resolveCorpusLinks` turned it into a `BuildFailure`, and a
   //    repository containing one linked local image could not build at all.
   // 2. The nested node not visited — the build worked and the *leak* arrived:
-  //    with `assets/diagram.png` unpublished, the standalone form correctly
-  //    degraded to `logo` while the nested form shipped
+  //    the standalone form degraded while the nested form shipped
   //    `[![logo](assets/diagram.png)](/notes-beta/)`, path and all.
   // 3. Each rewrite split into the two regions around the node's label, which
   //    is where a nested node writes. Both edits apply, neither overwrites the
-  //    other, and the two forms of the same image now agree.
-  const result = traverse('Badge: [![logo](assets/diagram.png)](notes/beta.md)');
-  assert.equal(result.markdown, 'Badge: [logo](/notes-beta/)');
-  assert.deepEqual(result.outgoing, ['notes-beta']);
-  // The excluded image is still *reported*, which draft 2 also had and draft 1
-  // never reached.
-  assert.deepEqual(
-    result.findings.map((finding) => finding.outcome),
-    ['unpublished'],
-  );
-
-  // The two forms of the same image agree — the property draft 2 broke, and the
-  // one a gate on the badge alone cannot see.
+  //    other, and the two forms of the same image agree.
   //
-  // **They agree by pointing at different things, and that asymmetry is the
-  // decision rather than a defect.** Since 2026-08-17 a withheld target renders
-  // as a live link to `/private/`, *except* where it is nested inside another
-  // link: CommonMark has no nested anchor, so the badge form must stay text or
-  // the outer link is destroyed. Measured through the shipped renderer, the
-  // nested-anchor form emits `[<a href="/private/">chart</a>](/notes-beta/)` —
-  // an anchor to the withheld page with the outer link's closing syntax spilled
-  // into the prose. What "agree" means here is that neither form ships the
-  // *path*: an image's label is its alt text, which the author wrote.
-  assert.equal(traverse('![logo](assets/diagram.png)').markdown, '[logo](/private/)');
+  // **Goal 0009 changes what the two forms agree *about*.** They used to agree
+  // by both losing the image — the media pipeline did not exist, so an image was
+  // a non-note file and the traversal degraded it. They now agree by both
+  // publishing it: the badge keeps the anchor and the image, and the standalone
+  // form keeps the image. The nesting property draft 3 established is what still
+  // makes that possible, and it is asserted here on the same fixture.
+  const result = traverse('Badge: [![logo](assets/diagram.png)](notes/beta.md)');
+  assert.equal(result.markdown, `Badge: [![logo](${DIAGRAM_URL})](/notes-beta/)`);
+  assert.deepEqual(result.outgoing, ['notes-beta']);
+  assert.deepEqual(result.findings, []);
+  assert.deepEqual(result.mediaFailures, []);
 
-  // A published image would keep its markup; there is no asset pipeline, so the
-  // external form is the only one that reaches that branch. Untouched, which is
-  // what proves the fix did not simply strip every nested node.
+  // The two forms of the same image agree, which is the property draft 2 broke
+  // and a gate on the badge alone cannot see.
+  assert.equal(traverse('![logo](assets/diagram.png)').markdown, `![logo](${DIAGRAM_URL})`);
+
+  // An external image inside a link keeps its markup, which is what proves the
+  // fix did not simply strip every nested node.
   const external = traverse('Badge: [![b](https://img.example/x)](notes/beta.md)');
   assert.equal(external.markdown, 'Badge: [![b](https://img.example/x)](/notes-beta/)');
 
   // An outer link that itself degrades still degrades — and does not throw,
-  // which drafts 1 and 3 both did before the split reached this branch.
-  assert.equal(traverse('[![logo](assets/diagram.png)](gone.md)').markdown, 'logo');
+  // which drafts 1 and 3 both did before the split reached this branch. The
+  // nested image has already published; what the reader loses is the anchor.
+  assert.equal(traverse('[![logo](assets/diagram.png)](gone.md)').markdown, `![logo](${DIAGRAM_URL})`);
 
   // Prose around a nested node survives. Draft 2's fix, applied naively,
   // deleted it.
   assert.equal(
     traverse('[text with ![i](assets/diagram.png) inside](notes/beta.md)').markdown,
-    '[text with i inside](/notes-beta/)',
+    `[text with ![i](${DIAGRAM_URL}) inside](/notes-beta/)`,
   );
 });
 
@@ -607,8 +645,12 @@ test('every withheld link form is live, keeps its label, and ships no withheld b
     put(
       root,
       'zzqclients/zzqacme/zzqrenewal.md',
-      '---\npublish: false\n---\n\n# Renewal\n\nzzqwithheldbody prose no reader may see\n',
+      '---\npublish: false\n---\n\n# Renewal\n\nzzqwithheldbody prose no reader may see\n\n' +
+        '![a withheld chart](../../zzqprivate/zzqchart.png)\n',
     );
+    // Referenced only by the withheld note, so the media pipeline never sees it.
+    // Goal 0009's half of this fixture: a file a withheld note embeds must not
+    // reach the artifact, which is asserted after the build.
     put(root, 'zzqprivate/zzqchart.png', 'not really a png\n');
     put(root, 'target.md', '# Target\n\nprose\n');
 
@@ -629,10 +671,15 @@ test('every withheld link form is live, keeps its label, and ships no withheld b
         'Markdown [text](zzqclients/zzqacme/zzqrenewal.md) here.',
         'Encoded [text](zzqclients/zzqacme/zzqrenewal%2Emd) here.',
         'Label equals href [zzqclients/zzqacme/zzqrenewal](zzqclients/zzqacme/zzqrenewal.md) here.',
-        'Image ![chart](zzqprivate/zzqchart.png) here.',
-        'Image embed ![[zzqprivate/zzqchart.png]] here.',
-        'Nested [![chart](zzqprivate/zzqchart.png)](target.md) here.',
-        'Nested to nothing [![chart](zzqprivate/zzqchart.png)](gone.md) here.',
+        'Nested [zzqclients/zzqacme/zzqrenewal](target.md) here.',
+        'Nested to nothing [zzqclients/zzqacme/zzqrenewal](gone.md) here.',
+        // **The four image forms this fixture used to carry were removed by
+        // Goal 0009.** They asserted that a withheld *image* degrades to text or
+        // to a `/private/` link, and the goal replaced exactly that: an image
+        // reference is now the media pipeline's, and an excluded one stops the
+        // build. Their replacement is in `tests/media-pipeline.test.ts` — with
+        // real bytes, because the reason they can no longer share this fixture
+        // is that an image is no longer a file the *link* resolver sees.
       ].join('\n'),
     );
 
@@ -640,18 +687,30 @@ test('every withheld link form is live, keeps its label, and ships no withheld b
     const findings = await resolveCorpusLinks(discovery);
     await writeArtifact(discovery, join(root, 'out', 'content.json'));
     const artifact = readFileSync(join(root, 'out', 'content.json'), 'utf8');
+    // The withheld note's image was never resolved, so nothing was staged for it
+    // and the artifact declares no assets at all. Asserted after the write
+    // because "no asset" is a fact about the output, not about the intent.
+    assert.equal(existsSync(join(root, 'out', 'assets')), false, 'a withheld note staged image bytes');
+    assert.equal(JSON.parse(artifact).assets, undefined, 'a withheld note declared an asset');
 
     // **Non-vacuity, and it is two halves.** The tokens must be present in the
     // *input* — otherwise an empty corpus passes the assertions below — and the
     // build must have seen them as real files, which the findings prove. Both
     // are asserted before anything else is.
     const source = readFileSync(join(root, 'src.md'), 'utf8');
-    for (const path of withheld) {
-      const directory = path.slice(0, path.indexOf('/'));
-      assert.ok(source.includes(directory), `the fixture never mentions ${directory}`);
-    }
+    // `zzqprivate` is referenced from the *withheld* note, not from `src.md` —
+    // that is the media half of this fixture: a file only a withheld note embeds
+    // must never reach the output.
+    const withheldSource = readFileSync(join(root, 'zzqclients/zzqacme/zzqrenewal.md'), 'utf8');
+    assert.ok(source.includes('zzqclients'), 'the fixture never mentions zzqclients');
+    assert.ok(withheldSource.includes('zzqprivate/zzqchart.png'), 'the withheld note embeds no image');
+    assert.deepEqual(
+      withheld.map((path) => path.split('/')[0]),
+      ['zzqclients', 'zzqprivate'],
+      'the fixture lost one of its withheld paths',
+    );
     assert.ok(
-      findings.filter((finding) => finding.outcome === 'unpublished').length >= 10,
+      findings.filter((finding) => finding.outcome === 'unpublished').length >= 8,
       `the corpus reached ${findings.length} findings, so most forms resolved to nothing ` +
         'instead of to a withheld file and the assertions below prove little',
     );
@@ -683,8 +742,6 @@ test('every withheld link form is live, keeps its label, and ships no withheld b
       // spelling, so they are counted rather than merely found: three
       // occurrences of that exact string is what proves all three rendered.
       [`[text]${anchor}`, 'the markdown href and its percent-encoded twin'],
-      [`[chart]${anchor}`, 'the standalone image'],
-      [`[zzqprivate/zzqchart.png]${anchor}`, 'the image embed, whose alt is its path'],
     ] as const) {
       assert.ok(entry.markdown.includes(expected), `${what} did not render as ${expected}`);
     }
@@ -710,18 +767,13 @@ test('every withheld link form is live, keeps its label, and ships no withheld b
       `the percent-encoded href did not resolve to the same withheld file: ${entry.markdown}`,
     );
 
-    // The two nested forms stay text, because an anchor may not open inside a
-    // link. Each is asserted as its whole line: the withheld image's own alt
-    // survives as the *label of the outer link* where that link is published,
-    // and as bare text where the outer link resolved to nothing. Asserting the
-    // absence of `/private/` alone would pass on a build that deleted the node.
+    // The nested *link* forms stay text, because an anchor may not open inside
+    // a link. Asserted as its whole line: the withheld label survives as the
+    // text the outer link leaves behind, which is what a build that deleted the
+    // node would fail to produce.
     assert.ok(
-      entry.markdown.includes('Nested [chart](/target/) here.'),
-      `a nested withheld image did not become the outer link's label: ${entry.markdown}`,
-    );
-    assert.ok(
-      entry.markdown.includes('Nested to nothing chart here.'),
-      `a nested withheld image under an unresolved link was not degraded: ${entry.markdown}`,
+      entry.markdown.includes('Nested [zzqclients/zzqacme/zzqrenewal](/target/) here.'),
+      `a nested withheld link did not become the outer link's label: ${entry.markdown}`,
     );
 
     // **And the body is still withheld, which is the half the decision did not
@@ -765,7 +817,7 @@ test('every spelling of a withheld target renders as one live link, label intact
     { path: 'drafts/secret plan.md', slug: undefined },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`);
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher());
 
   // Exact output for every form, rather than a substring test. A substring test
   // ("the path is present") would be green on a rewrite that emitted the path
@@ -837,7 +889,7 @@ test('a withheld node inside a reference link does not open an anchor inside one
     { path: 'drafts/secret.md', slug: undefined },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
 
   const definition = '\n\n[ci]: https://ci.example/\n';
   for (const [body, expected, what] of [
@@ -845,8 +897,8 @@ test('a withheld node inside a reference link does not open an anchor inside one
     // as text, which is what a node that may not open an anchor does.
     [
       `Badge: [![build](assets/badge.png)][ci]${definition}`,
-      `Badge: [build][ci]${definition}`,
-      'a withheld image inside a reference link',
+      `Badge: [![build](/_assets/${'c'.repeat(64)}-badge.png)][ci]${definition}`,
+      'an image inside a reference link publishes, and the reference link is untouched',
     ],
     // **Not nesting, and it is here because it looks like it.**
     // `[[[drafts/secret]]][ci]` reads as a wikilink *beside* a reference link
@@ -878,44 +930,46 @@ test('a withheld node inside a reference link does not open an anchor inside one
     assert.equal(run(body), expected, `${what} was rewritten wrongly`);
   }
 
-  // Non-vacuity: the same withheld image *outside* a reference link does become
-  // an anchor. Without this the rows above are satisfied by a build that
-  // stopped making withheld links live at all.
+  // Non-vacuity: the same image *outside* a reference link publishes too, so the
+  // row above is a statement about the reference form rather than about a build
+  // that stopped publishing images.
   assert.equal(
     run('C ![build](assets/badge.png) end'),
-    `C [build](${WITHHELD_ROUTE}) end`,
-    'the unnested form is not live, so the rows above prove nothing about nesting',
+    `C ![build](/_assets/${'c'.repeat(64)}-badge.png) end`,
+    'the unnested form did not publish, so the row above proves nothing about the reference form',
   );
 });
 
 test('a withheld link with no label of its own still has an accessible name', () => {
-  // `[](note.md)` and `![](chart.png)` carry no label at all. Under the rule
-  // this replaced they degraded to nothing and the shape did not exist; now
-  // they are anchors, and an anchor with no text is announced by a screen
-  // reader as its URL. Measured before the fallback: `<a href="/private/"></a>`.
+  // `[](note.md)` carries no label at all. Under the rule this replaced it
+  // degraded to nothing and the shape did not exist; now it is an anchor, and an
+  // anchor with no text is announced by a screen reader as its URL. Measured
+  // before the fallback: `<a href="/private/"></a>`.
   //
-  // The resolved branch has had this guard since TK-27 and falls back to the
-  // target's slug. A withheld target has no slug — there is no published note —
-  // so the fallback is what the destination says about itself.
+  // **`![](chart.png)` used to be the second row and is gone with Goal 0009.** An
+  // image is no longer a link: it publishes, and its empty label is the
+  // `alt=""` the renderer writes for a decorative image — which is the correct
+  // accessible treatment for an image, not the unnamed-anchor defect this row is
+  // about.
+  //
+  // A withheld target has no slug — there is no published note — so the fallback
+  // is what the destination says about itself.
   //
   // **Mutation watched fail:** dropping the third argument from the `rewrite`
-  // call in the `unpublished` branch of `scripts/resolve-links.ts` turns both
-  // rows red with an empty label.
+  // call in the `unpublished` branch of `scripts/resolve-links.ts` turns the row
+  // red with an empty label.
   const corpus: readonly CorpusFile[] = [
     { path: 'src.md', slug: 'src' },
     { path: 'drafts/secret.md', slug: undefined },
-    { path: 'assets/chart.png', slug: undefined },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
 
-  for (const body of ['[](drafts/secret.md) end', '![](assets/chart.png) end']) {
-    assert.equal(
-      run(body),
-      `[${WITHHELD_LINK_TEXT}](${WITHHELD_ROUTE}) end`,
-      `${body} produced an anchor with no accessible name`,
-    );
-  }
+  assert.equal(
+    run('[](drafts/secret.md) end'),
+    `[${WITHHELD_LINK_TEXT}](${WITHHELD_ROUTE}) end`,
+    'an unlabelled withheld link produced an anchor with no accessible name',
+  );
 
   // And a label the author *did* write is never replaced by the fallback, which
   // is what stops this from being "always use the fixed text".
@@ -952,7 +1006,11 @@ test('the title and the excerpt carry a link\'s text, never its syntax', async (
   await scratch('exc-syntax-', async (root) => {
     put(root, 'beta.md', '# Beta\n\nplain prose\n');
     put(root, 'drafts/secret.md', '---\npublish: false\n---\n\n# S\n\nhidden\n');
-    put(root, 'assets/logo.png', 'not really a png\n');
+    // Real PNG bytes: Goal 0009 refuses a file whose bytes are not an image, and
+    // this fixture has to *publish* the image for the excerpt row to be a
+    // statement about stripping a published image's syntax.
+    mkdirSync(join(root, 'assets'), { recursive: true });
+    writeFileSync(join(root, 'assets/logo.png'), PNG_SECOND);
     put(
       root,
       'hub.md',
@@ -1072,7 +1130,7 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
     { path: 'a.md', slug: 'a' },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
 
   for (const [syntax, spell] of [
     ['wikilink, the split rewrite', (label: string) => `[[t|${label}]]`],
@@ -1178,8 +1236,8 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // `applyEdits` refuses with a build failure. The text *beside* it still
   // escapes, in both directions around the nested node.
   assert.equal(
-    run('[[t|a ] bracket ![logo](a.md) here]]'),
-    '[a \\] bracket [logo](/a/) here](/t/)',
+    run('[[t|a ] bracket ![logo](assets/diagram.png) here]]'),
+    `[a \\] bracket ![logo](${DIAGRAM_URL}) here](/t/)`,
   );
   // **Only a wikilink can reach that shape, and it is worth saying why.** A
   // Markdown link's label cannot hold an unescaped `]` — the parser closes the
@@ -1189,8 +1247,8 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // nested node and a bracket. Measured; an earlier version of this row used the
   // Markdown spelling and was asserting a parse rather than an escape.
   assert.equal(
-    run('[a ] bracket ![logo](a.md) here](t.md)'),
-    '[a ] bracket [logo](/a/) here](t.md)',
+    run('[a ] bracket ![logo](assets/diagram.png) here](t.md)'),
+    `[a ] bracket ![logo](${DIAGRAM_URL}) here](t.md)`,
   );
 });
 
@@ -1211,7 +1269,7 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
     { path: 't.md', slug: 't' },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`).markdown;
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
 
   for (const [what, body, expected] of [
     ['a wikilink, right bracket', 'See [[t|has ] bracket]] here.', 'has ] bracket'],
@@ -1296,7 +1354,7 @@ test('a withheld link with a bracket in its label is still one anchor', async ()
     { path: 'drafts/secret.md', slug: undefined },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`);
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher());
 
   for (const [what, body, expected] of [
     ['a bracket in the label', 'See [[drafts/secret|has ] bracket]] here.', 'has ] bracket'],
@@ -1337,7 +1395,7 @@ test('an NFC link finds an NFD filename in every segment, not only the last', ()
     { path: `dir/${nfd}.md`, slug: 'dir-cafe' },
   ];
   const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`);
+    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher());
 
   // A normalised directory segment, which the basename key never sees.
   assert.equal(run(`A [[${nfc}/note]] end`).markdown, 'A [café/note](/cafe-note/) end');

@@ -17,7 +17,7 @@ build.
 
 ## Prerequisite and accepted design
 
-Requires [0009 — Zero-config static images](0009-zero-config-static-images.md)
+Requires [0009 — Zero-config static images](archive/0009-zero-config-static-images.md)
 and [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md).
 The [media core design](../core-design/media-pipeline.md#0012--svg-as-self-contained-build-time-source)
 has **already selected** the renderer and baseline security/format strategy:

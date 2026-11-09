@@ -79,8 +79,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile, readdir, mkdir, realpath, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, matchesGlob, relative } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { readFile, readdir, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, matchesGlob, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import {
   FIELD_LIMITS,
@@ -93,8 +94,25 @@ import {
   validateArtifact,
 } from '../src/lib/schema.ts';
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
+import {
+  assetFileName,
+  assetUrlFor,
+  looksLikeSvg,
+  parseAssetUrl,
+  resolveImageTarget,
+  sniffImageFormat,
+  type ImageOutcome,
+  type ImagePublisher,
+  type MediaFailureReason,
+} from '../src/lib/media.ts';
 import { SLUG_MAX_BYTES, compareSlugs, slugSegment, utf8Length } from '../src/lib/route-path.ts';
-import { BuildFailure, bySourceThenLine, type DroppedFile, type LinkFindingRow } from './write-report.ts';
+import {
+  BuildFailure,
+  bySourceThenLine,
+  type DroppedFile,
+  type LinkFindingRow,
+} from './write-report.ts';
+import type { MediaFailureRow } from './resolve-links.ts';
 
 /**
  * Names the walk never descends into or enumerates, tested against one path
@@ -1079,6 +1097,16 @@ export async function discover(
 ): Promise<Discovery> {
   const patterns = options.exclude ?? [];
   const matched = patterns.map(() => false);
+  /**
+   * Every non-Markdown file, with what this build may do with it.
+   *
+   * Recorded here rather than derived again where an image is resolved, because
+   * the exclusion verdict is a property of this walk: the pattern list, the
+   * zero-match bookkeeping, and the symlink escape set all live in this function,
+   * and a second pass over the same questions is a second answer waiting to
+   * disagree.
+   */
+  const media = new Map<string, MediaEntry>();
   /** File links whose target resolves outside the content root: dropped unread. */
   const escaped = new Set<string>();
   const paths = await walk(contentDirectory, escaped);
@@ -1109,6 +1137,19 @@ export async function discover(
     const excluded = excludes(path, patterns, matched);
 
     if (!path.endsWith('.md')) {
+      // Recorded before the drop, and with the exclusion and escape verdicts the
+      // note branches below compute. A file that is not a note is still a file
+      // the author wrote, and an image referenced from a published note is
+      // published by *this* verdict and no other.
+      //
+      // An escape is tested first: a symlink whose target lies outside the
+      // content root would otherwise look like an ordinary non-Markdown file,
+      // and on Windows a file symlink reports `isFile() === false` under
+      // `withFileTypes` — which is the measurement `walk` records.
+      media.set(path.normalize('NFC'), {
+        path,
+        verdict: escaped.has(path) ? 'escaping' : excluded ? 'excluded' : 'available',
+      });
       dropped.push({ path, reason: 'not-markdown' });
       continue;
     }
@@ -1274,6 +1315,9 @@ export async function discover(
     paths,
     pathBySlug,
     declaredTitles,
+    assetRoot: contentDirectory,
+    media,
+    assets: [],
   };
 }
 
@@ -1298,6 +1342,97 @@ const defaultRouteForSlug: RouteForSlug = (slug) => `/${slug}/`;
  * long-running process holding many discoveries does not retain them.
  */
 const resolved = new WeakSet<Discovery>();
+
+/** Reason labels, in the order the public summary counts them. */
+const MEDIA_REASON_LABELS: readonly (readonly [MediaFailureReason, string])[] = [
+  ['missing', 'missing'],
+  ['excluded', 'excluded'],
+  ['outside', 'outside the content root'],
+  ['svg', 'unsupported local SVG'],
+  ['unsupported', 'unsupported file type'],
+  ['html-form', 'unsupported HTML image form'],
+];
+
+/**
+ * The one function that reads image bytes, and the only writer of the asset set.
+ *
+ * Built per build and shared across notes, so deduplication is a property of the
+ * build rather than of a note: two notes embedding the same file, or two files
+ * with identical bytes, produce one asset because one digest names it. The cache
+ * is keyed by *resolved source path* rather than by the authored reference,
+ * because `../img/a.png` from one note and `img/a.png` from another are the same
+ * file and must not be read twice.
+ *
+ * Authorization happens **before** the read: an excluded file, a symlink whose
+ * target is outside the tree, and a name the walk never found are refused without
+ * ever being opened. That ordering is the publication boundary — the pixels of a
+ * withheld image are never in this process's memory, so no later step can leak
+ * them by accident.
+ *
+ * A failure is cached too, so an `unsupported` file is read once however many
+ * notes embed it. Every reference still gets its own report row, because a
+ * reference has a line and a spelling and the two are what an author edits.
+ */
+function mediaPublisher(discovery: Discovery): { publisher: ImagePublisher; assets: AssetEmission[] } {
+  const byDigest = new Map<string, string>();
+  const byPath = new Map<string, ImageOutcome>();
+  const assets: AssetEmission[] = [];
+
+  const publisher: ImagePublisher = {
+    publish({ notePath, target, isWikilink }) {
+      const resolved = resolveImageTarget(
+        target,
+        notePath,
+        (key) => discovery.media.get(key)?.path,
+        isWikilink,
+      );
+      if (resolved.kind === 'external') return { kind: 'external' };
+      if (resolved.kind !== 'local') return { kind: 'failed', reason: resolved.kind };
+
+      const cached = byPath.get(resolved.path);
+      if (cached !== undefined) return cached;
+
+      const record = (outcome: ImageOutcome): ImageOutcome => {
+        byPath.set(resolved.path, outcome);
+        return outcome;
+      };
+
+      const entry = discovery.media.get(resolved.path.normalize('NFC'));
+      if (entry === undefined) return record({ kind: 'failed', reason: 'missing' });
+      if (entry.verdict === 'excluded') return record({ kind: 'failed', reason: 'excluded' });
+      if (entry.verdict === 'escaping') return record({ kind: 'failed', reason: 'outside' });
+
+      let bytes: Buffer;
+      try {
+        bytes = readFileSync(join(discovery.assetRoot, entry.path));
+      } catch {
+        // The walk saw it and the read did not: it was removed between the two,
+        // or the process lacks permission. "Not there" is the honest answer and
+        // it fails the build like any other missing image.
+        return record({ kind: 'failed', reason: 'missing' });
+      }
+
+      const format = sniffImageFormat(bytes);
+      if (format === undefined) {
+        return record({ kind: 'failed', reason: looksLikeSvg(bytes) ? 'svg' : 'unsupported' });
+      }
+
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      const existing = byDigest.get(digest);
+      if (existing !== undefined) return record({ kind: 'published', url: existing });
+
+      // Identity is the digest; the name is decoration. Two files with identical
+      // bytes therefore publish one asset under the first name the deterministic
+      // walk order reached, which is what makes the URL stable across builds.
+      const url = assetUrlFor(digest, assetFileName(basename(entry.path), format));
+      byDigest.set(digest, url);
+      assets.push({ url, path: entry.path, digest });
+      return record({ kind: 'published', url });
+    },
+  };
+
+  return { publisher, assets };
+}
 
 /**
  * Resolve every link in every published note, in one traversal per note.
@@ -1355,6 +1490,8 @@ export async function resolveCorpusLinks(
   const slugByPath = new Map([...pathBySlug].map(([slug, path]) => [path, slug]));
   const corpus: CorpusFile[] = allPaths.map((path) => ({ path, slug: slugByPath.get(path) }));
   const index = indexCorpus(corpus);
+  const { publisher, assets } = mediaPublisher(discovery);
+  const mediaFailures: MediaFailureRow[] = [];
 
   // **Imported here rather than at the top of the file, and this is measured
   // rather than stylistic.** `resolve-links.ts` imports `satteri`, whose parser
@@ -1377,7 +1514,7 @@ export async function resolveCorpusLinks(
 
     let result;
     try {
-      result = resolveLinksIn(entry.markdown, path, index, entry.slug, routeForSlug);
+      result = resolveLinksIn(entry.markdown, path, index, entry.slug, routeForSlug, publisher);
     } catch (error) {
       // `applyEdits` refuses overlapping spans, which is a rewritten body that
       // would be neither of the two things it was built from. The public half
@@ -1401,6 +1538,7 @@ export async function resolveCorpusLinks(
     // The *page* still renders links in document order: this array is the edge
     // set, not the body, and the body is `result.markdown` above.
     entry.outgoing = [...result.outgoing].sort(compareSlugs);
+    mediaFailures.push(...result.mediaFailures);
     // Re-derived from the rewritten body. A title and an excerpt are
     // projections of what was published, and taking them from the pre-traversal
     // text put an unresolved `[[wikilink]]` into the excerpt of a body that no
@@ -1410,6 +1548,34 @@ export async function resolveCorpusLinks(
     entry.excerpt = excerptFor(entry.markdown);
     findings.push(...result.findings);
   }
+
+  // **The asset set is published only when every reference resolved.** The
+  // traversal has already degraded the failures to their alt text so the bodies
+  // above are self-consistent, but nothing from this run is written: a build that
+  // shipped some images and dropped others would be a site whose pictures
+  // silently changed.
+  //
+  // The stream carries a count and the reason labels — integers and literals of
+  // this module's own table. The file names, and the note that wrote each
+  // reference, are in the report, because an excluded image's directory is
+  // exactly the disclosure the private half exists for: a workflow log on a
+  // public notes repository is world-readable and retained.
+  if (mediaFailures.length > 0) {
+    mediaFailures.sort(bySourceThenLine);
+    const counts = MEDIA_REASON_LABELS.flatMap(([reason, label]) => {
+      const count = mediaFailures.filter((row) => row.reason === reason).length;
+      return count === 0 ? [] : [`${count} ${label}`];
+    }).join(', ');
+    throw new BuildFailure(
+      'image-not-publishable',
+      `${mediaFailures.length} image reference${mediaFailures.length === 1 ? '' : 's'} in published notes ` +
+        `cannot be published (${counts}). An image must name a file this build may publish — PNG, JPEG, ` +
+        'GIF, WebP, or AVIF inside the content root — and an SVG is refused until it has a rasterizer. ' +
+        'The build stops rather than shipping a broken picture.',
+      mediaFailures.map((row) => `${row.source}:${row.line} → ${row.link} (${row.reason})`).join('\n'),
+    );
+  }
+  discovery.assets = assets;
 
   // **The mechanical inverse, and why it is here rather than left to TK-28.**
   // `checkCorpus` requires `backlinks` to be the exact inverse of `outgoing`
@@ -1440,6 +1606,42 @@ export async function resolveCorpusLinks(
 }
 
 /**
+ * What the walk decided about one non-Markdown file.
+ *
+ * `available` means the file is inside the content root and no exclusion glob
+ * matched it; that is the whole authorization an image gets, and it is
+ * deliberately the same pair of mechanisms a note is subject to minus the
+ * frontmatter half — an image has no frontmatter of its own, so the publication
+ * boundary for media is its path.
+ *
+ * `excluded` and `escaping` are separate members rather than one `withheld`
+ * because they are different mistakes with different fixes: a glob the user can
+ * correct in their config, and a symlink whose target lies outside the tree they
+ * chose to publish from. Neither ever reaches the read.
+ */
+export type MediaVerdict = 'available' | 'excluded' | 'escaping';
+
+/** One non-Markdown file the walk found, keyed by its NFC-normalised path. */
+export interface MediaEntry {
+  /** The path as the walk spelled it, which is what a read needs. */
+  readonly path: string;
+  readonly verdict: MediaVerdict;
+}
+
+/**
+ * One image asset this build publishes.
+ *
+ * `url` is public; `path` is the source file relative to the content root and is
+ * private, so it never enters the artifact — {@link writeArtifact} copies the
+ * bytes next to the artifact and records only the URL list.
+ */
+export interface AssetEmission {
+  readonly url: string;
+  readonly path: string;
+  readonly digest: string;
+}
+
+/**
  * What one repository yielded: the entries to validate, and what was left out.
  *
  * `entries` is deliberately the unvalidated shape. Discovery does not call
@@ -1463,6 +1665,31 @@ export interface Discovery {
   paths: readonly string[];
   /** Each published slug to the path that produced it, for tiers 2 and 5. */
   pathBySlug: ReadonlyMap<string, string>;
+  /**
+   * The directory the walk read, so {@link resolveCorpusLinks} can read the
+   * bytes of an authorized image and {@link writeArtifact} can stage them.
+   *
+   * A host path, held in memory only: it is never serialized into the artifact,
+   * never printed, and it dies with the `Discovery` object.
+   */
+  assetRoot: string;
+  /**
+   * Every non-Markdown file the walk found, keyed by its NFC-normalised path.
+   *
+   * Keyed normalised because resolution compares normalised text on both sides
+   * — a macOS filesystem stores a decomposed name an author typed composed — and
+   * the value keeps the walk's own spelling so a read still works.
+   */
+  media: ReadonlyMap<string, MediaEntry>;
+  /**
+   * The image assets this build publishes, filled by {@link resolveCorpusLinks}
+   * and empty until then.
+   *
+   * Mutable for the same reason `entries` is: the traversal rewrites bodies in
+   * place, and the asset set is an output of that same one walk rather than a
+   * second derivation.
+   */
+  assets: AssetEmission[];
   /**
    * Slugs whose title came from frontmatter, so re-deriving a title after the
    * link traversal cannot overwrite one the author wrote down.
@@ -1494,6 +1721,52 @@ export interface ContentEntryInput {
 }
 
 /**
+ * Stage the asset bytes beside the artifact, under the names their URLs publish.
+ *
+ * **A sibling directory rather than source paths in the artifact.** The artifact
+ * is the producer's IR and it carries only public URLs; the bytes it names live in
+ * `<artifact directory>/assets/<digest>-<name>`, which is what lets the emission
+ * step and the output inventory run without knowing the content directory — and
+ * therefore without a second way to reach a file the walk authorized. The name is
+ * the published one, so a reader can correlate a served URL with the file that
+ * produced it.
+ *
+ * The digest is recomputed here rather than trusted. The publisher hashed these
+ * bytes minutes ago, and a source image edited in between would otherwise publish
+ * a URL that no longer describes its content — the one property a
+ * content-addressed path cannot tolerate.
+ */
+async function stageAssets(discovery: Discovery, destination: string, assets: readonly AssetEmission[]): Promise<void> {
+  const directory = join(dirname(destination), 'assets');
+  // Removed rather than merged: a stale asset from an earlier build into the same
+  // directory would sit beside the current set, and the emission step — which
+  // requires the source directory to match the artifact exactly — would refuse the
+  // build for a file nothing references.
+  await rm(directory, { recursive: true, force: true });
+  if (assets.length === 0) return;
+  await mkdir(directory, { recursive: true });
+  for (const asset of assets) {
+    const parsed = parseAssetUrl(asset.url);
+    if (parsed === undefined) {
+      throw new Error(`the producer built an asset URL this build cannot parse: ${asset.url}`);
+    }
+    const bytes = await readFile(join(discovery.assetRoot, ...asset.path.split('/')));
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (digest !== asset.digest) {
+      // The source name is in the report's half of this failure; the stream gets
+      // the sentence. An image that changed mid-build is a fault of the corpus or
+      // the machine, never of a reader.
+      throw new BuildFailure(
+        'asset-source-changed',
+        'a referenced image changed while the build ran, so its content address would name the wrong bytes',
+        `${asset.path}: expected ${asset.digest}, found ${digest}`,
+      );
+    }
+    await writeFile(join(directory, `${parsed.digest}-${parsed.fileName}`), bytes);
+  }
+}
+
+/**
  * Validate what discovery produced, and write it where the build will read it.
  *
  * Split from {@link discover} rather than taking a callback, so the caller can
@@ -1501,6 +1774,11 @@ export interface ContentEntryInput {
  * caller records the counts and the dropped rows, and only then asks for the
  * artifact. A callback would have hidden that ordering inside this module,
  * where nothing depends on it.
+ *
+ * **The artifact and its assets are written together.** `assets` is a sorted list
+ * of public URLs and the bytes are staged beside the file, so the pair is
+ * self-contained: the emission step needs no content directory, and a fixture
+ * artifact plus its `assets/` directory can be committed as one thing.
  *
  * @param options.includeEdges When false, `outgoing`/`backlinks` are validated
  *   against the in-memory producer result but not written: the packaged target's
@@ -1529,16 +1807,30 @@ export async function writeArtifact(
     );
   }
 
+  // Sorted because the contract requires it and because the asset list is a set:
+  // two builds of one corpus must serialize the same bytes, and discovery order is
+  // a property of the walk rather than of the site.
+  const published = [...discovery.assets].sort((a, b) => (a.url < b.url ? -1 : a.url > b.url ? 1 : 0));
+
   // A source literal, not the content directory: `ContentValidationError`
   // prefixes its message with this, and that message reaches a stream.
-  const artifact = validateArtifact({ version: 1, entries: discovery.entries }, 'content directory');
+  const artifact = validateArtifact(
+    {
+      version: 1,
+      ...(published.length === 0 ? {} : { assets: published.map((asset) => asset.url) }),
+      entries: discovery.entries,
+    },
+    'content directory',
+  );
   const serialized =
     options.includeEdges === false
       ? {
           version: artifact.version,
+          ...(artifact.assets === undefined ? {} : { assets: artifact.assets }),
           entries: artifact.entries.map(({ outgoing: _outgoing, backlinks: _backlinks, ...entry }) => entry),
         }
       : artifact;
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, `${JSON.stringify(serialized, null, 2)}\n`, 'utf8');
+  await stageAssets(discovery, destination, published);
 }

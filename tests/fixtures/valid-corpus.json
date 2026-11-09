@@ -270,9 +270,9 @@
     },
     {
       "slug": "image-embed-demo",
-      "title": "One Inline Image, Deliberately",
-      "excerpt": "A single inline raster image, encoded in the document, because the asset pipeline deliberately does not exist yet and an absent one is better than a half-built one.",
-      "markdown": "# One Inline Image, Deliberately\n\nThere is no asset pipeline here. That is a decision, not an omission.\n\n## The one exception\n\nA base64 raster image inline in the document, restricted to a short list of raster\ntypes. Vector images are excluded because a vector image can carry a script.\n\n![A one-pixel transparent placeholder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=)\n\n## Why not just copy the attachments\n\nBecause \"copy everything that is not a note\" is how a private garden publishes the\nphotographs attached to its drafts.\n\nBack to [the pipeline](/markdown-pipeline/).\n",
+      "title": "One Inline Image, and Three Published Ones",
+      "excerpt": "Three local images, published unchanged and keyed by content digest, beside the inline raster form that still exists. A referenced image is copied; an excluded one fails the build rather than shipping.",
+      "markdown": "# One Inline Image, and Three Published Ones\n\nA local image is published because a published note references it. There is no\nimage configuration, no image host, and no extra deploy step: the build resolves\nthe reference, copies the bytes unchanged, and gives them a URL their content\ndigest names.\n\n## Published from files\n\n![A chart whose name carries a space and CJK](/_assets/6cb9e3f4e81cc3206c7c6950ebfea05512551937a84662c4d327737f75c9e2ab-%E5%9B%BE%20%E8%A1%A8%20one.png)\n\nThe same photograph referenced again, in the reference form this time:\n![A shared photograph][photo]\n\n![A three-frame animated GIF](/_assets/3c5d74752776dc587a92fe50d5c518f5b03ac9de2ab1c99048db5de2d019f9bf-anim.gif)\n\n[photo]: /_assets/f2a88b1aa6460c903fdfef45d07d90cff4f8027e20703810266567896fbf7596-photo.jpg\n\n## The inline form that still exists\n\nA base64 raster image inline in the document is still allowed, restricted to a\nshort list of raster types. A vector image is not: an SVG can carry a script, so\na local SVG fails the build until it has a rasterizer.\n\n![A one-pixel transparent placeholder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=)\n\n## Why not just copy the attachments\n\nBecause \"copy everything that is not a note\" is how a private garden publishes the\nphotographs attached to its drafts. Only a file a published note references is\npublished, an excluded one fails the build rather than shipping a broken picture,\nand the bytes keep their original metadata — this phase copies images, it does not\nscrub them.\n\nBack to [the pipeline](/markdown-pipeline/).\n",
       "outgoing": [
         "markdown-pipeline"
       ],
@@ -598,8 +598,8 @@
     {
       "slug": "orphan-one",
       "title": "A Note Nobody Links To",
-      "excerpt": "No outgoing links and no incoming ones. It exists because isolated pages are the case implementations forget, and every listing surface has to handle it unremarkably.",
-      "markdown": "# A Note Nobody Links To\n\nThis note links to nothing and nothing links to it.\n\n## Why keep it\n\nAn isolated page is the case an implementation forgets. Every listing, index, and\nsearch surface has to handle it without comment, and an empty relationship section\nshould render as nothing rather than as an empty heading.\n\n## What it still needs\n\nA title, a body, a working route, and a place in search.\n",
+      "excerpt": "No outgoing links and no incoming ones. It exists because isolated pages are the least-exercised case in every listing, index, and search surface — and the image it embeds is not a relationship, so the emptiness stays true.",
+      "markdown": "# A Note Nobody Links To\n\nThis note links to nothing and nothing links to it.\n\n## Why keep it\n\nAn isolated page is the case an implementation forgets. Every listing, index, and\nsearch surface has to handle it without comment, and an empty relationship section\nshould render as nothing rather than as an empty heading.\n\n![A photograph another note references too](/_assets/f2a88b1aa6460c903fdfef45d07d90cff4f8027e20703810266567896fbf7596-photo.jpg)\n\nAn image is not a relationship: this note still links to nothing, and nothing\nlinks to it, which is exactly what the picture here is for.\n\n## What it still needs\n\nA title, a body, a working route, and a place in search.\n",
       "outgoing": [],
       "backlinks": [],
       "created": "2026-04-06",
@@ -702,5 +702,10 @@
       "outgoing": [],
       "backlinks": []
     }
+  ],
+  "assets": [
+    "/_assets/3c5d74752776dc587a92fe50d5c518f5b03ac9de2ab1c99048db5de2d019f9bf-anim.gif",
+    "/_assets/6cb9e3f4e81cc3206c7c6950ebfea05512551937a84662c4d327737f75c9e2ab-%E5%9B%BE%20%E8%A1%A8%20one.png",
+    "/_assets/f2a88b1aa6460c903fdfef45d07d90cff4f8027e20703810266567896fbf7596-photo.jpg"
   ]
 }

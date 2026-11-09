@@ -49,6 +49,10 @@ const STEPS: readonly Step[] = [
   ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/copy-snapshot.ts'],
   ['node', 'scripts/copy-wasm.ts'],
+  // After Astro, because `astro build` empties `outDir`, and before the
+  // inventory, because the inventory owns the exact `_assets/` set. The step asks
+  // the artifact for its published URL list — see `scripts/copy-assets.ts`.
+  ['node', 'scripts/copy-assets.ts'],
   ['node', 'scripts/emit-redirects.ts'],
   ['node', 'scripts/run-pagefind.ts'],
   ['node', 'scripts/verify-output-inventory.ts'],

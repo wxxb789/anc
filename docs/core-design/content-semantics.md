@@ -8,11 +8,19 @@ accepted product behavior, not backward compatibility with an old implementation
 Preserve discovery precedence: a note's `publish: false` is unconditional;
 configuration exclusions apply next; `publish: true` cannot override exclusion.
 Malformed configuration and zero-match exclusion patterns fail. Existing built-in
-exclusions remain in force. The implementation's **current** absence of a
-non-Markdown asset pipeline remains in force **until Goal 0009 ships**. The
-accepted **target** is the referenced-only, authorized same-origin image
-publication contract in [media design](media-pipeline.md), not copying all
-non-Markdown files; this design document does not itself claim image support.
+exclusions remain in force.
+
+Goal 0009 shipped the referenced-only image contract in
+[media design](media-pipeline.md). A local image is published **because a
+published note references it**, never because a file exists: the walk records
+every non-Markdown file with its exclusion and symlink-escape verdict, the
+resolver finds a reference note-relative then content-root-relative (with no
+basename fallback), and only an `available` file is read. An excluded file is
+never opened, so its pixels never enter the process. A reference that is missing,
+excluded, escaping, an SVG, or not a supported raster **fails the build**; it is
+never dropped from the HTML and never becomes a `/private/` link, because that
+link is the withheld-note rule and an image is not a note. Non-Markdown files are
+still not copied wholesale, and an unreferenced one still reaches nothing.
 
 Publication reads only what lies inside the content root. A `.md` symbolic link
 whose resolved target is outside it is dropped unread as `link-outside-content`,

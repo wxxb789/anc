@@ -80,7 +80,11 @@ It does forbid a second corpus index with the same lookup or adjacency facts.
 - Use the toolchain pinned in `.nvmrc` and the lockfile; align package engine
   declarations, CLI, CI, and adoption docs with the chosen runtime. There is no
   obligation to preserve a historical Node minimum or add a fallback SQLite driver.
-- Use the [media design](media-pipeline.md) for the accepted future local-image contract: no image host required, one sharp-based build-time encoder after 0011, and SVG converted to WebP only after SVG safety controls pass 0012. Until those goals ship, the existing no-asset-pipeline implementation remains in force.
+- Use the [media design](media-pipeline.md) for the local-image contract: no image host
+  required, one sharp-based build-time encoder after 0011, and SVG converted to WebP only
+  after SVG safety controls pass 0012. Goal 0009 has shipped the referenced-only, same-origin,
+  content-addressed raster path; 0010–0013 have not, so nothing here authorizes an optimizer,
+  an SVG rasterizer, an image index, a browser runtime, or a CDN requirement.
 - Ship required JS/WASM within the package and generated site. A built site needs
   same-origin HTTP asset requests, not a CDN library import or runtime data service.
 

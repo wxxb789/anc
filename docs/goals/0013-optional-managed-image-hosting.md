@@ -16,7 +16,7 @@ already work without it.
 
 ## Prerequisite and accepted design
 
-Requires [0009 — Zero-config static images](0009-zero-config-static-images.md)
+Requires [0009 — Zero-config static images](archive/0009-zero-config-static-images.md)
 to be accepted. [0011 — WebP-first delivery](0011-webp-first-image-delivery.md)
 may reduce upload/storage cost but does not block R2 publishing correctness.
 

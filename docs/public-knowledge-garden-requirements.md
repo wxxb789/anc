@@ -139,6 +139,11 @@ The initial product does not include:
 - an asset pipeline. Non-Markdown files are discovered and never emitted. This is the
   deliberate shape rather than a gap: Quartz's own documentation concedes every non-Markdown
   file ships regardless of filtering, so a withheld note publishes the images it embedded.
+  **Superseded by Goal 0009 (2026-11-08):** a *referenced-only* image pipeline now exists —
+  the images a published note embeds are copied byte-identically and nothing else is — which
+  keeps the property this bullet was defending. The current contract is
+  [`docs/core-design/media-pipeline.md`](core-design/media-pipeline.md); this historical text
+  is retained because source comments cite its section numbers.
 
 **Two non-goals were deleted here, and the deletions are the inversion itself.**
 
@@ -503,8 +508,10 @@ The producer must:
    matched, so the check does not depend on rule order;
 6. resolve links against the *full* file set and test publication separately, so a link to a
    withheld note and a link to nothing are distinct outcomes;
-7. emit an asset only if — and there is no asset pass, so: never. Not writing one is what keeps
-   deny-by-default true;
+7. ~~emit an asset only if — and there is no asset pass, so: never.~~ **Superseded by Goal
+   0009 (2026-11-08):** an asset is emitted only for a reference from a published note,
+   authorized by this same walk and the same exclusion ranks, so deny-by-default still holds.
+   The current contract is [`core-design/media-pipeline.md`](core-design/media-pipeline.md);
 8. reject unsafe URL schemes and unsupported embeds;
 9. produce deterministic output for identical input on every platform;
 10. ~~write only after target-project identity validation~~ — **deleted.** That was
@@ -904,9 +911,11 @@ unowned P1 in a requirements document reads as a commitment.
 
 - CommonMark/GitHub-flavored Markdown subset;
 - Obsidian wikilinks and heading links;
-- ~~public image embeds with explicit alt text~~ — **no image ships**; there is no asset pass,
-  an embed resolves to a repository file that is not a publishable note, and it degrades to
-  text and is reported. Alt text requirements still bind whatever HTML does render an image;
+- public image embeds with explicit alt text — **delivered by Goal 0009** (this bullet read
+  "no image ships" until then): a referenced PNG/JPEG/GIF/WebP/AVIF is published unchanged,
+  and a reference that is missing, excluded, escaping, SVG, or not one of those formats fails
+  the build rather than degrading to text. Alt text still binds, and the renderer writes
+  `alt=""` for a decorative image;
 - callouts;
 - task-list visual states without mutability;
 - code fences and syntax highlighting;

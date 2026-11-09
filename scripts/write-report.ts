@@ -164,7 +164,10 @@ export interface LinkFindingRow {
  * comparator is one edit away from two different orders. `line` is compared
  * numerically: as a string, 10 sorts before 9.
  */
-export function bySourceThenLine(a: LinkFindingRow, b: LinkFindingRow): number {
+export function bySourceThenLine(
+  a: { readonly source: string; readonly line: number },
+  b: { readonly source: string; readonly line: number },
+): number {
   if (a.source !== b.source) return a.source < b.source ? -1 : 1;
   return a.line - b.line;
 }

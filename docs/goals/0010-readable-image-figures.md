@@ -10,7 +10,7 @@ This is a reading-quality outcome, not an image encoder, CDN, or visual-effects 
 
 ## Prerequisite and material bounds
 
-Prerequisite: [0009 — Zero-config static images](0009-zero-config-static-images.md) is accepted.
+Prerequisite: [0009 — Zero-config static images](archive/0009-zero-config-static-images.md) is accepted.
 
 - Preserve the distinct meanings of `alt` (accessible image alternative) and an explicit Markdown title (human-visible caption). Do **not** automatically turn ordinary alt text into a visible caption. Decorative images retain `alt=""`; do not produce empty or duplicated captions.
 - The image's intrinsic dimensions, when available from supported raster files, should reserve appropriate layout space without distorting responsive rendering. Image metadata must not become a reason to load image bytes from a remote third-party host during a build.

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cpSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,9 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
 import { loadArtifact } from '../src/lib/artifact-source.ts';
+import type { ContentArtifact } from '../src/lib/schema.ts';
+import { ASSET_DIRECTORY } from '../src/lib/media.ts';
+import { PNG_UNICODE, NOT_AN_IMAGE } from './support/media.ts';
 import { readBuildBinding, snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
 import { snapshotFileName, snapshotRoute } from '../src/lib/snapshot.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
@@ -98,6 +101,126 @@ function copyDistDeep(): string {
   cpSync(DIST, root, { recursive: true });
   return root;
 }
+
+/** A published asset's bytes, its digest, and the URL they name. */
+const ASSET_BYTES = Buffer.from(PNG_UNICODE);
+const ASSET_DIGEST = createHash('sha256').update(ASSET_BYTES).digest('hex');
+const ASSET_NAME = `${ASSET_DIGEST}-chart.png`;
+const ASSET_URL = `/_assets/${ASSET_NAME}`;
+
+/**
+ * The real artifact plus exactly one declared image.
+ *
+ * The asset list is *replaced*, not merged: `pnpm run build:fixture` runs this
+ * file against a corpus that declares its own images, and a merged list would
+ * make these rows measure the ambient fixture instead of the one asset each row
+ * is about.
+ */
+const WITH_ASSET: ContentArtifact = { ...ARTIFACT, assets: [ASSET_URL] };
+
+/**
+ * A dist copy with no `_assets/` namespace at all, so a row can add exactly what
+ * it declares. The built output may carry the fixture corpus's images under
+ * `build:fixture`; they are removed here because an undeclared file in the
+ * namespace is deliberately an unexpected member.
+ */
+function cleanDist(): string {
+  const root = copyDist();
+  rmSync(join(root, ASSET_DIRECTORY), { recursive: true, force: true });
+  return root;
+}
+
+/** A clean dist copy carrying the declared asset, written with the given bytes. */
+function distWithAsset(bytes: Buffer = ASSET_BYTES): string {
+  const root = cleanDist();
+  mkdirSync(join(root, ASSET_DIRECTORY), { recursive: true });
+  writeFileSync(join(root, ASSET_DIRECTORY, ASSET_NAME), bytes);
+  return root;
+}
+
+test('a declared image asset is exactly the inventory the artifact describes', () => {
+  // The namespace is *owned*, not allowed: the declared file must be present and
+  // must hash to the digest its URL names, and the count returned covers it.
+  const root = distWithAsset();
+  try {
+    const files = assertOutputInventory(root, WITH_ASSET);
+    assert.ok(files > 0);
+    assert.ok(existsSync(join(root, ASSET_DIRECTORY, ASSET_NAME)), 'the inventory accepted a build without the declared asset');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  // Absent: the build declared it, so its absence is a missing member with its
+  // own code rather than a generic mismatch.
+  const missing = cleanDist();
+  try {
+    let thrown: BuildFailure | undefined;
+    try {
+      assertOutputInventory(missing, WITH_ASSET);
+    } catch (error) {
+      thrown = error as BuildFailure;
+    }
+    assert.ok(thrown, 'a declared asset that is absent passed the inventory');
+    assert.equal(thrown.code, 'output-inventory-asset-missing');
+    assert.match(thrown.detail, new RegExp(ASSET_NAME), 'the detail does not name the asset');
+  } finally {
+    rmSync(missing, { recursive: true, force: true });
+  }
+
+  // Altered bytes: the digest in the URL is the contract, and a static host
+  // would cache the wrong image under an immutable name.
+  const altered = distWithAsset(Buffer.concat([ASSET_BYTES, Buffer.from('x')]));
+  try {
+    let thrown: BuildFailure | undefined;
+    try {
+      assertOutputInventory(altered, WITH_ASSET);
+    } catch (error) {
+      thrown = error as BuildFailure;
+    }
+    assert.ok(thrown, 'an asset whose bytes changed passed the inventory');
+    assert.equal(thrown.code, 'output-inventory-asset-digest');
+  } finally {
+    rmSync(altered, { recursive: true, force: true });
+  }
+
+  // The right digest under the wrong extension: the URL would be served as the
+  // wrong content type, so it is refused even though the bytes are unchanged.
+  const misnamed = cleanDist();
+  try {
+    mkdirSync(join(misnamed, ASSET_DIRECTORY), { recursive: true });
+    const wrongUrl = `/_assets/${ASSET_DIGEST}-chart.gif`;
+    writeFileSync(join(misnamed, ASSET_DIRECTORY, `${ASSET_DIGEST}-chart.gif`), ASSET_BYTES);
+    let thrown: BuildFailure | undefined;
+    try {
+      assertOutputInventory(misnamed, { ...ARTIFACT, assets: [wrongUrl] });
+    } catch (error) {
+      thrown = error as BuildFailure;
+    }
+    assert.ok(thrown, 'a PNG published under a .gif extension passed the inventory');
+    assert.equal(thrown.code, 'output-inventory-asset-format');
+  } finally {
+    rmSync(misnamed, { recursive: true, force: true });
+  }
+
+  // An undeclared file in the namespace is an unexpected member, and the public
+  // message is a count — the name is in the detail.
+  const extra = distWithAsset();
+  try {
+    writeFileSync(join(extra, ASSET_DIRECTORY, `${'f'.repeat(64)}-stray.png`), NOT_AN_IMAGE);
+    let thrown: BuildFailure | undefined;
+    try {
+      assertOutputInventory(extra, WITH_ASSET);
+    } catch (error) {
+      thrown = error as BuildFailure;
+    }
+    assert.ok(thrown, 'an undeclared file in /_assets/ passed the inventory');
+    assert.equal(thrown.code, 'output-inventory-mismatch');
+    assert.ok(!thrown.message.includes('stray'), 'the public message named the unexpected file');
+    assert.match(thrown.detail, /stray\.png/, 'the detail does not name the unexpected file');
+  } finally {
+    rmSync(extra, { recursive: true, force: true });
+  }
+});
 
 test('the real built output matches the exact route and generated-asset inventory', () => {
   const inspected = assertOutputInventory(DIST, ARTIFACT);

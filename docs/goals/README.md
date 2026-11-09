@@ -87,6 +87,20 @@ members were on disk were fixed in `scripts/run-pagefind.ts`. CI verify run
 `35253591403` is green on the last code commit. Six goals are archived; one
 remains active.
 
+On 2026-11-09, [0009](archive/0009-zero-config-static-images.md) was completed
+on branch `feat/0009-zero-config-static-images` (implementation left uncommitted
+for the orchestrator to land; the file records branch, files, commands and real
+counts). The packaged producer now publishes only the images a published note
+references: PNG/JPEG/GIF/WebP/AVIF bytes are copied unchanged to
+`/_assets/<sha256>-<name>` and deduplicated by content, reference resolution is
+note-relative then content-root with no basename fallback, and a missing,
+excluded, escaping, SVG, or otherwise unsupported local image fails the build
+rather than shipping a broken picture. The coalesced gates are the exact output
+inventory over the emitted bytes, the extended column of residue/secret scans,
+a real-Chromium JavaScript-disabled display gate, and a packaged foreign-repository
+smoke. Seven goals are archived and 0008 remains active; 0010–0013 are still
+`Ready`.
+
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
 unrelated product requirements are complete. SQLite/WASM remains required for
@@ -119,16 +133,15 @@ cost acceptance is not a prerequisite for 0009.
 
 | Goal | Status | Single completion judgment | Material prerequisites |
 | --- | --- | --- | --- |
-| [0009 — Zero-config static images](0009-zero-config-static-images.md) | Ready | An independently packaged build publishes only authorized referenced raster images and serves them correctly on supported GitHub Pages / Cloudflare Pages root-site contracts with no image configuration | 0007 (completed) |
-| [0010 — Readable image figures](0010-readable-image-figures.md) | Ready | Local images have truthful captions, accessibility and responsive layout without another authoring interface | 0009 |
-| [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md) | Ready | Automatic format choice improves typical image costs while protecting legibility, behavior and package simplicity | 0009; 0010 is nonblocking |
-| [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009, 0011 |
-| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009; 0011 nonblocking |
+| [0010 — Readable image figures](0010-readable-image-figures.md) | Ready | Local images have truthful captions, accessibility and responsive layout without another authoring interface | 0009 (completed) |
+| [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md) | Ready | Automatic format choice improves typical image costs while protecting legibility, behavior and package simplicity | 0009 (completed); 0010 is nonblocking |
+| [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009 (completed), 0011 |
+| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009 (completed); 0011 nonblocking |
 
 `Ready` here means a downstream agent can pursue the stated outcome once its
 prerequisite is accepted; it does **not** mean implemented, deployed or approved
 as a release. `Provisional` goals preserve accepted direction but require
-refinement before activation. No goal in this new series has started or completed.
+refinement before activation. 0009 is completed; 0010–0013 have not started.
 
 **Scope boundary.** Current ANC deployment supports root-of-origin sites, not a
 GitHub Pages project site's `/<repo>/` prefix. Extending site-wide base-path
@@ -136,8 +149,10 @@ support is a separate potential outcome, not an unmentioned obligation of 0009.
 Media RFC #31 also proposes external-link behavior, numbered captions,
 references sections and wide-table accessibility. This initiative does not
 silently commit those still-unresolved proposals; such choices can be evaluated
-as separate future goals. The implementation of 0009 must reconcile the accepted
-core design's present no-asset-pipeline stance before claiming completion.
+as separate future goals. 0009 reconciled the accepted core design's former
+no-asset-pipeline stance as part of its change; the owning media design, content
+semantics, architecture index, `AGENTS.md`, and adoption docs now describe the
+implemented contract rather than a target.
 
 ## Completed goals
 
@@ -149,8 +164,9 @@ core design's present no-asset-pipeline stance before claiming completion.
 | [0005 — Interactive graph exploration](archive/0005-interactive-graph-exploration.md) | 2026-09-17 | Implementation commits `1d22934`, `610bb5f`, `38c9467`, PR #6; the live graph and its accessible representation agree on the bounded induced subgraph over a 65-note browser corpus, complete relations stay reachable beyond the drawing, the required mutation and failure controls were re-run, and SQL/Worker and render timings are recorded separately for 0008 — all in the file. |
 | [0006 — Safe release output](archive/0006-safe-release-output.md) | 2026-09-17 | Implementation commit `3e65a12`, PR #8, CI run `35231482566`; the reviewed-set failures, exact-output refusals, reconstructed-row scanner controls, withdrawal-after-rebuild, whole-tree failed-build preservation, and concurrent-build binding isolation are recorded in the file. |
 | [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md) | 2026-09-18 | Implementation commits `2c9772e`, `33aa0ae`, `12ff781`, `ebd02f9`, `c159802`, `65f89d4`, PR #10; local `pnpm run verify` and CI run `35253591403` (80 files / 952 passed / 34 skipped) green on `65f89d4`, Action-parity CI run `35253591383` green with the shallow-clone refusal, and the recorded `pack:tarball` digest plus `smoke:tarball` result — all six evaluation rows in the file. |
+| [0009 — Zero-config static images](archive/0009-zero-config-static-images.md) | 2026-11-09 | Branch `feat/0009-zero-config-static-images`, production commit `be6b6cf`, implementation uncommitted for landing; the packaged producer publishes only referenced, authorized raster bytes under `/_assets/<sha256>-<name>`, the exact inventory owns the namespace, and each "Done when" row carries its executed evidence in the file — including a JavaScript-disabled Chromium display gate and a packaged foreign-repository smoke with images. |
 
-One SQLite goal remains `in progress`. Media goals below are new and not started.
+One SQLite goal remains `in progress`, and three media goals remain `Ready`.
 Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
@@ -239,6 +255,7 @@ on 2026-09-14 into 0002–0008 without declaring completion. Its number is retai
 [0004](archive/0004-complete-tag-browsing.md) were completed and moved into the
 [archive](archive/README.md) on 2026-09-16,
 [0005](archive/0005-interactive-graph-exploration.md) and
-[0006](archive/0006-safe-release-output.md) on 2026-09-17, and
-[0007](archive/0007-independent-publisher-adoption.md) on 2026-09-18; 0008
-remains active and no other number has been completed.
+[0006](archive/0006-safe-release-output.md) on 2026-09-17,
+[0007](archive/0007-independent-publisher-adoption.md) on 2026-09-18, and
+[0009](archive/0009-zero-config-static-images.md) on 2026-11-09; 0008 remains
+active and no other number has been completed.

@@ -39,7 +39,7 @@ Every payload is inert by construction; none of it comes from the private vault.
 
 <div style="position:fixed;top:0;left:0;width:100vw">style div</div>
 
-<img src="broken.png" onerror="window.alert(8)" alt="with handler">
+<img src="https://evil.example/broken.png" onerror="window.alert(8)" alt="with handler">
 
 ## Dangerous URL schemes
 

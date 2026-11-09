@@ -22,7 +22,13 @@ const KNOWN_ROUTES: Readonly<Record<string, string>> = {
 
 const routeForSlug = (slug: string): string | undefined => KNOWN_ROUTES[slug];
 
-const kitchenSink = await renderMarkdown(fixture('kitchen-sink.md'), { routeForSlug });
+/** The one image asset the kitchen sink references; see `RenderOptions.publishedAssets`. */
+const DECORATIVE = '/_assets/' + 'e'.repeat(64) + '-decorative.png';
+
+const kitchenSink = await renderMarkdown(fixture('kitchen-sink.md'), {
+  routeForSlug,
+  publishedAssets: new Set([DECORATIVE]),
+});
 const hostile = await renderMarkdown(fixture('hostile.md'), { routeForSlug });
 
 // --- Supported constructs (requirements 15.1) ---------------------------------
@@ -257,11 +263,34 @@ test('an unlabelled fence is still a code block', () => {
 });
 
 test('image embeds always carry explicit alt text', () => {
-  assert.match(kitchenSink.html, /<img src="decorative\.png" alt="" \/>/);
+  assert.match(kitchenSink.html, new RegExp(`<img src="${DECORATIVE}" alt="" />`));
   assert.match(kitchenSink.html, /<img src="https:\/\/example\.com\/diagram\.png" alt="A described diagram" \/>/);
   const images = kitchenSink.html.match(/<img[^>]*>/g) ?? [];
   assert.ok(images.length > 0);
   for (const image of images) assert.match(image, /\balt="/, `image without alt: ${image}`);
+});
+
+test('a local image src the build did not publish stops the render', async () => {
+  // The renderer is the last gate over an image `src`. The producer refuses an
+  // unauthorized local reference before this point (`tests/media-pipeline.test.ts`),
+  // so what reaches here from a real corpus is either a remote URL, an inline
+  // raster, or a `/_assets/` URL the artifact declares. Anything else local is a
+  // reference that bypassed the pipeline — a raw-HTML `<img>`, or a
+  // hand-authored artifact naming no emitted file — and shipping it would be a
+  // broken picture.
+  for (const source of ['decorative.png', './decorative.png', '/decorative.png', '', 'my%20image.png']) {
+    await assert.rejects(
+      renderMarkdown(`<img src="${source}" alt="x">\n`),
+      /without being published/,
+      `a local image src survived the renderer: ${JSON.stringify(source)}`,
+    );
+  }
+  // A published asset URL is accepted, which is what makes the refusal a rule
+  // about authorization rather than about the URL's spelling.
+  const published = await renderMarkdown(`<img src="${DECORATIVE}" alt="x">\n`, {
+    publishedAssets: new Set([DECORATIVE]),
+  });
+  assert.match(published.html, new RegExp(`<img src="${DECORATIVE}" alt="x"`));
 });
 
 test('an inline image is allowed only as a base64 raster, matching the artifact scanner', async () => {
@@ -759,7 +788,7 @@ test('no rendered document contains a duplicate id or a dangling fragment link',
     '<a id="a">x</a>\n\n## A\n\n## A\n\n<span id="a-1">y</span>\n\n## A\n',
     'text[^n]\n\n## Notes\n\n[^n]: a footnote\n',
   ]) {
-    const { html } = await renderMarkdown(source, { routeForSlug });
+    const { html } = await renderMarkdown(source, { routeForSlug, publishedAssets: new Set([DECORATIVE]) });
     const ids = [...html.matchAll(/\sid="([^"]*)"/g)].map(([, id]) => id!);
     assert.equal(new Set(ids).size, ids.length, `duplicate id in: ${ids.join(', ')}`);
     for (const [, target] of html.matchAll(/\shref="#([^"]*)"/g)) {
@@ -985,8 +1014,8 @@ test('a Mermaid-only page does not claim to contain code', async () => {
 test('rendering the same fixture twice yields byte-identical output', async () => {
   for (const name of ['kitchen-sink.md', 'hostile.md']) {
     const source = fixture(name);
-    const first = await renderMarkdown(source, { routeForSlug });
-    const second = await renderMarkdown(source, { routeForSlug });
+    const first = await renderMarkdown(source, { routeForSlug, publishedAssets: new Set([DECORATIVE]) });
+    const second = await renderMarkdown(source, { routeForSlug, publishedAssets: new Set([DECORATIVE]) });
     assert.equal(second.html, first.html, `${name} rendered differently on a second pass`);
     assert.deepEqual(second.headings, first.headings);
     assert.deepEqual(second.toc, first.toc);
@@ -995,10 +1024,11 @@ test('rendering the same fixture twice yields byte-identical output', async () =
 
 test('concurrent renders do not contaminate each other', async () => {
   const source = fixture('kitchen-sink.md');
+  const assets = { routeForSlug, publishedAssets: new Set([DECORATIVE]) };
   const [a, b, c] = await Promise.all([
-    renderMarkdown(source, { routeForSlug }),
+    renderMarkdown(source, assets),
     renderMarkdown('## Shared\n\n## Shared\n', { routeForSlug }),
-    renderMarkdown(source, { routeForSlug }),
+    renderMarkdown(source, assets),
   ]);
   assert.equal(c!.html, a!.html);
   assert.deepEqual(b!.headings.map((heading) => heading.id), ['shared', 'shared-1']);
@@ -1023,9 +1053,9 @@ test('highlighting does not depend on what other pages the build rendered first'
 // --- Real artifact ------------------------------------------------------------
 
 test('the shipped artifact renders clean of residue markers', async () => {
-  const { entries } = await import('../src/lib/content.ts');
+  const { entries, publishedAssets } = await import('../src/lib/content.ts');
   for (const entry of entries) {
-    const rendered = await renderMarkdown(entry.markdown, { routeForSlug });
+    const rendered = await renderMarkdown(entry.markdown, { routeForSlug, publishedAssets });
     for (const pattern of [/msw\//i, /\[\[/, /<script/i, /\son[a-z]+\s*=/i, /javascript:/i, /file:\/\//i]) {
       assert.doesNotMatch(rendered.html, pattern, `entry "${entry.slug}" leaked ${pattern}`);
     }
@@ -1034,11 +1064,11 @@ test('the shipped artifact renders clean of residue markers', async () => {
 });
 
 test('every fence in the shipped artifact resolves to a real grammar', async () => {
-  const { entries } = await import('../src/lib/content.ts');
+  const { entries, publishedAssets } = await import('../src/lib/content.ts');
 
   /** Fences in one body that were expected to highlight and did not. */
   const unhighlighted = async (markdown: string): Promise<string[]> => {
-    const { html } = await renderMarkdown(markdown, { routeForSlug });
+    const { html } = await renderMarkdown(markdown, { routeForSlug, publishedAssets });
     const missed: string[] = [];
     for (const figure of html.match(/<figure class="code-block"[^>]*>[\s\S]*?<\/figure>/g) ?? []) {
       if (/data-diagram="mermaid"/.test(figure)) continue;

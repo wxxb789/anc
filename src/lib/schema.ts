@@ -8,6 +8,7 @@
  */
 
 import { compareSlugs, isNoteSlug, SLUG_MAX_BYTES } from './route-path.ts';
+import { parseAssetUrl } from './media.ts';
 
 export interface ContentEntry {
   slug: string;
@@ -30,6 +31,20 @@ export interface ContentEntry {
 export interface ContentArtifact {
   version: 1;
   entries: ContentEntry[];
+  /**
+   * Every published image asset, as a public URL, sorted.
+   *
+   * **Private IR, not a public manifest.** Nothing copies this into `dist/`: the
+   * site's HTML states each `src` inline, and the file set is what the output
+   * inventory checks. It exists so the emission step and the inventory can ask
+   * "exactly which assets must be present?" without re-deriving an answer from
+   * the Markdown, which would be a second parser and a second authority.
+   *
+   * Absent for a corpus with no local images, which is every corpus before Goal
+   * 0009. A path here is always `/_assets/<sha256>-<name>`; see `src/lib/media.ts`
+   * for why the digest owns identity and the name is decoration.
+   */
+  assets?: string[];
 }
 
 export const SCHEMA_VERSION = 1;
@@ -612,10 +627,44 @@ export function validateArtifact(data: unknown, source = 'content artifact'): Co
   if (!isPlainObject(data)) throw new ContentValidationError(source, ['artifact: must be an object']);
 
   for (const field of Object.keys(data)) {
-    if (field !== 'version' && field !== 'entries') issues.push(`${field}: unknown field is not allowed`);
+    if (field !== 'version' && field !== 'entries' && field !== 'assets') {
+      issues.push(`${field}: unknown field is not allowed`);
+    }
   }
   if (data['version'] !== SCHEMA_VERSION) {
     issues.push(`version: must be ${SCHEMA_VERSION}, got ${JSON.stringify(data['version'])}`);
+  }
+
+  // The image assets this artifact publishes. Every path must be a canonical
+  // `/_assets/<sha256>-<name>` URL — one spelling per asset, so the emission step
+  // and the inventory cannot disagree about which file a URL names — and the list
+  // is sorted and unique, so two builds of the same corpus serialize the same
+  // bytes. A path that is not canonical is a producer defect rather than an
+  // author's mistake, and it fails here rather than in a filename lookup.
+  const rawAssets = data['assets'];
+  if (rawAssets !== undefined) {
+    if (!Array.isArray(rawAssets)) {
+      issues.push('assets: must be an array of published asset paths');
+    } else {
+      const seen = new Set<string>();
+      let previous: string | undefined;
+      for (const [index, value] of rawAssets.entries()) {
+        if (typeof value !== 'string') {
+          issues.push(`assets[${index}]: must be a string`);
+          continue;
+        }
+        if (parseAssetUrl(value) === undefined) {
+          issues.push(`assets[${index}]: is not a canonical published asset path (/_assets/<sha256>-<name>)`);
+          continue;
+        }
+        if (seen.has(value)) issues.push(`assets[${index}]: appears twice`);
+        seen.add(value);
+        if (previous !== undefined && !(previous < value)) {
+          issues.push(`assets: must be sorted in ascending order, at index ${index}`);
+        }
+        previous = value;
+      }
+    }
   }
 
   const rawEntries = data['entries'];

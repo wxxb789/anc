@@ -30,6 +30,18 @@ export const artifact: ContentArtifact = loadArtifact();
 
 export const entries: readonly ContentEntry[] = artifact.entries;
 
+/**
+ * The image URLs this build published, for anything that renders artifact Markdown.
+ *
+ * `renderMarkdown` refuses a local image `src` the artifact did not declare — the
+ * last gate over an image reference — so every caller rendering an *artifact*
+ * entry has to hand it this set. It is exported here rather than recomputed in
+ * each caller because the artifact is the only authority for it, and a second
+ * `new Set(artifact.assets)` per page is both wasted work and a second place for
+ * the expression to drift.
+ */
+export const publishedAssets: ReadonlySet<string> = new Set(artifact.assets ?? []);
+
 const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
 
 export function getEntry(slug: string): ContentEntry | undefined {

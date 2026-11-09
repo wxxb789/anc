@@ -183,7 +183,7 @@ on the first failure. Run it before proposing a merge and report the pass count.
 | `astro check` | yes | — | yes | — |
 | Content contract + derived-route validation | yes | yes | yes | yes |
 | Astro build, redirects, Pagefind index | yes | yes | yes | yes |
-| Exact output inventory: routes, package assets, Astro/Pagefind namespaces | yes | yes | yes | yes |
+| Exact output inventory: routes, package assets, `/_assets/` image bytes, Astro/Pagefind namespaces | yes | yes | yes | yes |
 | Pinned Gitleaks over raw and inflated output | yes | — | yes | `build --release` |
 | Residue scan over the output — markers, paths, schemes, source maps, the search index | yes | yes | yes | yes |
 | Configuration parse: unknown key, wrong type, malformed YAML | — | — | — | yes |
@@ -239,6 +239,14 @@ deployment step. Read its run for 0007, not as a substitute for `verify`.
 - Generated routes are exactly the route model; package assets are byte-bound to `public/`;
   Astro owns only flat hashed JS/CSS; Pagefind has an exact runtime allowlist and metadata-bound
   content-addressed index members.
+- A published image is exactly the set the content artifact declares. Each `/_assets/` file must
+  be present, hash to the SHA-256 its URL names, and be the format its extension names — a static
+  host infers `Content-Type` from the extension, so a URL that disagrees with its own bytes would
+  be served as the wrong type everywhere. An `_assets/` file the artifact does not declare is an
+  unexpected member, which is what makes the namespace owned rather than allowed: the inventory
+  lists files, it does not permit a directory. The bytes are passthrough — no transcode, resize,
+  or metadata rewrite — so this phase is not metadata scrubbing; residue and secret scanning run
+  over them as declared binary and through Gitleaks respectively.
 - Gitleaks is exact-version pinned, cannot inherit user config or allow comments, scans one
   decode layer plus raw and explicitly inflated gzip, and never preserves or prints matched
   secret values.
@@ -317,7 +325,11 @@ progress, and the older note here that the design was "not yet implemented" pred
 that landing. Neither 0.1.0 nor 1.0.0 is ready. Deployment and post-deploy smoke tests
 are separate external actions, and so is publication — it runs in
 `.github/workflows/release-npm.yml` and is started by hand from the `release` workflow.
-Version 0.1 intentionally adds no non-Markdown asset pipeline or corpus redirects.
+Version 0.1 adds the local-image pipeline of [goal 0009](docs/goals/archive/0009-zero-config-static-images.md)
+— authorized, referenced PNG/JPEG/GIF/WebP/AVIF copied byte-identically to `/_assets/<sha256>-<name>`,
+an SVG refused until it has a rasterizer — and no other non-Markdown asset handling: no optimizer,
+no WebP conversion, no external image host, no corpus redirects. GitHub Pages *project* sites at
+`/<repo>/` remain unsupported; the hosting contract is a site at the domain root.
 `0.0.1` was published by hand to reserve the `@wxxb789/anc` name and create the page a
 trusted publisher needs; `0.0.2` is the first release cut from a tag.
 

@@ -40,6 +40,9 @@ const STEPS: readonly (readonly [string, ...string[]])[] = [
   ['pnpm', 'exec', 'astro', 'build'],
   ['node', 'scripts/copy-snapshot.ts'],
   ['node', 'scripts/copy-wasm.ts'],
+  // The fixture corpus carries real image bytes beside its artifact, so this
+  // corpus exercises the same emission step the packaged build runs.
+  ['node', 'scripts/copy-assets.ts'],
   ['node', 'scripts/emit-redirects.ts'],
   // `scripts/run-pagefind.ts` rather than `pnpm exec pagefind --site dist`,
   // which is what this line used to be. The two are not the same command: the

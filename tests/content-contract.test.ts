@@ -34,6 +34,56 @@ function rejection(name: string): ContentValidationError {
   return expectRejection(() => validateArtifact(load(new URL(`${name}.json`, INVALID)), name));
 }
 
+test('the published asset list is canonical, sorted, unique, and optional', () => {
+  // Goal 0009's one public artifact field. The artifact is private IR, but its
+  // asset paths are copied into two consumers — the emission step and the exact
+  // output inventory — so "one spelling per asset" is what keeps them from
+  // disagreeing about which file a URL names. A non-canonical path is a producer
+  // defect, not an author's mistake, and it fails here rather than in a filename
+  // lookup.
+  const entry = { slug: 'one', title: 'One', excerpt: '', markdown: '# One\n' };
+  const digest = 'a'.repeat(64);
+  const first = `/_assets/${digest}-one.png`;
+  const second = `/_assets/${'b'.repeat(64)}-caf%C3%A9.png`;
+
+  // Absent is the ordinary corpus with no local images, and an empty list is a
+  // producer that declared one — both parse.
+  assert.deepEqual(validateArtifact({ version: 1, entries: [entry] }).assets, undefined);
+  assert.deepEqual(validateArtifact({ version: 1, entries: [entry], assets: [] }).assets, []);
+
+  const sorted = [first, second].sort();
+  assert.deepEqual(validateArtifact({ version: 1, entries: [entry], assets: sorted }).assets, sorted);
+
+  for (const [assets, message] of [
+    [[second, first].sort().reverse(), 'must be sorted'],
+    [[first, first], 'appears twice'],
+    [['/_assets/not-a-digest-one.png'], 'not a canonical published asset path'],
+    [['/_assets/' + digest + '-one.png/extra'], 'not a canonical published asset path'],
+    [['/assets/' + digest + '-one.png'], 'not a canonical published asset path'],
+    // A percent-encoding that decodes to the same name is a second spelling of
+    // one asset, which is exactly what canonicality forbids.
+    [['/_assets/' + digest + '-caf%65.png'], 'not a canonical published asset path'],
+    // An extension the build cannot have emitted, and two real spellings of
+    // real formats that are not the canonical one — accepting either would give
+    // one asset a second URL.
+    [['/_assets/' + digest + '-one.bmp'], 'not a canonical published asset path'],
+    [['/_assets/' + digest + '-one.jpeg'], 'not a canonical published asset path'],
+    [['/_assets/' + digest + '-one.PNG'], 'not a canonical published asset path'],
+  ] as const) {
+    const error = expectRejection(() => validateArtifact({ version: 1, entries: [entry], assets }));
+    assert.ok(
+      error.issues.some((issue) => issue.includes(message)),
+      `expected an issue mentioning ${JSON.stringify(message)}, got ${JSON.stringify(error.issues)}`,
+    );
+  }
+
+  // The field is optional, but a non-array is refused rather than ignored.
+  const wrongType = expectRejection(() =>
+    validateArtifact({ version: 1, entries: [entry], assets: first as unknown }),
+  );
+  assert.ok(wrongType.issues.some((issue) => issue.includes('assets: must be an array')));
+});
+
 test('aliases are metadata, not globally unique names', () => {
   // A rule this contract used to carry, removed with its producer check and
   // recorded positively here. `docs/core-design/content-semantics.md` owns the

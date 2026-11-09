@@ -167,11 +167,42 @@ A symbolic link to a note elsewhere inside the content directory publishes under
 name. A link to a file **outside** it is dropped unread and counted as `link-outside-content`:
 publishing only reads what lives under the directory you pointed it at.
 
-Non-Markdown files are discovered and never emitted. **There is no asset pipeline**: an
-embedded image does not ship, and a link to one degrades to text and is reported. That is
-deliberate rather than pending — the alternative shape, copying every non-Markdown file, is
-how comparable tools publish the images belonging to notes their users excluded. The final
-output inventory fails if any note asset or unexpected route reaches the site anyway.
+### Images
+
+An image is published because **a published note references it**. The ordinary Markdown
+forms work — `![alt](path/to/photo.png)`, a title after the path, the reference form
+`![alt][ref]` with `[ref]: path/to/photo.png` on its own line — and so does an Obsidian
+embed, `![[path/to/photo.png]]`. (A bare `![[note]]` is still a link to a note, not a
+transclusion; that has not changed.)
+
+A reference resolves **relative to the note, then relative to the content root**, and nowhere
+else. `![chart](chart.png)` written in `notes/today.md` finds `notes/chart.png` first and
+`chart.png` at the root second; it will not pick up a `chart.png` from an unrelated folder
+because the name happened to match. `./` and `../` are exact: if the note-relative file is not
+there, the build stops rather than looking elsewhere. A leading `/` names the content root.
+
+The site serves the bytes you wrote. PNG, JPEG, GIF, WebP and AVIF are copied byte for byte —
+no resize, no recompression, and animations keep every frame — under
+`/_assets/<sha256>-<name>`, where the digest is the image's own content. The same picture
+referenced from five notes is one file on the site, and an unchanged picture keeps its URL.
+The extension comes from the bytes rather than from your filename, so a PNG named `.jpg` is
+still served as `image/png`. **This is not a metadata scrubber**: a photograph keeps its
+EXIF and GPS block, because stripping it is a separate policy this build does not claim.
+
+An image that cannot be published **fails the build**, and the previously built site stays
+where it was. The public message counts the reasons; the private report names the file and
+the line. The reasons are:
+
+- the file is not there;
+- a `publish.config.yaml` exclusion hides it;
+- the path leaves your content directory, or is a symbolic link to a file outside it;
+- it is an SVG — not publishable until it can be rasterized safely — or it is not one of the
+  five formats;
+- it is written as raw HTML, `<img src="...">`, which the resolver does not cover.
+
+Remote images (`https://…`) are left exactly as you wrote them and are never downloaded during
+a build. Files no published note references are never published, which is why an excluded
+draft's attachments stay off the site.
 
 Run `anc init` before your first `git add -A`. It seeds `.gitignore` with
 `node_modules/` and your build's output directory — which follows `--content`, so a build into
@@ -388,7 +419,10 @@ that rule is not negotiable.
 
 ## What it will not do
 
-- Publish a non-Markdown file, including images.
+- Publish a non-Markdown file no published note references, or serve a local SVG. Images are
+  published only through a reference in a published note, only in the five raster formats, and
+  only as the bytes you wrote. Optimization, WebP conversion, and SVG rasterization are later
+  outcomes, not options here.
 - Publish a note whose derived slug is reserved by the site, such as root `about.md`,
   `search.md`, `tags.md`, or `private.md`. Rename the source file; the private report lists
   every conflicting note and slug together.
