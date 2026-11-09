@@ -1132,9 +1132,10 @@ interface AvifExtent {
  *
  * `iloc` versions 0-2 share a layout except for item-ID width and the optional
  * construction method. Sizes are read as unsigned big-endian fields of the
- * widths the box declares; an absent field (size 0) contributes zero. Only
- * construction method 0 addresses the file directly, which is the only location
- * an `mdat` extent can describe.
+ * widths the box declares; an absent field (size 0) contributes zero.
+ * Construction method 0 addresses the file directly; method 1 addresses the
+ * payload of `meta/idat`. An item naming a non-zero data reference points at
+ * data outside this file and is not addressable by this gate.
  */
 function avifPrimaryExtents(bytes: Uint8Array, meta: IsoBox, primary: number): AvifExtent[] | undefined {
   const children = isoBoxes(bytes, meta.payload + 4, meta.end);
@@ -1177,7 +1178,9 @@ function avifPrimaryExtents(bytes: Uint8Array, meta: IsoBox, primary: number): A
       cursor += 2;
     }
     if (cursor + 2 > iloc.end) return undefined;
-    cursor += 2; // data_reference_index
+    const dataReferenceIndex = u16be(bytes, cursor);
+    cursor += 2;
+    if (itemId === primary && dataReferenceIndex !== 0) return undefined;
     const base = take(baseSize);
     if (base === undefined || cursor + 2 > iloc.end) return undefined;
     const extentCount = u16be(bytes, cursor);
@@ -1202,8 +1205,10 @@ function avifPrimaryExtents(bytes: Uint8Array, meta: IsoBox, primary: number): A
 }
 
 /**
- * AVIF: top-level boxes consume the file exactly, every `mdat` fits, and each
- * primary-item extent lies inside one `mdat` payload.
+ * AVIF: top-level boxes consume the file exactly, and each primary-item extent
+ * lies inside a container that its construction method names: a top-level
+ * `mdat` for method 0, or `meta/idat`'s payload for method 1. A file with
+ * neither container is incomplete; an extent may not span two containers.
  */
 function avifComplete(bytes: Uint8Array): void {
   const top = isoBoxes(bytes, 0, bytes.length);
@@ -1218,18 +1223,33 @@ function avifComplete(bytes: Uint8Array): void {
   const primary = avifPrimaryItem(bytes, meta);
   if (primary === undefined || primary === 0) failIncomplete('AVIF primary item');
   const mdats = top.filter((box) => box.type === 'mdat');
-  if (mdats.length === 0) failIncomplete('AVIF mdat');
+  const metaChildren = isoBoxes(bytes, meta.payload + 4, meta.end);
+  if (metaChildren === undefined) failIncomplete('AVIF meta children');
+  const idats = metaChildren.filter((box) => box.type === 'idat');
   const extents = avifPrimaryExtents(bytes, meta, primary);
   if (extents === undefined || extents.length === 0) failIncomplete('AVIF item location');
   for (const extent of extents) {
-    if (extent.method !== 0) failIncomplete('AVIF item location method');
-    const inside = mdats.some(
-      (mdat) =>
-        extent.offset >= mdat.payload &&
-        extent.offset + extent.length <= mdat.end &&
-        Number.isSafeInteger(extent.offset + extent.length),
-    );
-    if (!inside) failIncomplete('AVIF primary extent');
+    if (extent.method !== 0 && extent.method !== 1) failIncomplete('AVIF item location method');
+    // Method 0 offsets are file-relative; method 1 offsets are relative to the
+    // idat payload the spec names. Both must end inside that same container;
+    // an extent never spans two.
+    const inside =
+      extent.method === 0
+        ? mdats.some(
+            (mdat) =>
+              extent.offset >= mdat.payload &&
+              extent.offset + extent.length <= mdat.end &&
+              Number.isSafeInteger(extent.offset + extent.length),
+          )
+        : idats.some((idat) => {
+            const start = idat.payload + extent.offset;
+            return (
+              start >= idat.payload &&
+              start + extent.length <= idat.end &&
+              Number.isSafeInteger(start + extent.length)
+            );
+          });
+    if (!inside) failIncomplete(extent.method === 0 ? 'AVIF mdat' : 'AVIF idat');
   }
 }
 
@@ -1241,8 +1261,8 @@ function avifComplete(bytes: Uint8Array): void {
  * complete". Each format's own self-description is walked: PNG chunks and their
  * CRCs, the GIF block stream and its descriptor count, JPEG markers through EOI,
  * WebP's RIFF size and chunks, and AVIF's box tree with the primary item's
- * `mdat` extent. A failure is the existing `corrupt` reason; no caller may
- * publish the bytes anyway.
+ * `mdat` or `meta/idat` extent. A failure is the existing `corrupt` reason; no
+ * caller may publish the bytes anyway.
  *
  * An unreadable *dimension* header is still a different case: a complete
  * container whose header this module cannot interpret publishes without

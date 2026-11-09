@@ -217,7 +217,8 @@ final zero-length `IEND` with no trailing bytes; GIF is walked to its trailer
 and its image-descriptor count must match the decoded page count; JPEG markers
 must reach `EOI` exactly at the end; WebP's RIFF size must be the whole file and
 every chunk must fit; AVIF top-level boxes must consume the file exactly and the
-primary item's extent must lie inside an `mdat` payload. A failure is the
+primary item's extent must lie inside the `mdat` or `meta/idat` payload its
+construction method names. A failure is the
 existing `corrupt` reason, never a fallback to publishing the bytes. This is
 required because libvips decodes a truncated PNG prefix and a partial GIF
 successfully: decoder success alone is not container completeness. APNG's

@@ -131,6 +131,95 @@ function writeU32(bytes: Uint8Array, offset: number, value: number): void {
   bytes[offset + 3] = value & 0xff;
 }
 
+function writeU16(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = (value >>> 8) & 0xff;
+  bytes[offset + 1] = value & 0xff;
+}
+
+type IdatAvifVariant = 'valid' | 'overrun' | 'no-idat' | 'data-reference' | 'method-2';
+
+/**
+ * Move the committed AVIF's unchanged bitstream from top-level `mdat` into
+ * `meta/idat`, and rewrite `iloc` to construction method 1.
+ *
+ * The base fixture is 329 bytes: `ftyp` 0-31, `meta` 32-266 (its `iloc` box is
+ * 91-120 and its payload is the 54 bytes at 275-328), `mdat` 267-328. The
+ * rebuilt file is 331 bytes because the method-1 `iloc` gains its two-byte
+ * construction-method field; the image payload is the same bytes.
+ */
+function avifPrimaryInIdat(variant: IdatAvifVariant): Uint8Array {
+  const base = AVIF;
+  if (
+    base.length !== 329 ||
+    readU32(base, 32) !== 235 ||
+    readU32(base, 91) !== 30 ||
+    readU32(base, 117) !== 54 ||
+    readU32(base, 267) !== 62 ||
+    Buffer.from(base).toString('ascii', 271, 275) !== 'mdat'
+  ) {
+    throw new Error('the AVIF fixture layout changed; update the idat relocation builder');
+  }
+
+  const bitstream = base.subarray(275, 329);
+  const iloc = new Uint8Array(32);
+  writeU32(iloc, 0, iloc.length);
+  iloc.set(Buffer.from('iloc', 'ascii'), 4);
+  iloc[8] = 1; // version 1: carries construction_method
+  iloc[12] = 0x44; // offset_size 4, length_size 4
+  iloc[13] = 0; // base_offset_size 0, index_size 0
+  writeU16(iloc, 14, 1); // item_count
+  writeU16(iloc, 16, 1); // primary item_ID
+  writeU16(iloc, 18, variant === 'method-2' ? 2 : 1); // construction_method
+  writeU16(iloc, 20, variant === 'data-reference' ? 1 : 0); // data_reference_index
+  writeU16(iloc, 22, 1); // extent_count
+  writeU32(iloc, 24, 0); // extent offset, relative to idat's payload
+  writeU32(iloc, 28, variant === 'overrun' ? bitstream.length + 1 : bitstream.length);
+
+  const includeIdat = variant !== 'no-idat';
+  const idat = new Uint8Array(8 + bitstream.length);
+  writeU32(idat, 0, idat.length);
+  idat.set(Buffer.from('idat', 'ascii'), 4);
+  idat.set(bitstream, 8);
+
+  const metaHeader = base.subarray(40, 44);
+  const beforeIloc = base.subarray(44, 91);
+  const afterIloc = base.subarray(121, 267);
+  const metaPayloadLength = 4 + beforeIloc.length + iloc.length + afterIloc.length + (includeIdat ? idat.length : 0);
+  const meta = new Uint8Array(8 + metaPayloadLength);
+  writeU32(meta, 0, meta.length);
+  meta.set(Buffer.from('meta', 'ascii'), 4);
+  meta.set(metaHeader, 8);
+  let cursor = 12;
+  meta.set(beforeIloc, cursor);
+  cursor += beforeIloc.length;
+  meta.set(iloc, cursor);
+  cursor += iloc.length;
+  meta.set(afterIloc, cursor);
+  cursor += afterIloc.length;
+  if (includeIdat) meta.set(idat, cursor);
+
+  const ftyp = base.subarray(0, 32);
+  const output = new Uint8Array(ftyp.length + meta.length);
+  output.set(ftyp, 0);
+  output.set(meta, ftyp.length);
+  return output;
+}
+
+/** A valid method-1 AVIF whose primary bitstream lives in `meta/idat`. */
+export const AVIF_PRIMARY_IN_IDAT = avifPrimaryInIdat('valid');
+
+/** The method-1 file with an extent one byte longer than the `idat` payload. */
+export const AVIF_PRIMARY_IN_IDAT_OVERRUN = avifPrimaryInIdat('overrun');
+
+/** The method-1 file with no `idat` box at all. */
+export const AVIF_PRIMARY_IN_IDAT_NO_CONTAINER = avifPrimaryInIdat('no-idat');
+
+/** The method-1 file whose item names a non-zero data reference. */
+export const AVIF_PRIMARY_IN_IDAT_DATA_REFERENCE = avifPrimaryInIdat('data-reference');
+
+/** The method-1 file rewritten to construction method 2. */
+export const AVIF_PRIMARY_IN_IDAT_METHOD_2 = avifPrimaryInIdat('method-2');
+
 /**
  * Two adversarial AVIFs derived from the committed 8x6 {@link AVIF}.
  *

@@ -123,7 +123,8 @@ and requires its image-descriptor count to equal libvips' page count; JPEG walks
 marker segments and entropy-coded scan data to `EOI` exactly at the end; WebP
 requires the RIFF size to be `bytes.length - 8` and every chunk to fit; AVIF
 requires top-level boxes to consume the file and the primary item's `iloc`
-extent to lie inside an `mdat` payload. A failure maps to the existing
+extent to lie inside the `mdat` or `meta/idat` payload its construction method
+names. A failure maps to the existing
 `corrupt` reason. The gate is called for every source before `readMetadata` and
 again for GIF after the header read, which is the only way to compare its
 descriptor count with the decoder's page count; it runs before `validateDecode`

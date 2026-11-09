@@ -35,6 +35,11 @@ import {
 } from '../src/lib/media-codec.ts';
 import {
   AVIF,
+  AVIF_PRIMARY_IN_IDAT,
+  AVIF_PRIMARY_IN_IDAT_DATA_REFERENCE,
+  AVIF_PRIMARY_IN_IDAT_METHOD_2,
+  AVIF_PRIMARY_IN_IDAT_NO_CONTAINER,
+  AVIF_PRIMARY_IN_IDAT_OVERRUN,
   GIF_ANIMATED,
   JPEG,
   ORIENTED_JPEG,
@@ -350,6 +355,41 @@ test('progressive JPEGs with multiple scans are accepted, truncated ones are cor
   const refused = await prepareImage(Buffer.from(truncated), 'jpeg');
   assert.equal(refused.ok, false, 'a truncated progressive JPEG was accepted');
   if (!refused.ok) assert.equal(refused.reason, 'corrupt');
+});
+
+test('an AVIF primary item in meta/idat is accepted; overrun and no-container are not', async () => {
+  const original = Buffer.from(AVIF);
+  const relocated = Buffer.from(AVIF_PRIMARY_IN_IDAT);
+  assert.equal(relocated.length, original.length + 2, 'the method-1 iloc did not gain its construction field');
+
+  for (const [name, bytes] of [
+    ['original', original],
+    ['relocated', relocated],
+  ] as const) {
+    const stats = await sharp(bytes).stats();
+    assert.equal(stats.channels.length, 3, `${name}: libheif did not decode the AVIF`);
+    const metadata = await sharp(bytes).metadata();
+    assert.deepEqual([metadata.width, metadata.height], [8, 6], `${name}: decoded dimensions changed`);
+    assert.doesNotThrow(() => assertCompleteContainer('avif', bytes), `${name}: the gate rejected a valid AVIF`);
+  }
+
+  const image = accepted(await prepareImage(relocated, 'avif'));
+  assert.equal(image.transcoded, false, 'the method-1 AVIF was re-encoded');
+  assert.equal(image.format, 'avif');
+  assert.ok(image.bytes.equals(relocated), 'the method-1 AVIF was not published byte-identically');
+
+  const refused: readonly (readonly [string, Buffer])[] = [
+    ['extent past idat', Buffer.from(AVIF_PRIMARY_IN_IDAT_OVERRUN)],
+    ['no container', Buffer.from(AVIF_PRIMARY_IN_IDAT_NO_CONTAINER)],
+    ['non-zero data reference', Buffer.from(AVIF_PRIMARY_IN_IDAT_DATA_REFERENCE)],
+    ['construction method 2', Buffer.from(AVIF_PRIMARY_IN_IDAT_METHOD_2)],
+  ];
+  for (const [name, bytes] of refused) {
+    assert.throws(() => assertCompleteContainer('avif', bytes), /incomplete AVIF/, `${name}: the gate accepted it`);
+    const result = await prepareImage(bytes, 'avif');
+    assert.equal(result.ok, false, `${name} was accepted by the encoder`);
+    if (!result.ok) assert.equal(result.reason, 'corrupt', `${name}: wrong reason`);
+  }
 });
 
 test('truncated containers are refused before a decoder can report partial success', async () => {
