@@ -25,6 +25,16 @@ project makes no backward-compatibility promise.
   quick start installs from the registry, and the Action can be pinned by release tag
   (`@v0.0.2`, `@v0`) instead of only by commit SHA.
 
+### Fixed
+
+- An image whose filename carries `#`, `&`, `?` or `%` is resolvable from its
+  percent-encoded Markdown destination. The resolver now splits the authored fragment first
+  and decodes the path once, so `chart%23one.png` names `chart#one.png` while
+  `chart%2523one.png` names a file literally called `chart%23one.png`; previously all four
+  escapes were left encoded and the build failed as if the file were missing. The emitted
+  URL percent-encodes the name, so the browser and the exact output inventory agree on the
+  byte-identical file.
+
 ## [0.0.2] - 2026-11-07
 
 ### Security

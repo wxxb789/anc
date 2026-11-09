@@ -181,6 +181,13 @@ else. `![chart](chart.png)` written in `notes/today.md` finds `notes/chart.png` 
 because the name happened to match. `./` and `../` are exact: if the note-relative file is not
 there, the build stops rather than looking elsewhere. A leading `/` names the content root.
 
+A filename that a URL would read as syntax is written percent-encoded: a file named
+`chart#one.png` is referenced `![chart](chart%23one.png)`, and the same applies to `&`,
+`?` and `%`. The resolver decodes exactly once — `chart%2523one.png` names a file literally
+called `chart%23one.png` — while a raw `#` still starts a fragment. The published
+`/_assets/<sha256>-<name>` URL percent-encodes the character again, so the browser requests
+exactly the bytes the build wrote.
+
 The site serves the bytes you wrote. PNG, JPEG, GIF, WebP and AVIF are copied byte for byte —
 no resize, no recompression, and animations keep every frame — under
 `/_assets/<sha256>-<name>`, where the digest is the image's own content. The same picture

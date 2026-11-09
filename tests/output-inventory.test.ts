@@ -9,7 +9,7 @@ import { test } from 'vitest';
 import { loadArtifact } from '../src/lib/artifact-source.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { ASSET_DIRECTORY } from '../src/lib/media.ts';
-import { PNG_UNICODE, NOT_AN_IMAGE } from './support/media.ts';
+import { PNG_UNICODE, NOT_AN_IMAGE, JPEG, GIF_ANIMATED, AVIF } from './support/media.ts';
 import { readBuildBinding, snapshotWorkspace } from '../src/lib/snapshot-reader.ts';
 import { snapshotFileName, snapshotRoute } from '../src/lib/snapshot.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
@@ -219,6 +219,55 @@ test('a declared image asset is exactly the inventory the artifact describes', (
     assert.match(thrown.detail, /stray\.png/, 'the detail does not name the unexpected file');
   } finally {
     rmSync(extra, { recursive: true, force: true });
+  }
+});
+
+test('asset URLs with reserved characters name one file each and the inventory agrees', () => {
+  // The producer percent-encodes the name in the URL while the staged and
+  // emitted file keeps the raw bytes. The inventory is the step that has to undo
+  // exactly one layer: a URL that stopped at `#` or `?`, or a decoded name that
+  // did not match the file, would be refused here.
+  const rows = [
+    { bytes: PNG_UNICODE, raw: 'chart#one.png', encoded: 'chart%23one.png' },
+    { bytes: JPEG, raw: 'amp&one.jpg', encoded: 'amp%26one.jpg' },
+    { bytes: GIF_ANIMATED, raw: 'query?one.gif', encoded: 'query%3Fone.gif' },
+    { bytes: AVIF, raw: 'percent%one.avif', encoded: 'percent%25one.avif' },
+  ].map((row) => ({ ...row, digest: createHash('sha256').update(row.bytes).digest('hex') }));
+  const root = cleanDist();
+  try {
+    mkdirSync(join(root, ASSET_DIRECTORY), { recursive: true });
+    for (const row of rows) writeFileSync(join(root, ASSET_DIRECTORY, `${row.digest}-${row.raw}`), row.bytes);
+
+    const urls = rows.map((row) => `/_assets/${row.digest}-${row.encoded}`);
+    for (const row of rows) {
+      const url = `/_assets/${row.digest}-${row.encoded}`;
+      const asUrl = new URL(url, 'https://example.test');
+      assert.equal(asUrl.hash, '', `${row.raw}: the published URL carries a fragment`);
+      assert.equal(asUrl.search, '', `${row.raw}: the published URL carries a query`);
+      assert.equal(
+        decodeURIComponent(asUrl.pathname),
+        `/_assets/${row.digest}-${row.raw}`,
+        `${row.raw}: the URL does not decode to the emitted name`,
+      );
+    }
+
+    assert.ok(
+      assertOutputInventory(root, { ...ARTIFACT, assets: urls.sort() }) > 0,
+      'the inventory accepted nothing',
+    );
+
+    // A raw `#` spelling is a different URL — everything after it is a fragment —
+    // and it names no canonical asset.
+    let thrown: BuildFailure | undefined;
+    try {
+      assertOutputInventory(root, { ...ARTIFACT, assets: [`/_assets/${rows[0]!.digest}-chart#one.png`] });
+    } catch (error) {
+      thrown = error as BuildFailure;
+    }
+    assert.ok(thrown, 'an asset URL carrying a raw # passed the inventory');
+    assert.equal(thrown.code, 'output-inventory-asset-invalid');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

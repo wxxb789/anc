@@ -23,6 +23,11 @@ Order of outcomes:
    - Resolution is **note-relative, then content-root-relative**, with no basename
      tier; an explicitly relative reference does not fall through to the root.
      Markdown images, reference-style images, and image wikilinks all take it.
+     A Markdown destination is percent-decoded **exactly once, after its fragment
+     is split off**: a file named `chart#one.png` is written `chart%23one.png`,
+     and `chart%2523one.png` names a file literally called `chart%23one.png`. A
+     literal `#` still starts a fragment, and an encoded `/` in a segment names
+     no file rather than becoming a separator.
    - A reference to a file the walk did not authorize — missing, excluded by a
      configuration glob, outside the content root through `../` or a symlink, an
      SVG, a non-raster, or a raw-HTML `<img>` — **fails the build**. It is never
@@ -31,7 +36,9 @@ Order of outcomes:
      `/_assets/<full-sha256>-<sanitized-source-name>`, identical bytes publish one
      asset, and the name is decoration — the digest is what a consumer may rely
      on. The extension is derived from the detected bytes, because a static host
-     infers `Content-Type` from it.
+     infers `Content-Type` from it. The name is percent-encoded in the URL while
+     the staged file keeps the raw bytes, so `#`, `&`, `?` and `%` round-trip
+     through the artifact, the copy step, and the exact output inventory.
    - Bytes are copied byte-identically: no transcoding, resize, or metadata
      rewrite. An animated GIF or WebP keeps every frame. **This phase is not
      metadata sanitization** — a passthrough photo keeps its EXIF/GPS, and a

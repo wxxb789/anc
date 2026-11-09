@@ -35,6 +35,17 @@ export const PNG_SECOND = imageBytes(
     'RK5CYII=',
 );
 
+/**
+ * A third, byte-different PNG, for names carrying URL-reserved characters.
+ *
+ * Kept distinct from the other two because a display gate must publish it under
+ * its own digest: if it shared bytes, content-addressed deduplication would give
+ * it the other file's name and the reserved-character URL would never exist.
+ */
+export const PNG_THIRD = imageBytes(
+  'iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR42mOQz58PRwzEcQDhYxLRxFKAIgAAAABJRU5ErkJggg==',
+);
+
 /** A baseline JPEG; its source name ends `.jpeg` and it publishes as `.jpg`. */
 export const JPEG = imageBytes(
   '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwg' +

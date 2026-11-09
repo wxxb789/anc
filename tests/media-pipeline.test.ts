@@ -361,6 +361,125 @@ test('spaces and Unicode in a path publish through both legal destination spelli
   });
 });
 
+test('a filename carrying a URL-reserved character resolves from its encoded destination', async () => {
+  await scratch('media-reserved-', async (directories) => {
+    // One name per character that means something else inside a URL. The file
+    // literally named `chart%23one.avif` is the double-decode control: only a
+    // single decode of `chart%2523one.avif` reaches it, while `chart%23one.png`
+    // must reach the file named `chart#one.png` — both exist here at once, so a
+    // resolver that decoded twice would publish one and call the other missing.
+    putBytes(directories.content, 'assets/chart#one.png', PNG_UNICODE);
+    putBytes(directories.content, 'assets/amp&one.png', PNG_SECOND);
+    putBytes(directories.content, 'assets/query?one.jpg', JPEG);
+    putBytes(directories.content, 'assets/percent%one.gif', GIF_ANIMATED);
+    putBytes(directories.content, 'assets/chart%23one.avif', AVIF);
+    put(directories.content, 'notes/a.md', [
+      '# A',
+      '',
+      'Hash ![hash](../assets/chart%23one.png)',
+      '',
+      'Ampersand ![amp](../assets/amp%26one.png)',
+      '',
+      'Question ![query](../assets/query%3Fone.jpg)',
+      '',
+      'Percent ![percent](../assets/percent%25one.gif)',
+      '',
+      'Escape text ![escape](../assets/chart%2523one.avif)',
+      '',
+      'A real fragment ends the path: ![fragment](../assets/chart%23one.png#ignored)',
+      '',
+    ].join('\n'));
+
+    const expected: readonly {
+      readonly label: string;
+      readonly bytes: Uint8Array;
+      readonly fileName: string;
+      readonly encoded: string;
+    }[] = [
+      { label: 'hash', bytes: PNG_UNICODE, fileName: 'chart#one.png', encoded: 'chart%23one.png' },
+      { label: 'amp', bytes: PNG_SECOND, fileName: 'amp&one.png', encoded: 'amp%26one.png' },
+      { label: 'query', bytes: JPEG, fileName: 'query?one.jpg', encoded: 'query%3Fone.jpg' },
+      { label: 'percent', bytes: GIF_ANIMATED, fileName: 'percent%one.gif', encoded: 'percent%25one.gif' },
+      { label: 'escape', bytes: AVIF, fileName: 'chart%23one.avif', encoded: 'chart%2523one.avif' },
+    ];
+
+    const produced = await produce(directories);
+    const declared = produced.artifact.assets ?? [];
+    assert.equal(declared.length, expected.length, `the corpus published ${declared.length} assets, not ${expected.length}`);
+    const urlByDigest = new Map(declared.map((url) => [parseAssetUrl(url)!.digest, url]));
+    assert.equal(urlByDigest.size, expected.length, 'two reserved-character sources shared one digest');
+    const markdown = produced.markdown.get('notes-a')!;
+
+    for (const row of expected) {
+      const digest = digestOf(row.bytes);
+      const url = urlByDigest.get(digest);
+      assert.ok(url, `${row.label}: published nothing`);
+      assert.ok(url.endsWith(`-${row.encoded}`), `${row.label}: the URL is ${url}, not the encoded name ${row.encoded}`);
+      assert.ok(!/[#?&]/.test(url), `${row.label}: a reserved character stayed raw in ${url}`);
+
+      // The public URL is one fragment-free path segment, and its decoded path
+      // is the raw staged name — the pair the copy step and the inventory read.
+      const asUrl = new URL(url, 'https://example.test');
+      assert.equal(asUrl.hash, '', `${row.label}: the URL starts a fragment: ${url}`);
+      assert.equal(asUrl.search, '', `${row.label}: the URL starts a query: ${url}`);
+      const fileName = `${digest}-${row.fileName}`;
+      assert.equal(decodeURIComponent(asUrl.pathname), `/_assets/${fileName}`, `${row.label}: the URL path does not decode to the staged name`);
+      const staged = produced.staged.get(fileName);
+      assert.ok(staged?.equals(Buffer.from(row.bytes)), `${row.label}: ${fileName} is not the source bytes`);
+      assert.ok(markdown.includes(`![${row.label}](${url})`), `${row.label}: the reference was not rewritten to ${url}`);
+    }
+
+    // The fragment was split before decoding, so it did not become part of the
+    // name even though the path component is percent-decoded on its own.
+    const hashUrl = urlByDigest.get(digestOf(PNG_UNICODE))!;
+    assert.ok(markdown.includes(`![fragment](${hashUrl})`), 'a fragment on an encoded destination broke the reference');
+
+    // Stability: two identical builds produce identical artifact bytes and names.
+    const firstArtifact = readFileSync(join(directories.out, 'content.json'));
+    const firstNames = [...produced.staged.keys()].sort();
+    rmSync(join(directories.out, 'content.json'));
+    rmSync(join(directories.out, 'assets'), { recursive: true });
+    const second = await produce(directories);
+    assert.ok(firstArtifact.equals(readFileSync(join(directories.out, 'content.json'))), 'the artifact bytes changed between two identical builds');
+    assert.deepEqual(second.artifact.assets, produced.artifact.assets, 'the published URLs changed between two identical builds');
+    assert.deepEqual([...second.staged.keys()].sort(), firstNames, 'the staged names changed between two identical builds');
+  });
+});
+
+test('reserved-character spellings of identical bytes still publish one asset', async () => {
+  await scratch('media-reserved-dedupe-', async (directories) => {
+    // Three names, one byte set, two of them reserved-character spellings of a
+    // third. Keying identity by the authored reference rather than by the bytes
+    // would publish three copies; decoding twice would make the last two the
+    // same file and lose one.
+    putBytes(directories.content, 'assets/pic#one.png', PNG_UNICODE);
+    putBytes(directories.content, 'assets/pic&one.png', PNG_UNICODE);
+    putBytes(directories.content, 'assets/pic%23one.png', PNG_UNICODE);
+    put(directories.content, 'notes/a.md', [
+      '# A',
+      '',
+      '![hash](../assets/pic%23one.png)',
+      '',
+      '![amp](../assets/pic%26one.png)',
+      '',
+      '![escape](../assets/pic%2523one.png)',
+      '',
+    ].join('\n'));
+
+    const produced = await produce(directories);
+    const assets = assetsOf(produced.artifact);
+    assert.equal(assets.length, 1, `identical bytes published ${assets.length} assets`);
+    assert.equal(produced.staged.size, 1, 'the staging directory holds more than one copy');
+    const url = produced.artifact.assets![0]!;
+    const references = [...produced.markdown.get('notes-a')!.matchAll(/!\[[^\]]*\]\((\/_assets\/[^)\s]+)\)/g)].map((match) => match[1]);
+    assert.equal(references.length, 3, 'a reserved-character reference was not rewritten');
+    for (const reference of references) assert.equal(reference, url, `a reference points at ${reference}, not ${url}`);
+    const parsed = parseAssetUrl(url);
+    assert.ok(parsed, `the published URL is not canonical: ${url}`);
+    assert.ok(produced.staged.has(`${parsed.digest}-${parsed.fileName}`), 'the URL does not decode to the staged file');
+  });
+});
+
 test('reference-style images and image wikilinks publish through the same decision', async () => {
   await scratch('media-syntax-', async (directories) => {
     putBytes(directories.content, 'assets/chart.png', PNG_SECOND);
@@ -466,6 +585,22 @@ test('every unauthorized local image is a build failure with its own reason', as
     readonly reason: string;
   }[] = [
     { name: 'missing', body: '![x](../assets/gone.png)', label: 'missing', reason: 'missing' },
+    {
+      name: 'missing-encoded',
+      body: '![x](../assets/gone%23.png)',
+      label: 'missing',
+      reason: 'missing',
+    },
+    {
+      // `%2F` decodes to a separator, not a filename byte: the file below exists,
+      // but no single path segment names it, so this stays a failure rather than
+      // becoming a second spelling of `assets/sub/pic.png`.
+      name: 'encoded-separator',
+      body: '![x](../assets/sub%2Fpic.png)',
+      files: { 'assets/sub/pic.png': PNG_SECOND },
+      label: 'missing',
+      reason: 'missing',
+    },
     {
       name: 'excluded',
       body: '![x](../assets/secret.png)',

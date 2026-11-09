@@ -370,21 +370,46 @@ function joinRelative(directory: string, reference: string): string | undefined 
 }
 
 /**
- * Percent-decoding for a Markdown destination, `decodeURI` rather than
- * `decodeURIComponent`.
+ * Percent-decode the path half of one Markdown image destination, exactly once.
  *
- * `decodeURI` leaves `%23` encoded so a filename containing `#` stays
- * distinguishable from a fragment, which is the same choice `link-resolution.ts`
- * makes for the same reason. A malformed sequence throws, and the honest answer
- * is the reference as written: it will resolve to nothing rather than crash a
- * build over a typo.
+ * `decodeURIComponent` rather than `decodeURI`, because this decodes a *filename*
+ * after the fragment has already been split off: `%23`, `%26`, `%3F` and `%25`
+ * are the only spellings a file whose name carries `#`, `&`, `?` or `%` can be
+ * referenced by, and `decodeURI` deliberately leaves all four encoded — which
+ * asked the filesystem for the escape text and made such an image unresolvable.
+ * `link-resolution.ts` still uses `decodeURI` because a link decodes before it
+ * splits at `#`; here the split has already happened, so a decoded `#` is a
+ * filename byte rather than a fragment.
+ *
+ * **One pass, never two.** `%2523` decodes to the literal three characters
+ * `%23`, which is how a file *named* `chart%23one.png` is addressed. So
+ * `chart%23one.png` wins for the file named `chart#one.png`, and
+ * `chart%2523one.png` wins for the file named `chart%23one.png`; both may exist
+ * in one corpus, and each spelling resolves to exactly one of them.
+ *
+ * A decoded `/` is refused rather than treated as a separator: `%2F` is a byte
+ * inside one segment, `/` is the separator {@link joinRelative} owns, and a
+ * reference must not be able to name a path its author did not write. A
+ * malformed escape is left as written, matching the link resolver: a literal `%`
+ * in a filename is legal, and a typo then resolves to nothing instead of
+ * crashing the build.
+ *
+ * @returns the decoded path, or `undefined` when a segment decodes to contain a
+ *   separator and therefore names no single file.
  */
-function decodeHref(href: string): string {
-  try {
-    return decodeURI(href);
-  } catch {
-    return href;
+function decodeReferencePath(path: string): string | undefined {
+  const segments: string[] = [];
+  for (const segment of path.split('/')) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      decoded = segment;
+    }
+    if (decoded.includes('/')) return undefined;
+    segments.push(decoded);
   }
+  return segments.join('/');
 }
 
 /**
@@ -423,20 +448,26 @@ export function resolveImageTarget(
   locate: (path: string) => string | undefined,
   isWikilink: boolean,
 ): ImageTarget {
-  const written = (isWikilink ? reference.trim() : decodeHref(reference.trim())).trim();
+  const written = reference.trim();
   if (written === '') return { kind: 'missing' };
 
-  // A scheme or a protocol-relative host is not a file this build owns. A bare
-  // fragment points inside the page, which is likewise not an image file.
-  if (HAS_SCHEME.test(written) || written.startsWith('//')) return { kind: 'external' };
-  if (written.startsWith('#')) return { kind: 'external' };
-
   // A fragment on an image URL selects nothing this build serves; the path before
-  // it is the reference. Decoding first means a literal `#` in a filename has to
-  // be written `%23`, exactly as for a link.
+  // it is the reference. The cut happens on the **authored** spelling, before any
+  // decoding, because the two characters must stay distinguishable: a literal `#`
+  // ends the path, while `%23` is a filename byte that only becomes `#` below.
+  // A bare fragment points inside the page, which is likewise not an image file.
   const cut = written.indexOf('#');
-  const path = cut === -1 ? written : written.slice(0, cut);
-  if (path === '') return { kind: 'external' };
+  const authored = cut === -1 ? written : written.slice(0, cut);
+  if (authored === '') return { kind: 'external' };
+
+  // A scheme or a protocol-relative host is not a file this build owns.
+  if (HAS_SCHEME.test(authored) || authored.startsWith('//')) return { kind: 'external' };
+
+  // A wikilink target is an Obsidian path, not a URL, so it is used exactly as
+  // written — the same asymmetry the resolver always had. A Markdown destination
+  // is percent-decoded once; see {@link decodeReferencePath}.
+  const path = isWikilink ? authored : decodeReferencePath(authored);
+  if (path === undefined) return { kind: 'missing' };
 
   const located = (candidate: string): ImageTarget => {
     const found = locate(candidate.normalize('NFC'));

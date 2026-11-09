@@ -34,15 +34,16 @@ import {
   type BuiltSite,
   type ServedSite,
 } from './support/browser-site.ts';
-import { AVIF, GIF_ANIMATED, JPEG, PNG_SECOND, PNG_UNICODE, WEBP_ANIMATED } from './support/media.ts';
+import { AVIF, GIF_ANIMATED, JPEG, PNG_SECOND, PNG_THIRD, PNG_UNICODE, WEBP_ANIMATED } from './support/media.ts';
 
 /**
  * A corpus with every supported form in one page.
  *
- * The reference form, the angle-bracket Unicode path, an animation, an AVIF, and
- * a photograph shared with another note. `unused.png` is embedded only by a
- * withheld note, which is the negative control that keeps "everything published"
- * from passing a gate that never checked what was left out.
+ * The reference form, the angle-bracket Unicode path, an animation, an AVIF, a
+ * photograph shared with another note, and a name carrying `#` (written as
+ * `%23`). `unused.png` is embedded only by a withheld note, which is the
+ * negative control that keeps "everything published" from passing a gate that
+ * never checked what was left out.
  */
 const CORPUS: Record<string, string> = {
   'gallery.md': [
@@ -57,6 +58,8 @@ const CORPUS: Record<string, string> = {
     'A WebP animation: ![a WebP](assets/anim.webp)',
     '',
     'An AVIF: ![an AVIF](assets/still.avif)',
+    '',
+    'A name with a hash: ![reserved](assets/chart%23one.png)',
     '',
     'The same photograph again, root-anchored: ![shared](/assets/photo.jpeg)',
     '',
@@ -75,6 +78,7 @@ const MEDIA: Record<string, Uint8Array> = {
   'assets/anim.gif': GIF_ANIMATED,
   'assets/anim.webp': WEBP_ANIMATED,
   'assets/still.avif': AVIF,
+  'assets/chart#one.png': PNG_THIRD,
   'assets/unused.png': PNG_SECOND,
 };
 
@@ -117,11 +121,11 @@ function filesUnder(root: string): string[] {
 
 test('the published output carries one file per referenced image and nothing else', () => {
   const assets = filesUnder(join(built.dist, '_assets')).sort();
-  // Five unique byte sets were referenced by a published note; the withheld
+  // Six unique byte sets were referenced by a published note; the withheld
   // note's image is not among them.
-  assert.equal(assets.length, 5, `the output carries ${assets.length} assets: ${assets.join(', ')}`);
+  assert.equal(assets.length, 6, `the output carries ${assets.length} assets: ${assets.join(', ')}`);
   const digests = new Set(assets.map((name) => name.slice(0, 64)));
-  assert.equal(digests.size, 5, 'two published assets share a digest');
+  assert.equal(digests.size, 6, 'two published assets share a digest');
 
   // The withheld image's bytes are nowhere in the output. Compared by content
   // rather than by name, because the name is not what would leak.
@@ -172,10 +176,10 @@ test('a JavaScript-disabled browser decodes every published image under the serv
       alt: image.getAttribute('alt'),
     })),
   );
-  // Six references over five assets: the photograph is embedded twice, once
+  // Seven references over six assets: the photograph is embedded twice, once
   // through its definition. A page that published only the first reference would
   // still have the file and fail here.
-  assert.equal(images.length, 6, `the page rendered ${images.length} images: ${JSON.stringify(images)}`);
+  assert.equal(images.length, 7, `the page rendered ${images.length} images: ${JSON.stringify(images)}`);
   for (const image of images) {
     assert.ok(image.src.startsWith('/_assets/'), `an image points somewhere else: ${image.src}`);
     assert.ok(image.complete, `an image never finished loading: ${image.src}`);
@@ -188,7 +192,7 @@ test('a JavaScript-disabled browser decodes every published image under the serv
   // the extension a static host would map — which is why the extension is
   // derived from the bytes rather than from the source name.
   const byUrl = new Map(assetResponses.map((entry) => [entry.url, entry]));
-  assert.equal(byUrl.size, 5, `the browser fetched ${byUrl.size} distinct assets: ${[...byUrl.keys()].join(', ')}`);
+  assert.equal(byUrl.size, 6, `the browser fetched ${byUrl.size} distinct assets: ${[...byUrl.keys()].join(', ')}`);
   for (const [url, entry] of byUrl) {
     assert.equal(entry.status, 200, `${url} returned ${entry.status}`);
     const extension = url.slice(url.lastIndexOf('.'));
