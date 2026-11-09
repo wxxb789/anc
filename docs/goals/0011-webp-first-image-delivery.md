@@ -16,7 +16,7 @@ meaning or become larger for the sake of consistent file extensions.
 ## Prerequisite and accepted design
 
 Requires [0009 — Zero-config static images](archive/0009-zero-config-static-images.md).
-[0010 — Readable image figures](0010-readable-image-figures.md) is not blocking.
+[0010 — Readable image figures](archive/0010-readable-image-figures.md) is not blocking.
 The [media core design](../core-design/media-pipeline.md#0011--automatic-webp-preferred-raster-policy)
 already selects **pinned sharp 0.35.5** as the one build-time encoder and defines
 the initial photo-vs-lossless policy, output identity, source-format exemptions,

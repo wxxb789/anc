@@ -18,6 +18,16 @@ project makes no backward-compatibility promise.
   place. Remote images are left as written and never fetched. No new configuration key,
   dependency, deployment step, or browser script is added; the bytes are passthrough, so
   this is not metadata scrubbing.
+- A block image's explicit Markdown title — in its own paragraph or alone in a list item —
+  becomes a visible `<figcaption>` inside a semantic `<figure>`; `alt` stays the
+  accessible alternative and is never promoted to visible prose. Uncaptioned,
+  decorative, inline, and link-wrapped images keep their existing markup. The build
+  reads intrinsic PNG/JPEG/GIF/WebP/AVIF dimensions from the already-published bytes
+  and emits `width`/`height` so layout space is reserved; a malformed or truncated
+  header, or a JPEG/WebP/PNG EXIF or AVIF transform that changes the displayed
+  orientation, yields no attributes rather than a guess. The first image loads eagerly,
+  later images lazily, and all decode asynchronously, with no new dependency, browser
+  script, configuration key, or image metadata store.
 
 ### Changed
 

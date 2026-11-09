@@ -8,10 +8,11 @@
  *
  * The bytes are embedded rather than read from files so a test can write a corpus
  * without a fixture directory, and so the committed corpus under
- * `tests/fixtures/assets/` holds reproducibly the same bytes. They are tiny on
- * purpose — 8x6 or smaller — and two are *animated* (a three-frame GIF and a
- * three-frame WebP), because "animated source preserved" is only testable against
- * real animation.
+ * `tests/fixtures/assets/` holds reproducibly the same bytes. Most are tiny —
+ * 8x6 or smaller; the portrait, screenshot, transparent, lossless and lossy
+ * WebP fixtures are larger by design. Two are *animated* (a three-frame GIF and a
+ * three-frame WebP), because "animated source preserved" is only testable
+ * against real animation.
  *
  * `PNG_UNICODE` carries the kind of name an author writes — a space and CJK — and
  * is what the spaces/Unicode cases use. Each constant is a base64 payload decoded
@@ -78,6 +79,240 @@ export const AVIF = imageBytes(
     'AAAAAAEAAGF2MDFDb2xvcgAAAABqaXBycAAAAEtpcGNvAAAAFGlzcGUAAAAAAAAACAAAAAYAAAAQcGl4aQAAAAADCAgIAAAA' +
     'DGF2MUOBAAwAAAAAE2NvbHJuY2x4AAEADQAGgAAAABdpcG1hAAAAAAAAAAEAAQQBAoMEAAAAPm1kYXQSAAoIGAi9aICGg0Iy' +
     'KBPHh4ZlAYYYfhAAAAhIWSQPnn1IeDGh//Fp2vskWHjDP4kzUBqZ1YA=',
+);
+
+/** Read a big-endian u32 from a fixture being assembled. */
+function readU32(bytes: Uint8Array, offset: number): number {
+  return (
+    ((bytes[offset]! << 24) |
+      (bytes[offset + 1]! << 16) |
+      (bytes[offset + 2]! << 8) |
+      bytes[offset + 3]!) >>>
+    0
+  );
+}
+
+function writeU32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = (value >>> 24) & 0xff;
+  bytes[offset + 1] = (value >>> 16) & 0xff;
+  bytes[offset + 2] = (value >>> 8) & 0xff;
+  bytes[offset + 3] = value & 0xff;
+}
+
+/**
+ * Two adversarial AVIFs derived from the committed 8x6 {@link AVIF}.
+ *
+ * The first inserts an unused 1000x1 `ispe` at property index 1, shifts the
+ * original properties to indices 2-5 and rewrites `ipma` so the primary item
+ * still associates with the original 8x6 `ispe`. The file still decodes as 8x6.
+ * The second removes the primary item's `ispe` association entirely. Both keep
+ * `pitm` = item 1; the association table, not container order, decides.
+ *
+ * They are generated here from the base bytes rather than committed as opaque
+ * binaries, so a change to the base cannot silently leave a stale fixture.
+ * The fixed offsets are asserted below; a base change fails loudly.
+ */
+function adversarialAvif(keepPrimaryIspe: boolean): Uint8Array {
+  const base = AVIF;
+  if (
+    base.length !== 329 ||
+    readU32(base, 32) !== 235 ||
+    readU32(base, 161) !== 106 ||
+    readU32(base, 169) !== 75 ||
+    readU32(base, 244) !== 23 ||
+    readU32(base, 113) !== 275
+  ) {
+    throw new Error('the AVIF fixture layout changed; update the adversarial builder');
+  }
+
+  const insertedIspe = new Uint8Array([
+    0, 0, 0, 20,
+    0x69, 0x73, 0x70, 0x65,
+    0, 0, 0, 0,
+    0, 0, 0x03, 0xe8,
+    0, 0, 0, 1,
+  ]);
+  const output = keepPrimaryIspe
+    ? new Uint8Array([
+        ...base.subarray(0, 177),
+        ...insertedIspe,
+        ...base.subarray(177),
+      ])
+    : new Uint8Array([
+        ...base.subarray(0, 177),
+        ...insertedIspe,
+        ...base.subarray(177, 263),
+        3, 0x84, 5,
+        ...base.subarray(267),
+      ]);
+
+  writeU32(output, 32, keepPrimaryIspe ? 255 : 254);
+  writeU32(output, 161, keepPrimaryIspe ? 126 : 125);
+  writeU32(output, 169, 95);
+  writeU32(output, 113, keepPrimaryIspe ? 295 : 294);
+  if (keepPrimaryIspe) {
+    output.set([2, 3, 0x84, 5], 283);
+  } else {
+    writeU32(output, 264, 22);
+    output[282] = 3;
+  }
+  return output;
+}
+
+/** The original 8x6 `ispe` is associated with the primary item, behind an unused 1000x1 one. */
+export const AVIF_PRIMARY_ISPE_NOT_FIRST = adversarialAvif(true);
+
+/** No `ispe` is associated with the primary item; the container still has one. */
+export const AVIF_PRIMARY_ISPE_UNASSOCIATED = adversarialAvif(false);
+
+
+/** A portrait raster: 24x72, a 1:3 aspect ratio a responsive column must not distort. */
+export const PNG_PORTRAIT = imageBytes(
+  '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' +
+  'QnLd29gAAAAASUVORK5CYII=');
+
+
+/** A wide screenshot-like raster: 480x120, the case that overflows a narrow article when it is not capped. */
+export const PNG_SCREENSHOT = imageBytes(
+  'iVBORw0KGgoAAAANSUhEUgAAAeAAAAB4CAYAAAAqliEPAAACN0lEQVR4nO3VMW3DAAAFUSMpkoDwXCSFWEKeUwyRUl+k/4a333bH' +
+  '1+P7CQDc66gDAGCRAQNAwIABIGDAABAwYAAIGDAABAwYAAIGDAABAwaAgAEDQMCAASBgwAAQMGAACBgwAAQMGAACBgwAAQMGgIAB' +
+  'A0DAgAEgYMAAEDBgAAgYMAAEDBgAAsd1XU8A4F4GDAABAwaAgAEDQMCAASBgwAAQMGAACBgwAAQMGAACBgwAAQMGgIABA0DAgAEg' +
+  'YMAAEDBgAAgYMAAEDBgAAm8Z8OPnFwA+Sj1YAwZgUj1YAwZgUj1YAwZgUj1YAwZgUj1YAwZgUj1YAwZgUj1YAwZgUj1YAwZgUj1Y' +
+  'AwZgUj1YAwZgUj1YAwZgUj1YAwZgUj1YAwZgUj1YAwZgUj3YWwYMALzGgAEgYMAAEDBgAAgYMAAEDBgAAgYMAAEDBoCAAQNAwIAB' +
+  'IGDAABAwYAAIGDAABAwYAAIGDAABAwaAgAEDQOAtAz7PE4APVw8HAwaYVA8HAwaYVA8HAwaYVA8HAwaYVA+HfxgwAPAaAwaAgAED' +
+  'QMCAASBgwAAQMGAACBgwAAQMGAACBgwAAQMGgIABA0DAgAEgYMAAEDBgAAgYMAAEDBgAAgYMAAEDBoCAAQNAwIABIGDAABAwYAAI' +
+  'GDAABAwYAAIGDAABAwaAgAEDQMCAASBgwAAQMGAACBgwAAQMGAACBgwAAQMGgIABA0DAgAEgYMAAEDBgAAgYMAAEDBgAAgYMAAED' +
+  'BoDAH1D/pTkNpWqQAAAAAElFTkSuQmCC');
+
+
+/** Transparent artwork: 96x96 with fully transparent corners, so alpha and aspect ratio are both observable. */
+export const PNG_TRANSPARENT = imageBytes(
+  'iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAB3klEQVR4nO3U3U3DQBBF4ZSTciiMciiCIlIM4gFkJRCY2Vnf+TlX' +
+  '8nO851vncmGMMcYYY4yxYru9XN/U79B6n4FXH/UZSi0iOCDGnREdjB+mDD8aQh17LIQ67mgIddCxCOqIoyHU4UYjnBXm+vp+A+Fu' +
+  'OyJ7n3EIGaLvxlA3/nUZo+/CULd+WKX47RCqhY+EULd3x1dHj4QoB6AOHY1A/IkIXeOXQegc34tA/CkIU+J7EFLFnwiwHWFa/FRf' +
+  'wcTbn+ormBo/zVcwOb4VQRYfgE0IABQBUAfKhABAFwD+fnwAYQjEF38FAACQ7gEAAAAAAACA7QDEByHlw18QAAAAAAAAAAAAQBqA' +
+  'KQiWHiEAFgR1nEwAYfEBKATQHUHy9wNAAgALgjpSBoDw+BaArgjS228F6IZgPfsWACuCOlqr2+8B6IKQ5vZ7ENTxWt1+D0B1hHS3' +
+  'fxJC2vgegGoInvOdCtAZoUT8rgil4nsBsiJ4zyIFWEHIArHy/ur231s5hApi9Z3VzR9WCaFd/K+tHmwnRtS7qRv/uaiDRmBEv4u6' +
+  '7b8XffBnOGf9lrqpeWeFIf6TqcONjn+cOuLY8Mepg46Of5w67tjw91PHHhv+foRPNKInG8GTj8CMMcYYY4yZ9wHKfFMeSXIA0AAA' +
+  'AABJRU5ErkJggg==');
+
+
+/** A static lossless WebP (`VP8L`), 12x20, for the fourth dimension reader. */
+export const WEBP_LOSSLESS = imageBytes('UklGRhwAAABXRUJQVlA4TA8AAAAvC8AEAAcQ9Y/+ByKi/wEA');
+
+/** A JPEG whose EXIF IFD0 Orientation is 6: the coded frame is 8x6, the browser displays it 6x8. */
+export const ORIENTED_JPEG = imageBytes(
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAYAAAAAAAD/2wBDAAgGBgcGBQgHBwcJCQgK' +
+  'DBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIy' +
+  'MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAGAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEB' +
+  'AQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAk' +
+  'M2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKj' +
+  'pKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAA' +
+  'AAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl' +
+  '8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmq' +
+  'srO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDkKKKK8U/TD//Z',
+);
+
+/** A real lossy WebP carrying the same EXIF Orientation 6. */
+export const ORIENTED_WEBP = imageBytes(
+  'UklGRm4AAABXRUJQVlA4WAoAAAAIAAAABwAABQAAVlA4IC4AAACwAQCdASoIAAYAAUAmJaACdLoABDAAAP7x3I/4DdfFtMv/vYL/' +
+  '3YL/3YL/WwAARVhJRhoAAABNTQAqAAAACAABARIAAwAAAAEABgAAAAAAAA==',
+);
+
+/** A PNG whose eXIf chunk carries the same EXIF Orientation 6. */
+export const ORIENTED_PNG = imageBytes(
+  'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAGCAIAAABxZ0isAAAAGmVYSWZNTQAqAAAACAABARIAAwAAAAEABgAAAAAAANZnS2kAAAAU' +
+  'SURBVHicYzwhJ8eADTBhFaWTBACbFAEQKIqAAAAAAABJRU5ErkJggg==',
+);
+
+/** A real AVIF carrying an irot property, so its displayed orientation differs from its ispe pair. */
+export const ORIENTED_AVIF_MIRROR = imageBytes(
+  'AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAAD1bWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAAAAAAAAAOcGl0bQAAAAAAAQAAAB5pbG9jAAAAAEQAAAEAAQAAAAEAAAEdAAAAKQAAAChpaW5mAAAAAAABAAAAGmluZmUCAAAAAAEAAGF2MDFDb2xvcgAAAAB0aXBycAAAAFRpcGNvAAAAFGlzcGUAAAAAAAAACAAAAAYAAAAQcGl4aQAAAAADCAgIAAAADGF2MUOBAAwAAAAAE2NvbHJuY2x4AAEADQAGgAAAAAlpbWlyAQAAABhpcG1hAAAAAAAAAAEAAQUBAoMEhQAAADFtZGF0EgAKCBgIvWiAhoNCMhsUx4eGZQIIIJ5QAAAASFrZXNYxukwKUopkbGg=',
+);
+export const ORIENTED_AVIF = imageBytes(
+  'AAAAIGZ0eXBhdmlmAAAAAGF2aWZtaWYxbWlhZk1BMUIAAAD1bWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAcGljdAAAAAAAAAAAAAAA' +
+  'AAAAAAAOcGl0bQAAAAAAAQAAAB5pbG9jAAAAAEQAAAEAAQAAAAEAAAEdAAAAKQAAAChpaW5mAAAAAAABAAAAGmluZmUCAAAAAAEA' +
+  'AGF2MDFDb2xvcgAAAAB0aXBycAAAAFRpcGNvAAAAFGlzcGUAAAAAAAAACAAAAAYAAAAQcGl4aQAAAAADCAgIAAAADGF2MUOBAAwA' +
+  'AAAAE2NvbHJuY2x4AAEADQAGgAAAAAlpcm90AwAAABhpcG1hAAAAAAAAAAEAAQUBAoMEhQAAADFtZGF0EgAKCBgIvWiAhoNCMhsU' +
+  'x4eGZQIIIJ5QAAAASFrZXNYx4w4LH3xuRAY=',
+);
+
+/** A plain lossy WebP (VP8 ), 12x20. */
+export const WEBP_LOSSY = imageBytes(
+  'UklGRkQAAABXRUJQVlA4IDgAAABQAwCdASoMABQAPm0skUWkIqGYBABABsSgCdMoRgD8AAEIoAD+8JtD/yUgOz7///iyq83naYmA' +
+  'AA==',
+);
+
+/** A wider lossy WebP (VP8 ), 333x47. */
+export const WEBP_LOSSY_WIDE = imageBytes(
+  'UklGRmYAAABXRUJQVlA4IFoAAADwBgCdASpNAS8APm02mUmkIyKhIIgAgA2JaW7hdJlwH4AAAWl+e2IvEFRz2xF4gqOe2IvEFRz2' +
+  'xF4gqOe2ItgAAP7+jf7//8lNf425av//kFywuuIwAAAAAAA=',
+);
+
+/** A JPEG whose EXIF Orientation is explicitly 1: dimensions stay usable. */
+export const ORIENTATION_1_JPEG = imageBytes(
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/4QAiRXhpZgAATU0AKgAAAAgAAQESAAMAAAABAAEAAAAAAAD/2wBDAAgGBgcGBQgHBwcJCQgK' +
+  'DBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIy' +
+  'MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAGAAgDASIAAhEBAxEB/8QAHwAAAQUBAQEB' +
+  'AQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAk' +
+  'M2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKj' +
+  'pKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAA' +
+  'AAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl' +
+  '8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmq' +
+  'srO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDlKKKK+6PnD//Z',
 );
 
 /** An SVG document: a real image format this phase refuses on purpose. */

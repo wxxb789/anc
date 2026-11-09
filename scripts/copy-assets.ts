@@ -10,7 +10,8 @@
  *
  * ## Why the bytes come from beside the artifact
  *
- * The artifact carries public URLs only. Its bytes live in
+ * The artifact carries the public URL plus the header-declared pixel size; never
+ * bytes or source paths. Its bytes live in
  * `<artifact directory>/assets/<digest>-<name>` — the published filename — so this
  * step runs identically for the packaged build (a temporary workspace) and for
  * this repository's fixture build (a committed directory) without either being
@@ -78,7 +79,7 @@ export function copyAssetsToOutput(root: string, artifact: ContentArtifact, sour
   const assets = artifact.assets ?? [];
   if (assets.length === 0) return 0;
 
-  const declared = assets.map((url) => ({ url, ...publishedName(url) }));
+  const declared = assets.map((asset) => ({ url: asset.url, ...publishedName(asset.url) }));
   const accepted = new Set(declared.map((asset) => asset.file));
 
   let present: string[];

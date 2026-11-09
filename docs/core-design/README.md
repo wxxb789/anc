@@ -13,7 +13,7 @@ accessible fallback remain available without JavaScript.
 | Document | Contract |
 | --- | --- |
 | [Architecture](architecture.md) | Product scope, ownership, source/IR/output boundaries |
-| [Media processing and delivery](media-pipeline.md) | Same-origin referenced images (0009 shipped); accepted target for 0010–0013: sharp/WebP baseline, build-only SVG security and font policy |
+| [Media processing and delivery](media-pipeline.md) | Same-origin referenced images with captions and layout (0009 and 0010 shipped); accepted target for 0011–0013: sharp/WebP baseline, build-only SVG security and font policy |
 | [Content semantics](content-semantics.md) | Publication, links, identity, aliases, tags |
 | [SQLite contract](sqlite-contract.md) | Exact schema, invariants, query semantics |
 | [Build and browser runtime](build-and-runtime.md) | Artifact binding, Worker protocol, loading, failure, caching |

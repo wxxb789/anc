@@ -263,8 +263,8 @@ test('an unlabelled fence is still a code block', () => {
 });
 
 test('image embeds always carry explicit alt text', () => {
-  assert.match(kitchenSink.html, new RegExp(`<img src="${DECORATIVE}" alt="" />`));
-  assert.match(kitchenSink.html, /<img src="https:\/\/example\.com\/diagram\.png" alt="A described diagram" \/>/);
+  assert.match(kitchenSink.html, new RegExp(`<img src="${DECORATIVE}" alt="" loading="eager" decoding="async" />`));
+  assert.match(kitchenSink.html, /<img src="https:\/\/example\.com\/diagram\.png" alt="A described diagram" loading="lazy" decoding="async" \/>/);
   const images = kitchenSink.html.match(/<img[^>]*>/g) ?? [];
   assert.ok(images.length > 0);
   for (const image of images) assert.match(image, /\balt="/, `image without alt: ${image}`);
@@ -1103,4 +1103,251 @@ test('every fence in the shipped artifact resolves to a real grammar', async () 
       `entry "${entry.slug}" has a code block that fell back to unhighlighted source`,
     );
   }
+});
+
+
+// --- Goal 0010: readable image figures ---------------------------------------
+
+const IMAGE_URL = `/_assets/${'a'.repeat(64)}-chart.png`;
+const PORTRAIT_URL = `/_assets/${'b'.repeat(64)}-portrait.png`;
+const WIDE_URL = `/_assets/${'c'.repeat(64)}-screenshot.png`;
+const PUBLISHED = new Set([IMAGE_URL, PORTRAIT_URL, WIDE_URL]);
+
+test('an authored title is a visible caption on a standalone image, and alt stays distinct', async () => {
+  const rendered = await renderMarkdown(`![A chart of quarterly revenue](${IMAGE_URL} "Figure 1: revenue by quarter")\n`, {
+    publishedAssets: PUBLISHED,
+  });
+  assert.match(
+    rendered.html,
+    new RegExp(
+      `<figure class="image-figure"><img src="${IMAGE_URL}" alt="A chart of quarterly revenue" loading="eager" decoding="async" /><figcaption>Figure 1: revenue by quarter</figcaption></figure>`,
+    ),
+    rendered.html,
+  );
+  // The title moved; it is not duplicated as a tooltip on the image.
+  assert.doesNotMatch(rendered.html, /\stitle="/, rendered.html);
+});
+
+test('a title that disagrees with alt is still a caption, and alt is not rewritten', async () => {
+  // The misleading pair is the negative control: alt describes a photograph,
+  // the title says screenshot. The renderer is not obliged to arbitrate the
+  // author's inconsistency; it must keep both authored values distinct and put
+  // the title where a sighted reader sees it.
+  const rendered = await renderMarkdown(
+    `![A photograph of a cat](${IMAGE_URL} "A wide screenshot of a command line")\n`,
+    { publishedAssets: PUBLISHED },
+  );
+  assert.match(rendered.html, /alt="A photograph of a cat"/, rendered.html);
+  assert.match(rendered.html, /<figcaption>A wide screenshot of a command line<\/figcaption>/, rendered.html);
+  assert.equal((rendered.html.match(/<figcaption>/g) ?? []).length, 1, rendered.html);
+});
+
+test('alt text alone never becomes a caption, and decorative alt stays empty', async () => {
+  for (const [source, alt] of [
+    [`![A described chart](${IMAGE_URL})\n`, 'A described chart'],
+    [`![](${IMAGE_URL})\n`, ''],
+  ] as const) {
+    const rendered = await renderMarkdown(source, { publishedAssets: PUBLISHED });
+    assert.doesNotMatch(rendered.html, /<figure|<figcaption/, rendered.html);
+    assert.match(rendered.html, new RegExp(`<img src="${IMAGE_URL}" alt="${alt}" loading="eager" decoding="async" />`), rendered.html);
+  }
+});
+
+test('tight and loose list items produce the same figure, without double wrapping', async () => {
+  const figureOf = (html: string): string[] =>
+    html.match(/<figure class="image-figure">[\s\S]*?<\/figure>/g) ?? [];
+
+  const tight = await renderMarkdown(`- ![alt](${IMAGE_URL} "List caption")\n`, {
+    publishedAssets: PUBLISHED,
+  });
+  const loose = await renderMarkdown(
+    `- ![alt](${IMAGE_URL} "List caption")\n\n- a second item\n`,
+    { publishedAssets: PUBLISHED },
+  );
+  const tightFigures = figureOf(tight.html);
+  const looseFigures = figureOf(loose.html);
+  assert.equal(tightFigures.length, 1, tight.html);
+  assert.equal(looseFigures.length, 1, loose.html);
+  assert.equal(tightFigures[0], looseFigures[0], 'tight and loose list figures differ');
+  assert.match(tightFigures[0]!, /<figcaption>List caption<\/figcaption>/, tight.html);
+  assert.match(loose.html, /<li>\s*<figure class="image-figure">/, loose.html);
+
+  const nested = await renderMarkdown(`- outer\n  - ![alt](${IMAGE_URL} "Nested caption")\n`, {
+    publishedAssets: PUBLISHED,
+  });
+  assert.equal(figureOf(nested.html).length, 1, `a nested item wrapped twice: ${nested.html}`);
+  assert.match(nested.html, /<ul>\s*<li><figure class="image-figure">/, nested.html);
+
+  for (const source of [
+    `- ![a](${IMAGE_URL} "A") ![b](${IMAGE_URL} "B")\n`,
+    `- before ![a](${IMAGE_URL} "A") after\n`,
+  ]) {
+    const rendered = await renderMarkdown(source, { publishedAssets: PUBLISHED });
+    assert.doesNotMatch(rendered.html, /<figure|<figcaption/, rendered.html);
+  }
+});
+
+test('the raw-image matrix keeps the lead claims iff the sanitizer keeps the src', async () => {
+  // These are the families sanitize-html's policy actually decides. The test
+  // observes the shipped renderer's output rather than calling the mirror
+  // function, so a laundering or allowlist change in the dependency turns it red.
+  const renderRows = [
+    'javascript:alert(1)',
+    'JaVaScRiPt:alert(1)',
+    '&#106;avascript:alert(1)',
+    'javascript&colon;alert(1)',
+    'java\tscript:alert(1)',
+    '\0javascript:alert(1)',
+    '   javascript:alert(1)',
+    '//evil.example/x.png',
+    '\\\\evil.example/x.png',
+    'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+    'data:image/png;base64,iVBORw0KGgo=',
+    'http://example.test/x.png',
+    'https://example.test/x.png',
+    'mailto:someone@example.test',
+    'ftp://example.test/x.png',
+    'blob:https://example.test/x',
+    'tel:+1234567890',
+    'http://example.test/<!-- -->x.png',
+  ] as const;
+  for (const src of renderRows) {
+    const rendered = await renderMarkdown(`<img src="${src.replaceAll('"', '&quot;')}" alt="probe">\n`);
+    const tag = (rendered.html.match(/<img[^>]*>/) ?? [''])[0]!;
+    const kept = /\ssrc=/.test(tag);
+    const claimed = /\sloading=/.test(tag) && /\sdecoding=/.test(tag);
+    assert.equal(
+      kept,
+      claimed,
+      `${JSON.stringify(src)}: src kept=${kept}, loading/decoding assigned=${claimed} (${tag})`,
+    );
+    if (!kept) assert.doesNotMatch(tag, /\swidth=|\sheight=/, `${JSON.stringify(src)}: ${tag}`);
+  }
+
+  // An empty source is refused by the renderer's local-authorization gate before
+  // the sanitizer runs, so it has no output in which the invariant could hold.
+  for (const src of ['', '   ']) {
+    await assert.rejects(
+      renderMarkdown(`<img src="${src}" alt="probe">\n`),
+      /without being published/,
+      `${JSON.stringify(src)}: an empty local src was accepted`,
+    );
+  }
+  // A comment-smuggled scripting scheme is local to the producer/renderer gate
+  // before laundering, so it is refused rather than emitted as stripped markup.
+  await assert.rejects(
+    renderMarkdown('<img src="java<!-- -->script:alert(1)" alt="probe">\n'),
+    /without being published/,
+  );
+});
+
+test('inline and link-wrapped images keep their existing meaning, title included', async () => {
+  const inline = await renderMarkdown(`Text before ![an inline chart](${IMAGE_URL} "Inline title") and text after.\n`, {
+    publishedAssets: PUBLISHED,
+  });
+  assert.doesNotMatch(inline.html, /<figure|<figcaption/, inline.html);
+  assert.match(
+    inline.html,
+    new RegExp(`<img src="${IMAGE_URL}" alt="an inline chart" title="Inline title" loading="eager" decoding="async" />`),
+    inline.html,
+  );
+
+  const linked = await renderMarkdown(`[![a badge](${IMAGE_URL} "Badge title")](https://example.test/target)\n`, {
+    publishedAssets: PUBLISHED,
+  });
+  assert.doesNotMatch(linked.html, /<figure|<figcaption/, linked.html);
+  assert.match(linked.html, /<a href="https:\/\/example\.test\/target"><img [^>]*title="Badge title"/, linked.html);
+});
+
+test('a title with quotes, angle brackets and a script cannot inject markup into its caption', async () => {
+  const rendered = await renderMarkdown(
+    `![alt](${IMAGE_URL} "5 &lt; 6 &amp; &quot;quoted&quot; &lt;script&gt;alert(1)&lt;/script&gt;")\n`,
+    { publishedAssets: PUBLISHED },
+  );
+  assert.match(rendered.html, /<figcaption>/, rendered.html);
+  assert.match(rendered.html, /5 &lt; 6 &amp; "quoted" &lt;script&gt;alert\(1\)&lt;\/script&gt;/, rendered.html);
+  assert.doesNotMatch(rendered.html, /<script\b/i, rendered.html);
+  assert.doesNotMatch(rendered.html, /<figcaption>[^<]*<strong>/, rendered.html);
+});
+
+test('a figcaption outside a figure does not survive as caption semantics', async () => {
+  const orphan = await renderMarkdown('<figcaption>orphan caption</figcaption>\n');
+  assert.doesNotMatch(orphan.html, /<figcaption/, orphan.html);
+  assert.match(orphan.html, /<span>orphan caption<\/span>/, orphan.html);
+
+  const paired = await renderMarkdown('<figure><img src="https://example.test/x.png" alt="x"><figcaption>kept</figcaption></figure>\n');
+  assert.match(paired.html, /<figure><img src="https:\/\/example\.test\/x\.png" alt="x" loading="eager" decoding="async" \/><figcaption>kept<\/figcaption><\/figure>/, paired.html);
+});
+
+test('intrinsic dimensions reserve space, and the first image stays eager', async () => {
+  const dimensions = new Map([
+    [PORTRAIT_URL, { width: 24, height: 72 }],
+    [WIDE_URL, { width: 480, height: 120 }],
+  ]);
+  const rendered = await renderMarkdown(
+    [
+      `![portrait](${PORTRAIT_URL})`,
+      '',
+      `![wide](${WIDE_URL})`,
+      '',
+      `![again](${IMAGE_URL})`,
+      '',
+    ].join('\n'),
+    { publishedAssets: PUBLISHED, assetDimensions: dimensions },
+  );
+  const images = rendered.html.match(/<img[^>]*>/g) ?? [];
+  assert.equal(images.length, 3, rendered.html);
+  assert.match(images[0]!, /width="24" height="72" loading="eager" decoding="async"/);
+  assert.match(images[1]!, /width="480" height="120" loading="lazy" decoding="async"/);
+  assert.match(images[2]!, /loading="lazy" decoding="async"/);
+  // The asset with no recorded dimensions gets neither attribute, not a zero.
+  assert.doesNotMatch(images[2]!, /\swidth=|\sheight=/);
+});
+
+test('a hostile raw image attribute cannot survive the allowlist or the loading rule', async () => {
+  const rendered = await renderMarkdown(
+    '<img src="https://example.test/x.png" alt="raw" onerror="window.__pwned=1" style="width:9999px" loading="lazy">\n',
+  );
+  assert.doesNotMatch(rendered.html, /onerror|style=|<script/i, rendered.html);
+  assert.match(rendered.html, /loading="eager" decoding="async"/, rendered.html);
+});
+
+test('a stripped source does not spend the lead image', async () => {
+  // The transform runs before the scheme allowlist, so an earlier version
+  // checked only that `src` was present, marked a refused URL eager, and left
+  // the first image the reader actually meets lazy.
+  for (const stripped of [
+    'javascript:window.alert(1)',
+    'file:///etc/passwd',
+    '//evil.example/path',
+    'mailto:someone@example.test',
+    'ftp://example.test/file.png',
+    'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==',
+  ]) {
+    const rendered = await renderMarkdown(
+      `<img src="${stripped}" alt="junk" loading="lazy" width="9" height="9">\n\n![real](${IMAGE_URL})\n`,
+      { publishedAssets: PUBLISHED },
+    );
+    const images = rendered.html.match(/<img[^>]*>/g) ?? [];
+    assert.equal(images.length, 2, `${stripped}: ${rendered.html}`);
+    assert.doesNotMatch(images[0]!, /\ssrc=/, `${stripped}: a stripped source kept its src`);
+    assert.doesNotMatch(
+      images[0]!,
+      /\sloading=|\sdecoding=|\swidth=|\sheight=/,
+      `${stripped}: a stripped source kept layout or loading claims`,
+    );
+    assert.match(
+      images[1]!,
+      /loading="eager" decoding="async"/,
+      `${stripped}: the first surviving image did not become the lead`,
+    );
+  }
+});
+
+test('figure rendering is deterministic', async () => {
+  const source = `![alt](${IMAGE_URL} "A stable caption")\n\n![second](${WIDE_URL})\n`;
+  const options = { publishedAssets: PUBLISHED, assetDimensions: new Map([[WIDE_URL, { width: 480, height: 120 }]]) };
+  const first = await renderMarkdown(source, options);
+  const second = await renderMarkdown(source, options);
+  assert.equal(first.html, second.html);
 });

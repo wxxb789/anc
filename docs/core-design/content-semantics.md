@@ -51,6 +51,30 @@ Search-engine discovery settings are not access control. A published static page
 or DB is downloadable regardless of `robots.txt` or `noindex`; neither promises
 deletion from a crawler, cache, or a visitor's previous download.
 
+## Images
+
+A local image is published only through the producer contract in
+[media design](media-pipeline.md); the renderer's image rules are separate from
+publication and must not be used to authorize one.
+
+- An explicit Markdown title (`![alt](path "Caption")`, or a title on a
+  reference definition) is a **human-visible caption** when the image is a
+  standalone block. It becomes a `<figure class="image-figure">` containing the
+  image and a `<figcaption>` with the authored text.
+- `alt` remains the accessible alternative. Ordinary alt text is never promoted
+  to a visible caption, and an image with no title gets no `<figcaption>` — not
+  an empty one and not invented prose. Figure numbering does not exist.
+- An image with `alt=""` keeps an empty alternative and, absent a title, gains
+  no caption. An inline image, an image inside a link, and a table-cell image
+  keep their existing markup.
+- Intrinsic dimensions come from the emitted raster's own header and are
+  recorded in the private artifact beside the public URL. A header that cannot
+  be read yields no `width`/`height` attribute; it is never a guess and never a
+  build failure. The image is still published.
+- Loading is decided by rendered document order: the first content image keeps
+  eager loading and every later one is lazy; all use asynchronous decoding. No
+  JavaScript, placeholder, second index, or SQLite image metadata participates.
+
 ## Notes, routes, and identity
 
 - Preserve the validated slug grammar and reserved routes in `src/lib/schema.ts`,

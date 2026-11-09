@@ -206,7 +206,7 @@ function snapshotOutput(root: string, workspace?: string): Set<string> {
  */
 function assetOutput(root: string, artifact: ContentArtifact): Set<string> {
   const expected = new Set<string>();
-  for (const url of artifact.assets ?? []) {
+  for (const { url } of artifact.assets ?? []) {
     const parsed = parseAssetUrl(url);
     if (parsed === undefined) {
       throw new BuildFailure(

@@ -97,10 +97,12 @@ import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import {
   assetFileName,
   assetUrlFor,
+  imageDimensions,
   looksLikeSvg,
   parseAssetUrl,
   resolveImageTarget,
   sniffImageFormat,
+  type ImageDimensions,
   type ImageOutcome,
   type ImagePublisher,
   type MediaFailureReason,
@@ -1426,7 +1428,16 @@ function mediaPublisher(discovery: Discovery): { publisher: ImagePublisher; asse
       // walk order reached, which is what makes the URL stable across builds.
       const url = assetUrlFor(digest, assetFileName(basename(entry.path), format));
       byDigest.set(digest, url);
-      assets.push({ url, path: entry.path, digest });
+      // The dimensions come from the same authorized bytes and are read after
+      // authorization, exactly like the digest. A header this build cannot read
+      // yields no fields rather than a guess; the image still publishes.
+      const dimensions = imageDimensions(bytes, format);
+      assets.push({
+        url,
+        path: entry.path,
+        digest,
+        ...(dimensions === undefined ? {} : { dimensions }),
+      });
       return record({ kind: 'published', url });
     },
   };
@@ -1633,12 +1644,15 @@ export interface MediaEntry {
  *
  * `url` is public; `path` is the source file relative to the content root and is
  * private, so it never enters the artifact — {@link writeArtifact} copies the
- * bytes next to the artifact and records only the URL list.
+ * bytes next to the artifact and records the public URL plus the header-declared
+ * pixel size; never bytes or source paths.
  */
 export interface AssetEmission {
   readonly url: string;
   readonly path: string;
   readonly digest: string;
+  /** Intrinsic pixel size from the emitted bytes' own header, when readable. */
+  readonly dimensions?: ImageDimensions;
 }
 
 /**
@@ -1817,7 +1831,14 @@ export async function writeArtifact(
   const artifact = validateArtifact(
     {
       version: 1,
-      ...(published.length === 0 ? {} : { assets: published.map((asset) => asset.url) }),
+      ...(published.length === 0
+        ? {}
+        : {
+            assets: published.map((asset) => ({
+              url: asset.url,
+              ...asset.dimensions,
+            })),
+          }),
       entries: discovery.entries,
     },
     'content directory',

@@ -1,10 +1,12 @@
 # Media processing and delivery
 
 Status: accepted **target design** for Goals 0009–0013, 2026-11-08.
-**Goal 0009 is implemented and verified**; [its completion record](../goals/archive/0009-zero-config-static-images.md)
-carries the evidence. 0010–0013 have not shipped, and this document is not
-evidence that they have: the sections below are the target for those outcomes,
-and the one for 0009 now describes the implemented contract.
+**Goals 0009 and 0010 are implemented and verified**; their completion records
+([0009](../goals/archive/0009-zero-config-static-images.md) and
+[0010](../goals/archive/0010-readable-image-figures.md)) carry the evidence.
+0011–0013 have not shipped, and this document is not evidence that they have: the
+sections below are the target for those outcomes, and the ones for 0009 and
+0010 describe the implemented contracts.
 
 ## Product contract and ownership
 
@@ -51,8 +53,19 @@ Order of outcomes:
    - Nothing else is added: no browser JavaScript, no SQLite table or column, no
      public manifest, no image service, no `publish.config.yaml` key, and no
      system CLI. The hosting shape remains a site at the domain root.
-2. **0010:** optional figure captions and image layout/accessibility improve
-   reading; unrelated to which image encoder is installed.
+2. **0010 — shipped:** reading-quality changes over the 0009 asset contract.
+   An explicit Markdown title on a standalone block image becomes a semantic
+   `figure > img + figcaption`; `alt` remains the accessible alternative and is
+   never promoted to visible prose; an inline, link-wrapped, or decorative image
+   keeps its existing shape and gains no caption. The build reads intrinsic
+   pixel dimensions from the already-authorized emitted bytes (PNG `IHDR`,
+   JPEG `SOFn`, GIF logical screen descriptor, WebP `VP8`/`VP8L`/`VP8X`, AVIF
+   `ispe`) and emits `width`/`height`; a malformed or truncated header yields
+   neither attribute and does not fail the build. The first image in rendered
+   document order is `loading="eager"`; every later image is `loading="lazy"`;
+   all get `decoding="async"`. Identity, authorization, bytes, and the
+   `/_assets/<sha256>-<name>` URL are unchanged, no codec or new dependency is
+   added, and no browser script or SQLite metadata is introduced.
 3. **0011:** automatic WebP-preferred optimization, without changing how an
    author embeds an image or where it is hosted.
 4. **0012:** self-contained *static* SVG is accepted as **build-only input** and
@@ -129,6 +142,41 @@ The above is an **architectural selection**, not an unmeasured guarantee of
 sharp's performance or complete SVG conformance. If a required safety or
 cross-platform control fails, report the failed goal and propose a design
 revision; do not silently adopt another engine in implementation.
+
+## 0010 — Readable and accessible image figures (shipped)
+
+The implemented reading rules are deliberately narrow:
+
+- **Caption = authored title.** `![alt](path "Caption")` (and the same title on a
+  reference definition) is the human-visible caption of a standalone block
+  image. The image keeps its `alt`; the title is not repeated as a tooltip. The
+  caption text is escaped by the renderer's text node and passes the same
+  sanitizer as body text.
+- **No invented prose.** An image with no title never gets a `figcaption`, empty
+  or otherwise. `alt=""` stays `alt=""`; no figure numbering exists, so no
+  document-local or build-global counter can diverge between builds.
+- **Only a standalone block image is promoted.** A paragraph or list item whose
+  only meaningful child is the image becomes the figure. An inline image, an image
+  wrapped in a link, a table-cell image, an image wikilink with no title, Mermaid,
+  math, code, and nested Markdown keep their existing markup.
+- **Dimensions are header facts, not decoding.** The producer records the
+  intrinsic pixel size while it holds the authorized bytes it is already
+  publishing; the artifact carries it as private IR beside the public URL. The
+  renderer emits `width`/`height` and the global CSS keeps `max-width: 100%;
+  height: auto`, so a portrait, a wide screenshot, and transparent artwork
+  reserve their ratio without overflow or distortion. A malformed or truncated
+  header yields no attributes, never a build failure and never a guess. So does an
+  orientation or transform that would make the stored pixels differ from the
+  displayed pixels — a JPEG/WebP/PNG EXIF orientation other than 1, or an AVIF
+  `irot`/`imir` — because a transposed pair would reserve the wrong box.
+- **Loading follows rendered order.** The first `<img>` that keeps a source is
+  `loading="eager"`; every later one is `loading="lazy"`; all are
+  `decoding="async"`. No IntersectionObserver, placeholder script, or client-side
+  dimension fix-up exists.
+- **The sanitizer stays the exit.** `figure`, `figcaption`, and the four img
+  attributes are on the explicit allowlist; a raw `figcaption` outside a
+  `figure` is renamed to an inert `span` rather than left as an orphan caption.
+  `img-src 'self'` is unchanged.
 
 ## 0011 — Automatic WebP-preferred raster policy
 
@@ -439,10 +487,10 @@ The selected baseline is grounded in official upstream documents:
 - strict XML parser behavior: https://www.npmjs.com/package/saxes
 - CSS parser behavior (including recoverable `Raw` nodes): https://www.npmjs.com/package/css-tree
 
-The current documents select a technical direction; they do **not** claim
-completed benchmark evidence, a working SVG security sandbox, tested package
-installations, or shipped support for 0010–0013. Those belong to the goal
-completion records and real implementation PRs. 0009's record is the one already
-written: it claims byte-passthrough images, its negative controls, and its gate
-evidence, and it repeats here that nothing in this document is evidence for the
-goals after it.
+The current documents select a technical direction for 0011–0013; they do **not**
+claim completed benchmark evidence, a working SVG security sandbox, tested
+package installations, or shipped support for those three goals. Those belong to
+the goal completion records and real implementation PRs. The 0009 and 0010
+records are the two already written: they claim byte-passthrough images, figure
+and layout reading rules, their negative controls, and their gate evidence, and
+nothing in this document is evidence for the goals after them.

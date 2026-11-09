@@ -338,8 +338,7 @@ export function sniffImageFormat(bytes: Uint8Array): ImageFormat | undefined {
   // `avis`. Some encoders write `mif1` as the major brand and `avif` among the
   // compatible ones, so the brand list is scanned rather than only offset 8.
   if (bytes.length >= 16 && matchesAt(bytes, 4, 'ftyp')) {
-    const size =
-      ((bytes[0]! << 24) | (bytes[1]! << 16) | (bytes[2]! << 8) | bytes[3]!) >>> 0;
+    const size = u32be(bytes, 0);
     if (size >= 16 && size <= 256 && size <= bytes.length) {
       for (let offset = 8; offset + 4 <= size; offset += 4) {
         if (matchesAt(bytes, offset, 'avif') || matchesAt(bytes, offset, 'avis')) return 'avif';
@@ -364,6 +363,453 @@ export function looksLikeSvg(bytes: Uint8Array): boolean {
   return /^(?:\uFEFF)?\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)*<svg[\s>]/i.test(
     head,
   );
+}
+
+/* ------------------------------------------------------------------------- *
+ * Intrinsic dimensions
+ * ------------------------------------------------------------------------- */
+
+/** The pixel size a raster's own header declares. */
+export interface ImageDimensions {
+  readonly width: number;
+  readonly height: number;
+}
+
+function u16be(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset]! << 8) | bytes[offset + 1]!;
+}
+
+function u16le(bytes: Uint8Array, offset: number): number {
+  return bytes[offset]! | (bytes[offset + 1]! << 8);
+}
+
+function u24le(bytes: Uint8Array, offset: number): number {
+  return bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16);
+}
+
+function u32be(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset]! << 24) | (bytes[offset + 1]! << 16) | (bytes[offset + 2]! << 8) | bytes[offset + 3]!) >>> 0;
+}
+
+function u32le(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16) | (bytes[offset + 3]! << 24)) >>> 0;
+}
+
+/**
+ * Whether a value is a positive whole pixel count.
+ *
+ * Shared by the header readers here and the artifact-contract check in
+ * `schema.ts`, so “a usable dimension” has one definition rather than two
+ * spellings that can drift.
+ */
+export function isPositiveDimension(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
+function positive(width: number, height: number): ImageDimensions | undefined {
+  return isPositiveDimension(width) && isPositiveDimension(height) ? { width, height } : undefined;
+}
+
+/** A TIFF/EXIF orientation value, or why it could not be trusted. */
+type ExifOrientation = number | 'malformed' | undefined;
+
+function tiffU16(bytes: Uint8Array, offset: number, littleEndian: boolean): number {
+  return littleEndian ? u16le(bytes, offset) : u16be(bytes, offset);
+}
+
+function tiffU32(bytes: Uint8Array, offset: number, littleEndian: boolean): number {
+  return littleEndian ? u32le(bytes, offset) : u32be(bytes, offset);
+}
+
+/**
+ * The IFD0 `Orientation` tag from one TIFF/EXIF payload, or `undefined` when the
+ * payload has no such tag.
+ *
+ * A present-but-unreadable tag, a malformed TIFF header, or an IFD that runs out
+ * of bounds returns `'malformed'`: the orientation is then unknown, and the
+ * caller must emit no dimensions rather than a pair that describes the coded
+ * pixels instead of the displayed ones. Only a value of 1 is safe to pass
+ * through; every other EXIF value transforms the displayed image.
+ */
+function exifOrientation(bytes: Uint8Array, start: number, end: number): ExifOrientation {
+  if (start + 8 > end) return 'malformed';
+  const littleEndian = matchesAt(bytes, start, 'II');
+  if (!littleEndian && !matchesAt(bytes, start, 'MM')) return 'malformed';
+  if (tiffU16(bytes, start + 2, littleEndian) !== 42) return 'malformed';
+  const ifdOffset = tiffU32(bytes, start + 4, littleEndian);
+  if (ifdOffset < 8 || start + ifdOffset + 2 > end) return 'malformed';
+  const entryCount = tiffU16(bytes, start + ifdOffset, littleEndian);
+  const entriesStart = start + ifdOffset + 2;
+  if (entriesStart + entryCount * 12 > end) return 'malformed';
+  for (let index = 0; index < entryCount; index += 1) {
+    const entry = entriesStart + index * 12;
+    if (tiffU16(bytes, entry, littleEndian) !== 0x0112) continue;
+    const type = tiffU16(bytes, entry + 2, littleEndian);
+    const count = tiffU32(bytes, entry + 4, littleEndian);
+    if (type !== 3 || count !== 1) return 'malformed';
+    return tiffU16(bytes, entry + 8, littleEndian);
+  }
+  return undefined;
+}
+
+/**
+ * PNG: signature, then a 13-byte `IHDR` chunk whose width and height are
+ * big-endian.
+ *
+ * Chunks are also walked for `eXIf` so a stored EXIF orientation can veto the
+ * pair. An orientation other than 1 means the browser will display the image
+ * rotated or mirrored relative to the IHDR pixels, and omitting the attributes
+ * is the only honest fail-open answer.
+ */
+function pngDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+  // Signature, the IHDR length/type word pair, the 13 data bytes, and its CRC.
+  // Stopping at the height would read a chunk the file never finished writing.
+  if (bytes.length < 33 || !matchesAt(bytes, 12, 'IHDR')) return undefined;
+  if (u32be(bytes, 8) !== 13) return undefined;
+  const dimensions = positive(u32be(bytes, 16), u32be(bytes, 20));
+  if (dimensions === undefined) return undefined;
+
+  let offset = 8;
+  while (offset + 8 <= bytes.length) {
+    const length = u32be(bytes, offset);
+    const type = String.fromCharCode(
+      bytes[offset + 4]!,
+      bytes[offset + 5]!,
+      bytes[offset + 6]!,
+      bytes[offset + 7]!,
+    );
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd > bytes.length) {
+      // A truncated metadata chunk is unreadable; a truncated file with no
+      // eXIf encountered keeps its IHDR pair, exactly as Goal 0009 publishes it.
+      return type === 'eXIf' ? undefined : dimensions;
+    }
+    if (type === 'eXIf') {
+      const tiffStart = matchesAt(bytes, dataStart, 'Exif\0\0') ? dataStart + 6 : dataStart;
+      const orientation = exifOrientation(bytes, tiffStart, dataEnd);
+      if (orientation === 'malformed' || (orientation !== undefined && orientation !== 1)) return undefined;
+    }
+    if (type === 'IEND') break;
+    offset = dataEnd + 4;
+  }
+  return dimensions;
+}
+
+/**
+ * JPEG: walk marker segments through the frame header and any EXIF APP1, then
+ * stop at the start of scan.
+ *
+ * The frame header is a length-prefixed segment; its payload is precision,
+ * height, width. Markers with no length are skipped. A frame header after SOS is
+ * entropy-coded data, not a header, so SOS ends the walk. An EXIF `Orientation`
+ * other than 1 makes the coded frame disagree with the displayed image, so the
+ * caller gets no attributes rather than a transposed pair.
+ */
+function jpegDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+  let offset = 2;
+  let dimensions: ImageDimensions | undefined;
+  while (offset + 2 <= bytes.length) {
+    if (bytes[offset] !== 0xff) return undefined;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) return undefined;
+    const marker = bytes[offset]!;
+    offset += 1;
+    if (marker === 0xd8 || marker === 0xd9) return undefined;
+    // TEM and the restart markers carry no length; skip them without reading one.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    // The entropy-coded scan begins here. Stop before reading the SOS length.
+    if (marker === 0xda) return dimensions;
+    if (offset + 2 > bytes.length) return undefined;
+    const length = u16be(bytes, offset);
+    if (length < 2 || offset + length > bytes.length) return undefined;
+    const payloadStart = offset + 2;
+    const payloadEnd = offset + length;
+    if (marker === 0xe1 && payloadStart + 6 <= payloadEnd && matchesAt(bytes, payloadStart, 'Exif\0\0')) {
+      const orientation = exifOrientation(bytes, payloadStart + 6, payloadEnd);
+      if (orientation === 'malformed' || (orientation !== undefined && orientation !== 1)) return undefined;
+    }
+    const isFrame =
+      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isFrame && dimensions === undefined) {
+      if (length < 7) return undefined;
+      const precision = bytes[offset + 2]!;
+      const height = u16be(bytes, offset + 3);
+      const width = u16be(bytes, offset + 5);
+      if (precision === 0) return undefined;
+      dimensions = positive(width, height);
+      if (dimensions === undefined) return undefined;
+    }
+    offset += length;
+  }
+  return dimensions;
+}
+
+/** GIF: the logical screen descriptor, little-endian, immediately after the header. */
+function gifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+  if (bytes.length < 10) return undefined;
+  return positive(u16le(bytes, 6), u16le(bytes, 8));
+}
+
+/**
+ * WebP: RIFF chunks name the bitstream and any EXIF metadata.
+ *
+ * `VP8X` carries the canvas size as 24-bit minus-one fields; `VP8L` packs both
+ * minus-one dimensions into 32 bits; `VP8 ` is a lossy keyframe whose 3-byte
+ * frame tag, 3-byte start code, and 2+2 dimension fields follow the chunk
+ * header. An `EXIF` chunk with an orientation other than 1 vetoes the pair.
+ */
+function webpDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+  if (bytes.length < 20) return undefined;
+  let offset = 12;
+  let dimensions: ImageDimensions | undefined;
+  while (offset + 8 <= bytes.length) {
+    const type = String.fromCharCode(
+      bytes[offset]!,
+      bytes[offset + 1]!,
+      bytes[offset + 2]!,
+      bytes[offset + 3]!,
+    );
+    const size = u32le(bytes, offset + 4);
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + size;
+    if (dataEnd > bytes.length) return undefined;
+    if (type === 'EXIF') {
+      const tiffStart = matchesAt(bytes, dataStart, 'Exif\0\0') ? dataStart + 6 : dataStart;
+      const orientation = exifOrientation(bytes, tiffStart, dataEnd);
+      if (orientation === 'malformed' || (orientation !== undefined && orientation !== 1)) return undefined;
+    } else if (dimensions === undefined && type === 'VP8X') {
+      // Flags, three reserved bytes, then two 24-bit minus-one canvas fields.
+      if (size < 10) return undefined;
+      dimensions = positive(u24le(bytes, dataStart + 4) + 1, u24le(bytes, dataStart + 7) + 1);
+      if (dimensions === undefined) return undefined;
+    } else if (dimensions === undefined && type === 'VP8L') {
+      // Signature byte, then both minus-one dimensions packed into 32 bits.
+      if (size < 5 || bytes[dataStart] !== 0x2f) return undefined;
+      const packed = u32le(bytes, dataStart + 1);
+      dimensions = positive((packed & 0x3fff) + 1, ((packed >>> 14) & 0x3fff) + 1);
+      if (dimensions === undefined) return undefined;
+    } else if (dimensions === undefined && type === 'VP8 ') {
+      // Three-byte frame tag, three-byte keyframe start code, then 2+2 dimensions.
+      if (size < 10 || !matchesAt(bytes, dataStart + 3, '\x9d\x01\x2a')) return undefined;
+      dimensions = positive(u16le(bytes, dataStart + 6) & 0x3fff, u16le(bytes, dataStart + 8) & 0x3fff);
+      if (dimensions === undefined) return undefined;
+    }
+    offset = dataEnd + (size & 1);
+  }
+  return dimensions;
+}
+
+/**
+ * AVIF: the `ispe` property associated with the primary item.
+ *
+ * ISO BMFF boxes are sized and typed, so this walks the box tree rather than
+ * searching for the four bytes `ispe` — a marker in a payload is not a box
+ * boundary. The `ipco` container is a list of properties, not an item's
+ * description: its first `ispe` may belong to a thumbnail or an unused item.
+ * The only size this reader may report is the one `ipma` associates with the
+ * item `pitm` names.
+ *
+ * The association table is deliberately resolved rather than approximated. No
+ * `pitm`, more than one primary, no `ipma`, a duplicate primary row, a property
+ * index outside `ipco`, or an association with no `ispe` all yield no answer.
+ * That is the fail-open direction: a valid correlation is required before the
+ * page reserves space; an unresolved header publishes with no `width`/`height`.
+ *
+ * An `irot` or `imir` property associated with the primary item transforms it
+ * after `ispe`; this reader does not apply those transforms, so their presence
+ * vetoes the pair. Properties associated with other items do not.
+ */
+function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+  interface Box {
+    readonly type: string;
+    readonly payload: number;
+    readonly end: number;
+  }
+
+  const boxAt = (offset: number, end: number): Box | undefined => {
+    if (offset + 8 > end) return undefined;
+    let size = u32be(bytes, offset);
+    const type = String.fromCharCode(
+      bytes[offset + 4]!,
+      bytes[offset + 5]!,
+      bytes[offset + 6]!,
+      bytes[offset + 7]!,
+    );
+    let header = 8;
+    if (size === 1) {
+      if (offset + 16 > end) return undefined;
+      const high = u32be(bytes, offset + 8);
+      const low = u32be(bytes, offset + 12);
+      size = high * 2 ** 32 + low;
+      header = 16;
+    } else if (size === 0) {
+      size = end - offset;
+    }
+    if (size < header || !Number.isSafeInteger(size) || offset + size > end) {
+      return undefined;
+    }
+    return { type, payload: offset + header, end: offset + size };
+  };
+
+  const children = (start: number, end: number): Box[] | undefined => {
+    const boxes: Box[] = [];
+    let offset = start;
+    while (offset < end) {
+      const box = boxAt(offset, end);
+      if (box === undefined) return undefined;
+      boxes.push(box);
+      offset = box.end;
+    }
+    return boxes;
+  };
+
+  const top = children(0, bytes.length);
+  if (top === undefined) return undefined;
+  const metaBoxes = top.filter((box) => box.type === 'meta');
+  if (metaBoxes.length !== 1) return undefined;
+  const meta = metaBoxes[0]!;
+  // `meta` is a full box. Its version and reserved flags describe the box
+  // layout, so an unknown version is not a container this reader can trust.
+  if (meta.payload + 4 > meta.end || bytes[meta.payload] !== 0) return undefined;
+  if (bytes[meta.payload + 1] !== 0 || bytes[meta.payload + 2] !== 0 || bytes[meta.payload + 3] !== 0) {
+    return undefined;
+  }
+  const metaChildren = children(meta.payload + 4, meta.end);
+  if (metaChildren === undefined) return undefined;
+
+  const pitms = metaChildren.filter((box) => box.type === 'pitm');
+  if (pitms.length !== 1) return undefined;
+  const pitm = pitms[0]!;
+  if (pitm.payload + 4 > pitm.end) return undefined;
+  if (bytes[pitm.payload + 1] !== 0 || bytes[pitm.payload + 2] !== 0 || bytes[pitm.payload + 3] !== 0) {
+    return undefined;
+  }
+  const pitmVersion = bytes[pitm.payload]!;
+  let primaryItem: number;
+  if (pitmVersion === 0) {
+    if (pitm.payload + 6 !== pitm.end) return undefined;
+    primaryItem = u16be(bytes, pitm.payload + 4);
+  } else if (pitmVersion === 1) {
+    if (pitm.payload + 8 !== pitm.end) return undefined;
+    primaryItem = u32be(bytes, pitm.payload + 4);
+  } else {
+    return undefined;
+  }
+  if (primaryItem === 0) return undefined;
+
+  const iprps = metaChildren.filter((box) => box.type === 'iprp');
+  if (iprps.length !== 1) return undefined;
+  const iprp = iprps[0]!;
+  const iprpChildren = children(iprp.payload, iprp.end);
+  if (iprpChildren === undefined) return undefined;
+
+  const ipcos = iprpChildren.filter((box) => box.type === 'ipco');
+  const ipmas = iprpChildren.filter((box) => box.type === 'ipma');
+  if (ipcos.length !== 1 || ipmas.length !== 1) return undefined;
+  const ipco = ipcos[0]!;
+  const ipma = ipmas[0]!;
+  const properties = children(ipco.payload, ipco.end);
+  if (properties === undefined) return undefined;
+
+  if (ipma.payload + 4 > ipma.end) return undefined;
+  const ipmaVersion = bytes[ipma.payload]!;
+  const ipmaFlags =
+    (bytes[ipma.payload + 1]! << 16) |
+    (bytes[ipma.payload + 2]! << 8) |
+    bytes[ipma.payload + 3]!;
+  // Version selects the item-ID width; bit 0 selects the 15-bit property-index
+  // field. No other flag or version has a layout this reader knows.
+  if (ipmaVersion > 1 || (ipmaFlags & ~1) !== 0) return undefined;
+  let offset = ipma.payload + 4;
+  if (offset + 4 > ipma.end) return undefined;
+  const entryCount = u32be(bytes, offset);
+  offset += 4;
+  const itemIdWidth = ipmaVersion === 0 ? 2 : 4;
+  const associationWidth = (ipmaFlags & 1) === 0 ? 1 : 2;
+  let primaryAssociations: number[] | undefined;
+  let primarySeen = false;
+  const indices: number[] = [];
+
+  for (let entry = 0; entry < entryCount; entry += 1) {
+    if (offset + itemIdWidth > ipma.end) return undefined;
+    const itemId = itemIdWidth === 2 ? u16be(bytes, offset) : u32be(bytes, offset);
+    offset += itemIdWidth;
+    if (offset + 1 > ipma.end) return undefined;
+    const associationCount = bytes[offset]!;
+    offset += 1;
+    if (offset + associationCount * associationWidth > ipma.end) return undefined;
+
+    const associations: number[] = [];
+    for (let association = 0; association < associationCount; association += 1) {
+      const raw =
+        associationWidth === 2 ? u16be(bytes, offset) : bytes[offset]!;
+      offset += associationWidth;
+      // The high bit is the essential flag; the rest is the 1-based property
+      // index. Index 0 means "no property" and is skipped when resolving.
+      const index = associationWidth === 2 ? raw & 0x7fff : raw & 0x7f;
+      associations.push(index);
+      indices.push(index);
+    }
+
+    if (itemId === primaryItem) {
+      if (primarySeen) return undefined;
+      primarySeen = true;
+      primaryAssociations = associations;
+    }
+  }
+
+  if (offset !== ipma.end || primaryAssociations === undefined) return undefined;
+  if (indices.some((index) => index > properties.length)) return undefined;
+
+  let ispe: Box | undefined;
+  let transformed = false;
+  for (const index of primaryAssociations) {
+    if (index === 0) continue;
+    const property = properties[index - 1]!;
+    if (property.type === 'irot' || property.type === 'imir') {
+      transformed = true;
+    } else if (property.type === 'ispe') {
+      if (ispe !== undefined) return undefined;
+      ispe = property;
+    }
+  }
+
+  if (transformed || ispe === undefined) return undefined;
+  if (ispe.payload + 12 > ispe.end || bytes[ispe.payload] !== 0) return undefined;
+  return positive(
+    u32be(bytes, ispe.payload + 4),
+    u32be(bytes, ispe.payload + 8),
+  );
+}
+
+/**
+ * The intrinsic pixel dimensions a supported raster's header declares.
+ *
+ * This is header reading, not decoding: it runs on the bytes Goal 0009 already
+ * authorized and publishes, so a layout attribute never becomes a reason to
+ * fetch a remote URL, load a third-party decoder, or read past the file. A
+ * malformed, truncated, or internally inconsistent header returns `undefined`
+ * and the image still publishes; the page then omits `width`/`height` rather
+ * than guessing, which is the only safe direction for a fallible hint.
+ *
+ * `format` is the answer {@link sniffImageFormat} already gave for these exact
+ * bytes. The type cannot enforce that pairing, so the caller is trusted to pass
+ * the format it just sniffed; this function does not sniff again.
+ */
+export function imageDimensions(bytes: Uint8Array, format: ImageFormat): ImageDimensions | undefined {
+  switch (format) {
+    case 'png':
+      return pngDimensions(bytes);
+    case 'jpeg':
+      return jpegDimensions(bytes);
+    case 'gif':
+      return gifDimensions(bytes);
+    case 'webp':
+      return webpDimensions(bytes);
+    case 'avif':
+      return avifDimensions(bytes);
+  }
 }
 
 /* ------------------------------------------------------------------------- *

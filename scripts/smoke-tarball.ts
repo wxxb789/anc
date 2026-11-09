@@ -34,7 +34,14 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { chromium, type Browser } from 'playwright';
 import { serveDist, sqliteAssetRequests, tabTo, workerScriptPath, type ServedSite } from '../tests/support/browser-site.ts';
-import { GIF_ANIMATED, JPEG, PNG_UNICODE } from '../tests/support/media.ts';
+import {
+  GIF_ANIMATED,
+  JPEG,
+  PNG_PORTRAIT,
+  PNG_SCREENSHOT,
+  PNG_TRANSPARENT,
+  PNG_UNICODE,
+} from '../tests/support/media.ts';
 import { openSnapshot, snapshotMembers } from '../tests/support/snapshot.ts';
 import { spawnNpm } from './npm-command.ts';
 
@@ -380,19 +387,57 @@ async function checkImages(browser: Browser, server: ServedSite, expectedFiles: 
       'the foreign build was not served under a policy that allows same-origin images: ' + JSON.stringify(policy),
     );
 
+    const count = await page.locator('article img').count();
+    for (let index = 0; index < count; index += 1) {
+      await page.locator('article img').nth(index).scrollIntoViewIfNeeded();
+    }
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('article img')].every((image) => (image as HTMLImageElement).complete),
+    );
     const images = await page.locator('article img').evaluateAll((nodes) =>
       (nodes as HTMLImageElement[]).map((image) => ({
         src: image.getAttribute('src') ?? '',
         width: image.naturalWidth,
+        height: image.naturalHeight,
+        attributeWidth: image.getAttribute('width'),
+        attributeHeight: image.getAttribute('height'),
         complete: image.complete,
+        alt: image.getAttribute('alt'),
+        loading: image.getAttribute('loading'),
+        decoding: image.getAttribute('decoding'),
+        caption: image.closest('figure')?.querySelector('figcaption')?.textContent ?? null,
       })),
     );
-    assert(images.length >= 3, 'the foreign note rendered fewer images than it embeds: ' + JSON.stringify(images));
+    assert(images.length >= 6, 'the foreign note rendered fewer images than it embeds: ' + JSON.stringify(images));
     for (const image of images) {
       assert(image.src.startsWith('/_assets/'), 'an image points outside the published assets: ' + image.src);
       assert(image.complete, 'an image never finished loading: ' + image.src);
       assert(image.width > 0, 'the browser decoded nothing for ' + image.src);
+      assert(image.decoding === 'async', 'an image carries no async decoding hint: ' + image.src);
     }
+    assert(images[0]!.loading === 'eager', 'the lead image does not load eagerly: ' + JSON.stringify(images[0]));
+    for (const image of images.slice(1)) {
+      assert(image.loading === 'lazy', 'a below-the-fold image is not lazy: ' + image.src);
+    }
+    const sized = Object.entries({
+      'portrait.png': [24, 72],
+      'screenshot.png': [480, 120],
+      'transparent.png': [96, 96],
+    } as const);
+    for (const [suffix, [width, height]] of sized) {
+      const image = images.find((candidate) => candidate.src.endsWith(`-${suffix}`));
+      assert(image, 'the foreign page lost its ' + suffix);
+      assert(image.attributeWidth === String(width) && image.attributeHeight === String(height),
+        suffix + ' was emitted without its intrinsic dimensions: ' + JSON.stringify(image));
+      assert(image.width === width && image.height === height,
+        suffix + ' decoded at a different size than its header declared');
+    }
+    assert(
+      images.some((image) => image.caption === 'A packaged portrait caption' && image.alt === 'a narrow portrait gradient'),
+      'the packaged figure lost its caption or replaced its alt: ' + JSON.stringify(images),
+    );
+    assert(images.find((image) => image.src.endsWith('-transparent.png'))?.alt === '',
+      'the decorative image lost its empty alt');
 
     const contentTypes: Record<string, string> = {
       '.png': 'image/png',
@@ -442,6 +487,9 @@ async function main(): Promise<number> {
     writeFileSync(join(scratch, 'media', '图 表 one.png'), PNG_UNICODE);
     writeFileSync(join(scratch, 'media', 'photo.jpeg'), JPEG);
     writeFileSync(join(scratch, 'media', 'anim.gif'), GIF_ANIMATED);
+    writeFileSync(join(scratch, 'media', 'portrait.png'), PNG_PORTRAIT);
+    writeFileSync(join(scratch, 'media', 'screenshot.png'), PNG_SCREENSHOT);
+    writeFileSync(join(scratch, 'media', 'transparent.png'), PNG_TRANSPARENT);
     writeFileSync(
       join(scratch, 'welcome.md'),
       [
@@ -460,6 +508,24 @@ async function main(): Promise<number> {
         'The same photograph as the second note: ![shared][shot]',
         '',
         'An Obsidian embed of an animation: ![[media/anim.gif]]',
+        '',
+        'A titled standalone image becomes a figure:',
+        '',
+        '![a narrow portrait gradient](media/portrait.png "A packaged portrait caption")',
+        '',
+        'An untitled wide screenshot stays a plain image:',
+        '',
+        '![a wide screenshot](media/screenshot.png)',
+        '',
+        'Decorative artwork keeps an empty alternative and no caption:',
+        '',
+        '![](media/transparent.png)',
+        '',
+        'An inline picture keeps its sentence: ![inline screenshot](media/screenshot.png) and the prose continues.',
+        '',
+        'A tight list item promotes a captioned image:',
+        '',
+        '- ![a tight-list portrait](media/portrait.png "A tight-list caption")',
         '',
         '[shot]: media/photo.jpeg',
         '',
@@ -543,10 +609,10 @@ async function main(): Promise<number> {
     assert(welcome.includes('language-mermaid'), 'client diagram fallback did not ship');
     assert(!welcome.includes('PRIVATE-BODY-MUST-NOT-SHIP'), 'withheld body reached its linking page');
 
-    // --- Image assets: three references, three files, one filename with a space
-    // and CJK, and a photograph shared with the second note ---
+    // --- Image assets: six files, one filename with a space and CJK, a
+    // photograph shared with the second note, and the figure/layout cases ---
     const assetFiles = readdirSync(join(dist, '_assets')).sort();
-    assert(assetFiles.length === 3, 'the foreign output carries ' + assetFiles.length + ' image assets: ' + assetFiles.join(', '));
+    assert(assetFiles.length === 6, 'the foreign output carries ' + assetFiles.length + ' image assets: ' + assetFiles.join(', '));
     for (const file of assetFiles) {
       const bytes = readFileSync(join(dist, '_assets', file));
       const digest = createHash('sha256').update(bytes).digest('hex');
@@ -557,7 +623,34 @@ async function main(): Promise<number> {
       'the Unicode-named image did not publish under its own name: ' + assetFiles.join(', '),
     );
     const welcomeImages = [...welcome.matchAll(/<img src="(\/_assets\/[^"]+)"/g)].map((match) => match[1]!);
-    assert(welcomeImages.length === 3, 'the foreign page points at ' + welcomeImages.length + ' asset URLs');
+    assert(welcomeImages.length === 8, 'the foreign page points at ' + welcomeImages.length + ' asset URLs');
+    // The packaged renderer, not a test fixture, produced these: one figure with
+    // the author's caption, distinct alt text, header dimensions, and a lazy
+    // rule for everything after the lead.
+    assert(
+      /<figure class="image-figure"><img [^>]*alt="a narrow portrait gradient"[^>]*width="24" height="72"[^>]*\/><figcaption>A packaged portrait caption<\/figcaption><\/figure>/.test(
+        welcome,
+      ),
+      'the packaged build did not render a captioned figure with its dimensions: ' + welcome,
+    );
+    assert(
+      /<li><figure class="image-figure"><img [^>]*alt="a tight-list portrait"[^>]*\/><figcaption>A tight-list caption<\/figcaption><\/figure><\/li>/.test(
+        welcome,
+      ),
+      'the packaged build did not promote a tight-list item to one figure: ' + welcome,
+    );
+    assert(
+      /<img [^>]*alt="a wide screenshot"[^>]*width="480" height="120"[^>]*loading="lazy"/.test(welcome),
+      'the packaged build did not reserve the wide screenshot with lazy loading: ' + welcome,
+    );
+    assert(
+      /<img [^>]*alt=""[^>]*width="96" height="96"[^>]*loading="lazy"/.test(welcome),
+      'the decorative image lost its empty alt or dimensions: ' + welcome,
+    );
+    assert(
+      /<img [^>]*loading="eager"[^>]*>/.test(welcome),
+      'the packaged page has no eager lead image: ' + welcome,
+    );
     const secondHtml = readFileSync(join(dist, 'notes', 'second', 'index.html'), 'utf8');
     const shared = welcomeImages.filter((url) => secondHtml.includes(url));
     assert(shared.length === 1, 'the two foreign notes share ' + shared.length + ' image URLs, not one');
@@ -699,7 +792,7 @@ async function main(): Promise<number> {
       'a failed build replaced the last good output',
     );
 
-    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes, 3 images');
+    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes, 6 images');
     console.log('tarball: ' + basename(TARBALL));
     return 0;
   } finally {

@@ -8,7 +8,7 @@
  */
 
 import { compareSlugs, isNoteSlug, SLUG_MAX_BYTES } from './route-path.ts';
-import { parseAssetUrl } from './media.ts';
+import { isPositiveDimension, parseAssetUrl } from './media.ts';
 
 export interface ContentEntry {
   slug: string;
@@ -28,11 +28,26 @@ export interface ContentEntry {
   description?: string;
 }
 
+/**
+ * One image asset the producer publishes.
+ *
+ * `url` is the public identity. `width`/`height` are the raster header's own
+ * pixel size, recorded only because the producer already read the authorized
+ * bytes; the renderer uses them to reserve layout space. They are optional as a
+ * pair: a malformed or truncated header yields neither, and no consumer invents
+ * one from the other. Nothing in this declaration changes which bytes publish,
+ * where they are served, or what their digest is.
+ */
+export type AssetDeclaration = { url: string } & (
+  | { width: number; height: number }
+  | { width?: undefined; height?: undefined }
+);
+
 export interface ContentArtifact {
   version: 1;
   entries: ContentEntry[];
   /**
-   * Every published image asset, as a public URL, sorted.
+   * Every published image asset, sorted by public URL.
    *
    * **Private IR, not a public manifest.** Nothing copies this into `dist/`: the
    * site's HTML states each `src` inline, and the file set is what the output
@@ -41,10 +56,10 @@ export interface ContentArtifact {
    * the Markdown, which would be a second parser and a second authority.
    *
    * Absent for a corpus with no local images, which is every corpus before Goal
-   * 0009. A path here is always `/_assets/<sha256>-<name>`; see `src/lib/media.ts`
+   * 0009. A URL here is always `/_assets/<sha256>-<name>`; see `src/lib/media.ts`
    * for why the digest owns identity and the name is decoration.
    */
-  assets?: string[];
+  assets?: AssetDeclaration[];
 }
 
 export const SCHEMA_VERSION = 1;
@@ -133,6 +148,30 @@ const KNOWN_FIELDS: ReadonlySet<string> = new Set<string>([
   ...REQUIRED_STRINGS,
   ...OPTIONAL_FIELDS,
 ]);
+
+/** Top-level artifact keys, for the one unknown-field check. */
+const ARTIFACT_FIELDS: ReadonlySet<string> = new Set(['version', 'entries', 'assets']);
+
+/** One asset declaration's keys. */
+const ASSET_FIELDS: ReadonlySet<string> = new Set(['url', 'width', 'height']);
+
+/**
+ * Refuse every key outside `allowed`, under the caller's own field label.
+ *
+ * The artifact, each entry, and each asset declaration each reject unknown
+ * fields as a producer defect. One helper keeps the message and the rule from
+ * being spelled three slightly different ways.
+ */
+function unknownFields(
+  value: Record<string, unknown>,
+  allowed: ReadonlySet<string>,
+  prefix: string,
+  issues: string[],
+): void {
+  for (const field of Object.keys(value)) {
+    if (!allowed.has(field)) issues.push(`${prefix}${field}: unknown field is not allowed`);
+  }
+}
 
 /**
  * Size ceilings, stated per field.
@@ -484,9 +523,7 @@ function checkEntry(value: unknown, index: number, issues: string[]): ContentEnt
   const label = typeof slug === 'string' ? `entries[${index}] (slug "${slug}")` : `entries[${index}]`;
   const before = issues.length;
 
-  for (const field of Object.keys(value)) {
-    if (!KNOWN_FIELDS.has(field)) issues.push(`${label}.${field}: unknown field is not allowed`);
-  }
+  unknownFields(value, KNOWN_FIELDS, `${label}.`, issues);
 
   for (const field of REQUIRED_STRINGS) {
     const item = value[field];
@@ -616,6 +653,65 @@ function checkCorpus(entries: readonly ContentEntry[], issues: string[], edges: 
 }
 
 /**
+ * The image assets this artifact publishes. Every entry names a canonical
+ * `/_assets/<sha256>-<name>` URL — one spelling per asset, so the emission step
+ * and the inventory cannot disagree about which file a URL names — and the list
+ * is sorted and unique, so two builds of the same corpus serialize the same
+ * bytes. A URL that is not canonical is a producer defect rather than an
+ * author's mistake, and it fails here rather than in a filename lookup.
+ *
+ * `width`/`height` are the header's pixel size for the emitted bytes. They are
+ * a pair or absent: one without the other describes no aspect ratio a browser
+ * can reserve, and the producer never writes a guess. Their only consumer is
+ * the renderer's layout attributes; they do not participate in identity.
+ */
+function checkAssets(rawAssets: unknown, issues: string[]): void {
+  if (rawAssets === undefined) return;
+  if (!Array.isArray(rawAssets)) {
+    issues.push('assets: must be an array of published asset declarations');
+    return;
+  }
+
+  const seen = new Set<string>();
+  let previous: string | undefined;
+  for (const [index, value] of rawAssets.entries()) {
+    if (!isPlainObject(value)) {
+      issues.push(`assets[${index}]: must be an object with a url`);
+      continue;
+    }
+    unknownFields(value, ASSET_FIELDS, `assets[${index}].`, issues);
+    const url = value['url'];
+    if (typeof url !== 'string') {
+      issues.push(`assets[${index}].url: must be a string`);
+      continue;
+    }
+    if (parseAssetUrl(url) === undefined) {
+      issues.push(`assets[${index}].url: is not a canonical published asset path (/_assets/<sha256>-<name>)`);
+      continue;
+    }
+    const width = value['width'];
+    const height = value['height'];
+    if ((width === undefined) !== (height === undefined)) {
+      issues.push(`assets[${index}]: width and height must be declared together`);
+    }
+    for (const [field, dimension] of [
+      ['width', width],
+      ['height', height],
+    ] as const) {
+      if (dimension !== undefined && !isPositiveDimension(dimension)) {
+        issues.push(`assets[${index}].${field}: must be a positive integer`);
+      }
+    }
+    if (seen.has(url)) issues.push(`assets[${index}]: appears twice`);
+    seen.add(url);
+    if (previous !== undefined && !(previous < url)) {
+      issues.push(`assets: must be sorted in ascending order, at index ${index}`);
+    }
+    previous = url;
+  }
+}
+
+/**
  * Validate a parsed content artifact.
  *
  * @throws {ContentValidationError} listing every violation, each naming the
@@ -626,46 +722,12 @@ export function validateArtifact(data: unknown, source = 'content artifact'): Co
 
   if (!isPlainObject(data)) throw new ContentValidationError(source, ['artifact: must be an object']);
 
-  for (const field of Object.keys(data)) {
-    if (field !== 'version' && field !== 'entries' && field !== 'assets') {
-      issues.push(`${field}: unknown field is not allowed`);
-    }
-  }
+  unknownFields(data, ARTIFACT_FIELDS, '', issues);
   if (data['version'] !== SCHEMA_VERSION) {
     issues.push(`version: must be ${SCHEMA_VERSION}, got ${JSON.stringify(data['version'])}`);
   }
 
-  // The image assets this artifact publishes. Every path must be a canonical
-  // `/_assets/<sha256>-<name>` URL — one spelling per asset, so the emission step
-  // and the inventory cannot disagree about which file a URL names — and the list
-  // is sorted and unique, so two builds of the same corpus serialize the same
-  // bytes. A path that is not canonical is a producer defect rather than an
-  // author's mistake, and it fails here rather than in a filename lookup.
-  const rawAssets = data['assets'];
-  if (rawAssets !== undefined) {
-    if (!Array.isArray(rawAssets)) {
-      issues.push('assets: must be an array of published asset paths');
-    } else {
-      const seen = new Set<string>();
-      let previous: string | undefined;
-      for (const [index, value] of rawAssets.entries()) {
-        if (typeof value !== 'string') {
-          issues.push(`assets[${index}]: must be a string`);
-          continue;
-        }
-        if (parseAssetUrl(value) === undefined) {
-          issues.push(`assets[${index}]: is not a canonical published asset path (/_assets/<sha256>-<name>)`);
-          continue;
-        }
-        if (seen.has(value)) issues.push(`assets[${index}]: appears twice`);
-        seen.add(value);
-        if (previous !== undefined && !(previous < value)) {
-          issues.push(`assets: must be sorted in ascending order, at index ${index}`);
-        }
-        previous = value;
-      }
-    }
-  }
+  checkAssets(data['assets'], issues);
 
   const rawEntries = data['entries'];
   if (!Array.isArray(rawEntries)) issues.push('entries: must be an array');

@@ -270,9 +270,9 @@
     },
     {
       "slug": "image-embed-demo",
-      "title": "One Inline Image, and Three Published Ones",
-      "excerpt": "Three local images, published unchanged and keyed by content digest, beside the inline raster form that still exists. A referenced image is copied; an excluded one fails the build rather than shipping.",
-      "markdown": "# One Inline Image, and Three Published Ones\n\nA local image is published because a published note references it. There is no\nimage configuration, no image host, and no extra deploy step: the build resolves\nthe reference, copies the bytes unchanged, and gives them a URL their content\ndigest names.\n\n## Published from files\n\n![A chart whose name carries a space and CJK](/_assets/6cb9e3f4e81cc3206c7c6950ebfea05512551937a84662c4d327737f75c9e2ab-%E5%9B%BE%20%E8%A1%A8%20one.png)\n\nThe same photograph referenced again, in the reference form this time:\n![A shared photograph][photo]\n\n![A three-frame animated GIF](/_assets/3c5d74752776dc587a92fe50d5c518f5b03ac9de2ab1c99048db5de2d019f9bf-anim.gif)\n\n[photo]: /_assets/f2a88b1aa6460c903fdfef45d07d90cff4f8027e20703810266567896fbf7596-photo.jpg\n\n## The inline form that still exists\n\nA base64 raster image inline in the document is still allowed, restricted to a\nshort list of raster types. A vector image is not: an SVG can carry a script, so\na local SVG fails the build until it has a rasterizer.\n\n![A one-pixel transparent placeholder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=)\n\n## Why not just copy the attachments\n\nBecause \"copy everything that is not a note\" is how a private garden publishes the\nphotographs attached to its drafts. Only a file a published note references is\npublished, an excluded one fails the build rather than shipping a broken picture,\nand the bytes keep their original metadata — this phase copies images, it does not\nscrub them.\n\nBack to [the pipeline](/markdown-pipeline/).\n",
+      "title": "Images Published by Reference",
+      "excerpt": "Captioned figures, inline pictures, decorative artwork and a hidden image: the bytes are published unchanged, the caption is the title the author wrote, and the layout reserves each image's own aspect ratio.",
+      "markdown": "# Images Published by Reference\n\nA local image is published because a published note references it. There is no\nimage configuration, no image host, and no extra deploy step: the build resolves\nthe reference, copies the bytes unchanged, and gives them a URL their content\ndigest names.\n\n## Published from files\n\n![A chart whose name carries a space and CJK](/_assets/6cb9e3f4e81cc3206c7c6950ebfea05512551937a84662c4d327737f75c9e2ab-%E5%9B%BE%20%E8%A1%A8%20one.png)\n\nThe same photograph referenced again, in the reference form this time:\n![A shared photograph][photo]\n\n![A three-frame animated GIF](/_assets/3c5d74752776dc587a92fe50d5c518f5b03ac9de2ab1c99048db5de2d019f9bf-anim.gif)\n\n[photo]: /_assets/f2a88b1aa6460c903fdfef45d07d90cff4f8027e20703810266567896fbf7596-photo.jpg\n\n## Figures and layout\n\nA title is a caption. The picture below is taller than it is wide, and the\ncaption is the author's own words rather than a repeat of its alternative text.\n\n![A narrow vertical gradient](/_assets/15efa375b19b9e51c627754b19993367cae9d8918ce2d5c0cd2f83c3d38e595a-portrait.png \"A portrait figure: the caption, not the alt text\")\n\nThis wide screenshot has no title, so it gets no caption and no invented prose:\n![A wide screenshot of a command line](/_assets/37dc9939c395ef5050ce8c71188bce3749b8713479ca8b0213270263ec1222ff-screenshot.png)\n\nAn image whose EXIF orientation rotates the stored frame still publishes, but it\ncarries no dimensions because the stored pixels are not the displayed pixels:\n\n![An oriented phone photograph](/_assets/0f6b30323fcb4df410f0a80cc39c301834bf1e177a4e47f6f06385f282764dfa-oriented.jpg \"An oriented photograph\")\n\nA tight list item promotes the same way as a loose one:\n\n- ![A tight-list portrait](/_assets/15efa375b19b9e51c627754b19993367cae9d8918ce2d5c0cd2f83c3d38e595a-portrait.png \"A tight-list caption\")\n\nAn inline picture keeps its place in the sentence, and it is not promoted to a\nfigure: ![a wide screenshot inline](/_assets/37dc9939c395ef5050ce8c71188bce3749b8713479ca8b0213270263ec1222ff-screenshot.png) the words continue.\n\nDecorative artwork is marked as such and acquires no caption:\n![](/_assets/a975cdaf01e142778ada8745c36000f0946fb4a4fc42e1cb169f07d4e5767f02-transparent.png)\n\n## The inline form that still exists\n\nA base64 raster image inline in the document is still allowed, restricted to a\nshort list of raster types. A vector image is not: an SVG can carry a script, so\na local SVG fails the build until it has a rasterizer.\n\n![A one-pixel transparent placeholder](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=)\n\n## Why not just copy the attachments\n\nBecause \"copy everything that is not a note\" is how a private garden publishes the\nphotographs attached to its drafts. Only a file a published note references is\npublished, an excluded one fails the build rather than shipping a broken picture,\nand the bytes keep their original metadata — this phase copies images, it does not\nscrub them.\n\nBack to [the pipeline](/markdown-pipeline/).\n",
       "outgoing": [
         "markdown-pipeline"
       ],
@@ -704,8 +704,38 @@
     }
   ],
   "assets": [
-    "/_assets/3c5d74752776dc587a92fe50d5c518f5b03ac9de2ab1c99048db5de2d019f9bf-anim.gif",
-    "/_assets/6cb9e3f4e81cc3206c7c6950ebfea05512551937a84662c4d327737f75c9e2ab-%E5%9B%BE%20%E8%A1%A8%20one.png",
-    "/_assets/f2a88b1aa6460c903fdfef45d07d90cff4f8027e20703810266567896fbf7596-photo.jpg"
+    {
+      "url": "/_assets/0f6b30323fcb4df410f0a80cc39c301834bf1e177a4e47f6f06385f282764dfa-oriented.jpg"
+    },
+    {
+      "url": "/_assets/15efa375b19b9e51c627754b19993367cae9d8918ce2d5c0cd2f83c3d38e595a-portrait.png",
+      "width": 24,
+      "height": 72
+    },
+    {
+      "url": "/_assets/37dc9939c395ef5050ce8c71188bce3749b8713479ca8b0213270263ec1222ff-screenshot.png",
+      "width": 480,
+      "height": 120
+    },
+    {
+      "url": "/_assets/3c5d74752776dc587a92fe50d5c518f5b03ac9de2ab1c99048db5de2d019f9bf-anim.gif",
+      "width": 4,
+      "height": 4
+    },
+    {
+      "url": "/_assets/6cb9e3f4e81cc3206c7c6950ebfea05512551937a84662c4d327737f75c9e2ab-%E5%9B%BE%20%E8%A1%A8%20one.png",
+      "width": 8,
+      "height": 6
+    },
+    {
+      "url": "/_assets/a975cdaf01e142778ada8745c36000f0946fb4a4fc42e1cb169f07d4e5767f02-transparent.png",
+      "width": 96,
+      "height": 96
+    },
+    {
+      "url": "/_assets/f2a88b1aa6460c903fdfef45d07d90cff4f8027e20703810266567896fbf7596-photo.jpg",
+      "width": 8,
+      "height": 6
+    }
   ]
 }

@@ -33,7 +33,7 @@ import { MATH_MODE } from './math-mode.ts';
 import { RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH, type RenderedKind } from './rendered-marker.ts';
 import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
 import { slugFromSegment } from './route-path.ts';
-import { classifyImageSource } from './media.ts';
+import { classifyImageSource, type ImageDimensions } from './media.ts';
 
 /** A heading authored in the Markdown body, in document order. */
 export interface Heading {
@@ -150,6 +150,17 @@ export interface RenderOptions {
    * filesystem here.
    */
   publishedAssets?: ReadonlySet<string>;
+  /**
+   * Intrinsic pixel dimensions of published assets, keyed by public URL.
+   *
+   * The producer reads these from the emitted bytes' own headers; the renderer
+   * writes them as `width`/`height` attributes so the browser reserves layout
+   * space before the image arrives. An absent entry means the header did not
+   * yield a size, and the image renders with no dimension attributes rather
+   * than a guess. Omitted is the same as empty: a caller without artifact
+   * bytes has no dimensions to claim.
+   */
+  assetDimensions?: ReadonlyMap<string, ImageDimensions>;
 }
 
 /**
@@ -1163,6 +1174,96 @@ function asClassList(value: unknown): string[] {
 }
 
 /**
+ * A standalone, captioned image becomes `figure > img + figcaption`.
+ *
+ * **Only the title becomes a caption.** `alt` is the accessible alternative and
+ * stays on the image; ordinary alt text never turns into reader-visible prose.
+ * A title is the author's explicit visible label, which is what Markdown's
+ * `![alt](path "Caption")` and a reference definition's title already mean.
+ *
+ * The shape is deliberately narrow:
+ *
+ * - a paragraph **or list item** must contain exactly one meaningful child, and
+ *   it must be an `img` — so `Prose ![alt](x) prose` keeps its inline image, and
+ *   a link-wrapped image (`[![badge](x)](target)`) is not promoted because its
+ *   child is the anchor;
+ * - the image must have a non-empty title; an uncaptioned image keeps the exact
+ *   container it had, so no empty `<figcaption>` and no invented "Figure 1";
+ * - a decorative `alt=""` image with no title is therefore untouched, and a
+ *   title is authored content rather than something derived from `alt`.
+ *
+ * A tight list item (`- ![alt](x "Cap")`) has the image as the item's direct
+ * child, while a loose one carries a paragraph; both must become the same
+ * figure. Promoting a paragraph that is already inside a list item and then
+ * re-checking the item is safe because the item's meaningful child is then the
+ * promoted `figure`, not an `img`, so it is not wrapped twice.
+ *
+ * A blockquote's own paragraph is promoted too: a figure is a block, so it
+ * remains valid there. A table cell holds no paragraph here, and a fenced code
+ * block's content is text, so neither can reach this visitor with an element
+ * `img` child.
+ */
+function imageFigurePlugin(): HastPluginDefinition {
+  type ElementNode = Extract<HastNode, { type: 'element' }>;
+
+  const titledOnlyImage = (node: ElementNode): { image: ElementNode; title: string } | undefined => {
+    const meaningful = (node.children ?? []).filter(
+      (child) => !(child.type === 'text' && /^\s*$/.test(child.value)),
+    );
+    if (meaningful.length !== 1) return undefined;
+    const image = meaningful[0]!;
+    if (image.type !== 'element' || image.tagName !== 'img') return undefined;
+    const title = image.properties?.['title'];
+    if (typeof title !== 'string' || title.trim() === '') return undefined;
+    return { image, title };
+  };
+
+  const figureFor = (image: ElementNode, title: string): HastNode => {
+    const { title: _caption, ...properties } = image.properties ?? {};
+    return {
+      type: 'element',
+      tagName: 'figure',
+      properties: { className: ['image-figure'] },
+      children: [
+        { ...image, properties },
+        {
+          type: 'element',
+          tagName: 'figcaption',
+          properties: {},
+          children: [{ type: 'text', value: title }],
+        },
+      ],
+    };
+  };
+
+  return {
+    name: 'anc-image-figures',
+    element: [
+      {
+        filter: ['p'],
+        visit(node, ctx) {
+          const found = titledOnlyImage(node);
+          if (found === undefined) return;
+          ctx.replaceNode(node, figureFor(found.image, found.title));
+        },
+      },
+      {
+        filter: ['li'],
+        visit(node) {
+          const found = titledOnlyImage(node);
+          if (found === undefined) return;
+          const figure = figureFor(found.image, found.title);
+          return {
+            ...node,
+            children: (node.children ?? []).map((child) => (child === found.image ? figure : child)),
+          };
+        },
+      },
+    ],
+  };
+}
+
+/**
  * The fence info string satteri records on a code node, or `undefined` for an
  * unlabelled fence. hast's `ElementData` is an open record with no declared
  * `lang`, so the read is narrowed here rather than asserted at the call site.
@@ -1192,7 +1293,8 @@ const POLICY: sanitizeHtml.IOptions = {
   /**
    * satteri and this module's own plugins emit only: `a blockquote code del em
    * h1`–`h6 hr img input li ol p pre section strong sup table tbody td th thead
-   * tr ul`, plus `figure` and `span` from the code-block transform.
+   * tr ul`, plus `figure`/`figcaption` from the code-block, diagram, and image
+   * transforms, and `span` from the math source path.
    *
    * The remainder are reachable only through raw HTML in a note body. They are
    * kept because requirements 15.1 promises a "safe HTML subset", and because a
@@ -1223,7 +1325,7 @@ const POLICY: sanitizeHtml.IOptions = {
       'href', 'title', 'class', 'rel', 'aria-label', 'aria-describedby',
       'data-footnote-ref', 'data-footnote-backref', 'id',
     ],
-    img: ['src', 'alt', 'title'],
+    img: ['src', 'alt', 'title', 'width', 'height', 'loading', 'decoding'],
     h1: ['id'],
     h2: ['id', 'class'],
     h3: ['id'],
@@ -1241,7 +1343,6 @@ const POLICY: sanitizeHtml.IOptions = {
     section: ['class', 'data-footnotes'],
     blockquote: ['class', 'cite', 'data-callout'],
     figure: ['class', 'data-code-language', 'data-diagram'],
-    figcaption: ['class'],
     div: ['class', 'tabindex'],
     input: ['type', 'checked', 'disabled', 'aria-label'],
     th: ['colspan', 'rowspan', 'scope', 'data-align'],
@@ -1276,10 +1377,10 @@ const POLICY: sanitizeHtml.IOptions = {
     section: ['footnotes'],
     blockquote: ['callout', 'callout-*'],
     // `diagram` is the figure a rendered diagram sits in; `code-block` the one a
-    // fence sits in. `diagram-canvas` and `diagram-source` are the two shapes a
-    // diagram takes, one per mode.
-    figure: ['code-block', 'diagram'],
-    figcaption: [],
+    // fence sits in; `image-figure` a standalone image with an authored caption.
+    // `diagram-canvas` and `diagram-source` are the two shapes a diagram takes,
+    // one per mode.
+    figure: ['code-block', 'diagram', 'image-figure'],
     div: ['diagram-canvas'],
     pre: ['diagram-source'],
     strong: ['callout-title'],
@@ -1307,6 +1408,45 @@ const POLICY: sanitizeHtml.IOptions = {
 };
 
 /**
+ * Whether `sanitize-html` will keep this `src` after the transforms run.
+ *
+ * This mirrors the policy the sanitizer actually applies, for the one decision
+ * that must not be made before it: which image is the article's lead. A
+ * transform runs before the scheme allowlist, so treating any present `src` as
+ * surviving spent the eager image on a `javascript:`, `file:`, `mailto:`, `ftp:`
+ * or protocol-relative URL the sanitizer then removed, leaving the real first
+ * image lazy.
+ *
+ * The predicates are the policy's own (`allowedSchemesByTag.img`,
+ * `allowProtocolRelative`, and the safe-`data:` test the transform applies),
+ * and the laundering is the sanitizer's: remove every character at or below
+ * U+0020, then remove complete HTML comments before reading a scheme.
+ */
+function imageSourceSurvivesPolicy(source: string | undefined): source is string {
+  if (source === undefined) return false;
+  // The transform turns an unsafe `data:` URI into an empty `src`, which the
+  // sanitizer then drops because `src` is a non-boolean attribute.
+  if (/^data:/i.test(source) && !SAFE_IMAGE_DATA_URI.test(source)) return false;
+
+  let href = Array.from(source, (character) => (character <= ' ' ? '' : character)).join('');
+  for (;;) {
+    const first = href.indexOf('<!--');
+    if (first === -1) break;
+    const last = href.indexOf('-->', first + 4);
+    if (last === -1) break;
+    href = href.slice(0, first) + href.slice(last + 3);
+  }
+  if (href === '') return false;
+  const allowProtocolRelative = POLICY.allowProtocolRelative !== false;
+  if (!allowProtocolRelative && /^[/\\]{2}/.test(href)) return false;
+  const scheme = /^([a-zA-Z][a-zA-Z0-9.\-+]*):/.exec(href)?.[1]?.toLowerCase();
+  if (scheme === undefined) return true;
+  const byTag = typeof POLICY.allowedSchemesByTag === 'object' ? POLICY.allowedSchemesByTag : undefined;
+  const allowed = byTag?.['img'] ?? (Array.isArray(POLICY.allowedSchemes) ? POLICY.allowedSchemes : []);
+  return allowed.includes(scheme);
+}
+
+/**
  * The rendering policy's terminal step. Transforms that must observe *every*
  * anchor and image live here rather than in a hast plugin, because raw HTML in
  * the Markdown body reaches the hast tree as opaque `raw` nodes that element
@@ -1320,6 +1460,7 @@ function sanitize(
   generatedIds: ReadonlySet<string>,
   rawIds: ReadonlyMap<string, number>,
   publishedAssets: ReadonlySet<string>,
+  assetDimensions: ReadonlyMap<string, ImageDimensions>,
 ): string {
   // Each generated id survives exactly once. `headingPlugin` has already made
   // the generated set disjoint from every raw-HTML id, so this no longer
@@ -1329,9 +1470,26 @@ function sanitize(
   const usedFootnoteIds = new Set<string>();
   // One deny token per raw-HTML claim on that id; see the note below.
   const denials = new Map(rawIds);
+  // The first image that actually keeps a `src` is the article's lead, and the
+  // rest are below it. This closure advances in parse order, which is document
+  // order for the one sanitizer pass; an `<img>` with no surviving source is not
+  // a content image and does not spend the lead.
+  let leadImagePending = true;
+  // A minimal open-element stack, used by the one structural rule the allowlist
+  // cannot express: a `figcaption` outside a `figure` is a shape this renderer
+  // never emits, so a raw-HTML one is renamed to an inert `span` rather than
+  // left claiming caption semantics. `onOpenTag` runs before the tag's own
+  // transform, so the current tag is the stack's last entry and its parent is
+  // the one before it.
+  const openTags: string[] = [];
 
   return sanitizeHtml(html, {
     ...POLICY,
+    onOpenTag: (name) => openTags.push(name),
+    onCloseTag: (name) => {
+      const index = openTags.lastIndexOf(name);
+      if (index !== -1) openTags.length = index;
+    },
     transformTags: {
       // Element ids are page-global names, and the layout owns hooks such as
       // `#search-toggle`. Only ids this pipeline generated survive, and each
@@ -1441,14 +1599,60 @@ function sanitize(
           source !== undefined && /^data:/i.test(source) && !SAFE_IMAGE_DATA_URI.test(source)
             ? undefined
             : source;
+        // The lead is the first image whose source the sanitizer will actually
+        // keep. A transform runs before the scheme allowlist, so testing only
+        // `src !== undefined` spent it on a URL that was about to be stripped.
+        const survives = imageSourceSurvivesPolicy(src);
+        let dimensions: ImageDimensions | undefined;
+        let loading: 'eager' | 'lazy' | undefined;
+        if (survives) {
+          // The intrinsic size the producer read from these exact bytes, if its
+          // header yielded one. Serialized as strings because that is what an
+          // HTML attribute is; `CSS height: auto` plus `max-width: 100%` keeps
+          // the ratio responsive after the browser reserves the space.
+          dimensions = assetDimensions.get(src);
+          // Lead-versus-deferred is decided by rendered document order, not by a
+          // guess about position: the first image that keeps a source is the one
+          // a reader meets first, so it stays eager. Everything after it defers.
+          // `decoding="async"` is assigned to both; it is a hint about the
+          // decode thread, not a delay, and it cannot slow the lead's fetch.
+          loading = leadImagePending ? 'eager' : 'lazy';
+          leadImagePending = false;
+        }
+        // A stripped source carries no layout or loading claim: author-supplied
+        // `loading`, `decoding`, `width` and `height` would otherwise survive
+        // the allowlist on an element with no picture.
+        const {
+          loading: _loading,
+          decoding: _decoding,
+          width: _width,
+          height: _height,
+          ...withoutImageClaims
+        } = attribs;
         return {
           tagName,
           attribs: {
-            ...attribs,
+            ...(survives ? attribs : withoutImageClaims),
             ...(src === undefined ? { src: '' } : { src }),
             alt: typeof attribs['alt'] === 'string' ? attribs['alt'] : '',
+            ...(dimensions === undefined
+              ? {}
+              : { width: String(dimensions.width), height: String(dimensions.height) }),
+            ...(loading === undefined ? {} : { loading, decoding: 'async' }),
           },
         };
+      },
+      // A `figcaption` is a valid caption only as a direct child of a `figure`.
+      // This renderer emits exactly that shape (the image transform above and
+      // the two diagram modes), so a raw-HTML caption elsewhere is markup this
+      // pipeline does not produce and must not survive with caption semantics.
+      // Renaming it to an inert `span` keeps the author's text instead of
+      // silently deleting it, while ensuring the page has no orphan caption.
+      figcaption: (tagName) => {
+        const parent = openTags[openTags.length - 2];
+        return parent === 'figure'
+          ? { tagName, attribs: {} }
+          : { tagName: 'span', attribs: {} };
       },
       // Task-list checkboxes are visual state, not controls. Forcing the shape
       // here also neutralizes any other raw-HTML input (a text field, a hidden
@@ -1701,6 +1905,7 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
       calloutPlugin(),
       mathPlugin(collected, maths),
       codePlugin(collected, diagrams, chrome.diagramCaption),
+      imageFigurePlugin(),
       taskListPlugin(),
       tablePlugin(),
     ],
@@ -1712,6 +1917,7 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
     new Set(collected.headings.map((heading) => heading.id)),
     collected.rawIds,
     options.publishedAssets ?? new Set<string>(),
+    options.assetDimensions ?? new Map<string, ImageDimensions>(),
   );
 
   // Rendered after sanitization, at markers the sanitizer preserved. Both
