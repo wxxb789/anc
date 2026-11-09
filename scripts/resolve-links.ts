@@ -277,32 +277,60 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
  * A label safe to place inside `[…]`, re-encoded from **decoded** text.
  *
  * The input here is the parser's decoded value — an image's `alt` — not source
- * bytes. `[` and `]` are escaped because neither is ordinary text inside a
- * label, and a backslash run is **doubled exactly where the parser would
- * otherwise consume one**: when the character after it is ASCII punctuation (the
- * escapable set), a line break, or the end of the label. A single backslash
- * before the closing `]` escapes the delimiter and the picture becomes prose;
- * a single one before `]`, `[`, `*` or another punctuation byte escapes that
- * character and the backslash vanishes. Every other run is left alone, so a
- * label whose backslashes are followed by ordinary text still comes out
- * byte-identical to what the author wrote.
- *
- * Measured on the previous two-character rule, which escaped only the brackets
- * (the arrow's right side is the exact text the old rule emitted):
+ * bytes. Re-emitting that value raw is not round-trip-safe, because decoded text
+ * is not Markdown source: an `&` that begins a character reference decodes a
+ * second time, a `*` the author escaped becomes emphasis, and `<` starts raw
+ * HTML. Measured on the previous rule, which escaped only brackets and
+ * backslash runs:
  *
  * ```
- * ![ends with \\](pic.png)  ->  ![ends with \](/assets/…)    no image at all
- * ![mix \\\]](pic.png)      ->  ![mix \\]](/assets/…)        no image; alt lost `]`
+ * ![literal &amp;copy;](pic.png)  ->  alt "literal &copy;"
+ *                                        re-emit "&copy;"  ->  alt "©"
+ * ![a\*b\*c](pic.png)             ->  alt "a*b*c"
+ *                                        re-emit "a*b*c"   ->  alt "abc"
+ * ![<b>x</b>](pic.png)            ->  alt "<b>x</b>"
+ *                                        re-emit raw       ->  inline HTML
  * ```
  *
- * **This is the same rule {@link escapeLabelEdits} applies, reached from the
- * other side.** That function works on source bytes, where a bracket is already
- * escaped exactly when the backslashes before it are odd, so it adds a byte only
- * to an odd run and leaves even runs alone. Here every backslash is data, so a
- * run that must stay literal before punctuation is emitted at twice its length
- * and becomes even; a run followed by ordinary text is already literal and is
- * emitted once. Both produce a label in which no delimiter or escaped
- * punctuation is preceded by an odd run.
+ * So the label serialiser escapes **every character that can begin or
+ * participate in an inline construct this renderer enables**, one backslash
+ * each, and nothing else:
+ *
+ * | escaped | why leaving it raw changes the text |
+ * | --- | --- |
+ * | `\` | the escape introducer: it consumes the next byte (emitted twice only where the next byte would consume it, below) |
+ * | `` ` `` | a code span, which discards its delimiters |
+ * | `*`, `_` | emphasis and strong, which discard their markers |
+ * | `[`, `]` | the label's own delimiters, and nested link/image syntax |
+ * | `<` | raw HTML and autolinks, which reprocess the text as markup |
+ * | `&` | a character reference, which decodes the text a second time |
+ * | `~` | GFM strikethrough |
+ * | `\|` | a GFM table cell separator, when the image sits in a table |
+ * | `$` | the math feature's delimiters (`$$…$$`) |
+ *
+ * A line feed or carriage return cannot be backslash-escaped, and a raw one
+ * would let the next character start a block construct (a heading or list after
+ * the break) or end the construct at a blank line. Both are emitted as numeric
+ * character references (`&#10;` / `&#13;`), which keep the label on one line and
+ * still decode to the same character. Everything else — letters, digits,
+ * spaces, `\u00a0`, `!`, `(`, `)`, `+`, `%`, `#`, `:`, `/`, `.`, `>` — is
+ * ordinary text inside a link label, so it is emitted unchanged; an unescaped
+ * `!` cannot form an image because the `[` after it is escaped.
+ *
+ * **Backslash runs are handled separately, and the round-2 rule is unchanged.**
+ * A decoded backslash is data, not source: emit it twice when the following
+ * character is ASCII punctuation, a line break, or the end of the label, and
+ * once when it is ordinary text, where the parser leaves a lone backslash
+ * alone. That is why `has \ backslash` still comes out byte-identical, while a
+ * trailing backslash cannot escape the closing `]`.
+ *
+ * **This is the decoded-text half of {@link escapeLabelEdits}.** That function
+ * works on *source* bytes, where the author's own escapes are already present
+ * and escaping anything beyond an unescaped bracket would corrupt the label, so
+ * its set is exactly the two delimiters. Here the input is decoded text, so
+ * every construct-forming character has to be reintroduced as escaped
+ * punctuation. The two sets differ because the inputs differ; the guarantee is
+ * the same.
  *
  * The alternative — copy the label's source span — is what the split rewrite
  * does for an anchor's label, and it is not available here: an image's `alt`
@@ -331,6 +359,28 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
 /** CommonMark's escapable ASCII punctuation, as one code-unit range set. */
 const ASCII_PUNCTUATION = /[\u0021-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u007E]/;
 
+/**
+ * Every character that begins or participates in an inline construct.
+ *
+ * A record rather than a `Set` because the table is static: each key names one
+ * construct above, and a reader can audit the whole rule in one place. `\` is
+ * included for completeness although the accumulator consumes it before this
+ * lookup; keeping the set whole is what makes its coverage checkable here.
+ */
+const LABEL_SYNTAX: Readonly<Record<string, true>> = {
+  '\\': true,
+  '`': true,
+  '*': true,
+  _: true,
+  '[': true,
+  ']': true,
+  '<': true,
+  '&': true,
+  '~': true,
+  '|': true,
+  $: true,
+};
+
 function escapeLabel(text: string): string {
   let result = '';
   let slashes = 0;
@@ -346,7 +396,10 @@ function escapeLabel(text: string): string {
       continue;
     }
     flush(character);
-    result += character === '[' || character === ']' ? `\\${character}` : character;
+    if (character === '\n') result += '&#10;';
+    else if (character === '\r') result += '&#13;';
+    else if (LABEL_SYNTAX[character] === true) result += `\\${character}`;
+    else result += character;
   }
   // End of the label: the next byte is the closing `]`, a delimiter a lone
   // backslash would escape.

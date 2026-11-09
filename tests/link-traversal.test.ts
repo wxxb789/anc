@@ -1144,23 +1144,34 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
     assert.equal(run(spell('plain label')), '[plain label](/t/)', syntax);
   }
 
-  // **The set is `[` and `]` and nothing else, measured rather than assumed.**
-  // Each of these was run through both paths and the renderer (a one-off probe,
-  // not kept) and round-trips intact: the parser closes a label
-  // at its `]` before a destination begins, so a paren cannot truncate one, and
-  // a backtick and a lone backslash are not label syntax at all. A gate over the
-  // two that break would pass just as well if the escape were widened to all
-  // six, which is why the four that must *not* change are asserted here.
-  for (const label of ['has ( paren', 'has ) paren', 'has ` backtick', 'has \\ backslash']) {
+  // **For the source-byte path the set is `[` and `]` and nothing else, and
+  // that is measured rather than assumed.** The split rewrite copies the label's
+  // own bytes and escapes only a bracket the author did not already escape; the
+  // parser closes a label at its `]` before a destination begins, so a paren
+  // cannot truncate one, and a lone backslash before ordinary text is literal.
+  // A gate over the two that break would pass just as well if the escape were
+  // widened to all six, which is why these must *not* change on that path.
+  //
+  // A backtick is the one input where the two paths disagree, and the reason is
+  // the parser rather than the escape: the split path keeps the author's source
+  // bytes, so a lone backtick stays byte-identical; the whole-span path re-emits
+  // a decoded `alt`, where two raw backticks would form a code span and lose
+  // their contents. The serialiser therefore escapes every backtick there, and
+  // the embed row asserts the escape is present while the wikilink row asserts
+  // the source-byte path is untouched.
+  for (const label of ['has ( paren', 'has ) paren', 'has \\ backslash']) {
     assert.equal(run(`[[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
     assert.equal(run(`![[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
   }
+  assert.equal(run('[[t|has ` backtick]]'), '[has ` backtick](/t/)', 'the source-byte path escaped a backtick');
+  assert.equal(run('![[t|has ` backtick]]'), '[has \\` backtick](/t/)', 'the decoded path did not escape a backtick');
 
   // **The invariant that actually matters, stated as itself: a label with no
-  // bracket comes out byte-identical to what the author wrote.** The four rows
-  // above check four characters; this checks the property, and it is the one two
-  // successive versions of this fix violated in ways no bracket-shaped gate
-  // could see. Each row below was a real regression, found by review:
+  // bracket comes out byte-identical to what the author wrote.** The character
+  // rows above check the individual bytes; this checks the property, and it is
+  // the one two successive versions of this fix violated in ways no
+  // bracket-shaped gate could see. Each row below was a real regression, found
+  // by review:
   //
   // - a label ending in a backslash had its escape re-emitted raw, so the
   //   backslash escaped the label's own `]` and the link vanished entirely;
