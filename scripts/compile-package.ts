@@ -176,10 +176,16 @@ function compile(destination: string, isExcluded: (path: string) => boolean): st
   const { config, error } = ts.readConfigFile(configPath, ts.sys.readFile.bind(ts.sys));
   if (error !== undefined) throw new Error(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
 
+  // `.d.ts` files are included in the *program* but never emitted or staged:
+  // `src/types/css-tree.d.ts` declares the API of a pinned dependency that ships
+  // no types of its own, and without it the package compile fails on a module
+  // `astro check` accepts. They are type-only, so `ts.createProgram` emits
+  // nothing for them, and the staging copy's `!source.endsWith('.ts')` filter
+  // already keeps them out of the tarball.
   const sources = COMPILED_ROOTS.flatMap((root) =>
     filesUnder(
       join(ROOT, root),
-      (path) => path.endsWith('.ts') && !path.endsWith('.d.ts') && !isExcluded(path),
+      (path) => path.endsWith('.ts') && !isExcluded(path),
     ),
   );
 

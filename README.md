@@ -199,18 +199,26 @@ a disclosure there; that is why the names and the counts are split.
   so one picture is one file however many notes embed it. A JPEG photograph becomes lossy
   WebP only when the candidate is smaller; a PNG screenshot, diagram, or alpha graphic
   becomes lossless WebP only when that is smaller. Existing WebP/AVIF and every animation
-  are published unchanged, with every frame and delay. No resize, crop, responsive matrix,
-  image CDN, browser script, or per-image setting exists. A reference resolves relative to
-  the note, then the content root; a missing, excluded, escaping, corrupt, over-limit, or
-  unsupported one — SVG included — fails the build rather than shipping a broken picture.
-  Remote images are left as written and never fetched. A standalone image's explicit
-  Markdown title becomes a visible `<figcaption>` while `alt` stays the accessible
-  alternative; intrinsic dimensions come from the emitted bytes so layout space is reserved,
-  and the first image loads eagerly while later ones defer.
-- The encoder is the pinned `sharp` package, installed as an ordinary dependency with its
-  prebuilt platform binary: no system CLI, `cwebp`, or `libvips` install step. Linux x64 is
-  the platform exercised by this repository's gates; Windows and macOS use sharp's prebuilt
-  packages but were not exercised here.
+  are published unchanged, with every frame and delay. A local, self-contained **static SVG**
+  is build-only input: it is validated against a fail-closed XML/CSS subset, rasterized from
+  its bytes to lossless WebP at twice its logical size, and its source is never served. Every
+  external reference, `data:` payload, script, animation, foreign namespace, DTD and CSS
+  at-rule is refused; text no installed font covers fails the build rather than publishing
+  tofu. No resize, crop, responsive matrix, image CDN, browser script, per-image setting, or
+  bundled font exists. A reference resolves relative to the note, then the content root; a
+  missing, excluded, escaping, corrupt, over-limit, or unsupported one fails the build rather
+  than shipping a broken picture. Remote images are left as written and never fetched. A
+  standalone image's explicit Markdown title becomes a visible `<figcaption>` while `alt`
+  stays the accessible alternative; dimensions come from the emitted bytes — half the emitted
+  raster for a 2× SVG (the logical size unless the output budget clamped it, in which case the
+  layout shrinks with the raster) — so layout space is reserved, and the first image loads
+  eagerly while later ones defer.
+- The encoder and SVG rasterizer are the pinned `sharp` package, installed as an ordinary
+  dependency with its prebuilt platform binary: no system CLI, `cwebp`, `librsvg`, `resvg`,
+  or `libvips` install step. SVG text uses the build host's fonts, and missing coverage fails
+  rather than adding a bundled font. Linux x64 is the platform exercised by this repository's
+  gates; Windows and macOS use sharp's prebuilt packages but were not exercised here, and
+  cross-platform byte equality is not promised.
 
 ## Architecture
 

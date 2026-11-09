@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50mm" viewBox="0 0 1000 500">
+  <title>Physical units</title>
+  <rect width="1000" height="500" fill="#ffffff"/>
+  <rect x="40" y="40" width="920" height="420" rx="30" fill="#f4f7fa" stroke="#3c4652" stroke-width="4"/>
+  <circle cx="260" cy="250" r="140" fill="#8ad884"/>
+  <text x="460" y="270" font-family="DejaVu Sans, sans-serif" font-size="56" fill="#161b21">mm units</text>
+</svg>

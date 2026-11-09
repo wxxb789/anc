@@ -128,6 +128,16 @@ export interface PreparedImage {
   readonly format: ImageFormat;
   /** Intrinsic size read from {@link bytes}, when a header could be read. */
   readonly dimensions?: ImageDimensions;
+  /**
+   * The CSS layout size to publish in `width`/`height`, when it differs from the
+   * intrinsic pixels.
+   *
+   * Only Goal 0012 sets it: an SVG is rasterized at 2× its logical size, so the
+   * 1,200-pixel WebP of a 600-pixel diagram must be laid out at 600 CSS pixels,
+   * not at 1,200. For every raster it is absent, because there one emitted pixel
+   * is one CSS pixel and the intrinsic size is already the layout size.
+   */
+  readonly displayDimensions?: ImageDimensions;
   /** Whether the candidate replaced the source bytes. */
   readonly transcoded: boolean;
 }
@@ -135,7 +145,7 @@ export interface PreparedImage {
 /** What preparing one authorized image produced. */
 export type PrepareResult =
   | { readonly ok: true; readonly image: PreparedImage }
-  | { readonly ok: false; readonly reason: MediaProcessingFailureReason };
+  | { readonly ok: false; readonly reason: MediaProcessingFailureReason; readonly detail?: string };
 
 /** A rejected operation whose classification the caller needs. */
 class MediaLimitError extends Error {

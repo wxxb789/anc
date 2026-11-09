@@ -1355,13 +1355,26 @@ const MEDIA_REASON_LABELS: Readonly<Record<MediaFailureReason, string>> = {
   missing: 'missing',
   excluded: 'excluded',
   outside: 'outside the content root',
-  svg: 'unsupported local SVG',
   unsupported: 'unsupported file type',
   'html-form': 'unsupported HTML image form',
   corrupt: 'corrupt or undecodable',
   'too-large': 'over the size limit',
   timeout: 'exceeded the processing deadline',
   'encode-failed': 'encoder failure',
+  'svg-invalid': 'malformed SVG',
+  'svg-doctype': 'SVG doctype or entity declaration',
+  'svg-xinclude': 'SVG XInclude',
+  'svg-script': 'active SVG content',
+  'svg-foreign': 'SVG foreign content',
+  'svg-unsafe': 'unsupported SVG construct',
+  'svg-animation': 'SVG animation',
+  'svg-external': 'external SVG reference',
+  'svg-data': 'embedded SVG data asset',
+  'svg-css': 'unsafe SVG CSS',
+  'svg-render': 'SVG rasterizer failure',
+  'svg-workload': 'SVG over the work budget',
+  'svg-font': 'SVG text with no host font coverage',
+  'svg-empty': 'SVG with no visible content',
 };
 
 /**
@@ -1435,20 +1448,33 @@ function mediaPublisher(discovery: Discovery): { publisher: ImagePublisher; asse
     }
 
     const format = sniffImageFormat(bytes);
-    if (format === undefined) {
-      return { kind: 'failed', reason: looksLikeSvg(bytes) ? 'svg' : 'unsupported' };
-    }
+    // Goal 0012: an SVG is a build-only source. The signature selects the policy
+    // and rasterizer, which run on these same authorized bytes; the XML is never
+    // staged or published, and a conversion failure never falls back to it.
+    const svg = format === undefined && looksLikeSvg(bytes);
 
     // The source digest answers "have I already processed these exact bytes?".
     // The emitted digest is what the URL will name.
     const sourceDigest = createHash('sha256').update(bytes).digest('hex');
     let prepared = bySource.get(sourceDigest);
     if (prepared === undefined) {
-      prepared = prepareImage(bytes, format);
+      if (svg) {
+        prepared = import('../src/lib/svg-render.ts').then(({ prepareSvg }) => prepareSvg(bytes));
+      } else if (format !== undefined) {
+        prepared = prepareImage(bytes, format);
+      } else {
+        return { kind: 'failed', reason: 'unsupported' };
+      }
       bySource.set(sourceDigest, prepared);
     }
     const result = await prepared;
-    if (!result.ok) return { kind: 'failed', reason: result.reason };
+    if (!result.ok) {
+      return {
+        kind: 'failed',
+        reason: result.reason,
+        ...(result.detail === undefined ? {} : { detail: result.detail }),
+      };
+    }
 
     const emitted = result.image;
     const digest = createHash('sha256').update(emitted.bytes).digest('hex');
@@ -1468,6 +1494,7 @@ function mediaPublisher(discovery: Discovery): { publisher: ImagePublisher; asse
       digest,
       bytes: emitted.bytes,
       ...(emitted.dimensions === undefined ? {} : { dimensions: emitted.dimensions }),
+      ...(emitted.displayDimensions === undefined ? {} : { displayDimensions: emitted.displayDimensions }),
     });
     return { kind: 'published', url };
   };
@@ -1633,9 +1660,14 @@ export async function resolveCorpusLinks(
       'image-not-publishable',
       `${mediaFailures.length} image reference${mediaFailures.length === 1 ? '' : 's'} in published notes ` +
         `cannot be published (${counts}). An image must name a file this build may publish — PNG, JPEG, ` +
-        'GIF, WebP, or AVIF inside the content root — and an SVG is refused until it has a rasterizer. ' +
-        'The build stops rather than shipping a broken picture.',
-      mediaFailures.map((row) => `${row.source}:${row.line} → ${row.link} (${row.reason})`).join('\n'),
+        'GIF, WebP, or AVIF, or a self-contained static SVG — inside the content root. The build stops ' +
+        'rather than shipping a broken picture.',
+      mediaFailures
+        .map(
+          (row) =>
+            `${row.source}:${row.line} → ${row.link} (${row.reason}${row.detail === undefined ? '' : `: ${row.detail}`})`,
+        )
+        .join('\n'),
     );
   }
   discovery.assets = assets;
@@ -1716,6 +1748,14 @@ export interface AssetEmission {
   readonly bytes: Buffer;
   /** Intrinsic pixel size from the emitted bytes' own header, when readable. */
   readonly dimensions?: ImageDimensions;
+  /**
+   * The CSS layout size, when it is not the intrinsic pixel size.
+   *
+   * An SVG rasterized at 2× is 1,200 pixels wide and laid out at 600; the
+   * artifact's `width`/`height` are layout hints, and a 2× asset that published
+   * its pixel size would render twice as large as its author drew it.
+   */
+  readonly displayDimensions?: ImageDimensions;
 }
 
 /**
@@ -1914,7 +1954,7 @@ export async function writeArtifact(
         : {
             assets: published.map((asset) => ({
               url: asset.url,
-              ...asset.dimensions,
+              ...(asset.displayDimensions ?? asset.dimensions),
             })),
           }),
       entries: discovery.entries,

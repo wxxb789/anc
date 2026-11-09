@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="300" viewBox="0 0 640 300">
+  <title>Filters</title>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="5" result="blur"/>
+      <feOffset in="blur" dx="3" dy="4" result="offset"/>
+      <feMerge>
+        <feMergeNode in="offset"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="tint" x="0" y="0" width="100%" height="100%">
+      <feColorMatrix type="matrix" values="0.9 0 0 0 0.05  0 0.9 0 0 0.05  0 0 1 0 0  0 0 0 1 0"/>
+      <feOffset in="SourceGraphic" dx="6" dy="6" result="moved"/>
+    </filter>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="0" stdDeviation="4" flood-color="#86c8e6"/>
+    </filter>
+  </defs>
+  <rect width="640" height="300" fill="#ffffff"/>
+  <rect x="40" y="80" width="150" height="140" rx="12" fill="#8ad884" filter="url(#shadow)"/>
+  <circle cx="320" cy="150" r="70" fill="#f0c08c" filter="url(#tint)"/>
+  <text x="420" y="160" font-family="DejaVu Sans, sans-serif" font-size="34" fill="#161b21" filter="url(#glow)">glow</text>
+</svg>

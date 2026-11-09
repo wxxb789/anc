@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="240" viewBox="0 0 560 240">
+  <title>CJK text</title>
+  <rect width="560" height="240" fill="#ffffff"/>
+  <text x="30" y="70" font-family="Noto Sans CJK JP, Noto Sans, sans-serif" font-size="30" fill="#161b21">构建流水线：从 Markdown 到静态站点</text>
+  <text x="30" y="120" font-family="Noto Sans CJK JP, Noto Sans, sans-serif" font-size="24" fill="#3c4652">发布、排除、隐私、链接、图片与搜索索引。</text>
+  <text x="30" y="170" font-family="Noto Sans CJK JP, Noto Sans, sans-serif" font-size="24" fill="#3c4652">图片 / images · 第 3 行</text>
+</svg>

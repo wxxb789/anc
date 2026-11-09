@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+  <defs>
+    <filter id="f">
+      <feTurbulence baseFrequency="0.5" numOctaves="1000000abc" seed="1"/>
+    </filter>
+  </defs>
+  <rect width="200" height="120" filter="url(#f)" fill="#8ad884"/>
+</svg>

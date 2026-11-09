@@ -211,6 +211,66 @@ preferred when it is worthwhile, not compulsory:
   fields* cannot be read is a different case: the complete image still publishes, without
   `width`/`height`.
 
+**SVG diagrams.** A local, self-contained **static** SVG is accepted and
+published as **lossless WebP**; the XML itself is never served. Write it like any
+other picture — `![A flow diagram](diagrams/flow.svg)` — and the build validates
+it, rasterizes it from the file's bytes, and hands the rest of the pipeline only
+the WebP bytes. A rasterized SVG is laid out at **half the emitted raster**. When
+the output budget does not bite, that is the author's logical size: an absolute
+`width`/`height` in the document is honoured (`px`, `pt`, `pc`, `mm`, `cm`, `in`,
+converted at CSS's 96 dpi), and a `viewBox`-only document is laid out at 720 CSS
+pixels wide with its own aspect ratio. The published raster is normally 2× that
+size, so text stays sharp on a high-density display; a picture wider than the
+reading column is still capped by the page's CSS. When the finite output budget
+clamps the raster, the layout shrinks with it: a 4000×4000 SVG is emitted at
+2449×2449 and lays out at 1225×1225. Transparency is preserved, the encoding is
+lossless, and two notes that embed the same file get one asset. Nothing is
+cropped, no `viewBox` is rewritten, and a proportional downscale keeps a very
+large diagram inside a finite pixel budget.
+
+The accepted subset is deliberate and fail-closed. The source must be UTF-8
+XML. A UTF-16 document does not match the byte signature and is reported as an
+unsupported image; any other non-UTF-8 bytes are refused as malformed rather
+than parsed.
+
+- **Drawing:** shapes, paths, groups, `defs`/`symbol`/`use`, `view`, linear and
+  radial gradients, patterns, masks, clip paths, markers, and static filters
+  (blur, offset, merge, colour matrix, flood, drop shadow, component transfer,
+  point and spot lighting, tile and turbulence within the work budget).
+  `feDistantLight` is not part of the subset.
+- **Text:** `text`, `tspan`, `textPath`, `title`, `desc`, and text converted to
+  outlines. `<style>` sheets, `style` attributes and presentation attributes are
+  supported for static styling.
+- **References:** same-document fragments only — `href="#id"`,
+  `xlink:href="#id"`, `url(#gradient)`. A gradient, mask, clip path, symbol or
+  filter defined in the same file is fine.
+- **Refused:** a DOCTYPE or entity declaration, XInclude, `script` or an `on*`
+  handler, `foreignObject`, animation (`animate*`, `set`), an external stylesheet,
+  any CSS at-rule (`@import`, `@font-face`, `@media`, …), an external `url()`, a
+  `file:` or `http(s)` reference, a relative path, an embedded `data:` asset,
+  `xml:base`, `<metadata>`, a root without
+  `xmlns="http://www.w3.org/2000/svg"`, and any element or attribute outside the
+  subset — including an Inkscape `sodipodi`/`inkscape` attribute or an RDF
+  metadata block. Inert `role`, `aria-*`, `data-*`, `lang` and `tabindex`
+  attributes and the legacy `xlink:title`/`xlink:role` are the documented
+  exception; none can name a resource. Re-export the drawing as plain SVG if
+  your editor adds anything else.
+- **Fonts:** text uses the fonts installed on the build machine; ANC does not
+  download or bundle one. Every `<text>` subtree is checked, including one in an
+  unused `defs` or `symbol`, because proving a symbol is unreferenced is not
+  worth the failure direction. If no installed font covers a character, the build
+  fails and names the code point — install a font with those glyphs, or convert
+  the labels to outlines in the editor. This is checked per character, not per
+  requested family. Latin and CJK render on a host that has them; the same
+  pinned engine and font set produce identical bytes across repeat builds, and
+  no cross-machine byte identity is promised.
+
+The failure reasons are part of the build's contract: `svg-invalid`,
+`svg-doctype`, `svg-xinclude`, `svg-script`, `svg-foreign`, `svg-unsafe`,
+`svg-animation`, `svg-external`, `svg-data`, `svg-css`, `svg-workload`,
+`svg-font`, `svg-render`, and `svg-empty`. The public message counts them; the
+private report names the element, attribute, CSS construct or code point.
+
 No resize, crop, sharpening, responsive variant matrix, image CDN, browser script, or
 per-image configuration is involved. The digest, the filename extension, and the bytes a
 reader receives all agree, so a PNG that became WebP is served as `image/webp`. The same
@@ -223,11 +283,13 @@ and every unchanged WebP, AVIF, GIF, or APNG keeps its EXIF/GPS block exactly as
 it. If you need unconditional metadata removal, do it before committing the image; ANC does
 not promise it for passthrough bytes.
 
-**Platforms.** The encoder is the pinned `sharp` package, installed as an ordinary npm
-dependency with its prebuilt platform binary; there is no system command, `cwebp`, or
-`libvips` installation step. Linux x64 is the platform this repository's gates and
-measurements ran on. Windows and macOS are covered by sharp's published prebuilt packages
-but were **not exercised here**; untested is not passed.
+**Platforms.** The encoder and SVG rasterizer are the pinned `sharp` package, installed as an
+ordinary npm dependency with its prebuilt platform binary; there is no system command,
+`cwebp`, `librsvg`, `resvg`, or `libvips` installation step. SVG text uses the build host's
+own fonts, and missing glyph coverage is a build failure rather than a bundled font. Linux x64
+is the platform this repository's gates and measurements ran on. Windows and macOS are covered
+by sharp's published prebuilt packages but were **not exercised here**; untested is not passed,
+and cross-platform byte equality is not promised.
 
 Write the image's description in `alt`, and use Markdown's own title for a caption:
 
@@ -263,11 +325,14 @@ the line. The reasons are:
 - the file is not there;
 - a `publish.config.yaml` exclusion hides it;
 - the path leaves your content directory, or is a symbolic link to a file outside it;
-- it is an SVG — not publishable until it can be rasterized safely — or it is not one of the
-  five formats;
+- it is not one of the five raster formats or a self-contained static SVG;
 - it is written as raw HTML, `<img src="...">`, which the resolver does not cover;
 - its bytes are corrupt or truncated, it exceeds the finite source-size/decoded-pixel budget,
-  a decode or encode exceeds its deadline, or the encoder returns bytes it cannot validate.
+  a decode or encode exceeds its deadline, or the encoder returns bytes it cannot validate;
+- an SVG was refused by the static-subset policy, exceeded its work budget (including an
+  SVG over 8 MiB or more than 1,000,000 characters of CSS), had no visible pixel, or used
+  text no installed font covers. The private report names the construct or code point; the
+  SVG section above lists the accepted subset.
 
 Remote images (`https://…`) are left exactly as you wrote them and are never downloaded during
 a build. Files no published note references are never published, which is why an excluded
@@ -488,11 +553,13 @@ that rule is not negotiable.
 
 ## What it will not do
 
-- Publish a non-Markdown file no published note references, or serve a local SVG. Images are
-  published only through a reference in a published note and only in the five raster formats.
-  WebP conversion is automatic for JPEG and 8-bit PNG (16-bit PNG is retained); there is no
-  resize, crop, responsive-variant matrix, external image host, or per-author quality setting,
-  and SVG rasterization is a later outcome, not an option here.
+- Publish a non-Markdown file no published note references. Images — including a local static
+  SVG that becomes WebP — are published only through a reference in a published note. WebP
+  conversion is automatic for JPEG and 8-bit PNG (16-bit PNG is retained), and a static SVG
+  is always WebP; there is no resize, crop, responsive-variant matrix, external image host,
+  per-author quality setting, or SVG `data:` URL. A dynamic SVG (script, animation,
+  `foreignObject`), an embedded `data:` asset, or an external reference is refused, not
+  partially rendered.
 - Publish a note whose derived slug is reserved by the site, such as root `about.md`,
   `search.md`, `tags.md`, or `private.md`. Rename the source file; the private report lists
   every conflicting note and slug together.

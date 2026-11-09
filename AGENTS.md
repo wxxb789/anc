@@ -248,6 +248,12 @@ deployment step. Read its run for 0007, not as a substitute for `verify`.
   by a WebP candidate, but only after authorization, structural completeness validation, and only
   when the emitted candidate is smaller; identity is then the SHA-256 of the emitted bytes, not the
   source. 16-bit PNG, existing WebP/AVIF, and every GIF/APNG/animation pass through unchanged.
+  A local static SVG under goal 0012 is a build-only source: it must be authorized first, then
+  pass the XML/CSS policy, then rasterize from its bytes to lossless WebP at 2× its logical
+  size; only the WebP bytes and the logical layout size reach the artifact, and a failed
+  conversion never falls back to publishing the XML. The hostile corpus is refused by named
+  reason, a build-host canary and a listening socket prove no file read or egress, and a failed
+  rebuild leaves the previous output byte-identical.
   Transcoded output is metadata-free after orientation is applied; **passthrough originals keep
   their metadata** and this is not a scrubber. Encoding is bounded by finite decoded-pixel,
   source-byte and deadline limits. Residue and secret scanning run over the emitted bytes as
@@ -331,17 +337,25 @@ that landing. Neither 0.1.0 nor 1.0.0 is ready. Deployment and post-deploy smoke
 are separate external actions, and so is publication — it runs in
 `.github/workflows/release-npm.yml` and is started by hand from the `release` workflow.
 Version 0.1 adds the local-image pipeline of [goal 0009](docs/goals/archive/0009-zero-config-static-images.md)
-— authorized, referenced PNG/JPEG/GIF/WebP/AVIF published under `/_assets/<sha256>-<name>`,
-an SVG refused until it has a rasterizer — the reading rules of
-[goal 0010](docs/goals/archive/0010-readable-image-figures.md), and the WebP-preferred policy of
+— authorized, referenced PNG/JPEG/GIF/WebP/AVIF published under `/_assets/<sha256>-<name>` —
+the reading rules of
+[goal 0010](docs/goals/archive/0010-readable-image-figures.md), the WebP-preferred policy of
 [goal 0011](docs/goals/archive/0011-webp-first-image-delivery.md): lossy WebP for JPEG and lossless
 WebP for 8-bit PNG only when the candidate is smaller, 16-bit PNG and existing WebP/AVIF/animation
 unchanged, structural completeness checked before any decode, one pinned sharp encoder, and no
 resize, crop, responsive matrix, browser script, external image host,
-image index, CDN requirement, or author-facing quality setting. A standalone image's explicit
-Markdown title is a visible `<figcaption>`; `width`/`height` come from the emitted bytes, and the
-first surviving image is eager while later ones defer. GitHub Pages *project* sites at
-`/<repo>/` remain unsupported; the hosting contract is a site at the domain root.
+image index, CDN requirement, or author-facing quality setting, and the SVG turn of
+[goal 0012](docs/goals/0012-safe-svg-rasterization.md): a self-contained static SVG is
+build-only input, validated by a namespace-aware XML/CSS policy (`saxes` + `css-tree`),
+rasterized from its bytes by the same pinned sharp/librsvg into **lossless WebP** at 2× its
+logical size, with every external reference, `data:` asset, script, animation, foreign
+namespace, DTD and CSS at-rule refused, host-font coverage checked per code point, and the
+source XML never published. A standalone image's explicit Markdown title is a visible
+`<figcaption>`; `width`/`height` are the CSS layout size (the emitted header's pixels for a
+raster, **half the emitted raster** for a 2× SVG raster — the author's logical size unless the
+output budget clamped it, in which case the layout shrinks proportionally), and the first
+surviving image is eager while later ones defer. GitHub Pages *project* sites at `/<repo>/` remain unsupported; the hosting
+contract is a site at the domain root.
 `0.0.1` was published by hand to reserve the `@wxxb789/anc` name and create the page a
 trusted publisher needs; `0.0.2` is the first release cut from a tag.
 
