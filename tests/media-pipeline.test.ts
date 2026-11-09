@@ -369,7 +369,9 @@ test('every supported format publishes under the policy row it belongs to', asyn
     // because the file is the file. The fixtures really are animated — asserted
     // here so a future edit that replaces them with static images cannot quietly
     // retire the property.
-    assert.ok(Buffer.from(GIF_ANIMATED).includes(Buffer.from('NETSCAPE2.0')), 'the GIF fixture is no longer animated');
+    const gifPages = (await sharp(Buffer.from(GIF_ANIMATED)).metadata()).pages ?? 1;
+    assert.ok(gifPages >= 3, `the GIF fixture has ${gifPages} page(s), not a real animation`);
+    assert.ok(Buffer.from(GIF_ANIMATED).includes(Buffer.from('NETSCAPE2.0')), 'the GIF fixture lost its loop extension');
     assert.ok(Buffer.from(WEBP_ANIMATED).includes(Buffer.from('ANIM')), 'the WebP fixture is no longer animated');
   });
 });

@@ -1,13 +1,22 @@
 /**
  * Goal 0011's measurement report: published image bytes, per source/emitted
- * format, transcode count and asset count, from an actual built `dist/`.
+ * format, emitted-asset counts and the sources that have no row, from an actual
+ * built `dist/`.
  *
  * The measurement is deliberately an independent reader of the output rather
  * than a hook inside the producer. It re-hashes every `/_assets/` file against
  * the digest its name claims, detects the emitted format from the bytes, and
- * maps each asset back to the corpus source that produced it by the sanitized
- * stem in its name. That keeps the numbers about the artifact a reader gets, and
- * it means a producer that lied about identity cannot make this report agree.
+ * maps each emitted asset back to a corpus source by the sanitized stem in its
+ * name. That keeps the byte counts about the artifact a reader gets, and a
+ * producer that lied about identity cannot make those counts agree.
+ *
+ * The report is **one row per emitted asset**, attributed to the first source
+ * name that matches. It does not count encode operations: when two source
+ * digests produce one emitted asset, the second source has no row and
+ * `sourcesWithoutEmittedRow` names it. Only the SHA-256 recomputation is
+ * independent of the producer; asset-name parsing, format sniffing and source
+ * attribution reuse this product's own conventions, so changing a producer
+ * convention changes what this report can see.
  *
  * Usage:
  *   node scripts/measure-media.ts --corpus .tmp/media-corpus \
@@ -114,6 +123,7 @@ async function main(): Promise<number> {
     });
   }
   const sourceTotal = manifest.sources.reduce((sum, source) => sum + source.bytes, 0);
+  const matchedSources = new Set<SourceRow>();
 
   const quality = parsed.has('quality');
   const assetDirectory = join(dist, '_assets');
@@ -121,8 +131,8 @@ async function main(): Promise<number> {
   const byEmitted = new Map<string, { files: number; bytes: number }>();
   const bySource = new Map<string, { files: number; sourceBytes: number; emittedBytes: number }>();
   let imageBytes = 0;
-  let transcoded = 0;
-  let passthrough = 0;
+  let transcodedAssets = 0;
+  let passthroughAssets = 0;
   const perSource: {
     source: string;
     sourceFormat: string;
@@ -161,9 +171,10 @@ async function main(): Promise<number> {
     sourceRow.emittedBytes += bytes.length;
     bySource.set(source.format, sourceRow);
 
+    matchedSources.add(source);
     const isPassthrough = digest === match.digest;
-    if (isPassthrough) passthrough += 1;
-    else transcoded += 1;
+    if (isPassthrough) passthroughAssets += 1;
+    else transcodedAssets += 1;
     perSource.push({
       source: source.path,
       sourceFormat: source.format,
@@ -208,6 +219,10 @@ async function main(): Promise<number> {
   }
 
   const distBytes = filesUnder(dist).reduce((sum, file) => sum + statSync(join(dist, file)).size, 0);
+  const sourcesWithoutEmittedRow = manifest.sources
+    .filter((source) => !matchedSources.has(source))
+    .map((source) => source.path)
+    .sort();
   const report = {
     label,
     corpus,
@@ -219,9 +234,14 @@ async function main(): Promise<number> {
       distBytes,
       bytesSaved: sourceTotal - imageBytes,
       sourceBytes: sourceTotal,
-      transcoded,
-      passthrough,
+      transcodedAssets,
+      passthroughAssets,
+      sourcesWithoutEmittedRow,
     },
+    independence:
+      'SHA-256 recomputation is independent of the producer. Asset-name parsing, format sniffing and source attribution reuse product conventions, so a producer change can change what this report sees; encode operations are not counted.',
+    scope:
+      'One row per emitted asset, attributed to the first source name that matches. A source deduplicated into another emitted asset has no row and appears in sourcesWithoutEmittedRow.',
     byEmittedFormat: Object.fromEntries([...byEmitted].sort()),
     perSource: perSource.sort((left, right) => (left.source < right.source ? -1 : left.source > right.source ? 1 : 0)),
     bySourceFormat: Object.fromEntries(

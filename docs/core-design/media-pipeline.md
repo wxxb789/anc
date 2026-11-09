@@ -62,12 +62,13 @@ Order of outcomes:
    keeps its existing shape and gains no caption. The build reads intrinsic
    pixel dimensions from the already-authorized emitted bytes (PNG `IHDR`,
    JPEG `SOFn`, GIF logical screen descriptor, WebP `VP8`/`VP8L`/`VP8X`, AVIF
-   `ispe`) and emits `width`/`height`; a malformed or truncated header yields
-   neither attribute and does not fail the build. The first image in rendered
-   document order is `loading="eager"`; every later image is `loading="lazy"`;
-   all get `decoding="async"`. Identity, authorization, bytes, and the
-   `/_assets/<sha256>-<name>` URL are unchanged, no codec or new dependency is
-   added, and no browser script or SQLite metadata is introduced.
+   `ispe`) and emits `width`/`height`; a malformed dimension header yields
+   neither attribute and does not fail the build. That is a missing layout hint,
+   not an incomplete file: an incomplete source container is refused before it
+   can publish (see the 0011 completeness gate below). The first image in
+   rendered document order is `loading="eager"`; every later image is
+   `loading="lazy"`; all get `decoding="async"`. The 0010 change itself added no
+   codec or dependency and no browser script or SQLite metadata.
 3. **0011 — shipped:** automatic WebP-preferred delivery, without changing how an
    author embeds an image or where it is hosted.
 4. **0012:** self-contained *static* SVG is accepted as **build-only input** and
@@ -166,11 +167,13 @@ The implemented reading rules are deliberately narrow:
   publishing; the artifact carries it as private IR beside the public URL. The
   renderer emits `width`/`height` and the global CSS keeps `max-width: 100%;
   height: auto`, so a portrait, a wide screenshot, and transparent artwork
-  reserve their ratio without overflow or distortion. A malformed or truncated
-  header yields no attributes, never a build failure and never a guess. So does an
-  orientation or transform that would make the stored pixels differ from the
-  displayed pixels — a JPEG/WebP/PNG EXIF orientation other than 1, or an AVIF
-  `irot`/`imir` — because a transposed pair would reserve the wrong box.
+  reserve their ratio without overflow or distortion. A malformed dimension
+  header yields no attributes, never a guess. It does not fail the build on its
+  own, but it does not excuse an incomplete container: the completeness gate
+  described under 0011 refuses truncated source bytes before publication. So
+  does an orientation or transform that would make the stored pixels differ from
+  the displayed pixels — a JPEG/WebP/PNG EXIF orientation other than 1, or an
+  AVIF `irot`/`imir` — because a transposed pair would reserve the wrong box.
 - **Loading follows rendered order.** The first `<img>` that keeps a source is
   `loading="eager"`; every later one is `loading="lazy"`; all are
   `decoding="async"`. No IntersectionObserver, placeholder script, or client-side
@@ -201,11 +204,25 @@ Initial encoding policy is deliberately small:
 | Validated input | Initial candidate | Acceptance rule |
 | --- | --- | --- |
 | JPEG (ordinary photo) | Lossy WebP at quality 80, effort 4 | Keep WebP only if its emitted bytes are smaller; otherwise retain the original JPEG. Visual acceptability is a fixture-qualification gate, not a per-build comparison |
-| PNG (screenshot, text, diagrams, alpha) | Lossless WebP, effort 4 | Compare actual published bytes with PNG; keep PNG if there is no saving. Lossless conversion preserves displayed pixels and alpha |
+| 8-bit PNG (screenshot, text, diagrams, alpha) | Lossless WebP, effort 4 | Compare actual published bytes with PNG; keep PNG if there is no saving. Lossless conversion preserves displayed pixels and alpha. Only 8-bit samples with a colour model WebP lossless carries faithfully |
+| 16-bit or other-depth PNG | Unchanged | WebP lossless is 8-bit; an encoder candidate would reduce visible values. Publish the PNG bytes exactly |
 | Existing WebP or AVIF | Unchanged | Do not pay for speculative generation loss or re-encode an already effective format |
 | Animated GIF / animated WebP / animated PNG | Unchanged | No first-frame-only conversion, lost timing, changed loop count, or unreviewed full-animation encoder cost. APNG is detected structurally because sharp does not report its frame count |
 | Static GIF | Unchanged | No policy row selects an encoder for it; the file is copied byte-identically |
-| Any decoded invalid/corrupt or unsupported image | Build failure | Never put unidentified or unsafe bytes into public assets |
+| Any decoded invalid/corrupt or structurally incomplete image | Build failure | Never put unidentified, truncated, or unsafe bytes into public assets. A header read is not evidence the container is complete |
+
+Before any image reaches a pixel decode or encoder, one structural gate checks the container
+the bytes claim to be: PNG chunks are walked with their CRC-32 checks and a
+final zero-length `IEND` with no trailing bytes; GIF is walked to its trailer
+and its image-descriptor count must match the decoded page count; JPEG markers
+must reach `EOI` exactly at the end; WebP's RIFF size must be the whole file and
+every chunk must fit; AVIF top-level boxes must consume the file exactly and the
+primary item's extent must lie inside an `mdat` payload. A failure is the
+existing `corrupt` reason, never a fallback to publishing the bytes. This is
+required because libvips decodes a truncated PNG prefix and a partial GIF
+successfully: decoder success alone is not container completeness. APNG's
+frame-extent semantics remain the disclosed limit, but its PNG chunk stream is
+still walked.
 
 The approximately 80-quality JPEG setting and effort 4 are **initial encoder
 settings**, not a universal proof of visual quality or an immutable user-facing

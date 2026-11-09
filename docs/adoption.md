@@ -194,13 +194,20 @@ preferred when it is worthwhile, not compulsory:
 
 - An ordinary JPEG photograph becomes lossy WebP at quality 80 / effort 4. The candidate
   replaces the JPEG only when its bytes are smaller; otherwise the JPEG is published.
-- A PNG screenshot, diagram, or transparent graphic becomes **lossless** WebP. It replaces
-  the PNG only when the lossless candidate is smaller, and the visible pixels and alpha are
-  preserved exactly.
-- An existing WebP or AVIF is published unchanged. So is every GIF, and every animated
-  WebP: no frame, delay, or loop count is altered, and no first frame is extracted.
-- A corrupt, truncated, over-limit, or unsupported image fails the build. There is no
-  fallback to publishing bytes the encoder could not decode.
+- An 8-bit PNG screenshot, diagram, or transparent graphic becomes **lossless** WebP. It
+  replaces the PNG only when the lossless candidate is smaller, and the visible pixels and
+  alpha are preserved exactly. A 16-bit PNG, or any PNG with a depth WebP lossless cannot
+  carry without reducing values, is published unchanged as PNG.
+- An existing WebP or AVIF is published unchanged. So is every GIF, every animated WebP,
+  and every animated PNG (APNG): no frame, delay, or loop count is altered, and no first
+  frame is extracted. APNG frame extents are not fully validated, but its PNG chunk stream
+  still has to pass the completeness check.
+- A corrupt, structurally incomplete, over-limit, or unsupported image fails the build.
+  Completeness is checked before decoding: a truncated PNG, GIF, JPEG, WebP, or AVIF is
+  refused even when a decoder can produce partial pixels from its prefix. There is no
+  fallback to publishing bytes the encoder could not decode. A header whose *dimension
+  fields* cannot be read is a different case: the complete image still publishes, without
+  `width`/`height`.
 
 No resize, crop, sharpening, responsive variant matrix, image CDN, browser script, or
 per-image configuration is involved. The digest, the filename extension, and the bytes a
@@ -209,10 +216,10 @@ picture referenced from five notes is one file, and an unchanged picture keeps i
 
 **Metadata.** A transcoded image carries no EXIF, XMP, IPTC, or ICC profile from its source:
 orientation is applied to the pixels first and then the metadata is removed. **A passthrough
-original is not scrubbed.** A JPEG kept because its WebP candidate was larger, and every
-unchanged WebP, AVIF, or GIF, keeps its EXIF/GPS block exactly as the file had it. If you
-need unconditional metadata removal, do it before committing the image; ANC does not
-promise it for passthrough bytes.
+original is not scrubbed.** A JPEG kept because its WebP candidate was larger, a 16-bit PNG,
+and every unchanged WebP, AVIF, GIF, or APNG keeps its EXIF/GPS block exactly as the file had
+it. If you need unconditional metadata removal, do it before committing the image; ANC does
+not promise it for passthrough bytes.
 
 **Platforms.** The encoder is the pinned `sharp` package, installed as an ordinary npm
 dependency with its prebuilt platform binary; there is no system command, `cwebp`, or
@@ -241,7 +248,8 @@ inside the article at any width. A transcode applies EXIF orientation to the pix
 rotated photograph publishes upright at its displayed size. An unchanged image whose EXIF
 orientation is not 1, or whose AVIF carries an `irot`/`imir` transform, is published as-is
 and gets no dimension attributes rather than a pair that would reserve the wrong box. A
-truncated or corrupt file now fails the build instead of publishing a header-only image.
+truncated or structurally incomplete file fails the build before decoding; that is distinct
+from an unreadable dimension header, which only omits the attributes.
 The first image in an article loads eagerly, later images load lazily, and all use
 asynchronous decoding. This is ordinary static HTML: nothing here needs JavaScript, an
 image CDN, or a configuration key.
@@ -480,9 +488,9 @@ that rule is not negotiable.
 
 - Publish a non-Markdown file no published note references, or serve a local SVG. Images are
   published only through a reference in a published note and only in the five raster formats.
-  WebP conversion is automatic for JPEG and PNG; there is no resize, crop, responsive-variant
-  matrix, external image host, or per-author quality setting, and SVG rasterization is a later
-  outcome, not an option here.
+  WebP conversion is automatic for JPEG and 8-bit PNG (16-bit PNG is retained); there is no
+  resize, crop, responsive-variant matrix, external image host, or per-author quality setting,
+  and SVG rasterization is a later outcome, not an option here.
 - Publish a note whose derived slug is reserved by the site, such as root `about.md`,
   `search.md`, `tags.md`, or `private.md`. Rename the source file; the private report lists
   every conflicting note and slug together.

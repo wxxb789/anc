@@ -75,10 +75,11 @@ not completion.
 ## Implementation progress
 
 Branch `feat/0011-webp-first-image-delivery`, created off `origin/main` at
-`f167750` (Goals 0009 and 0010 present). The implementation is uncommitted by
-design for the orchestrator to verify and land; this record names files and
-commands rather than an implementation commit. Environment: Linux x64, 4 vCPU /
-8 GB RAM, Node 24.16.0 (`.nvmrc` pins 24.18.1; CI runs the pin).
+`f167750` (Goals 0009 and 0010 present). The goal implementation is committed at
+`7d2540d` (`feat(media): WebP-preferred delivery with emitted-byte identity`);
+the review round recorded below is uncommitted on top of that commit for the
+orchestrator to verify and land. Environment: Linux x64, 4 vCPU / 8 GB RAM,
+Node 24.16.0 (`.nvmrc` pins 24.18.1; CI runs the pin).
 
 **Encoder.** `src/lib/media-codec.ts` is the only module that imports the encoder.
 It pins the policy settings (`quality: 80, effort: 4` lossy; lossless effort 4),
@@ -103,13 +104,31 @@ the artifact's `width`/`height` come from 0010's reader over the emitted bytes.
 
 **Decision tree.** A reference resolves note-first then content-root; the walk's
 verdict is checked **before** any read, so an excluded, escaping, or unlisted file
-never reaches memory or the codec. Authorized bytes are sniffed by content. GIF,
-WebP and AVIF are decode-validated and published byte-identically; a multi-frame
-PNG (APNG) takes the same preservation path. JPEG and PNG are encoded; the
-candidate is kept only when its emitted byte length is strictly smaller than the
-source's, otherwise the source is decode-validated and retained. A decode,
-validation, byte-cap, pixel-cap or deadline failure stops the build, and no branch
-falls back to publishing bytes the process could not decode.
+never reaches memory or the codec. Authorized bytes are sniffed by content, then
+`assertCompleteContainer` structurally checks the claimed format before any pixel
+decode or encode. GIF, WebP and AVIF are decode-validated and published
+byte-identically; a multi-frame PNG (APNG), a 16-bit PNG, and any PNG whose depth
+or colour model WebP lossless cannot carry faithfully take the same preservation
+path. JPEG and 8-bit PNG are encoded; the candidate is kept only when its emitted
+byte length is strictly smaller than the source's, otherwise the source is
+decode-validated and retained. A decode, validation, byte-cap, pixel-cap or
+deadline failure stops the build, and no branch falls back to publishing bytes
+the process could not decode.
+
+**Completeness gate.** `src/lib/media.ts` owns one pre-decode walk, not a
+per-format patch in the codec. PNG walks every chunk, checks each CRC-32, and
+requires a zero-length `IEND` as the last chunk with no trailing bytes; GIF walks
+the block stream to `0x3B`, rejects a trailer with a following non-zero byte,
+and requires its image-descriptor count to equal libvips' page count; JPEG walks
+marker segments and entropy-coded scan data to `EOI` exactly at the end; WebP
+requires the RIFF size to be `bytes.length - 8` and every chunk to fit; AVIF
+requires top-level boxes to consume the file and the primary item's `iloc`
+extent to lie inside an `mdat` payload. A failure maps to the existing
+`corrupt` reason. The gate is called for every source before `readMetadata` and
+again for GIF after the header read, which is the only way to compare its
+descriptor count with the decoder's page count; it runs before `validateDecode`
+or `transcode` for transcode and passthrough alike. A header-only dimension
+failure remains the separate fail-open case 0010 defined.
 
 **Emission and gates unchanged in authority.** `scripts/copy-assets.ts` verifies
 and copies the staged emitted bytes; `scripts/verify-output-inventory.ts` still
@@ -125,17 +144,33 @@ is never set and `failOn: 'warning'` is. Encode operations are sequential
 four threads. Limits are an injectable internal contract for tests; there is no
 user configuration key.
 
-**Tests.** `tests/media-codec.test.ts` (15 tests) covers every policy row over
+**Tests.** `tests/media-codec.test.ts` (17 tests) covers every policy row over
 real bytes, lossless pixel/alpha identity, EXIF orientation applied before
 metadata removal, ICC-to-sRGB conversion, metadata-free transcode, byte-identical
 passthrough (including WebP EXIF, animated GIF/WebP frame counts/delays, and an
 APNG shape sharp reports as a single frame), emitted-byte
-deduplication across metadata-only sources, determinism, and the byte/pixel/
-animation/time limits with a huge-header PNG and a deliberately timed-out encode.
+deduplication across metadata-only sources, determinism, the 16-bit PNG
+passthrough with a smaller 8-bit candidate as the non-vacuity control, the
+byte/pixel/animation/time limits with a huge-header PNG and a deliberately
+timed-out encode, and the structural gate: intact fixtures pass, while GIF at
+90/75/50 %, a GIF without its trailer or with a non-zero byte after it, PNG minus
+4/12/20 bytes, at half, with a trailing byte after `IEND`, or with a damaged
+chunk CRC, JPEG without `EOI`,
+WebP with a shortened RIFF size, and AVIF truncated inside `mdat` all fail as
+`corrupt` before a decoder can accept the prefix. The 16-bit control is a 16×16
+`rgb16` PNG of 117 bytes; the encoder's 8-bit candidate is 38 bytes and reports
+`uchar`, and `prepareImage` returns the 117 source bytes unchanged
+(`transcoded: false`).
+`tests/release-failure-preservation.test.ts` adds a full two-note release build
+with a referenced truncated GIF: the second build exits 1, names
+`corrupt or undecodable`, and the prior output tree hashes byte-identically.
 `tests/media-pipeline.test.ts` gained the emitted-identity, policy-row,
 cross-source dedupe, corrupt/oversized refusal and upright-dimension changes;
-`tests/media-display.test.ts` now asserts both encoder rows are served as WebP,
-the served bytes equal the emitted candidate, every image decodes under CSP, the
+its animated GIF fixture is now a genuine three-page GIF and both it and
+`tests/media-display.test.ts` assert `pages >= 3` rather than only the presence
+of a loop-extension string. `tests/media-display.test.ts` now asserts both
+encoder rows are served as WebP, the served bytes equal the emitted candidate,
+every image decodes under CSP, the
 0010 caption/dimension/lead rules still hold, and the served corpus has no
 overflow at 320 px. `tests/media-quality.test.ts` builds a browser-visible corpus
 with a CJK/Latin UI screenshot, a thin-line diagram, transparent artwork, a
@@ -151,10 +186,14 @@ unchanged GIF (seven images) through the packaged CLI.
 **Measurement.** `scripts/media-corpus.ts` generates a deterministic corpus
 under `.tmp` with two photographs, a CJK/UI screenshot, a thin-line diagram,
 transparent artwork, an already-compressed WebP and AVIF, and an animated GIF and
-WebP. `scripts/measure-media.ts` reads a built `dist/` independently, re-hashes
-every asset, detects emitted formats, maps each asset to its source by stem, and
-optionally decodes source and candidate to report displayed-pixel identity or
-PSNR. Both scripts are excluded from the published package.
+WebP. `scripts/measure-media.ts` reads a built `dist/`, re-hashes every asset, detects
+emitted formats, and optionally decodes source and candidate to report
+displayed-pixel identity or PSNR. It reports **one row per emitted asset**,
+attributed to the first source name that matches; a source deduplicated into
+another emitted asset has no row and is listed in `sourcesWithoutEmittedRow`.
+Only the SHA-256 recomputation is independent of the producer; name parsing,
+format sniffing, and attribution reuse product conventions, and encode
+operations are not counted. Both scripts are excluded from the published package.
 
 ## Measurement
 
@@ -196,10 +235,12 @@ node scripts/measure-media.ts --corpus .tmp/media-corpus \
 ```
 
 `/usr/bin/time -v` is the instrumentation. Its `Maximum resident set size` is a
-single process's peak as the kernel reports it (the direct `node bin/anc.mjs`
-process, which performs discovery and encoding; Astro runs as a child). It is not
-an aggregate over the process tree, and it includes the baseline site machinery,
-which dominates both figures. Wall time is `Elapsed (wall clock) time`.
+single process's peak as the kernel reports it: `bin/anc.mjs` imports `astro` and
+calls `astroBuild` in-process, and imports the Pagefind runner the same way, so
+Astro, Pagefind, the producer, and sharp's native allocations all share that
+process. It is **not** an aggregate over a process tree, and it includes the
+baseline site machinery, which dominates both figures. Wall time is
+`Elapsed (wall clock) time`.
 
 ### Published bytes, same corpus
 
@@ -208,15 +249,31 @@ which dominates both figures. Wall time is `Elapsed (wall clock) time`.
 | `dist/_assets` files | 9 | 9 | 0 |
 | Published image bytes | 1,242,624 | 728,778 | −513,846 (−41.4%) |
 | Whole `dist/` bytes | 9,551,724 | 9,037,872 | −513,852 (−5.4%) |
-| Transcode operations | 0 | 5 | +5 |
+| Transcoded assets (emitted rows) | 0 | 5 | +5 |
 | Passthrough assets | 9 | 4 | −5 |
 | Wall time, run 1 / run 2 | 3.86 s / 4.57 s | 5.09 s / 5.19 s | +1.23 s / +0.62 s |
 | Peak RSS, run 1 / run 2 | 1,240,388 KiB / 1,243,460 KiB | 1,216,808 KiB / 1,236,148 KiB | −23,580 / −7,312 KiB |
 
 The five transforms are six references over five unique sources: the first
-photograph is embedded by both notes and is encoded once. Bytes per emitted type,
+photograph is embedded by both notes and is encoded once. The measurement script
+reports one row per emitted asset; it does not independently observe encode
+operations, and a deduplicated source has no row (`sourcesWithoutEmittedRow`).
+Bytes per emitted type,
 baseline → 0011: JPEG 680,731 → 0; PNG 189,593 → 0; GIF 354,069 → 354,069;
 WebP 15,154 → 371,632 (15,154 passthrough + 356,478 emitted); AVIF 3,077 → 3,077.
+
+**CDN transfer implications (reasoned, not measured).** The reader downloads
+each emitted `/_assets/` representation once per page load (subject to the
+browser cache); this corpus's measured image total is 728,778 bytes against
+1,242,624 source bytes, and the browser receives the representation the `<img>`
+names, not both. A CDN changes where those bytes are served and can cache the
+content-addressed URLs closer to a reader, reducing origin egress and latency;
+it does **not** transcode, choose a candidate, or change the byte count this
+encoder produces. The static host still applies its revalidating default to
+`/_assets/*` (only `/_astro/*` is marked immutable), so a CDN or host cache
+policy can reduce revalidation round trips but is not required for the transfer
+saving, which comes from selecting smaller bytes. No CDN account, header key,
+or second index is involved.
 
 ### Per-source result, with the browser-decoded quality check
 
@@ -260,10 +317,10 @@ each unchanged input.
 
 | Measure | Baseline | 0011 |
 | --- | ---: | ---: |
-| Packed tarball | 440,908 bytes | 447,192 bytes (+6,284; +1.43%) |
+| Packed tarball | 440,908 bytes | 451,190 bytes (+10,282; +2.33%) |
 | Compiled TypeScript files in the tarball | 75 | 76 |
 | `npm install <tarball>` in a foreign repository | exit 0 | exit 0 (installed sharp 0.35.5 and `@img/sharp-linux-x64` 0.35.5, libvips 1.3.4) |
-| Foreign `node_modules` after install | 358,371,642 bytes | 358,390,473 bytes (+18,831) |
+| Foreign `node_modules` after install | 358,371,642 bytes | 358,408,643 bytes (+37,001) |
 | sharp's own installed footprint (pnpm tree) | — | 20,072,677 bytes |
 
 The install delta is small **on this graph** because Astro 7.4.5 already pulls
@@ -294,28 +351,43 @@ before and after. `tests/media-codec.test.ts` additionally proves a PNG whose
 header declares 50,000×50,000 pixels returns `too-large` (libvips' finite
 `limitInputPixels`) within its 5-second assertion bound, every truncated format
 returns `corrupt`, a 1 ms injected encode deadline returns `timeout`, and the
-32 MiB source-byte and total-animation-pixel caps return `too-large`.
+32 MiB source-byte and total-animation-pixel caps return `too-large`. The review
+round adds direct structural controls: GIF truncated to 90/75/50 %, missing its
+trailer, or carrying a non-zero byte after it; PNG minus 4/12/20 bytes, at half,
+with a trailing byte after `IEND`, or with a damaged chunk CRC; JPEG without
+`EOI`; WebP with a shortened RIFF size; and AVIF truncated inside `mdat` — all
+fail as `corrupt`, while the intact fixtures pass. A full two-note release build
+whose GIF is replaced by its 50 % prefix exits 1 with `corrupt or undecodable` and
+hashes the prior output tree identically; that is
+`tests/release-failure-preservation.test.ts`, not a producer module test. The
+same failure was reproduced through the shipped CLI on a separate two-note
+corpus: the intact build exited 0 and published one `motion.gif`; after replacing
+the GIF with its 50 % prefix the build exited 1 with
+`1 image reference in published notes cannot be published (1 corrupt or
+undecodable)`, and the 152-file output tree was byte-identical before and after.
 
 ## Completion record
 
-Completed 2026-11-09 on `feat/0011-webp-first-image-delivery` (implementation
-uncommitted for landing; base `f167750`). Environment: Linux x64, 4 vCPU / 8 GB,
-Node 24.16.0 where `.nvmrc` pins 24.18.1; CI runs the pin. Live deployment and
-post-deploy smoke tests remain external, separately approved actions and were not
-performed.
+Completed 2026-11-09 on `feat/0011-webp-first-image-delivery`; implementation
+commit `7d2540d` on base `f167750`, with the 2026-11-10 review round uncommitted
+for landing. Environment: Linux x64, 4 vCPU / 8 GB, Node 24.16.0 where `.nvmrc` pins
+24.18.1; CI runs the pin. Live deployment and post-deploy smoke tests remain
+external, separately approved actions and were not performed.
 
 ### Commands and results
 
 | Command | Result |
 | --- | --- |
-| `pnpm run verify` | exit 0 — lint and `astro check` clean, the full build chain (`image assets ok: 0`, `output inventory ok: 150`, `secret scan ok: 150 files, 0 findings`, `residue scan ok: 34 files, 0 findings`), then the suite: 93 files / 1128 passed / 35 skipped |
-| `pnpm run build:fixture` | exit 0 — 93 files / 1158 passed / 5 skipped; the fixture build reported 54 pages, `image assets ok: 7 files`, `output inventory ok: 234 files`, `secret scan ok: 234 files, 0 findings`; `fixture build ok: every gate passed against tests/fixtures/valid-corpus.json` |
-| `pnpm run pack:tarball` | exit 0 — compiled 76 TypeScript files and rewrote specifiers in 24; wrote `wxxb789-anc-0.0.2.tgz` (447,192 bytes, sha256 `a3f152e65433c2e5b52b76e39da66c8ddcfe4bdf874e371b1389dfa34b680513`) |
+| `pnpm run verify` | exit 0 — lint and `astro check` clean, the full build chain (`image assets ok: 0`, `output inventory ok: 150`, `secret scan ok: 150 files, 0 findings`, `residue scan ok: 34 files, 0 findings`), then the suite: 94 files / 1135 passed / 35 skipped |
+| `pnpm run build:fixture` | exit 0 — 94 files / 1165 passed / 5 skipped; the fixture build reported 54 pages, `image assets ok: 7 files`, `output inventory ok: 234 files`, `secret scan ok: 234 files, 0 findings`; `fixture build ok: every gate passed against tests/fixtures/valid-corpus.json` |
+| `pnpm run pack:tarball` | exit 0 — compiled 76 TypeScript files and rewrote specifiers in 24; wrote `wxxb789-anc-0.0.2.tgz` (451,190 bytes, sha256 `4665c48b87810bae2af4df4196516b362db89e63f57c15ed9ce05995958f25dc`) |
 | `pnpm run smoke:tarball` | exit 0 — `tarball adoption smoke ok: 2 published notes, 2 withheld notes, 7 images`, including the packaged `npm install`, `init`, `review`, `build --release`, script-free Chromium checks, and the missing-image failed-build preservation |
 | `node scripts/media-corpus.ts .tmp/media-corpus` | 9 sources / 1,242,624 bytes |
 | baseline and 0011 builds, each twice, under `/usr/bin/time -v` | see the measurement section above |
 | `node scripts/measure-media.ts … --quality`, both trees | see the byte and quality tables above |
+| `node scripts/measure-media.ts` on the final review build | exit 0 — 728,778 image bytes, 5 transcoded assets, 4 passthrough assets, `sourcesWithoutEmittedRow: []`; totals unchanged |
 | Hostile-input build over a copy of the corpus | exit 1, named `corrupt or undecodable` reason, no path on the stream, previous 161-file output byte-identical |
+| Two-note CLI build, GIF then replaced by its 50 % prefix | first exit 0 (one `motion.gif`); second exit 1 with `1 image reference ... (1 corrupt or undecodable)`; 152 output files byte-identical before and after |
 | `git diff --check` | exit 0 |
 
 ### "Done when" → evidence
@@ -411,7 +483,12 @@ limit.
   it does not publish the unfinished result.
 - APNG is preserved, but sharp reports no frame count for it, so its decode
   validation covers the frame sharp decodes. The guard exists so animation cannot
-  be flattened; full-frame validation of an APNG is not claimed.
+  be flattened; full-frame extent validation of an APNG is not claimed. Its PNG
+  chunk stream still passes the completeness walk, so a truncated APNG prefix is
+  refused even though its frame semantics are not fully checked.
+- WebP lossless is an 8-bit format, so 16-bit and other-depth PNGs are published
+  unchanged rather than reduced. This is a deliberate coverage limit, not a
+  promise that WebP can carry every PNG.
 - Lossless conversion preserves displayed pixels, not RGB stored under alpha 0;
   WebP is not required to retain invisible colour. The quality comparison and the
   browser gate therefore compare alpha exactly and RGB where alpha > 0.
@@ -422,8 +499,9 @@ limit.
   with a very large total of published image bytes holds those emitted bytes
   until the build ends; no global corpus byte budget is introduced.
 - The measurement corpus renders its CJK text with this host's Noto fonts, so the
-  visual numbers are host-specific. The product's PNG conversion is lossless, so
-  the font's presence affects the corpus image, not the conversion.
+  visual numbers are host-specific. The product's 8-bit PNG conversion is
+  lossless, so the font's presence affects the corpus image, not the conversion.
 - A build that previously published a truncated-but-header-valid image now fails
-  as `corrupt`. That is the goal's decode-validation requirement, not an
-  accidental narrowing; the failure preserves the previous output.
+  as `corrupt`. That is the goal's container-completeness and decode-validation
+  requirement, not an accidental narrowing; the failure preserves the previous
+  output.

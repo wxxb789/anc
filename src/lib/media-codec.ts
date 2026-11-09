@@ -14,7 +14,8 @@
  * | Validated input | Candidate | Keep it only when |
  * | --- | --- | --- |
  * | JPEG | lossy WebP, quality 80, effort 4 | its bytes are smaller than the JPEG's |
- * | PNG | lossless WebP, effort 4 | its bytes are smaller than the PNG's; pixels are not compared here |
+ * | 8-bit PNG | lossless WebP, effort 4 | its bytes are smaller than the PNG's; pixels are not compared here |
+ * | 16-bit or other-depth PNG | none | the original bytes are published unchanged |
  * | WebP / AVIF | none | the original bytes are published unchanged |
  * | animated GIF / animated WebP | none | ditto; no first frame is extracted |
  * | static GIF | none | no policy row selects an encoder for it |
@@ -48,9 +49,11 @@
 
 import sharp, { type Metadata, type SharpOptions } from 'sharp';
 import {
+  assertCompleteContainer,
   imageDimensions,
   isAnimatedPng,
   isPositiveDimension,
+  pngCanUseLosslessWebp,
   type ImageDimensions,
   type ImageFormat,
   type MediaProcessingFailureReason,
@@ -301,6 +304,17 @@ export async function prepareImage(
     return { ok: false, reason: 'too-large' };
   }
 
+  // A successful header read is not a complete container: measured, libvips
+  // decodes a 96x96 PNG with its last 20 bytes missing and a GIF truncated to
+  // 90% with a garbage tail. The structural gate runs before any sharp call, so
+  // an incomplete source never reaches libvips at all. GIF's one cross-check
+  // that needs decoded metadata is repeated after the header read below.
+  try {
+    assertCompleteContainer(format, bytes);
+  } catch {
+    return { ok: false, reason: 'corrupt' };
+  }
+
   // Animation is a property of the already-sniffed container, not a second
   // decode: choosing it here makes the first metadata read sufficient.
   const animated = format === 'gif' || format === 'webp' || format === 'avif';
@@ -309,6 +323,17 @@ export async function prepareImage(
     metadata = await readMetadata(bytes, limits, animated);
   } catch (error) {
     return { ok: false, reason: classify(error) };
+  }
+
+  // The descriptor walk above counted frames, but only the decoder can say how
+  // many pages it accepted. Requiring the two numbers to agree catches a stream
+  // whose descriptors are structurally present but whose page table disagrees.
+  if (format === 'gif') {
+    try {
+      assertCompleteContainer(format, bytes, { pages: metadata.pages });
+    } catch {
+      return { ok: false, reason: 'corrupt' };
+    }
   }
 
   const sourceResult = (): PrepareResult => ({
@@ -337,7 +362,12 @@ export async function prepareImage(
   if (pages > 1) return passthrough();
   // APNG is a PNG whose animation sharp does not report as pages. Preserve the
   // source exactly rather than publishing its first frame as a still WebP.
-  if (format === 'png' && isAnimatedPng(bytes)) return passthrough();
+  // A PNG whose depth or colour model WebP lossless cannot carry faithfully
+  // (16-bit and other depths) is likewise published unchanged, even when an
+  // 8-bit candidate would be smaller: that candidate is a visible reduction.
+  if (format === 'png' && (isAnimatedPng(bytes) || !pngCanUseLosslessWebp(bytes))) {
+    return passthrough();
+  }
 
   let candidate: Buffer | undefined;
   try {

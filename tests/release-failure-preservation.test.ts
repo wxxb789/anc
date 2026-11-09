@@ -71,6 +71,7 @@ import { afterAll, beforeAll, test } from 'vitest';
 
 import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
 import { resolveArtifactDirectory } from '../scripts/preview-site.ts';
+import { GIF_ANIMATED } from './support/media.ts';
 import { snapshotMembers, snapshotPath } from './support/snapshot.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -399,4 +400,29 @@ test('a first failed build leaves no preview-acceptable output', () => {
       error.code === 'preview-directory-not-found' || error.code === 'preview-directory-not-an-artifact',
     'a first failed build produced a directory preview would accept',
   );
+}, TEST_TIMEOUT);
+
+test('a truncated GIF fails a full two-note build and preserves the prior output', () => {
+  const fixture = createRepository('anc-media-corrupt-', {
+    'alpha.md': '---\ntitle: Alpha\n---\n\n# Alpha\n\n![motion](motion.gif)\n',
+    'beta.md': note('Beta'),
+  });
+  const image = join(fixture.root, 'motion.gif');
+  writeFileSync(image, Buffer.from(GIF_ANIMATED));
+
+  const built = releaseBuild(fixture.root);
+  assert.equal(built.status, 0, `the intact GIF did not build:\n${streams(built)}`);
+  const good = treeHash(fixture.out);
+  assert.ok(
+    good.files.some((file) => file.path.startsWith('_assets/') && file.path.endsWith('-motion.gif')),
+    `the prior build published no GIF: ${good.files.map((file) => file.path).join(', ')}`,
+  );
+
+  // A decoder that accepts the prefix reports a shorter animation; the
+  // completeness gate must refuse the file before that can be published.
+  writeFileSync(image, Buffer.from(GIF_ANIMATED.subarray(0, Math.floor(GIF_ANIMATED.length / 2))));
+  const failed = releaseBuild(fixture.root);
+  assertPreserved(failed, fixture.out, good, 'a truncated-GIF build');
+  assert.match(failed.stderr, /corrupt or undecodable/, 'the build did not name the corruption');
+  assert.doesNotMatch(failed.stdout, /residue scan ok/, 'the build reached the residue scan');
 }, TEST_TIMEOUT);

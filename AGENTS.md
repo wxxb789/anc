@@ -244,13 +244,14 @@ deployment step. Read its run for 0007, not as a substitute for `verify`.
   host infers `Content-Type` from the extension, so a URL that disagrees with its own bytes would
   be served as the wrong type everywhere. An `_assets/` file the artifact does not declare is an
   unexpected member, which is what makes the namespace owned rather than allowed: the inventory
-  lists files, it does not permit a directory. Under goal 0011 a JPEG or PNG may be replaced by
-  a WebP candidate, but only after authorization and only when the emitted candidate is smaller;
-  identity is then the SHA-256 of the emitted bytes, not the source. Existing WebP/AVIF and every
-  GIF/animation pass through unchanged. Transcoded output is metadata-free after orientation is
-  applied; **passthrough originals keep their metadata** and this is not a scrubber. Encoding is
-  bounded by finite decoded-pixel, source-byte and deadline limits. Residue and secret scanning run
-  over the emitted bytes as declared binary and through Gitleaks respectively.
+  lists files, it does not permit a directory. Under goal 0011 a JPEG or 8-bit PNG may be replaced
+  by a WebP candidate, but only after authorization, structural completeness validation, and only
+  when the emitted candidate is smaller; identity is then the SHA-256 of the emitted bytes, not the
+  source. 16-bit PNG, existing WebP/AVIF, and every GIF/APNG/animation pass through unchanged.
+  Transcoded output is metadata-free after orientation is applied; **passthrough originals keep
+  their metadata** and this is not a scrubber. Encoding is bounded by finite decoded-pixel,
+  source-byte and deadline limits. Residue and secret scanning run over the emitted bytes as
+  declared binary and through Gitleaks respectively.
 - Gitleaks is exact-version pinned, cannot inherit user config or allow comments, scans one
   decode layer plus raw and explicitly inflated gzip, and never preserves or prints matched
   secret values.
@@ -334,8 +335,9 @@ Version 0.1 adds the local-image pipeline of [goal 0009](docs/goals/archive/0009
 an SVG refused until it has a rasterizer — the reading rules of
 [goal 0010](docs/goals/archive/0010-readable-image-figures.md), and the WebP-preferred policy of
 [goal 0011](docs/goals/archive/0011-webp-first-image-delivery.md): lossy WebP for JPEG and lossless
-WebP for PNG only when the candidate is smaller, existing WebP/AVIF and animation unchanged, one
-pinned sharp encoder, and no resize, crop, responsive matrix, browser script, external image host,
+WebP for 8-bit PNG only when the candidate is smaller, 16-bit PNG and existing WebP/AVIF/animation
+unchanged, structural completeness checked before any decode, one pinned sharp encoder, and no
+resize, crop, responsive matrix, browser script, external image host,
 image index, CDN requirement, or author-facing quality setting. A standalone image's explicit
 Markdown title is a visible `<figcaption>`; `width`/`height` come from the emitted bytes, and the
 first surviving image is eager while later ones defer. GitHub Pages *project* sites at

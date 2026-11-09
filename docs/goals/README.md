@@ -117,11 +117,13 @@ narrow-viewport overflow and reserved layout space. Eight goals are archived and
 
 On 2026-11-09, [0011](archive/0011-webp-first-image-delivery.md) was completed
 on branch `feat/0011-webp-first-image-delivery`, created off `origin/main` at
-`f167750` (implementation left uncommitted for the orchestrator; the file records
-files, commands and real counts). Referenced JPEG photographs now publish lossy
-WebP and PNG screenshots/diagrams/alpha graphics lossless WebP, each only when the
-emitted candidate is smaller; existing WebP/AVIF and every animation publish
-unchanged. The encoder is pinned `sharp` 0.35.5 at the producer's existing
+`f167750`; the implementation commit is `7d2540d`, with the review round
+uncommitted for the orchestrator and the file recording files, commands and real
+counts. Referenced JPEG photographs now publish lossy WebP and 8-bit PNG
+screenshots/diagrams/alpha graphics lossless WebP, each only when the emitted
+candidate is smaller; 16-bit PNG, existing WebP/AVIF, and every animation publish
+unchanged. A structural completeness gate refuses truncated containers before
+decoding. The encoder is pinned `sharp` 0.35.5 at the producer's existing
 authorization point, public identity is the SHA-256 of the emitted bytes, orientation
 is applied before metadata removal, and finite pixel/byte/deadline limits fail
 hostile input boundedly while preserving the previous output. Nine goals are
@@ -190,7 +192,7 @@ adoption docs now describe the 0009–0011 implemented contracts rather than a t
 | [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md) | 2026-09-18 | Implementation commits `2c9772e`, `33aa0ae`, `12ff781`, `ebd02f9`, `c159802`, `65f89d4`, PR #10; local `pnpm run verify` and CI run `35253591403` (80 files / 952 passed / 34 skipped) green on `65f89d4`, Action-parity CI run `35253591383` green with the shallow-clone refusal, and the recorded `pack:tarball` digest plus `smoke:tarball` result — all six evaluation rows in the file. |
 | [0009 — Zero-config static images](archive/0009-zero-config-static-images.md) | 2026-11-09 | Branch `feat/0009-zero-config-static-images`, production commit `be6b6cf`, implementation uncommitted for landing; the packaged producer publishes only referenced, authorized raster bytes under `/_assets/<sha256>-<name>`, the exact inventory owns the namespace, and each "Done when" row carries its executed evidence in the file — including a JavaScript-disabled Chromium display gate and a packaged foreign-repository smoke with images. |
 | [0010 — Readable image figures](archive/0010-readable-image-figures.md) | 2026-11-09 | Branch `feat/0010-readable-image-figures`, created off `origin/main` at `69f0f85`; implementation uncommitted for landing. The completion record maps each “Done when” row to its executed evidence, including packaged-build Chromium measurements for figures, dimensions, lazy/eager loading, no-script decoding, narrow-width overflow and reserved layout space. |
-| [0011 — WebP-first image delivery](archive/0011-webp-first-image-delivery.md) | 2026-11-09 | Branch `feat/0011-webp-first-image-delivery`, base `f167750`, implementation uncommitted for landing; the file records the packaged foreign-repository smoke, the emitter's final-byte identity and dedupe, bounded hostile-input preservation, and a twice-run baseline-vs-optimized corpus measurement on Linux x64 — including the rows where WebP wins and where bytes are retained. |
+| [0011 — WebP-first image delivery](archive/0011-webp-first-image-delivery.md) | 2026-11-09 | Branch `feat/0011-webp-first-image-delivery`, base `f167750`, implementation commit `7d2540d` with the review round uncommitted for landing; the file records the packaged foreign-repository smoke, the emitter's final-byte identity and dedupe, the pre-decode completeness gate for every supported container, bounded hostile-input preservation, and a twice-run baseline-vs-optimized corpus measurement on Linux x64 — including the rows where WebP wins and where bytes are retained. |
 
 One SQLite goal remains `in progress`, and two media goals remain `Ready`.
 Schema creation, query-module code,

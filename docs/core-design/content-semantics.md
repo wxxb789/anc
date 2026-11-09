@@ -68,9 +68,11 @@ publication and must not be used to authorize one.
   no caption. An inline image, an image inside a link, and a table-cell image
   keep their existing markup.
 - Intrinsic dimensions come from the emitted raster's own header and are
-  recorded in the private artifact beside the public URL. A header that cannot
-  be read yields no `width`/`height` attribute; it is never a guess and never a
-  build failure. The image is still published.
+  recorded in the private artifact beside the public URL. A dimension header
+  that cannot be read yields no `width`/`height` attribute; it is never a guess
+  and never, by itself, a build failure. The image is still published only if
+  its container is complete: a truncated or structurally invalid source is
+  refused before publication, which is a separate check from the layout hint.
 - Loading is decided by rendered document order: the first content image keeps
   eager loading and every later one is lazy; all use asynchronous decoding. No
   JavaScript, placeholder, second index, or SQLite image metadata participates.

@@ -36,6 +36,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, test } from 'vitest';
 import type { Browser, BrowserContext, Route } from 'playwright';
+import sharp from 'sharp';
 
 import {
   buildSiteWithMedia,
@@ -290,6 +291,8 @@ test('a JavaScript-disabled browser decodes every published image under the serv
   assert.ok(renderedUrls.some((url) => url.endsWith('-photo.webp')), 'no JPEG photograph was transcoded');
   assert.ok(renderedUrls.some((url) => url.endsWith('-screenshot.webp')), 'no PNG screenshot was converted');
   assert.ok(renderedUrls.some((url) => url.endsWith('-anim.gif')), 'the animated GIF was not published unchanged');
+  const gifPages = (await sharp(Buffer.from(GIF_ANIMATED)).metadata()).pages ?? 1;
+  assert.ok(gifPages >= 3, `the fixture behind anim.gif has ${gifPages} page(s), not a real animation`);
 
   // The lead image is the first in document order and stays eager; everything
   // after it defers. The inline image and the linked badge appear later, so

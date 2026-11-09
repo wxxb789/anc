@@ -19,7 +19,13 @@ import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import sharp from 'sharp';
 
-import { imageExtension, imageMimeType, sniffImageFormat } from '../src/lib/media.ts';
+import {
+  assertCompleteContainer,
+  imageExtension,
+  imageMimeType,
+  pngCanUseLosslessWebp,
+  sniffImageFormat,
+} from '../src/lib/media.ts';
 import {
   ENCODER_SETTINGS,
   MEDIA_LIMITS,
@@ -312,18 +318,95 @@ test('an animated PNG is preserved rather than flattened to one frame', async ()
   assert.ok(image.bytes.equals(source), 'the APNG bytes changed');
 });
 
-test('a corrupt or unsupported payload is a named failure, never the source bytes', async () => {
-  const rows: readonly (readonly [string, Buffer, 'png' | 'jpeg' | 'webp' | 'gif' | 'avif', string])[] = [
-    ['truncated PNG', Buffer.from(PNG_UNICODE.subarray(0, 8)), 'png', 'corrupt'],
-    ['truncated JPEG', Buffer.from(JPEG.subarray(0, Math.floor(JPEG.length / 2))), 'jpeg', 'corrupt'],
-    ['truncated WebP', Buffer.from(WEBP_LOSSY.subarray(0, 20)), 'webp', 'corrupt'],
-    ['truncated GIF', Buffer.from(GIF_ANIMATED.subarray(0, 0)), 'gif', 'corrupt'],
+test('every intact supported container passes the structural completeness gate', () => {
+  assert.doesNotThrow(() => assertCompleteContainer('png', Buffer.from(PNG_UNICODE)));
+  assert.doesNotThrow(() => assertCompleteContainer('jpeg', Buffer.from(JPEG)));
+  assert.doesNotThrow(() => assertCompleteContainer('gif', Buffer.from(GIF_ANIMATED), { pages: 3 }));
+  assert.doesNotThrow(() => assertCompleteContainer('webp', Buffer.from(WEBP_LOSSY)));
+  assert.doesNotThrow(() => assertCompleteContainer('avif', Buffer.from(AVIF)));
+});
+
+test('truncated containers are refused before a decoder can report partial success', async () => {
+  const gif = await animatedGif();
+  const gifMetadata = await sharp(gif).metadata();
+  assert.equal(gifMetadata.pages, 3, 'the GIF control is not a real three-frame animation');
+  assert.equal(gif[gif.length - 1], 0x3b, 'the GIF control does not end at its trailer');
+  const png = Buffer.from(PNG_SCREENSHOT);
+  const avif = Buffer.from(AVIF);
+  const mdat = avif.indexOf('mdat');
+  assert.ok(mdat > 0, 'the AVIF control has no mdat to truncate');
+  const mdatMidpoint = mdat + 4 + Math.floor((avif.length - (mdat + 4)) / 2);
+  assert.ok(mdatMidpoint > mdat + 4 && mdatMidpoint < avif.length, 'the AVIF cut is not inside mdat');
+  const webp = Buffer.from(WEBP_LOSSY);
+  const riffSize = webp.readUInt32LE(4);
+  webp.writeUInt32LE(riffSize - 1, 4);
+  const gifWithTrailingByte = Buffer.concat([gif, Buffer.from([0x01])]);
+  const pngWithTrailingByte = Buffer.concat([png, Buffer.from([0x00])]);
+  const pngWithBadCrc = Buffer.from(png);
+  const idat = pngWithBadCrc.indexOf('IDAT');
+  assert.ok(idat > 0, 'the PNG control has no IDAT chunk');
+  pngWithBadCrc[idat + 4] = pngWithBadCrc[idat + 4]! ^ 0xff;
+
+  const rows: readonly (readonly [string, Buffer, 'png' | 'jpeg' | 'webp' | 'gif' | 'avif'])[] = [
+    ['GIF at 90%', gif.subarray(0, Math.floor(gif.length * 0.9)), 'gif'],
+    ['GIF at 75%', gif.subarray(0, Math.floor(gif.length * 0.75)), 'gif'],
+    ['GIF at 50%', gif.subarray(0, Math.floor(gif.length * 0.5)), 'gif'],
+    ['GIF without trailer', gif.subarray(0, gif.length - 1), 'gif'],
+    ['GIF with a non-zero byte after trailer', gifWithTrailingByte, 'gif'],
+    ['PNG minus 4 bytes', png.subarray(0, png.length - 4), 'png'],
+    ['PNG minus 12 bytes', png.subarray(0, png.length - 12), 'png'],
+    ['PNG minus 20 bytes', png.subarray(0, png.length - 20), 'png'],
+    ['PNG at half', png.subarray(0, Math.floor(png.length / 2)), 'png'],
+    ['PNG with a trailing byte after IEND', pngWithTrailingByte, 'png'],
+    ['PNG with a damaged chunk CRC', pngWithBadCrc, 'png'],
+    ['JPEG without EOI', Buffer.from(JPEG.subarray(0, JPEG.length - 2)), 'jpeg'],
+    ['WebP with a shortened RIFF size', webp, 'webp'],
+    ['AVIF truncated mid-mdat', avif.subarray(0, mdatMidpoint), 'avif'],
   ];
-  for (const [name, bytes, format, reason] of rows) {
-    const result = await prepareImage(bytes, format);
-    assert.equal(result.ok, false, `${name} was accepted`);
-    if (!result.ok) assert.equal(result.reason, reason, `${name}: wrong reason`);
+  for (const [name, bytes, format] of rows) {
+    assert.throws(
+      () => assertCompleteContainer(format, bytes, { pages: gifMetadata.pages }),
+      /incomplete/,
+      `${name}: the completeness gate accepted it`,
+    );
+    const result = await prepareImage(Buffer.from(bytes), format);
+    assert.equal(result.ok, false, `${name} was accepted by the encoder`);
+    if (!result.ok) assert.equal(result.reason, 'corrupt', `${name}: wrong reason`);
   }
+
+  // The same bytes before each cut still pass, so the rows above measure the
+  // truncation and not a fixture that was already incomplete.
+  assert.doesNotThrow(() => assertCompleteContainer('gif', gif, { pages: gifMetadata.pages }));
+  assert.doesNotThrow(() => assertCompleteContainer('png', png));
+  assert.doesNotThrow(() => assertCompleteContainer('jpeg', Buffer.from(JPEG)));
+  assert.doesNotThrow(() => assertCompleteContainer('webp', Buffer.from(WEBP_LOSSY)));
+  assert.doesNotThrow(() => assertCompleteContainer('avif', avif));
+});
+
+test('a 16-bit PNG is published unchanged instead of being reduced to 8-bit', async () => {
+  const source = await sharp({
+    create: { width: 16, height: 16, channels: 3, background: { r: 100, g: 150, b: 200 } },
+  })
+    .toColourspace('rgb16')
+    .png()
+    .toBuffer();
+  const sourceMetadata = await sharp(source).metadata();
+  assert.equal(sourceMetadata.depth, 'ushort', 'the fixture is not a 16-bit PNG');
+  assert.equal(pngCanUseLosslessWebp(source), false, 'the policy would transcode a 16-bit PNG');
+
+  const image = accepted(await prepareImage(source, 'png'));
+  assert.equal(image.transcoded, false, 'a 16-bit PNG was converted');
+  assert.equal(image.format, 'png');
+  assert.ok(image.bytes.equals(source), 'the 16-bit PNG bytes changed');
+
+  // Non-vacuity: an 8-bit lossless candidate exists and is smaller, so the
+  // passthrough is the depth rule and not the size comparison.
+  const candidate = await sharp(source)
+    .webp({ lossless: true, ...ENCODER_SETTINGS.lossless })
+    .toBuffer();
+  assert.equal(sniffImageFormat(candidate), 'webp');
+  assert.equal((await sharp(candidate).metadata()).depth, 'uchar');
+  assert.ok(candidate.length < source.length, 'the generated 16-bit fixture no longer proves the depth rule');
 });
 
 test('an EXIF-rotated JPEG publishes upright, at its displayed size', async () => {
