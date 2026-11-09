@@ -15,6 +15,7 @@
  * as a pass.
  */
 
+import { createHash } from 'node:crypto';
 import { spawnSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import {
@@ -33,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { chromium, type Browser } from 'playwright';
 import { serveDist, sqliteAssetRequests, tabTo, workerScriptPath, type ServedSite } from '../tests/support/browser-site.ts';
+import { GIF_ANIMATED, JPEG, PNG_UNICODE } from '../tests/support/media.ts';
 import { openSnapshot, snapshotMembers } from '../tests/support/snapshot.ts';
 import { spawnNpm } from './npm-command.ts';
 
@@ -356,6 +358,68 @@ async function checkShippedPreview(binary: string, scratch: string): Promise<voi
   }
 }
 
+/**
+ * The packaged path's image evidence, with scripting off.
+ *
+ * The goal's first completion clause is about a reader, not about a file: a
+ * generated site served statically shows its pictures in an ordinary browser
+ * without JavaScript. So this opens the foreign output in a context whose page
+ * scripts are disabled and asks the browser whether it decoded each image —
+ * `naturalWidth > 0` is the browser's own answer, and under the served CSP it
+ * also proves `img-src 'self'` allowed the request. Every response is then
+ * checked for status, content type, and the digest its URL names.
+ */
+async function checkImages(browser: Browser, server: ServedSite, expectedFiles: readonly string[]): Promise<void> {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  try {
+    const page = await context.newPage();
+    const response = await page.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
+    const policy = response?.headers()['content-security-policy'] ?? '';
+    assert(
+      /img-src[^;]*'self'/.test(policy),
+      'the foreign build was not served under a policy that allows same-origin images: ' + JSON.stringify(policy),
+    );
+
+    const images = await page.locator('article img').evaluateAll((nodes) =>
+      (nodes as HTMLImageElement[]).map((image) => ({
+        src: image.getAttribute('src') ?? '',
+        width: image.naturalWidth,
+        complete: image.complete,
+      })),
+    );
+    assert(images.length >= 3, 'the foreign note rendered fewer images than it embeds: ' + JSON.stringify(images));
+    for (const image of images) {
+      assert(image.src.startsWith('/_assets/'), 'an image points outside the published assets: ' + image.src);
+      assert(image.complete, 'an image never finished loading: ' + image.src);
+      assert(image.width > 0, 'the browser decoded nothing for ' + image.src);
+    }
+
+    const contentTypes: Record<string, string> = {
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp',
+      '.avif': 'image/avif',
+    };
+    const served = new Set(images.map((image) => image.src));
+    assert(served.size === expectedFiles.length, 'the page shows ' + served.size + ' assets, the output carries ' + expectedFiles.length);
+    for (const url of served) {
+      const asset = await fetch(server.origin + url);
+      assert(asset.status === 200, url + ' returned ' + asset.status);
+      const extension = url.slice(url.lastIndexOf('.'));
+      assert(
+        asset.headers.get('content-type') === contentTypes[extension],
+        url + ' was served as ' + String(asset.headers.get('content-type')),
+      );
+      const bytes = Buffer.from(await asset.arrayBuffer());
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      assert(digest === url.slice('/_assets/'.length, '/_assets/'.length + 64), url + ' served bytes that do not hash to its digest');
+    }
+  } finally {
+    await context.close();
+  }
+}
+
 async function main(): Promise<number> {
   const packOutput = run(process.execPath, [join(ROOT, 'scripts', 'compile-package.ts')], ROOT);
   assert(
@@ -371,6 +435,13 @@ async function main(): Promise<number> {
       JSON.stringify({ name: 'foreign-notes', version: '1.0.0', private: true }, null, 2) + '\n',
       'utf8',
     );
+    // Real image bytes, under a path with a space and CJK so the packaged path
+    // exercises resolution, URL encoding, staging, inventory, and serving with
+    // names a stranger would actually write.
+    mkdirSync(join(scratch, 'media'), { recursive: true });
+    writeFileSync(join(scratch, 'media', '图 表 one.png'), PNG_UNICODE);
+    writeFileSync(join(scratch, 'media', 'photo.jpeg'), JPEG);
+    writeFileSync(join(scratch, 'media', 'anim.gif'), GIF_ANIMATED);
     writeFileSync(
       join(scratch, 'welcome.md'),
       [
@@ -383,6 +454,14 @@ async function main(): Promise<number> {
         'A public note linking to [[private]] and [[second]] with math $$x^2$$.',
         '',
         'INDEX-CONTROL-**JOINED**-TEXT',
+        '',
+        '![a chart with a space and CJK in its name](<media/图 表 one.png>)',
+        '',
+        'The same photograph as the second note: ![shared][shot]',
+        '',
+        'An Obsidian embed of an animation: ![[media/anim.gif]]',
+        '',
+        '[shot]: media/photo.jpeg',
         '',
         '~~~mermaid',
         'graph TD',
@@ -409,6 +488,8 @@ async function main(): Promise<number> {
         'A public note linking back to [[welcome]].',
         '',
         'SECOND-NOTE-BODY-MARKER',
+        '',
+        'The photograph the welcome note shows too: ![shared](media/photo.jpeg)',
         '',
       ].join('\n'),
       'utf8',
@@ -462,6 +543,25 @@ async function main(): Promise<number> {
     assert(welcome.includes('language-mermaid'), 'client diagram fallback did not ship');
     assert(!welcome.includes('PRIVATE-BODY-MUST-NOT-SHIP'), 'withheld body reached its linking page');
 
+    // --- Image assets: three references, three files, one filename with a space
+    // and CJK, and a photograph shared with the second note ---
+    const assetFiles = readdirSync(join(dist, '_assets')).sort();
+    assert(assetFiles.length === 3, 'the foreign output carries ' + assetFiles.length + ' image assets: ' + assetFiles.join(', '));
+    for (const file of assetFiles) {
+      const bytes = readFileSync(join(dist, '_assets', file));
+      const digest = createHash('sha256').update(bytes).digest('hex');
+      assert(digest === file.slice(0, 64), file + ' does not hash to the digest its URL names');
+    }
+    assert(
+      assetFiles.some((file) => file.includes('图 表 one')),
+      'the Unicode-named image did not publish under its own name: ' + assetFiles.join(', '),
+    );
+    const welcomeImages = [...welcome.matchAll(/<img src="(\/_assets\/[^"]+)"/g)].map((match) => match[1]!);
+    assert(welcomeImages.length === 3, 'the foreign page points at ' + welcomeImages.length + ' asset URLs');
+    const secondHtml = readFileSync(join(dist, 'notes', 'second', 'index.html'), 'utf8');
+    const shared = welcomeImages.filter((url) => secondHtml.includes(url));
+    assert(shared.length === 1, 'the two foreign notes share ' + shared.length + ' image URLs, not one');
+
     assert(
       !welcome.includes('INDEX-CONTROL-JOINED-TEXT'),
       'the Pagefind control degraded into a raw HTML substring',
@@ -475,7 +575,7 @@ async function main(): Promise<number> {
     // scan ran — so a change to it must be applied to both.
     let inflatedText = '';
     const outputText = filesUnder(dist)
-      .filter((file) => !/\.(?:avif|ico|jpe?g|png|webp|woff2?)$/i.test(file))
+      .filter((file) => !/\.(?:avif|gif|ico|jpe?g|png|webp|woff2?)$/i.test(file))
       .map((file) => {
         const artifact = artifactText(file);
         if (artifact.inflated) inflatedText += artifact.text + '\n';
@@ -539,6 +639,8 @@ async function main(): Promise<number> {
     const workerChunk = workerScriptPath(dist);
     const browser = await launchSmokeBrowser();
     try {
+      await checkImages(browser, server, assetFiles);
+
       await checkReadingAndPreview(browser, server, workerChunk, secondTitle);
 
       await checkTagEnumeration(browser, server, publicNotes);
@@ -574,7 +676,30 @@ async function main(): Promise<number> {
     assert(failedReport.includes('github-pat'), 'private report omitted the sanitized rule id');
     assert(readFileSync(join(dist, 'notes', 'welcome', 'index.html'), 'utf8') === welcome, 'failed release replaced the last good output');
 
-    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes');
+    // --- A missing image fails the build and leaves the last good output ---
+    //
+    // The secret case above proves preservation for a scan failure *after* the
+    // output was built. This one proves it for a producer failure *before* Astro
+    // ran: the previous `dist/` must be untouched, and the stream must count the
+    // reasons without naming the private source path.
+    writeFileSync(join(scratch, 'welcome.md'), readFileSync(join(scratch, 'welcome.md'), 'utf8').replace(/\ntoken=\S+\n?$/, '\n'), 'utf8');
+    writeFileSync(
+      join(scratch, 'second.md'),
+      readFileSync(join(scratch, 'second.md'), 'utf8') + '\n![a file that is not there](media/zzqmissing.png)\n',
+      'utf8',
+    );
+    const imageRejected = spawnSync(process.execPath, [binary, 'build', '--release'], { cwd: scratch, encoding: 'utf8' });
+    assert(imageRejected.status !== 0, 'a build whose note embeds a missing image succeeded');
+    const imageStreams = imageRejected.stdout + imageRejected.stderr;
+    assert(/image reference/.test(imageStreams), 'the failure did not say an image could not be published: ' + imageStreams);
+    assert(!imageStreams.includes('zzqmissing'), 'the failure printed the private image path: ' + imageStreams);
+    assert(!imageStreams.includes('second.md'), 'the failure printed the note filename: ' + imageStreams);
+    assert(
+      readFileSync(join(dist, 'notes', 'welcome', 'index.html'), 'utf8') === welcome,
+      'a failed build replaced the last good output',
+    );
+
+    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes, 3 images');
     console.log('tarball: ' + basename(TARBALL));
     return 0;
   } finally {

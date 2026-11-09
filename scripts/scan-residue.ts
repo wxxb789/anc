@@ -374,14 +374,23 @@ const TEXT_NAMES: ReadonlySet<string> = new Set(['_headers', '_redirects']);
  * File kinds whose bytes are not text, so a marker search over them reports
  * coincidences rather than residue.
  *
- * Mirrors the `binary` list in `.gitattributes`, plus `.jpeg` — which that file
- * omits because nothing in the tree uses the spelling, and which is listed here
- * because an unlisted extension would fail the scan as unclassified rather than
- * be treated as the image it is. These are not *unscanned by
- * accident* — they are declared, which is what separates them from a file kind
- * nobody has considered.
+ * Mirrors the `binary` list in `.gitattributes` exactly. Goal 0009 added `.gif`
+ * and `.avif` to both lists, and `.jpeg` to that file so the two now agree. An
+ * extension in neither set fails the scan as "neither declared text nor declared
+ * binary" — the fail-closed branch, which is why a new asset format has to be
+ * declared here in the same change that starts emitting it. These are not
+ * *unscanned by accident* — they are declared, which is what separates them from
+ * a file kind nobody has considered.
+ *
+ * A published image is copied byte-identically (Goal 0009 does not transcode or
+ * scrub metadata), so there is nothing in one for a marker search to find that
+ * the author's own file did not already contain; credential scanning still runs
+ * over the same bytes through Gitleaks, which is a different rule set with its
+ * own false-positive policy.
  */
 const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.avif',
+  '.gif',
   '.ico',
   '.jpg',
   '.jpeg',

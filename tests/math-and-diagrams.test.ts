@@ -100,9 +100,12 @@ function builtPages(): { file: string; html: string }[] {
 
 /** Note pages whose body contains the construct, by what the renderer reports. */
 async function pagesWith(flag: 'hasMath' | 'hasMermaid'): Promise<Set<string>> {
+  // The renderer refuses an unpublished local image `src`, and this helper
+  // renders the artifact's own bodies, so it needs the artifact's asset list.
+  const { publishedAssets } = await import('../src/lib/content.ts');
   const slugs = new Set<string>();
   for (const entry of entries) {
-    const rendered = await renderMarkdown(entry.markdown, { pageTitle: entry.title });
+    const rendered = await renderMarkdown(entry.markdown, { pageTitle: entry.title, publishedAssets });
     if (rendered[flag]) slugs.add(entry.slug);
   }
   return slugs;

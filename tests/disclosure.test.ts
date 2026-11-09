@@ -164,6 +164,12 @@ const BODIES = {
   clean: 'Ordinary prose, with nothing planted in it at all.',
   contract: (token: string): string => `Exported from C:\\${token}planted\\x.md today.`,
   residue: (token: string): string => `Exported from /home/${token}planted/ today.`,
+  // Goal 0009's failure surface. The image is missing, so the build stops in the
+  // producer — and the note's own path to it is a private source path that a
+  // world-readable workflow log must not carry. The body is token-free on
+  // purpose: what this run measures is whether the *failure* varies with the
+  // corpus name, not whether the planted text does.
+  media: 'A note with ![a chart](zzqprivate/zzqchart.png) embedded.',
 } as const;
 
 test('the streams carry no name that changes when the corpus is renamed', () => {
@@ -186,6 +192,7 @@ test('the streams carry no name that changes when the corpus is renamed', () => 
         ['a', BODIES.clean],
         ['b', BODIES.contract(token)],
         ['c', BODIES.residue(token)],
+        ['d', BODIES.media],
       ] as const) {
         const here = join(directory, name);
         mkdirSync(here, { recursive: true });
@@ -204,7 +211,7 @@ test('the streams carry no name that changes when the corpus is renamed', () => 
     // `mkdtemp` suffix in `residue scan: N findings in <workspace>`, which
     // differed between two runs of the *same* corpus.
     const alphaAgain = runs('zzqalpha');
-    for (const run of ['a', 'b', 'c'] as const) {
+    for (const run of ['a', 'b', 'c', 'd'] as const) {
       assert.equal(
         alphaAgain[run]!.output,
         alpha[run]!.output,
@@ -214,7 +221,7 @@ test('the streams carry no name that changes when the corpus is renamed', () => 
     }
 
     // The gate itself.
-    for (const run of ['a', 'b', 'c'] as const) {
+    for (const run of ['a', 'b', 'c', 'd'] as const) {
       assert.equal(
         beta[run]!.output,
         alpha[run]!.output,
@@ -229,7 +236,20 @@ test('the streams carry no name that changes when the corpus is renamed', () => 
     assert.equal(alpha['a']!.status, 0, `run (a) did not build cleanly:\n${alpha['a']!.output}`);
     assert.equal(alpha['b']!.status, 1, `run (b) did not fail:\n${alpha['b']!.output}`);
     assert.equal(alpha['c']!.status, 1, `run (c) did not fail:\n${alpha['c']!.output}`);
+    assert.equal(alpha['d']!.status, 1, `run (d) did not fail:\n${alpha['d']!.output}`);
     assert.match(alpha['b']!.output, /content contract violation/, 'run (b) did not fail at the contract');
+    // The image run fails on the media check rather than on a scan, and it does
+    // not name the file it could not publish — which is the whole point of
+    // extending this differential with it.
+    assert.match(
+      alpha['d']!.output,
+      /image reference/,
+      'run (d) did not fail on the media check — it may be tripping a different rule',
+    );
+    assert.ok(
+      !alpha['d']!.output.includes('zzqchart') && !alpha['d']!.output.includes('zzqprivate'),
+      `run (d) named the private image path:\n${alpha['d']!.output}`,
+    );
     assert.match(
       alpha['c']!.output,
       /absolute home-directory path/,

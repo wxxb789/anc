@@ -58,7 +58,7 @@ $$
 
 ## Images
 
-![](decorative.png)
+![](/_assets/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-decorative.png)
 
 ![A described diagram](https://example.com/diagram.png)
 

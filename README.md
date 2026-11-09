@@ -194,8 +194,12 @@ a disclosure there; that is why the names and the counts are split.
 - Frontmatter can set `slug`, `language`, `description`, `tags`, and `aliases`.
   Aliases are public, searchable metadata with no route of their own — deliberately
   not alternate link targets.
-- Non-Markdown files are never published. There is no asset pipeline, so an embedded
-  image degrades to text and is reported.
+- Local images referenced by a published note are published. PNG, JPEG, GIF, WebP, and
+  AVIF are copied byte-identically to `/_assets/<sha256>-<name>` and deduplicated by
+  content, so an animation keeps its frames and one picture is one file however many notes
+  embed it. A reference resolves relative to the note, then the content root; a missing,
+  excluded, escaping, or unsupported one — SVG included — fails the build rather than
+  shipping a broken picture. Remote images are left as written and never fetched.
 
 ## Architecture
 

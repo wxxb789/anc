@@ -48,9 +48,34 @@
  */
 
 import { markdownToMdast, type MdastNode } from 'satteri';
+import sanitizeHtml from 'sanitize-html';
 import { resolveLink, type LinkIndex } from '../src/lib/link-resolution.ts';
+import {
+  classifyImageSource,
+  type ImagePublisher,
+  type MediaFailureReason,
+} from '../src/lib/media.ts';
 import { WITHHELD_LINK_TEXT, WITHHELD_ROUTE } from '../src/lib/route-path.ts';
 import type { LinkFindingRow } from './write-report.ts';
+
+/**
+ * One image reference this note carries that the build refuses to publish.
+ *
+ * The row exists so the *report* can name it — the source file, the line, the
+ * reference as authored — while the stream carries a count. An image reference
+ * is never degraded: a broken `<img>`, a `/private/` link, and a silently
+ * dropped element are all outcomes Goal 0009 forbids, so the producer collects
+ * every failure and the build stops.
+ */
+export interface MediaFailureRow {
+  /** The writing file's path, relative to the content directory. */
+  readonly source: string;
+  /** 1-indexed line within that file. */
+  readonly line: number;
+  /** The reference exactly as authored, so it can be searched for. */
+  readonly link: string;
+  readonly reason: MediaFailureReason;
+}
 
 /** What one note's traversal produced. */
 export interface TraversalResult {
@@ -60,7 +85,14 @@ export interface TraversalResult {
   readonly outgoing: readonly string[];
   /** Everything the report needs from this note. */
   readonly findings: readonly LinkFindingRow[];
+  /**
+   * Image references the build must refuse. Non-empty means the caller stops the
+   * build; the body above has already degraded them to their authored alt text so
+   * the value is self-consistent, but it is never written.
+   */
+  readonly mediaFailures: readonly MediaFailureRow[];
 }
+
 
 /** One span of the source to replace, and what to replace it with. */
 interface Edit {
@@ -132,6 +164,7 @@ function collectLinkNodes(
   into: MdastNode[],
   nested: Set<MdastNode>,
   definitions: MdastNode[],
+  raw: MdastNode[],
   inside = false,
 ): void {
   if (CONTAINS_LINK.has(node.type)) {
@@ -139,9 +172,15 @@ function collectLinkNodes(
     if (inside) nested.add(node);
   } else if (node.type === 'definition') {
     definitions.push(node);
+  } else if (node.type === 'html') {
+    // Raw HTML is the one image form the node walk cannot see: `<img>` written
+    // by hand is an `html` node, not an `image` node. Collected here so the
+    // producer can refuse a local one before a broken element ships; see
+    // `rawImageSources`.
+    raw.push(node);
   }
   for (const child of ('children' in node ? node.children : []) as MdastNode[]) {
-    collectLinkNodes(child, into, nested, definitions, inside || CONTAINS_LINK.has(node.type));
+    collectLinkNodes(child, into, nested, definitions, raw, inside || CONTAINS_LINK.has(node.type));
   }
 }
 
@@ -236,13 +275,75 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
 }
 
 /**
- * A label safe to place inside `[…]`, with the two delimiters escaped.
+ * Decoded text → Markdown inline source. **The only place that conversion
+ * happens**, for both an image's `alt` and its `title`.
+ *
+ * The rule, in one sentence: escape every decoded character that Markdown or
+ * the renderer can interpret, encode a line feed or carriage return as a numeric
+ * character reference, and emit everything else unchanged. The escaped set is
+ *
+ * | escaped | why leaving it raw changes the text |
+ * | --- | --- |
+ * | `\` | the escape introducer: **every** decoded backslash is emitted as `\\`, unconditionally |
+ * | `"` | the title's delimiter (a label never needs it, but one uniform set is the point) |
+ * | `` ` `` | a code span, which discards its delimiters |
+ * | `*`, `_` | emphasis and strong, which discard their markers |
+ * | `[`, `]` | a label's own delimiters, and nested link/image syntax |
+ * | `<` | raw HTML and autolinks, which reprocess the text as markup |
+ * | `&` | a character reference, which decodes the text a second time |
+ * | `~` | GFM strikethrough |
+ * | `\|` | a GFM table cell separator, when the image sits in a table |
+ * | `$` | the math feature's delimiters (`$$…$$`) |
+ *
+ * **A decoded backslash is always doubled; there is no conditional run logic.**
+ * The round-2 rule doubled a run only before punctuation, a line break, or the
+ * end of the label. That is wrong for a run before ordinary text: two decoded
+ * backslashes emitted raw re-parse as one, because each pair escapes itself.
+ * Emitting `2n` bytes for `n` decoded backslashes decodes back to `n` in every
+ * position — before a letter, a space, punctuation, a bracket, or the closing
+ * delimiter — so the uniform rule is also the simpler one. Measured before this
+ * change:
+ *
+ * ```
+ * alt "ends with \\"  emitted raw "ends with \\"  ->  alt "ends with \"
+ * ```
+ *
+ * LF/CR cannot be backslash-escaped, and a raw one would let the next line start
+ * a block construct or a blank line end it, so both are emitted as `&#10;` /
+ * `&#13;`; the parser decodes them back to the same character. Everything else —
+ * letters, digits, spaces, `\u00a0`, `!`, `(`, `)`, `+`, `%`, `#`, `:`, `/`,
+ * `.`, `>` — is ordinary text in a label and a title, so it is emitted
+ * unchanged; an unescaped `!` cannot form an image because the `[` after it is
+ * escaped.
+ *
+ * The two fields this serves are an image's `alt` and its `title`, and they
+ * differ only in the title's surrounding quotes (added by {@link inlineTitle}).
+ * The title path used to carry a second copy of the escaping rule, and it
+ * decoded a second time for exactly the reason this function exists:
+ *
+ * ```
+ * title "literal &copy;"  emitted raw inside quotes  ->  title "literal ©"
+ * ```
+ *
+ * **Compared with {@link escapeLabelEdits}, this is a different input, not a
+ * second rule.** That function receives *source* bytes, where the author's own
+ * escapes are already present, so it must add a byte only to an unescaped
+ * bracket; escaping anything else there would corrupt text that was already
+ * Markdown. This function receives decoded text, where every construct-forming
+ * character has to be reintroduced. There is no decoded text anywhere else in
+ * this module that is turned back into Markdown.
+ *
+ * The alternative — copy the label's source span — is what the split rewrite
+ * does for an anchor's label, and it is not available here: an image's `alt`
+ * arrives as the parser's decoded string with no span of its own inside the
+ * node, and recovering that span would need a second bracket-aware scanner in
+ * this function. The decoded form is the one the rewrite already has, so it is
+ * the one re-encoded.
  *
  * Text taken from one construct and written into another has to be re-escaped
- * for the construct it lands in, and this is the one place that happens: a
- * wikilink's display half and an image's `alt` are *not* link-label syntax, so
- * a `[` or `]` inside either is ordinary text there and a delimiter here.
- * Measured, all three from the same defect:
+ * for the construct it lands in: a wikilink's display half and an image's `alt`
+ * are *not* link-label syntax, so a `[` or `]` inside either is ordinary text
+ * there and a delimiter here. Measured, from the same defect:
  *
  * ```
  * ![[t|before ] after]]  ->  [before ] after](/t/)     the link ends early
@@ -253,27 +354,48 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
  * back one image whose `alt` is `](t.md)` — and it is not a shape worth
  * special-casing, because escaping the delimiters fixes it and every other
  * spelling at once.
- *
- * **Only `[` and `]`, and the set is measured rather than assumed.** Every
- * candidate was run through both rewrite paths and the shipped renderer
- * (`.tmp/probe-labels.mjs`); `(`, `)`, a backtick, and a lone backslash all
- * round-trip intact, because the parser closes a label at its `]` before a
- * destination begins and nothing else in a label is delimiter syntax. Escaping
- * more than the two characters that can break the construct would put visible
- * backslashes into a reader's text.
  */
-function escapeLabel(text: string): string {
-  return text.replace(/[[\]]/g, (character) => `\\${character}`);
+
+/**
+ * Every character that begins or participates in Markdown/HTML syntax.
+ *
+ * A record rather than a `Set` because the table is static: each key names one
+ * construct above, and a reader can audit the whole rule in one place.
+ */
+const MARKDOWN_SYNTAX: Readonly<Record<string, true>> = {
+  '\\': true,
+  '"': true,
+  '`': true,
+  '*': true,
+  _: true,
+  '[': true,
+  ']': true,
+  '<': true,
+  '&': true,
+  '~': true,
+  '|': true,
+  $: true,
+};
+
+function serializeText(text: string): string {
+  let result = '';
+  for (const character of text) {
+    if (character === '\n') result += '&#10;';
+    else if (character === '\r') result += '&#13;';
+    else if (MARKDOWN_SYNTAX[character] === true) result += `\\${character}`;
+    else result += character;
+  }
+  return result;
 }
 
 /**
  * The edits that make a label's own text safe to sit inside `[…]`.
  *
- * **This is the split rewrite's half of {@link escapeLabel}, and it existed as a
- * defect for as long as the split rewrite has.** An outer link is rewritten as
- * two edits *around* its label so a nested node can write into the middle
- * (see {@link labelSpan}) — which means the label's bytes are copied through
- * untouched, escaper included. Measured on `2405cb2` and still live at
+ * **This is the source-byte counterpart of {@link serializeText}, and it
+ * existed as a defect for as long as the split rewrite has.** An outer link is
+ * rewritten as two edits *around* its label so a nested node can write into the
+ * middle (see {@link labelSpan}) — which means the label's bytes are copied
+ * through untouched, escaper included. Measured on `2405cb2` and still live at
  * `ebd53ff`:
  *
  * ```
@@ -433,6 +555,77 @@ function spanOf(node: MdastNode | undefined): { start: number; end: number; line
 }
 
 /**
+ * Whether a reference names a file other than a note.
+ *
+ * The one question that decides whether an `![[…]]` embed is the media
+ * pipeline's business or the note resolver's. A wikilink embed with no extension
+ * is Obsidian's transclusion syntax for a note (`![[beta]]`, `![[A note]]`); one
+ * carrying an extension names a file (`![[chart.png]]`, `![[report.pdf]]`), and
+ * Goal 0009's boundary is that a referenced file which is not a note must be
+ * published or fail. `.md` is excluded because `![[note.md]]` is still a note.
+ */
+function namesNonNoteFile(reference: string): boolean {
+  const cut = reference.indexOf('#');
+  const path = cut === -1 ? reference : reference.slice(0, cut);
+  const slash = path.lastIndexOf('/');
+  const base = slash === -1 ? path : path.slice(slash + 1);
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0 || dot === base.length - 1) return false;
+  return base.slice(dot).toLowerCase() !== '.md';
+}
+
+/**
+ * Every `src` a fragment of raw HTML gives an `<img>`, in document order.
+ *
+ * Parsed by `sanitize-html` — the same parser that later decides whether an
+ * element reaches the page — rather than matched with a regex, because the
+ * question is what a *browser* would fetch and a regex over `[^>]*` stops at the
+ * first `>` inside a quoted attribute. Measured shape: `<img alt="a > b"
+ * src="x.png">` is one tag with one src, and a search that truncates at `>` sees
+ * none.
+ *
+ * Returns `undefined` when the fragment mentions `<img` but the parser found no
+ * element, which is malformed raw HTML rather than a remote image. The caller
+ * treats that as a failure too: an `<img>` this build cannot read is not one it
+ * can certify as remote.
+ */
+function rawImageSources(html: string): string[] | undefined {
+  const sources: string[] = [];
+  sanitizeHtml(html, {
+    allowedTags: ['img'],
+    // Not a security decision — the renderer's sanitizer owns that. The
+    // attributes are only needed long enough for the transform to read `src`.
+    allowedAttributes: { img: ['src', 'alt', 'title', 'width', 'height', 'loading', 'decoding', 'srcset', 'sizes'] },
+    // Schemes are read, not filtered, here.
+    allowedSchemes: [],
+    allowProtocolRelative: true,
+    transformTags: {
+      img: (tagName, attribs) => {
+        sources.push(typeof attribs['src'] === 'string' ? attribs['src'] : '');
+        return { tagName, attribs };
+      },
+    },
+  });
+  return sources.length === 0 ? undefined : sources;
+}
+
+/**
+ * An image title, quoted and serialised from the parser's decoded value.
+ *
+ * Only reached when an image is republished under its asset URL and the author
+ * wrote a title, inline or on the reference's definition. The parsed title is
+ * the author's text with character references and escapes already resolved, so
+ * it goes through the same {@link serializeText} the label does; the only
+ * title-specific part is the surrounding `"`. Whitespace is **not** collapsed
+ * or trimmed: the parser preserved it, and the old collapse changed titles like
+ * ` a  b ` and turned a decoded `&copy;` into `©` a second time.
+ */
+function inlineTitle(title: string | null | undefined): string {
+  if (typeof title !== 'string' || title === '') return '';
+  return ` "${serializeText(title)}"`;
+}
+
+/**
  * Resolve every link in one note, rewriting the body and collecting the edges.
  *
  * @param markdown The note's body, frontmatter already stripped.
@@ -445,6 +638,10 @@ function spanOf(node: MdastNode | undefined): { start: number; end: number; line
  *   hardcoded for the same reason `renderMarkdown` injects it: this module does
  *   not own the route shape, and a later ticket moving notes under a prefix must
  *   not have to edit a traversal.
+ * @param media The asset publisher. Required rather than defaulted, because a
+ *   default that ignored images is the fail-open shape this module exists to
+ *   avoid: every local image reference must either publish or be recorded as a
+ *   failure, and the caller is the only one that can say which.
  */
 export function resolveLinksIn(
   markdown: string,
@@ -452,16 +649,29 @@ export function resolveLinksIn(
   index: LinkIndex,
   selfSlug: string,
   routeFor: (slug: string) => string,
+  media: ImagePublisher,
 ): TraversalResult {
   const tree = markdownToMdast(markdown, { features: { wikilinks: true, gfm: true } });
   const nodes: MdastNode[] = [];
   const nestedNodes = new Set<MdastNode>();
   const definitionNodes: MdastNode[] = [];
-  collectLinkNodes(tree as MdastNode, nodes, nestedNodes, definitionNodes);
+  const rawNodes: MdastNode[] = [];
+  collectLinkNodes(tree as MdastNode, nodes, nestedNodes, definitionNodes, rawNodes);
   const definitions = definitionsById(definitionNodes);
 
   const edits: Edit[] = [];
   const findings: LinkFindingRow[] = [];
+  const mediaFailures: MediaFailureRow[] = [];
+  /**
+   * Definitions an image reference republished through, and the URL it became.
+   *
+   * The definition's own rewrite runs after the node loop, and without this it
+   * would resolve the *source path* against the corpus and find no note, leaving
+   * `[ref]: chart.png` in the body of the note that published it. No reader sees
+   * a definition, but the body handed onward would still carry the one path the
+   * asset pipeline replaced.
+   */
+  const publishedDefinitions = new Map<MdastNode, string>();
   const outgoing: string[] = [];
   const seen = new Set<string>();
 
@@ -470,9 +680,10 @@ export function resolveLinksIn(
     // rewritten exactly as the inline form with that destination would be — see
     // {@link rewriteDefinition} for the definition's own half.
     let url: string;
+    let definition: MdastNode | undefined;
     if (node.type === 'link' || node.type === 'image') url = node.url;
     else if (node.type === 'linkReference' || node.type === 'imageReference') {
-      const definition = definitions.get(node.identifier);
+      definition = definitions.get(node.identifier);
       // The parser only emits a reference node when a matching definition
       // exists, so this is unreachable; a reference with nothing to resolve is
       // left as authored rather than guessed at.
@@ -494,9 +705,49 @@ export function resolveLinksIn(
     const label = displayText(node, markdown);
     const nested = nestedNodes.has(node);
 
-    // **The single resolution.** Everything below reads this one value: the
-    // replacement text, the edge, and the finding. There is no second call and
-    // no second decision.
+    // **Image references are the media pipeline's, not the note resolver's.**
+    // Markdown image syntax is unambiguous; an `![[…]]` embed is the media
+    // pipeline's only when it names a file rather than a note (`![[chart.png]]`
+    // versus `![[beta]]`), which is what keeps Obsidian's note transclusion
+    // syntax — and its existing demote-to-link behaviour — intact. Handing an
+    // image to the note resolver would degrade it to text, to a `/private/` link,
+    // or to a link to a note the author meant to display; none of which is a
+    // picture.
+    //
+    // Decided before the resolver runs, and by the reference's own shape: the
+    // ownership question has nothing to do with which note a path might name, and
+    // asking it first means an image never pays for the five note-link tiers.
+    const isImage = node.type === 'image' || node.type === 'imageReference';
+    const mediaOwned = isImage && (!isWikilink || namesNonNoteFile(url));
+
+    if (mediaOwned) {
+      const outcome = media.publish({ notePath: sourcePath, target: url, isWikilink });
+      const title =
+        node.type === 'image' ? node.title : definition?.type === 'definition' ? definition.title : null;
+      if (outcome.kind === 'external') continue;
+      if (outcome.kind === 'published') {
+        // The destination is replaced and the alt text kept — the author's words
+        // are the only description a reader without the image has. Written as an
+        // inline image even when the source was a reference, because the
+        // reference's destination is a source path this build never publishes.
+        edits.push({
+          start: span.start,
+          end: span.end,
+          text: `![${serializeText(label)}](${outcome.url}${inlineTitle(title)})`,
+        });
+        if (definition !== undefined) publishedDefinitions.set(definition, outcome.url);
+        continue;
+      }
+      mediaFailures.push({ source: sourcePath, line: span.line, link: written, reason: outcome.reason });
+      // Degraded to its own alt text so the returned body is self-consistent.
+      // The caller stops the build; this value is never written.
+      edits.push({ start: span.start, end: span.end, text: serializeText(label) });
+      continue;
+    }
+
+    // **The single resolution, for everything that is not an image.** The
+    // replacement text, the edge, and the finding all read this one value. There
+    // is no second call and no second decision.
     const resolution = resolveLink(url, sourcePath, index, isWikilink);
 
     if (resolution.kind === 'external') {
@@ -516,18 +767,18 @@ export function resolveLinksIn(
     // nothing nested to protect and is replaced whole.
     //
     // The whole-span form is also the only one that could escape its label
-    // *through* {@link escapeLabel}: the split form leaves the label's own bytes
-    // in place, which is what preserves a nested node's rewrite. So the split
-    // form escapes its label separately, in edits scoped to the label's own text
-    // nodes — see {@link escapeLabelEdits}, which is where that had been missing
-    // for as long as the split form existed.
+    // *through* {@link serializeText}: the split form leaves the label's own
+    // bytes in place, which is what preserves a nested node's rewrite. So the
+    // split form escapes its label separately, in edits scoped to the label's
+    // own text nodes — see {@link escapeLabelEdits}, which is where that had
+    // been missing for as long as the split form existed.
     const inner = node.type === 'link' || node.type === 'linkReference' ? labelSpan(node) : undefined;
     const rewrite = (before: string, after: string, fallbackLabel = label): void => {
       if (inner === undefined) {
         edits.push({
           start: span.start,
           end: span.end,
-          text: before + escapeLabel(fallbackLabel) + after,
+          text: before + serializeText(fallbackLabel) + after,
         });
         return;
       }
@@ -614,7 +865,11 @@ export function resolveLinksIn(
     // discover a missing image. An embed of a *file* — the ordinary
     // `![[diagram.png]]` — never reaches here: an image is not a published note,
     // so it left as `unpublished` above.
-    const embedDemoted = node.type === 'image' || node.type === 'imageReference';
+    // The image node reaching this point is a wikilink embed of a note — the
+    // media branch above owns every file reference — and it is demoted to a
+    // link for the reason this branch states. `isImage` is the same test made
+    // before that branch, so control-flow narrowing cannot hide it.
+    const embedDemoted = isImage;
     const href = `${routeFor(resolution.slug)}${resolution.anchor}`;
     // The slug is the fallback name for a node with no label at all — `[](x)`
     // and an image whose alt is empty — because `[](/route/)` renders an anchor
@@ -658,19 +913,62 @@ export function resolveLinksIn(
   // It contributes no edge and no finding: a definition renders nothing, and an
   // edge exists exactly where a rendered anchor does. An unresolved destination
   // names no file this build knows of, so it is left as written.
+  //
+  // A definition an image reference published through points at the asset URL,
+  // not at the withheld route: the source path it held is exactly what the
+  // pipeline replaced, and `resolveLink` cannot see a file the media map owns.
   for (const definition of definitionNodes) {
     if (definition.type !== 'definition') continue;
     const span = spanOf(definition);
     if (span === undefined) continue;
-    const resolution = resolveLink(definition.url, sourcePath, index, false);
+    const published = publishedDefinitions.get(definition);
     let destination: string;
-    if (resolution.kind === 'resolved' || resolution.kind === 'ambiguous') {
-      destination = `${routeFor(resolution.slug)}${resolution.anchor}`;
-    } else if (resolution.kind === 'unpublished') destination = WITHHELD_ROUTE;
-    else continue;
+    if (published !== undefined) destination = published;
+    else {
+      const resolution = resolveLink(definition.url, sourcePath, index, false);
+      if (resolution.kind === 'resolved' || resolution.kind === 'ambiguous') {
+        destination = `${routeFor(resolution.slug)}${resolution.anchor}`;
+      } else if (resolution.kind === 'unpublished') destination = WITHHELD_ROUTE;
+      else continue;
+    }
     const text = rewriteDefinition(markdown.slice(span.start, span.end), destination);
     if (text !== undefined) edits.push({ start: span.start, end: span.end, text });
   }
 
-  return { markdown: applyEdits(markdown, edits), outgoing, findings };
+  // **Raw-HTML `<img>` is refused unless it is remote or an inline raster.**
+  // The Markdown walk cannot see it — `<img src="chart.png">` is an `html` node
+  // — so without this it would bypass asset authorization entirely and ship a
+  // broken element. The accepted resolver covers Markdown images, reference-style
+  // images, and image wikilinks; an HTML form outside that set fails the build,
+  // which is what the goal requires rather than a silently dropped picture.
+  //
+  // Classification is {@link classifyImageSource} in `src/lib/media.ts`, the
+  // same function the renderer's `img` transform calls. It strips the characters
+  // at or below U+0020 that `sanitize-html` ignores before reading a scheme, so
+  // a leading space or tab cannot give the two sides different answers. Only
+  // `remote` is left alone: `refused` is `file:`/`javascript:`/`vbscript:`,
+  // which the producer must report, and `local` is a bare relative path, an
+  // all-whitespace value, or an empty src. `data:` is remote and keeps its
+  // previous treatment.
+  for (const node of rawNodes) {
+    if (node.type !== 'html') continue;
+    // HTML comments are inert, and a comment is how a note *documents* markup
+    // without rendering it. A commented-out `<img>` asks the browser for nothing,
+    // so it is stripped before the detection — otherwise a note explaining how to
+    // embed an image would fail its own build.
+    const value = node.value.replace(/<!--[\s\S]*?-->/g, '');
+    if (!/<img[\s/>]/i.test(value)) continue;
+    const span = spanOf(node);
+    const sources = rawImageSources(value);
+    const offenders = sources === undefined ? [''] : sources.filter((source) => classifyImageSource(source) !== 'remote');
+    if (offenders.length === 0) continue;
+    mediaFailures.push({
+      source: sourcePath,
+      line: span?.line ?? 1,
+      link: value.trim(),
+      reason: 'html-form',
+    });
+  }
+
+  return { markdown: applyEdits(markdown, edits), outgoing, findings, mediaFailures };
 }

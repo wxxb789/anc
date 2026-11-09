@@ -33,6 +33,7 @@ import { readBuildBinding } from '../src/lib/snapshot-reader.ts';
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { BuildFailure } from './write-report.ts';
 import { assertSnapshotRows } from '../src/lib/snapshot-contract.ts';
+import { ASSET_DIRECTORY, imageExtension, parseAssetUrl, sniffImageFormat } from '../src/lib/media.ts';
 import { isGzip, declaresWal, journalSidecar } from './snapshot-rows.ts';
 import { readStagedWasm } from './copy-wasm.ts';
 
@@ -185,6 +186,71 @@ function snapshotOutput(root: string, workspace?: string): Set<string> {
 }
 
 /**
+ * The image assets the artifact declares, validated against their own bytes.
+ *
+ * **Exactness in both directions.** The returned set is what the generic loop
+ * accepts, so an asset file the artifact does not declare is an unexpected member
+ * — a stale file, a second copy, or something a future step wrote — and a declared
+ * file that is absent is a missing one. That is the difference between owning the
+ * namespace and allowing a directory: a blanket `/_assets/` rule would pass any
+ * bytes a build step dropped there.
+ *
+ * Each file is checked against the two things its URL claims: the digest prefix is
+ * the SHA-256 of the bytes, and the extension is the format the bytes actually are.
+ * A static host infers `Content-Type` from the extension, so a URL that disagrees
+ * with its own bytes would be served as the wrong type by every host that trusts
+ * the name — which is all of them.
+ *
+ * Nothing here reads the content directory or a source filename: a published asset
+ * is identified by its digest, and that is all this gate is given.
+ */
+function assetOutput(root: string, artifact: ContentArtifact): Set<string> {
+  const expected = new Set<string>();
+  for (const url of artifact.assets ?? []) {
+    const parsed = parseAssetUrl(url);
+    if (parsed === undefined) {
+      throw new BuildFailure(
+        'output-inventory-asset-invalid',
+        'output inventory found an asset URL it cannot parse',
+        url,
+      );
+    }
+    const file = `${ASSET_DIRECTORY}/${parsed.digest}-${parsed.fileName}`;
+    const path = join(root, ...file.split('/'));
+    let bytes: Buffer;
+    try {
+      if (!lstatSync(path).isFile()) throw new Error('not a regular file');
+      bytes = readFileSync(path);
+    } catch (error) {
+      throw new BuildFailure(
+        'output-inventory-asset-missing',
+        'output inventory is missing a declared image asset',
+        `${file}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const digest = createHash('sha256').update(bytes).digest('hex');
+    if (digest !== parsed.digest) {
+      throw new BuildFailure(
+        'output-inventory-asset-digest',
+        'an output image asset does not hash to the digest its URL names',
+        `${file}: expected ${parsed.digest}, got ${digest}`,
+      );
+    }
+    const format = sniffImageFormat(bytes);
+    const extension = parsed.fileName.slice(parsed.fileName.lastIndexOf('.'));
+    if (format === undefined || imageExtension(format) !== extension) {
+      throw new BuildFailure(
+        'output-inventory-asset-format',
+        'an output image asset is not the format its URL extension names',
+        `${file}: detected ${format ?? 'no supported image format'}, URL extension ${extension}`,
+      );
+    }
+    expected.add(file);
+  }
+  return expected;
+}
+
+/**
  * The bound SQLite WASM member, validated against its own filename.
  *
  * An empty set when this build staged no WASM (synthetic inventories without a
@@ -333,6 +399,7 @@ export function assertOutputInventory(root: string, artifact: ContentArtifact, w
     ...PAGEFIND_RUNTIME,
     ...snapshotOutput(root, workspace),
     ...wasmOutput(root, workspace),
+    ...assetOutput(root, artifact),
   ]);
   const pagefind = pagefindFiles(root, actual);
   const unexpected: string[] = [];

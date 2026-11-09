@@ -522,6 +522,13 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     const { copyWasmToOutput } = await import('../scripts/copy-wasm.ts');
     copyWasmToOutput(staging, snapshotDirectory);
 
+    // The image assets the producer authorized and staged beside the artifact,
+    // moved into the output after Astro emptied it. No count on the stream: a
+    // build's reading surface is fixed, and the report already carries what was
+    // published.
+    const { copyAssetsToOutput, assetSourceDirectory } = await import('../scripts/copy-assets.ts');
+    copyAssetsToOutput(staging, validated, assetSourceDirectory(artifact));
+
     const { emitRedirects } = await import('../scripts/emit-redirects.ts');
     emitRedirects(staging);
 

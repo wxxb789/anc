@@ -889,12 +889,13 @@ test('the optional summary renders exactly when the artifact carries one', () =>
  */
 test('the table of contents is server-rendered, nested, and complete', async () => {
   const { renderMarkdown, TOC_MIN_HEADINGS } = await import('../src/lib/markdown.ts');
+  const { publishedAssets } = await import('../src/lib/content.ts');
 
   let withToc = 0;
   let nested = 0;
   for (const { slug, html } of notePages()) {
     const entry = getEntry(slug)!;
-    const { toc } = await renderMarkdown(entry.markdown, { pageTitle: entry.title });
+    const { toc } = await renderMarkdown(entry.markdown, { pageTitle: entry.title, publishedAssets });
     const rendered = /<nav class="toc"[\s\S]*?<\/nav>/.exec(html)?.[0];
 
     if (toc.length === 0) {
@@ -949,12 +950,13 @@ test('the table of contents is server-rendered, nested, and complete', async () 
  */
 test('the code stylesheet is linked only by pages that contain a code fence', async () => {
   const { renderMarkdown } = await import('../src/lib/markdown.ts');
+  const { publishedAssets } = await import('../src/lib/content.ts');
 
   let gated = 0;
   let highlighted = 0;
   for (const { slug, html } of notePages()) {
     const entry = getEntry(slug)!;
-    const { hasCode } = await renderMarkdown(entry.markdown, { pageTitle: entry.title });
+    const { hasCode } = await renderMarkdown(entry.markdown, { pageTitle: entry.title, publishedAssets });
     const linked = /<link\b[^>]*href="\/_astro\/code\.[^"]*\.css"/.test(html);
     assert.equal(
       linked,

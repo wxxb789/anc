@@ -40,6 +40,16 @@ const SOURCE_HEADERS = join(ROOT, 'public', '_headers');
  */
 const PLATFORM_REVALIDATION = 'public, max-age=0, must-revalidate';
 
+/**
+ * The platform's own extension-to-type mapping, for the kinds this output ships.
+ *
+ * The image rows are what Goal 0009's display gate reads: a static host infers
+ * `Content-Type` from the extension, so the published extension has to be true
+ * of the bytes or a browser would be handed `image/jpeg` for a PNG. `.avif`,
+ * `.gif`, and `.webp` are here because the pipeline publishes them, and a missing
+ * row would make the harness serve `application/octet-stream` — which the gate
+ * would then measure as the host's behavior rather than its own omission.
+ */
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript',
@@ -51,6 +61,12 @@ const CONTENT_TYPES: Record<string, string> = {
   '.svg': 'image/svg+xml',
   '.xml': 'application/xml',
   '.txt': 'text/plain; charset=utf-8',
+  '.avif': 'image/avif',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
 };
 
 export const WORKER_CHUNK_PATTERN = /\/_astro\/snapshot-worker-[\w-]+\.js$/;
@@ -133,14 +149,31 @@ export interface ServedSite {
 
 export type RunningSite = BuiltSite & ServedSite;
 
-/** Write a corpus into a workspace and build it with the shipped binary. */
-export function buildIn(workspace: string, files: Record<string, string>, out: string): BuiltSite {
+/**
+ * Write a corpus into a workspace and build it with the shipped binary.
+ *
+ * `media` is the same map for bytes rather than text. Goal 0009 publishes images
+ * unchanged, so a corpus that embeds one has to carry real image bytes; a
+ * `Record<string, string>` cannot. Keys are paths relative to the corpus root,
+ * like `files`.
+ */
+export function buildIn(
+  workspace: string,
+  files: Record<string, string>,
+  out: string,
+  media: Readonly<Record<string, Uint8Array>> = {},
+): BuiltSite {
   const notes = join(workspace, 'notes');
   mkdirSync(notes, { recursive: true });
   for (const [name, contents] of Object.entries(files)) {
     const path = join(notes, name);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, contents, 'utf8');
+  }
+  for (const [name, bytes] of Object.entries(media)) {
+    const path = join(notes, name);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes);
   }
   const build = spawnSync(process.execPath, [BINARY, 'build', '--content', 'notes', '--out', out], {
     cwd: workspace,
@@ -158,6 +191,15 @@ export function buildIn(workspace: string, files: Record<string, string>, out: s
  */
 export function buildSite(files: Record<string, string>, out = 'dist'): BuiltSite {
   return buildIn(mkdtempSync(join(tmpdir(), 'anc-site-')), files, out);
+}
+
+/** {@link buildSite} for a corpus that embeds real image bytes. */
+export function buildSiteWithMedia(
+  files: Record<string, string>,
+  media: Readonly<Record<string, Uint8Array>>,
+  out = 'dist',
+): BuiltSite {
+  return buildIn(mkdtempSync(join(tmpdir(), 'anc-site-')), files, out, media);
 }
 
 /**

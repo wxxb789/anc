@@ -7,11 +7,33 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+### Added
+
+- Local images referenced by a published note are published. PNG, JPEG, GIF, WebP, and AVIF
+  are copied byte-identically to `/_assets/<sha256>-<name>` and deduplicated by content, so
+  an animation keeps every frame and one picture is one file however many notes embed it.
+  A reference resolves relative to the note and then to the content root, with no basename
+  fallback. A missing, excluded, escaping, or unsupported image — an SVG included — fails
+  the build rather than shipping a broken picture, and the previously built site stays in
+  place. Remote images are left as written and never fetched. No new configuration key,
+  dependency, deployment step, or browser script is added; the bytes are passthrough, so
+  this is not metadata scrubbing.
+
 ### Changed
 
 - Documentation states the published state: `@wxxb789/anc` is on npm with provenance, the
   quick start installs from the registry, and the Action can be pinned by release tag
   (`@v0.0.2`, `@v0`) instead of only by commit SHA.
+
+### Fixed
+
+- An image whose filename carries `#`, `&`, `?` or `%` is resolvable from its
+  percent-encoded Markdown destination. The resolver now splits the authored fragment first
+  and decodes the path once, so `chart%23one.png` names `chart#one.png` while
+  `chart%2523one.png` names a file literally called `chart%23one.png`; previously all four
+  escapes were left encoded and the build failed as if the file were missing. The emitted
+  URL percent-encodes the name, so the browser and the exact output inventory agree on the
+  byte-identical file.
 
 ## [0.0.2] - 2026-11-07
 
