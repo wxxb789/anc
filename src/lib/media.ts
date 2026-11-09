@@ -601,72 +601,186 @@ function webpDimensions(bytes: Uint8Array): ImageDimensions | undefined {
 }
 
 /**
- * AVIF: the `ispe` property box inside `meta/iprp/ipco`.
+ * AVIF: the `ispe` property associated with the primary item.
  *
  * ISO BMFF boxes are sized and typed, so this walks the box tree rather than
  * searching for the four bytes `ispe` — a marker in a payload is not a box
- * boundary. Only the containers that can hold the image-spatial-extents
- * property are descended into, each bounded by its own declared size, so a
- * truncated or hostile header yields no answer rather than an unchecked read.
+ * boundary. The `ipco` container is a list of properties, not an item's
+ * description: its first `ispe` may belong to a thumbnail or an unused item.
+ * The only size this reader may report is the one `ipma` associates with the
+ * item `pitm` names.
  *
- * An `irot` or `imir` property transforms the item after `ispe`; this reader
- * does not apply those transforms, so their presence vetoes the pair and the
- * image fails open to no `width`/`height`.
+ * The association table is deliberately resolved rather than approximated. No
+ * `pitm`, more than one primary, no `ipma`, a duplicate primary row, a property
+ * index outside `ipco`, or an association with no `ispe` all yield no answer.
+ * That is the fail-open direction: a valid correlation is required before the
+ * page reserves space; an unresolved header publishes with no `width`/`height`.
+ *
+ * An `irot` or `imir` property associated with the primary item transforms it
+ * after `ispe`; this reader does not apply those transforms, so their presence
+ * vetoes the pair. Properties associated with other items do not.
  */
 function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
-  let dimensions: ImageDimensions | undefined;
-  let transformed = false;
-  let malformed = false;
+  interface Box {
+    readonly type: string;
+    readonly payload: number;
+    readonly end: number;
+  }
 
-  const scan = (start: number, end: number, depth: number): void => {
-    let offset = start;
-    while (offset + 8 <= end) {
-      let size = u32be(bytes, offset);
-      const type = String.fromCharCode(
-        bytes[offset + 4]!,
-        bytes[offset + 5]!,
-        bytes[offset + 6]!,
-        bytes[offset + 7]!,
-      );
-      let header = 8;
-      if (size === 1) {
-        if (offset + 16 > end) {
-          malformed = true;
-          return;
-        }
-        const high = u32be(bytes, offset + 8);
-        const low = u32be(bytes, offset + 12);
-        size = high * 2 ** 32 + low;
-        header = 16;
-      } else if (size === 0) {
-        size = end - offset;
-      }
-      if (size < header || !Number.isSafeInteger(size) || offset + size > end) {
-        malformed = true;
-        return;
-      }
-      if (type === 'irot' || type === 'imir') {
-        transformed = true;
-      } else if (type === 'ispe') {
-        if (size >= header + 12 && dimensions === undefined) {
-          dimensions = positive(
-            u32be(bytes, offset + header + 4),
-            u32be(bytes, offset + header + 8),
-          );
-        }
-      } else if (depth < 4 && (type === 'meta' || type === 'iprp' || type === 'ipco')) {
-        // `meta` is a full box: its version/flags word follows the header.
-        const childStart = offset + header + (type === 'meta' ? 4 : 0);
-        if (childStart < offset + size) scan(childStart, offset + size, depth + 1);
-        if (malformed) return;
-      }
-      offset += size;
+  const boxAt = (offset: number, end: number): Box | undefined => {
+    if (offset + 8 > end) return undefined;
+    let size = u32be(bytes, offset);
+    const type = String.fromCharCode(
+      bytes[offset + 4]!,
+      bytes[offset + 5]!,
+      bytes[offset + 6]!,
+      bytes[offset + 7]!,
+    );
+    let header = 8;
+    if (size === 1) {
+      if (offset + 16 > end) return undefined;
+      const high = u32be(bytes, offset + 8);
+      const low = u32be(bytes, offset + 12);
+      size = high * 2 ** 32 + low;
+      header = 16;
+    } else if (size === 0) {
+      size = end - offset;
     }
+    if (size < header || !Number.isSafeInteger(size) || offset + size > end) {
+      return undefined;
+    }
+    return { type, payload: offset + header, end: offset + size };
   };
 
-  scan(0, bytes.length, 0);
-  if (malformed || transformed) return undefined;
-  return dimensions;
+  const children = (start: number, end: number): Box[] | undefined => {
+    const boxes: Box[] = [];
+    let offset = start;
+    while (offset < end) {
+      const box = boxAt(offset, end);
+      if (box === undefined) return undefined;
+      boxes.push(box);
+      offset = box.end;
+    }
+    return boxes;
+  };
+
+  const top = children(0, bytes.length);
+  if (top === undefined) return undefined;
+  const metaBoxes = top.filter((box) => box.type === 'meta');
+  if (metaBoxes.length !== 1) return undefined;
+  const meta = metaBoxes[0]!;
+  // `meta` is a full box. Its version and reserved flags describe the box
+  // layout, so an unknown version is not a container this reader can trust.
+  if (meta.payload + 4 > meta.end || bytes[meta.payload] !== 0) return undefined;
+  if (bytes[meta.payload + 1] !== 0 || bytes[meta.payload + 2] !== 0 || bytes[meta.payload + 3] !== 0) {
+    return undefined;
+  }
+  const metaChildren = children(meta.payload + 4, meta.end);
+  if (metaChildren === undefined) return undefined;
+
+  const pitms = metaChildren.filter((box) => box.type === 'pitm');
+  if (pitms.length !== 1) return undefined;
+  const pitm = pitms[0]!;
+  if (pitm.payload + 4 > pitm.end) return undefined;
+  if (bytes[pitm.payload + 1] !== 0 || bytes[pitm.payload + 2] !== 0 || bytes[pitm.payload + 3] !== 0) {
+    return undefined;
+  }
+  const pitmVersion = bytes[pitm.payload]!;
+  let primaryItem: number;
+  if (pitmVersion === 0) {
+    if (pitm.payload + 6 !== pitm.end) return undefined;
+    primaryItem = u16be(bytes, pitm.payload + 4);
+  } else if (pitmVersion === 1) {
+    if (pitm.payload + 8 !== pitm.end) return undefined;
+    primaryItem = u32be(bytes, pitm.payload + 4);
+  } else {
+    return undefined;
+  }
+  if (primaryItem === 0) return undefined;
+
+  const iprps = metaChildren.filter((box) => box.type === 'iprp');
+  if (iprps.length !== 1) return undefined;
+  const iprp = iprps[0]!;
+  const iprpChildren = children(iprp.payload, iprp.end);
+  if (iprpChildren === undefined) return undefined;
+
+  const ipcos = iprpChildren.filter((box) => box.type === 'ipco');
+  const ipmas = iprpChildren.filter((box) => box.type === 'ipma');
+  if (ipcos.length !== 1 || ipmas.length !== 1) return undefined;
+  const ipco = ipcos[0]!;
+  const ipma = ipmas[0]!;
+  const properties = children(ipco.payload, ipco.end);
+  if (properties === undefined) return undefined;
+
+  if (ipma.payload + 4 > ipma.end) return undefined;
+  const ipmaVersion = bytes[ipma.payload]!;
+  const ipmaFlags =
+    (bytes[ipma.payload + 1]! << 16) |
+    (bytes[ipma.payload + 2]! << 8) |
+    bytes[ipma.payload + 3]!;
+  // Version selects the item-ID width; bit 0 selects the 15-bit property-index
+  // field. No other flag or version has a layout this reader knows.
+  if (ipmaVersion > 1 || (ipmaFlags & ~1) !== 0) return undefined;
+  let offset = ipma.payload + 4;
+  if (offset + 4 > ipma.end) return undefined;
+  const entryCount = u32be(bytes, offset);
+  offset += 4;
+  const itemIdWidth = ipmaVersion === 0 ? 2 : 4;
+  const associationWidth = (ipmaFlags & 1) === 0 ? 1 : 2;
+  let primaryAssociations: number[] | undefined;
+  let primarySeen = false;
+  const indices: number[] = [];
+
+  for (let entry = 0; entry < entryCount; entry += 1) {
+    if (offset + itemIdWidth > ipma.end) return undefined;
+    const itemId = itemIdWidth === 2 ? u16be(bytes, offset) : u32be(bytes, offset);
+    offset += itemIdWidth;
+    if (offset + 1 > ipma.end) return undefined;
+    const associationCount = bytes[offset]!;
+    offset += 1;
+    if (offset + associationCount * associationWidth > ipma.end) return undefined;
+
+    const associations: number[] = [];
+    for (let association = 0; association < associationCount; association += 1) {
+      const raw =
+        associationWidth === 2 ? u16be(bytes, offset) : bytes[offset]!;
+      offset += associationWidth;
+      // The high bit is the essential flag; the rest is the 1-based property
+      // index. Index 0 means "no property" and is skipped when resolving.
+      const index = associationWidth === 2 ? raw & 0x7fff : raw & 0x7f;
+      associations.push(index);
+      indices.push(index);
+    }
+
+    if (itemId === primaryItem) {
+      if (primarySeen) return undefined;
+      primarySeen = true;
+      primaryAssociations = associations;
+    }
+  }
+
+  if (offset !== ipma.end || primaryAssociations === undefined) return undefined;
+  if (indices.some((index) => index > properties.length)) return undefined;
+
+  let ispe: Box | undefined;
+  let transformed = false;
+  for (const index of primaryAssociations) {
+    if (index === 0) continue;
+    const property = properties[index - 1]!;
+    if (property.type === 'irot' || property.type === 'imir') {
+      transformed = true;
+    } else if (property.type === 'ispe') {
+      if (ispe !== undefined) return undefined;
+      ispe = property;
+    }
+  }
+
+  if (transformed || ispe === undefined) return undefined;
+  if (ispe.payload + 12 > ispe.end || bytes[ispe.payload] !== 0) return undefined;
+  return positive(
+    u32be(bytes, ispe.payload + 4),
+    u32be(bytes, ispe.payload + 8),
+  );
 }
 
 /**

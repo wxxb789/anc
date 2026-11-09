@@ -90,7 +90,7 @@ the default shell's Node 22.23.2 is below Astro's `>=22.23.4` floor.
 | `pnpm run verify` | 91 files / 1109 passed / 35 skipped, exit 0 — lint, `astro check` (0 errors, 2 hints), the full build chain with the pinned secret scan (`secret scan ok: 150 files, 0 findings`) and residue scan (`residue scan ok: 34 files, 0 findings`), then the suite |
 | `pnpm exec vitest run --maxWorkers=1 tests/media-display.test.ts` | 5 tests passed, exit 0, 6.23 s. Run alone after the first full-suite attempt under four-worker contention; it was also green in both full-suite runs |
 | `pnpm run build:fixture` | 91 files / 1139 passed / 5 skipped, exit 0 (`fixture build ok: every gate passed against tests/fixtures/valid-corpus.json`). The same build steps counted directly with `CONTENT_ARTIFACT=tests/fixtures/valid-corpus.json node scripts/build-site.ts --scan-secrets`: `image assets ok: 7 files`, `search index ok: 54 pages indexed`, `output inventory ok: 234 files`, `secret scan ok: 234 files, 0 findings`, `residue scan ok: 109 files, 0 findings` |
-| `pnpm run pack:tarball` | compiled 75 TypeScript files and rewrote specifiers in 24; wrote `wxxb789-anc-0.0.2.tgz` (439,682 bytes, sha256 `5ddf1a99108c8c9b594d4172ef7882906510e8c62f828bc06835734e2935e44d`), exit 0 |
+| `pnpm run pack:tarball` | compiled 75 TypeScript files and rewrote specifiers in 24; wrote `wxxb789-anc-0.0.2.tgz` (440,908 bytes, sha256 `da651cfb9bbbd75bc5125e5ccc0253d0fdedb54877fa16614ab464a7ea3b1754`), exit 0 |
 | `pnpm run smoke:tarball` | exit 0: `tarball adoption smoke ok: 2 published notes, 2 withheld notes, 6 images` — the packaged `init`, `review`, and `build --release` path over a synthetic foreign git repository, including script-free Chromium and the missing-image failed-build control |
 | `git diff --check` | exit 0 |
 
@@ -170,10 +170,13 @@ command exists; the smoke drives the same packaged `init`/`review`/`build
 
 ### Residual limits
 
-- AVIF dimensions are read from the first `ispe` box found under
-  `meta/iprp/ipco`. A multi-item AVIF whose first property is not the primary
-  image could report that other item's size; the browser's natural-size
-  assertions cover the committed fixtures but not every encoder's item order.
+- AVIF dimensions are resolved through `meta/pitm` and `meta/iprp/ipma` to the
+  `ispe` associated with the primary item. No `pitm`, more than one primary or
+  `ipma` row, an unknown `ipma` version or flag, a property index outside
+  `ipco`, or no associated `ispe` yields no attributes; an unused property in
+  the container cannot supply the pair. Only `ipma` versions 0 and 1 with the
+  standard 7-bit/15-bit association widths are supported, and AVIF `clap` is
+  not checked.
 - JPEG scanning stops at the first start-of-frame and before the entropy-coded
   scan, which is the shape of a decodable JPEG; a nonconforming file yields no
   attributes rather than a decode failure, because this is a header hint.
@@ -187,8 +190,7 @@ command exists; the smoke drives the same packaged `init`/`review`/`build
 - Orientation fail-open is unit-gated with genuine JPEG, WebP-EXIF, PNG-eXIf and
   AVIF-`irot`/`imir` fixtures; only the JPEG is committed to the fixture corpus and
   browser-observed, so browser geometry for the WebP/PNG/AVIF cases is not
-  independently verified. AVIF `clap` is not checked, and any `irot`/`imir`
-  found in the property containers vetoes the pair even if it belongs to a
-  non-primary item.
+  independently verified. An `irot`/`imir` associated with the primary item
+  vetoes the pair; one associated with another item does not.
 - Live host deployment and post-deploy smoke tests remain unverified and
   separately approved.

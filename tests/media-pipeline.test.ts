@@ -28,6 +28,8 @@ import { discover, resolveCorpusLinks, writeArtifact } from '../scripts/markdown
 import type { BuildFailure } from '../scripts/write-report.ts';
 import {
   AVIF,
+  AVIF_PRIMARY_ISPE_NOT_FIRST,
+  AVIF_PRIMARY_ISPE_UNASSOCIATED,
   GIF_ANIMATED,
   JPEG,
   NOT_AN_IMAGE,
@@ -891,6 +893,21 @@ test('every supported raster header yields its own pixel size, and a truncated o
     imageDimensions(ORIENTATION_1_JPEG, 'jpeg'),
     { width: 8, height: 6 },
     'an explicit Orientation 1 should keep the usable pair',
+  );
+  // An `ipco` is a property container, not an item description. The first
+  // `ispe` here is an unused 1000x1 property; the primary item's `ipma` entry
+  // still points at the original 8x6 property. The second file removes that
+  // association, so there is no primary `ispe` even though the container has
+  // one: both must fail open rather than read container order.
+  assert.deepEqual(
+    imageDimensions(AVIF_PRIMARY_ISPE_NOT_FIRST, 'avif'),
+    { width: 8, height: 6 },
+    'AVIF dimensions followed a non-primary property',
+  );
+  assert.equal(
+    imageDimensions(AVIF_PRIMARY_ISPE_UNASSOCIATED, 'avif'),
+    undefined,
+    'an AVIF with no primary-item ispe association produced dimensions',
   );
   // JPEG TEM carries no length and must be skipped, while a frame header after
   // the start of scan is entropy-coded data and must not become a size.

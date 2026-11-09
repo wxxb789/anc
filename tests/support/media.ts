@@ -81,6 +81,90 @@ export const AVIF = imageBytes(
     'KBPHh4ZlAYYYfhAAAAhIWSQPnn1IeDGh//Fp2vskWHjDP4kzUBqZ1YA=',
 );
 
+/** Read a big-endian u32 from a fixture being assembled. */
+function readU32(bytes: Uint8Array, offset: number): number {
+  return (
+    ((bytes[offset]! << 24) |
+      (bytes[offset + 1]! << 16) |
+      (bytes[offset + 2]! << 8) |
+      bytes[offset + 3]!) >>>
+    0
+  );
+}
+
+function writeU32(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = (value >>> 24) & 0xff;
+  bytes[offset + 1] = (value >>> 16) & 0xff;
+  bytes[offset + 2] = (value >>> 8) & 0xff;
+  bytes[offset + 3] = value & 0xff;
+}
+
+/**
+ * Two adversarial AVIFs derived from the committed 8x6 {@link AVIF}.
+ *
+ * The first inserts an unused 1000x1 `ispe` at property index 1, shifts the
+ * original properties to indices 2-5 and rewrites `ipma` so the primary item
+ * still associates with the original 8x6 `ispe`. The file still decodes as 8x6.
+ * The second removes the primary item's `ispe` association entirely. Both keep
+ * `pitm` = item 1; the association table, not container order, decides.
+ *
+ * They are generated here from the base bytes rather than committed as opaque
+ * binaries, so a change to the base cannot silently leave a stale fixture.
+ * The fixed offsets are asserted below; a base change fails loudly.
+ */
+function adversarialAvif(keepPrimaryIspe: boolean): Uint8Array {
+  const base = AVIF;
+  if (
+    base.length !== 329 ||
+    readU32(base, 32) !== 235 ||
+    readU32(base, 161) !== 106 ||
+    readU32(base, 169) !== 75 ||
+    readU32(base, 244) !== 23 ||
+    readU32(base, 113) !== 275
+  ) {
+    throw new Error('the AVIF fixture layout changed; update the adversarial builder');
+  }
+
+  const insertedIspe = new Uint8Array([
+    0, 0, 0, 20,
+    0x69, 0x73, 0x70, 0x65,
+    0, 0, 0, 0,
+    0, 0, 0x03, 0xe8,
+    0, 0, 0, 1,
+  ]);
+  const output = keepPrimaryIspe
+    ? new Uint8Array([
+        ...base.subarray(0, 177),
+        ...insertedIspe,
+        ...base.subarray(177),
+      ])
+    : new Uint8Array([
+        ...base.subarray(0, 177),
+        ...insertedIspe,
+        ...base.subarray(177, 263),
+        3, 0x84, 5,
+        ...base.subarray(267),
+      ]);
+
+  writeU32(output, 32, keepPrimaryIspe ? 255 : 254);
+  writeU32(output, 161, keepPrimaryIspe ? 126 : 125);
+  writeU32(output, 169, 95);
+  writeU32(output, 113, keepPrimaryIspe ? 295 : 294);
+  if (keepPrimaryIspe) {
+    output.set([2, 3, 0x84, 5], 283);
+  } else {
+    writeU32(output, 264, 22);
+    output[282] = 3;
+  }
+  return output;
+}
+
+/** The original 8x6 `ispe` is associated with the primary item, behind an unused 1000x1 one. */
+export const AVIF_PRIMARY_ISPE_NOT_FIRST = adversarialAvif(true);
+
+/** No `ispe` is associated with the primary item; the container still has one. */
+export const AVIF_PRIMARY_ISPE_UNASSOCIATED = adversarialAvif(false);
+
 
 /** A portrait raster: 24x72, a 1:3 aspect ratio a responsive column must not distort. */
 export const PNG_PORTRAIT = imageBytes(
