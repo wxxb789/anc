@@ -23,6 +23,7 @@ import { test } from 'vitest';
 
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { parseAssetUrl, sniffImageFormat, imageExtension } from '../src/lib/media.ts';
+import { renderMarkdown } from '../src/lib/markdown.ts';
 import { discover, resolveCorpusLinks, writeArtifact } from '../scripts/markdown-to-artifact.ts';
 import type { BuildFailure } from '../scripts/write-report.ts';
 import { AVIF, GIF_ANIMATED, JPEG, NOT_AN_IMAGE, PNG_SECOND, PNG_UNICODE, SVG, WEBP_ANIMATED } from './support/media.ts';
@@ -561,6 +562,52 @@ test('remote and inline images are untouched, no asset is emitted, and nothing i
   });
 });
 
+test('a raw remote image with ignored leading whitespace builds and keeps its src', async () => {
+  // The regression: the producer tested raw bytes while the renderer stripped
+  // the characters `sanitize-html` ignores, so this note failed the build but
+  // rendered unchanged before it. The producer and renderer now share
+  // `classifyImageSource`, and this drives a real corpus through both.
+  await scratch('media-html-remote-', async (directories) => {
+    put(directories.content, 'notes/a.md', [
+      '# A',
+      '',
+      '<img src=" https://example.test/leading.png" alt="space">',
+      '',
+      '<img src="\thttps://example.test/tab.png" alt="tab">',
+      '',
+      '<img src="\nhttps://example.test/newline.png" alt="newline">',
+      '',
+      '<img src="HTTPS://EXAMPLE.TEST/UPPER.PNG" alt="upper">',
+      '',
+      '<img src="data:image/png;base64,iVBORw0KGgo=" alt="inline">',
+      '',
+    ].join('\n'));
+
+    const produced = await produce(directories);
+    assert.deepEqual(produced.artifact.assets ?? [], [], 'a remote raw image emitted an asset');
+    assert.equal(produced.staged.size, 0, 'a remote raw image staged bytes');
+    const markdown = produced.markdown.get('notes-a')!;
+    for (const expected of [
+      '<img src=" https://example.test/leading.png"',
+      '<img src="\thttps://example.test/tab.png"',
+      '<img src="\nhttps://example.test/newline.png"',
+      '<img src="HTTPS://EXAMPLE.TEST/UPPER.PNG"',
+      '<img src="data:image/png;base64,iVBORw0KGgo="',
+    ]) {
+      assert.ok(markdown.includes(expected), `${JSON.stringify(expected)} left the body: ${markdown}`);
+    }
+
+    const { html } = await renderMarkdown(markdown, { publishedAssets: new Set() });
+    // The renderer must keep the exact src it used to keep, including the
+    // whitespace character the old producer rejected the note for.
+    assert.ok(html.includes('src=" https://example.test/leading.png"'), html);
+    assert.ok(html.includes('src="\thttps://example.test/tab.png"'), html);
+    assert.ok(html.includes('src="\nhttps://example.test/newline.png"'), html);
+    assert.ok(html.includes('src="HTTPS://EXAMPLE.TEST/UPPER.PNG"'), html);
+    assert.ok(html.includes('src="data:image/png;base64,iVBORw0KGgo="'), html);
+  });
+});
+
 test('an image reference never becomes a note edge, and existing links keep theirs', async () => {
   await scratch('media-edges-', async (directories) => {
     putBytes(directories.content, 'assets/chart.png', PNG_SECOND);
@@ -616,6 +663,40 @@ test('every unauthorized local image is a build failure with its own reason', as
       name: 'html',
       body: '<img src="assets/chart.png" alt="handwritten">',
       files: { 'assets/chart.png': PNG_SECOND },
+      label: 'unsupported HTML image form',
+      reason: 'html-form',
+    },
+    // A raw `<img>` whose src is a local/script scheme is the producer's to
+    // report. The shared classifier marks these `refused`; the renderer would
+    // have let the sanitizer drop the attribute, which is the silent outcome
+    // Goal 0009 replaces with a failure.
+    {
+      name: 'html-file',
+      body: '<img src="file:///etc/passwd" alt="handwritten">',
+      label: 'unsupported HTML image form',
+      reason: 'html-form',
+    },
+    {
+      name: 'html-javascript',
+      body: '<img src="java\tscript:alert(1)" alt="handwritten">',
+      label: 'unsupported HTML image form',
+      reason: 'html-form',
+    },
+    {
+      name: 'html-vbscript',
+      body: '<img src="vbscript:msgbox(1)" alt="handwritten">',
+      label: 'unsupported HTML image form',
+      reason: 'html-form',
+    },
+    {
+      name: 'html-whitespace',
+      body: '<img src="   " alt="handwritten">',
+      label: 'unsupported HTML image form',
+      reason: 'html-form',
+    },
+    {
+      name: 'html-no-src',
+      body: '<img alt="handwritten">',
       label: 'unsupported HTML image form',
       reason: 'html-form',
     },

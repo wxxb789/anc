@@ -251,6 +251,58 @@ export function isAssetUrl(url: string): boolean {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Raw image sources
+ * ------------------------------------------------------------------------- */
+
+/** The schemes the producer must report instead of leaving to the sanitizer. */
+const REFUSED_IMAGE_SCHEMES: Readonly<Record<string, true>> = {
+  file: true,
+  javascript: true,
+  vbscript: true,
+};
+
+/** What a raw `<img src>` is, as one answer for both the producer and renderer. */
+export type ImageSourceClass = 'remote' | 'refused' | 'local';
+
+/**
+ * Classify one raw-HTML `<img src>`: remote, refused, or local.
+ *
+ * **One classifier, two callers.** `scripts/resolve-links.ts` uses it to decide
+ * whether a raw `<img>` is an `html-form` failure, and `src/lib/markdown.ts`
+ * uses it to decide whether the renderer may skip the published-asset check.
+ * Before this function the producer tested the raw bytes while the renderer
+ * stripped whitespace first, so `<img src=" https://example.test/pic.png">`
+ * failed the build but rendered unchanged: one URL, two answers.
+ *
+ * The rule is the renderer's (and `sanitize-html`'s `launder`): remove **every**
+ * character at or below U+0020, then a URL is **remote** when it begins with an
+ * RFC 3986 scheme or with a protocol-relative `//` (or the `\\` spelling the
+ * renderer already accepts). Within that set, `file:`, `javascript:` and
+ * `vbscript:` are **refused** rather than remote: the producer must report them
+ * as the local/script forms Goal 0009 names, while the renderer still treats
+ * them as non-local, so the sanitizer keeps deciding their fate and removes the
+ * attribute exactly as before. Everything else — a bare relative path, an
+ * all-whitespace value, the empty string — is **local**.
+ *
+ * The refused set is a deny list rather than an allow list. Other schemes
+ * (`ftp:`, `mailto:`) were accepted by the producer before this function and
+ * are still accepted here; the renderer's scheme policy already removes them
+ * from the page, and turning that into a new build failure would widen this
+ * fix past the local/script forms the goal names.
+ */
+export function classifyImageSource(source: string): ImageSourceClass {
+  // The value `sanitize-html`'s `launder` reads: every character at or below
+  // U+0020 removed. A filter rather than a control-character range in a regex
+  // keeps the raw control classes banned by lint out of this file.
+  const cleaned = Array.from(source, (character) => (character <= ' ' ? '' : character)).join('');
+  const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):/.exec(cleaned)?.[1]?.toLowerCase();
+  const remote = scheme !== undefined || /^[/\\]{2}/.test(cleaned);
+  if (!remote) return 'local';
+  if (scheme !== undefined && REFUSED_IMAGE_SCHEMES[scheme] === true) return 'refused';
+  return 'remote';
+}
+
+/* ------------------------------------------------------------------------- *
  * Format detection
  * ------------------------------------------------------------------------- */
 

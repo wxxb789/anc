@@ -33,6 +33,7 @@ import { MATH_MODE } from './math-mode.ts';
 import { RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH, type RenderedKind } from './rendered-marker.ts';
 import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
 import { slugFromSegment } from './route-path.ts';
+import { classifyImageSource } from './media.ts';
 
 /** A heading authored in the Markdown body, in document order. */
 export interface Heading {
@@ -1413,23 +1414,17 @@ function sanitize(
       // fetched, never mirrored, and their forms did not change in this goal.
       img: (tagName, attribs) => {
         const source = attribs['src'];
-        // The classification has to be the one the sanitizer will apply to this
-        // same value, or the two disagree about what a scheme is. `launder`,
-        // which `sanitize-html` uses to decide an attribute's fate, removes every
-        // character at or below U+0020 from a URL before looking for a scheme —
-        // measured, `java&#9;script:` arrives here as a literal tab and is
-        // rejected there as `javascript:`. Testing the raw bytes here would call
-        // that local, refuse the whole document, and report a scheme problem as
-        // an unpublished image.
-        // Every character at or below U+0020, dropped one at a time rather than
-        // with a control-character range: the intent is "what a URL parser
-        // ignores", and writing it as a filter keeps that readable and keeps the
-        // lint rule that bans raw control classes out of this file.
-        const cleaned =
-          typeof source === 'string'
-            ? Array.from(source, (character) => (character <= ' ' ? '' : character)).join('')
-            : '';
-        const external = /^[A-Za-z][A-Za-z0-9.\-+]*:/.test(cleaned) || /^[/\\]{2}/.test(cleaned);
+        // **The producer and this transform share one classifier.** See
+        // {@link classifyImageSource} in `media.ts`: it strips every character
+        // at or below U+0020 before reading a scheme, the same way
+        // `sanitize-html`'s `launder` does. Testing the raw bytes here used to
+        // call `<img src=" https://…">` local while the producer called it an
+        // unpublished image, so one URL got two answers; the shared function
+        // makes both sides read it as remote. `refused` and `remote` are both
+        // non-local here, which keeps the sanitizer's scheme policy deciding
+        // the fate of `file:`/`javascript:`/`vbscript:` and protocol-relative
+        // values exactly as before. `data:` keeps its separate body below.
+        const external = source !== undefined && classifyImageSource(source) !== 'local';
         // An `<img>` with no `src` at all is not a reference to anything, and the
         // producer refuses that form outright (`html-form`); the renderer leaves
         // the element as the allowlist always has. A *present* src that is not

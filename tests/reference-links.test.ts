@@ -24,7 +24,7 @@ import { markdownToMdast, type MdastNode } from 'satteri';
 
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import { WITHHELD_ROUTE } from '../src/lib/route-path.ts';
-import { resolveImageTarget, type ImagePublisher } from '../src/lib/media.ts';
+import { classifyImageSource, resolveImageTarget, type ImagePublisher } from '../src/lib/media.ts';
 import { resolveLinksIn } from '../scripts/resolve-links.ts';
 import { renderMarkdown } from '../src/lib/markdown.ts';
 
@@ -546,6 +546,78 @@ test('a failed image label with backslashes or syntax characters degrades to tex
     htmlWindow.document.body.innerHTML = result.html;
     assert.equal(htmlWindow.document.body.textContent?.trim(), alt, `${JSON.stringify(source)}: ${result.html}`);
   }
+});
+
+/**
+ * Raw-HTML `src` values and the one answer both sides must give for them.
+ *
+ * `expected` is the shared classifier's answer; `rendered` is what the renderer
+ * does with the element: `kept` (the sanitizer preserves the src), `stripped`
+ * (the renderer treats it as non-local and the sanitizer removes the attribute,
+ * existing behaviour), or `refused` (the renderer's published-asset check
+ * throws because the value is local). The producer refuses every non-remote
+ * value before the renderer sees it in a real build.
+ */
+const RAW_IMAGE_ROWS: readonly {
+  readonly name: string;
+  readonly src: string;
+  readonly expected: 'remote' | 'refused' | 'local';
+  readonly rendered: 'kept' | 'stripped' | 'refused';
+}[] = [
+  { name: 'leading space', src: ' https://example.test/pic.png', expected: 'remote', rendered: 'kept' },
+  { name: 'leading tab', src: '\thttps://example.test/pic.png', expected: 'remote', rendered: 'kept' },
+  { name: 'leading newline', src: '\nhttps://example.test/pic.png', expected: 'remote', rendered: 'kept' },
+  { name: 'all whitespace', src: '   ', expected: 'local', rendered: 'refused' },
+  { name: 'protocol-relative', src: '//host.example/x.png', expected: 'remote', rendered: 'stripped' },
+  { name: 'backslash-relative', src: '\\\\host.example\\x.png', expected: 'remote', rendered: 'stripped' },
+  { name: 'uppercase scheme', src: 'HTTPS://HOST.EXAMPLE/X.PNG', expected: 'remote', rendered: 'kept' },
+  { name: 'tab-split javascript', src: 'java\tscript:alert(1)', expected: 'refused', rendered: 'stripped' },
+  { name: 'file', src: 'file:///etc/passwd', expected: 'refused', rendered: 'stripped' },
+  { name: 'vbscript', src: 'vbscript:msgbox(1)', expected: 'refused', rendered: 'stripped' },
+  { name: 'bare relative', src: 'pic.png', expected: 'local', rendered: 'refused' },
+  { name: 'data raster', src: 'data:image/png;base64,iVBORw0KGgo=', expected: 'remote', rendered: 'kept' },
+];
+
+test('the producer and renderer classify raw image sources with one predicate', async () => {
+  for (const row of RAW_IMAGE_ROWS) {
+    assert.equal(classifyImageSource(row.src), row.expected, `${row.name}: shared classifier`);
+    const body = `<img src="${row.src}" alt="probe">\n`;
+    const result = resolveLinksIn(body, 'src.md', indexCorpus([{ path: 'src.md', slug: 'src' }]), 'src', (slug) => `/${slug}/`, publisher);
+    const failures = result.mediaFailures.map((failure) => failure.reason);
+    if (row.expected === 'remote') {
+      assert.deepEqual(failures, [], `${row.name}: the producer refused a remote source`);
+    } else {
+      assert.deepEqual(failures, ['html-form'], `${row.name}: the producer did not report the source`);
+    }
+
+    if (row.rendered === 'refused') {
+      await assert.rejects(
+        renderMarkdown(body, { publishedAssets: new Set() }),
+        /without being published/,
+        `${row.name}: the renderer accepted a local source`,
+      );
+      continue;
+    }
+    const { html } = await renderMarkdown(body, { publishedAssets: new Set() });
+    if (row.rendered === 'kept') {
+      assert.match(html, /\ssrc=/, `${row.name}: the renderer dropped a kept src: ${html}`);
+    } else {
+      // Existing sanitizer policy: protocol-relative and refused schemes are
+      // non-local here, so the membership check is skipped and the sanitizer
+      // removes the attribute exactly as it did before this fix.
+      assert.doesNotMatch(html, /\ssrc=/, `${row.name}: the renderer kept a stripped src: ${html}`);
+    }
+    if (row.name === 'leading space') {
+      assert.ok(html.includes('src=" https://example.test/pic.png"'), `the exact src was not kept: ${html}`);
+    }
+  }
+
+  // An `<img>` with no src keeps its current split treatment: the producer
+  // reports the form, the renderer leaves the element without a src attribute.
+  const noSrc = resolveLinksIn('<img alt="probe">\n', 'src.md', indexCorpus([{ path: 'src.md', slug: 'src' }]), 'src', (slug) => `/${slug}/`, publisher);
+  assert.deepEqual(noSrc.mediaFailures.map((failure) => failure.reason), ['html-form'], 'an img with no src was accepted');
+  const renderedNoSrc = await renderMarkdown('<img alt="probe">\n', { publishedAssets: new Set() });
+  assert.doesNotMatch(renderedNoSrc.html, /\ssrc=/, renderedNoSrc.html);
 });
 
 test('a badge image inside a link keeps the image and the anchor', async () => {

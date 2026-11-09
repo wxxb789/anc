@@ -51,6 +51,7 @@ import { markdownToMdast, type MdastNode } from 'satteri';
 import sanitizeHtml from 'sanitize-html';
 import { resolveLink, type LinkIndex } from '../src/lib/link-resolution.ts';
 import {
+  classifyImageSource,
   type ImagePublisher,
   type MediaFailureReason,
 } from '../src/lib/media.ts';
@@ -574,19 +575,6 @@ function namesNonNoteFile(reference: string): boolean {
 }
 
 /**
- * Whether an `<img src>` is one this build leaves alone.
- *
- * Remote images and inline rasters predate Goal 0009 and keep working unchanged;
- * everything else names a local form the accepted resolver does not cover. The
- * test is `has a scheme or is protocol-relative`, not "is relative", so a
- * `file:` URL and a `javascript:` URL fall to the refusal rather than to the
- * sanitizer's later filter — they are local forms the producer must report.
- */
-function isExternalImageSource(source: string): boolean {
-  return /^[A-Za-z][A-Za-z0-9+.-]*:/.test(source) || source.startsWith('//');
-}
-
-/**
  * Every `src` a fragment of raw HTML gives an `<img>`, in document order.
  *
  * Parsed by `sanitize-html` — the same parser that later decides whether an
@@ -954,8 +942,14 @@ export function resolveLinksIn(
   // images, and image wikilinks; an HTML form outside that set fails the build,
   // which is what the goal requires rather than a silently dropped picture.
   //
-  // Remote and `data:` sources are left alone: they predate this goal, they are
-  // never fetched by the build, and their form did not change.
+  // Classification is {@link classifyImageSource} in `src/lib/media.ts`, the
+  // same function the renderer's `img` transform calls. It strips the characters
+  // at or below U+0020 that `sanitize-html` ignores before reading a scheme, so
+  // a leading space or tab cannot give the two sides different answers. Only
+  // `remote` is left alone: `refused` is `file:`/`javascript:`/`vbscript:`,
+  // which the producer must report, and `local` is a bare relative path, an
+  // all-whitespace value, or an empty src. `data:` is remote and keeps its
+  // previous treatment.
   for (const node of rawNodes) {
     if (node.type !== 'html') continue;
     // HTML comments are inert, and a comment is how a note *documents* markup
@@ -966,7 +960,7 @@ export function resolveLinksIn(
     if (!/<img[\s/>]/i.test(value)) continue;
     const span = spanOf(node);
     const sources = rawImageSources(value);
-    const offenders = sources === undefined ? [''] : sources.filter((source) => !isExternalImageSource(source));
+    const offenders = sources === undefined ? [''] : sources.filter((source) => classifyImageSource(source) !== 'remote');
     if (offenders.length === 0) continue;
     mediaFailures.push({
       source: sourcePath,
