@@ -19,6 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
+import { markdownToMdast, type MdastNode } from 'satteri';
 
 import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import { WITHHELD_ROUTE } from '../src/lib/route-path.ts';
@@ -114,6 +115,83 @@ test('a reference-style image publishes through its definition', async () => {
   // Both halves of the reference: the inline rewrite and the definition line.
   assert.ok(!result.markdown.includes('assets/chart'), result.markdown);
   assert.ok(result.markdown.includes(`[c]: ${CHART_URL}`), result.markdown);
+});
+
+/** Every `image` node in one body, in document order, as the parser reads it. */
+function images(markdown: string): { alt: string; url: string }[] {
+  const found: { alt: string; url: string }[] = [];
+  const walk = (node: MdastNode): void => {
+    if (node.type === 'image') found.push({ alt: node.alt ?? '', url: node.url ?? '' });
+    for (const child of ('children' in node ? node.children : []) as MdastNode[]) walk(child);
+  };
+  walk(markdownToMdast(markdown, { features: { wikilinks: true, gfm: true } }) as MdastNode);
+  return found;
+}
+
+/**
+ * Source spellings for the label shapes that can break the rewrite, and the alt
+ * the parser decodes each one to. The rewrite re-emits the *decoded* text, so
+ * the assertion is that parsing the result gives back exactly this `alt` — not
+ * that the bytes match, which would permit an unescaped label that only looks
+ * right to a human.
+ *
+ * Written as source rather than generated from `alt`, because a generator would
+ * encode this file's belief about escaping and could agree with the bug.
+ */
+const LABEL_CASES: readonly { readonly source: string; readonly alt: string }[] = [
+  // Trailing backslash: a single emitted one escapes the closing `]`.
+  { source: '![ends with \\\\](assets/chart.png)', alt: 'ends with \\' },
+  // An even run must stay an even run.
+  { source: '![ends with \\\\\\\\](assets/chart.png)', alt: 'ends with \\\\' },
+  // A backslash immediately before a bracket, in both orders. The `]` case
+  // needs an escaped bracket for the alt *and* a delimiter after it.
+  { source: '![mix \\\\\\]](assets/chart.png)', alt: 'mix \\]' },
+  { source: '![mix \\\\\\\\\\[ x](assets/chart.png)', alt: 'mix \\\\[ x' },
+  // An escaped bracket that is ordinary alt text.
+  { source: '![a \\] b](assets/chart.png)', alt: 'a ] b' },
+  { source: '![a \\[ b](assets/chart.png)', alt: 'a [ b' },
+];
+
+test('an inline image label with backslashes or brackets round-trips through the rewrite', async () => {
+  for (const { source, alt } of LABEL_CASES) {
+    const result = await run(`${source}\n`);
+    const parsed = images(result.markdown);
+    assert.equal(parsed.length, 1, `${JSON.stringify(source)}: not one image after rewrite: ${result.markdown}`);
+    assert.equal(parsed[0]!.alt, alt, `${JSON.stringify(source)}: the alt changed`);
+    assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(source)}: wrong destination`);
+    assert.match(result.html, /<img src="[^"]+" alt="/, `${JSON.stringify(source)}: ${result.html}`);
+    assert.ok(!result.html.includes('!['), `${JSON.stringify(source)}: literal Markdown reached the page: ${result.html}`);
+  }
+});
+
+test('a reference-style image label round-trips and its definition still names the asset', async () => {
+  for (const { source, alt } of LABEL_CASES) {
+    const reference = source.replace('](assets/chart.png)', '][c]');
+    const result = await run(`See ${reference} here.\n\n[c]: assets/chart.png\n`);
+    const parsed = images(result.markdown);
+    assert.equal(parsed.length, 1, `${JSON.stringify(reference)}: not one image after rewrite: ${result.markdown}`);
+    assert.equal(parsed[0]!.alt, alt, `${JSON.stringify(reference)}: the alt changed`);
+    assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(reference)}: wrong destination`);
+    // The reference is rewritten inline and the definition is rewritten too:
+    // no source path survives, and both halves name the published asset.
+    assert.ok(result.markdown.includes(`[c]: ${CHART_URL}`), `${JSON.stringify(reference)}: ${result.markdown}`);
+    assert.ok(!result.markdown.includes('assets/chart'), `${JSON.stringify(reference)}: the source path survived`);
+    assert.match(result.html, /<img src="[^"]+" alt="/, `${JSON.stringify(reference)}: ${result.html}`);
+    assert.ok(!result.html.includes('!['), `${JSON.stringify(reference)}: literal Markdown reached the page: ${result.html}`);
+  }
+});
+
+test('a failed image label with backslashes degrades to text, not a broken image', async () => {
+  // The caller stops the build on `mediaFailures`, but the returned body still
+  // has to be self-consistent: escaping it with the image rule must produce
+  // ordinary text, never something that later parses as an image.
+  for (const source of ['![ends with \\\\](missing.png)', '![a \\] b](missing.png)']) {
+    const result = await run(`${source}\n`);
+    assert.equal(result.mediaFailures.length, 1, `${JSON.stringify(source)}: the failure was not recorded`);
+    assert.equal(images(result.markdown).length, 0, `${JSON.stringify(source)}: a degraded label still parses as an image: ${result.markdown}`);
+    assert.ok(!result.markdown.includes('!['), `${JSON.stringify(source)}: ${result.markdown}`);
+    assert.ok(!result.html.includes('<img'), `${JSON.stringify(source)}: a failed image rendered an element: ${result.html}`);
+  }
 });
 
 test('a badge image inside a link keeps the image and the anchor', async () => {

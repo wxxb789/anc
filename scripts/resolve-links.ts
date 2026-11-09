@@ -274,13 +274,48 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
 }
 
 /**
- * A label safe to place inside `[…]`, with the two delimiters escaped.
+ * A label safe to place inside `[…]`, re-encoded from **decoded** text.
+ *
+ * The input here is the parser's decoded value — an image's `alt` — not source
+ * bytes. `[` and `]` are escaped because neither is ordinary text inside a
+ * label, and a backslash run is **doubled exactly where the parser would
+ * otherwise consume one**: when the character after it is ASCII punctuation (the
+ * escapable set), a line break, or the end of the label. A single backslash
+ * before the closing `]` escapes the delimiter and the picture becomes prose;
+ * a single one before `]`, `[`, `*` or another punctuation byte escapes that
+ * character and the backslash vanishes. Every other run is left alone, so a
+ * label whose backslashes are followed by ordinary text still comes out
+ * byte-identical to what the author wrote.
+ *
+ * Measured on the previous two-character rule, which escaped only the brackets
+ * (the arrow's right side is the exact text the old rule emitted):
+ *
+ * ```
+ * ![ends with \\](pic.png)  ->  ![ends with \](/assets/…)    no image at all
+ * ![mix \\\]](pic.png)      ->  ![mix \\]](/assets/…)        no image; alt lost `]`
+ * ```
+ *
+ * **This is the same rule {@link escapeLabelEdits} applies, reached from the
+ * other side.** That function works on source bytes, where a bracket is already
+ * escaped exactly when the backslashes before it are odd, so it adds a byte only
+ * to an odd run and leaves even runs alone. Here every backslash is data, so a
+ * run that must stay literal before punctuation is emitted at twice its length
+ * and becomes even; a run followed by ordinary text is already literal and is
+ * emitted once. Both produce a label in which no delimiter or escaped
+ * punctuation is preceded by an odd run.
+ *
+ * The alternative — copy the label's source span — is what the split rewrite
+ * does for an anchor's label, and it is not available here: an image's `alt`
+ * arrives as the parser's decoded string with no span of its own inside the
+ * node, and recovering that span would need a second bracket-aware scanner in
+ * this function. The decoded form is the one the rewrite already has, so it is
+ * the one re-encoded.
  *
  * Text taken from one construct and written into another has to be re-escaped
  * for the construct it lands in, and this is the one place that happens: a
  * wikilink's display half and an image's `alt` are *not* link-label syntax, so
  * a `[` or `]` inside either is ordinary text there and a delimiter here.
- * Measured, all three from the same defect:
+ * Measured, from the same defect:
  *
  * ```
  * ![[t|before ] after]]  ->  [before ] after](/t/)     the link ends early
@@ -291,17 +326,32 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
  * back one image whose `alt` is `](t.md)` — and it is not a shape worth
  * special-casing, because escaping the delimiters fixes it and every other
  * spelling at once.
- *
- * **Only `[` and `]`, and the set is measured rather than assumed.** Every
- * candidate was run through both rewrite paths and the shipped renderer
- * (`.tmp/probe-labels.mjs`); `(`, `)`, a backtick, and a lone backslash all
- * round-trip intact, because the parser closes a label at its `]` before a
- * destination begins and nothing else in a label is delimiter syntax. Escaping
- * more than the two characters that can break the construct would put visible
- * backslashes into a reader's text.
  */
+
+/** CommonMark's escapable ASCII punctuation, as one code-unit range set. */
+const ASCII_PUNCTUATION = /[\u0021-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u007E]/;
+
 function escapeLabel(text: string): string {
-  return text.replace(/[[\]]/g, (character) => `\\${character}`);
+  let result = '';
+  let slashes = 0;
+  /** Emit the pending run, doubled when `following` is what would consume it. */
+  const flush = (following: string): void => {
+    const consumed = following === '' || following === '\n' || following === '\r' || ASCII_PUNCTUATION.test(following);
+    result += '\\'.repeat(slashes * (consumed ? 2 : 1));
+    slashes = 0;
+  };
+  for (const character of text) {
+    if (character === '\\') {
+      slashes += 1;
+      continue;
+    }
+    flush(character);
+    result += character === '[' || character === ']' ? `\\${character}` : character;
+  }
+  // End of the label: the next byte is the closing `]`, a delimiter a lone
+  // backslash would escape.
+  flush('');
+  return result;
 }
 
 /**
