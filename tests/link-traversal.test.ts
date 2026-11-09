@@ -1043,7 +1043,7 @@ test('the title and the excerpt carry a link\'s text, never its syntax', async (
     //
     // **The bracket row was a known-broken output and is now repaired.** A
     // wikilink whose display half contains `]` was a producer defect for as long
-    // as the split rewrite existed: `escapeLabel` escaped it in the whole-span
+    // as the split rewrite existed: the decoded-text serialiser escaped it in the whole-span
     // rewrite, and the split rewrite — the one a node with a label span takes —
     // copied the label's own bytes through unescaped. Measured on `2405cb2` and
     // still live at `ebd53ff`, `[[beta|has ] bracket]]` became
@@ -1102,7 +1102,7 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // Text moved from one construct into another has to be re-escaped for the one
   // it lands in. A wikilink's display half and an image's `alt` are not
   // link-label syntax, so a `[` or `]` inside either is ordinary text there and
-  // a delimiter here. Measured before `escapeLabel` existed — the anchor ended
+  // a delimiter here. Measured before the decoded-text serialiser existed — the anchor ended
   // at the author's bracket and the rest became prose:
   //
   //     ![[t|before ] after]]  ->  [before ] after](/t/)
@@ -1111,7 +1111,7 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // the parser gives a label span — an ordinary wikilink — is rewritten as two
   // edits *around* its label so a nested node can write into the middle, and
   // that path copied the label's bytes through untouched. A node with no label
-  // span — an image embed — is replaced whole and went through `escapeLabel`.
+  // span — an image embed — is replaced whole and went through the decoded-text serialiser.
   // The two rows below are the same input in the two syntaxes, and the first
   // was the defect: measured at `ebd53ff`, `[[t|has ] bracket]]` produced
   // `[has ] bracket](/t/)` — no anchor at all — and `[[t|has [ bracket]]`
@@ -1159,19 +1159,28 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // their contents. The serialiser therefore escapes every backtick there, and
   // the embed row asserts the escape is present while the wikilink row asserts
   // the source-byte path is untouched.
-  for (const label of ['has ( paren', 'has ) paren', 'has \\ backslash']) {
+  for (const label of ['has ( paren', 'has ) paren']) {
     assert.equal(run(`[[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
     assert.equal(run(`![[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
   }
+  // A backslash differs by path. The source-byte split path copies the author's
+  // one backslash through; the decoded whole-span path re-serialises it as two,
+  // because a decoded backslash is data and `\\` is the only spelling that
+  // decodes back to one. Both render `has \ backslash`.
+  assert.equal(run('[[t|has \\ backslash]]'), '[has \\ backslash](/t/)', 'the source-byte path changed a single backslash');
+  assert.equal(run('![[t|has \\ backslash]]'), '[has \\\\ backslash](/t/)', 'the decoded path did not double a backslash');
   assert.equal(run('[[t|has ` backtick]]'), '[has ` backtick](/t/)', 'the source-byte path escaped a backtick');
   assert.equal(run('![[t|has ` backtick]]'), '[has \\` backtick](/t/)', 'the decoded path did not escape a backtick');
 
-  // **The invariant that actually matters, stated as itself: a label with no
-  // bracket comes out byte-identical to what the author wrote.** The character
-  // rows above check the individual bytes; this checks the property, and it is
-  // the one two successive versions of this fix violated in ways no
-  // bracket-shaped gate could see. Each row below was a real regression, found
-  // by review:
+  // **The invariant that actually matters on the source-byte path: a label with
+  // no bracket comes out byte-identical to what the author wrote.** The
+  // character rows above check the individual bytes; this checks the property,
+  // and it is the one two successive versions of this fix violated in ways no
+  // bracket-shaped gate could see. A decoded whole-span label cannot share it —
+  // a lone backslash is data there and must be re-emitted as `\\` — so its
+  // equivalent guarantee is the reparse property gated in
+  // `tests/reference-links.test.ts`, not byte identity. Each row below was a
+  // real regression, found by review:
   //
   // - a label ending in a backslash had its escape re-emitted raw, so the
   //   backslash escaped the label's own `]` and the link vanished entirely;

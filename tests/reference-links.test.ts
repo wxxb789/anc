@@ -123,22 +123,30 @@ function tree(markdown: string): MdastNode {
   return markdownToMdast(markdown, { features: { wikilinks: true, gfm: true } }) as MdastNode;
 }
 
-/** Every `image` node in one body, in document order, as the parser reads it. */
-function images(markdown: string): { alt: string; url: string }[] {
-  const found: { alt: string; url: string }[] = [];
+/** Every image-bearing node in one body, in document order, as the parser reads it. */
+function images(markdown: string): { type: 'image' | 'imageReference'; alt: string; title: string | null; url: string }[] {
+  const found: { type: 'image' | 'imageReference'; alt: string; title: string | null; url: string }[] = [];
   const walk = (node: MdastNode): void => {
-    if (node.type === 'image') found.push({ alt: node.alt ?? '', url: node.url ?? '' });
+    if (node.type === 'image') {
+      found.push({ type: 'image', alt: node.alt ?? '', title: node.title ?? null, url: node.url ?? '' });
+    } else if (node.type === 'imageReference') {
+      // A reference node carries no title or destination of its own; both live
+      // on its definition, which the rewrite reads and the tests inspect there.
+      found.push({ type: 'imageReference', alt: node.alt ?? '', title: null, url: '' });
+    }
     for (const child of ('children' in node ? node.children : []) as MdastNode[]) walk(child);
   };
   walk(tree(markdown));
   return found;
 }
 
-/** Every `definition` node in one body, with its label and destination. */
-function definitions(markdown: string): { identifier: string; url: string }[] {
-  const found: { identifier: string; url: string }[] = [];
+/** Every `definition` node in one body, with its label, destination and title. */
+function definitions(markdown: string): { identifier: string; url: string; title: string | null }[] {
+  const found: { identifier: string; url: string; title: string | null }[] = [];
   const walk = (node: MdastNode): void => {
-    if (node.type === 'definition') found.push({ identifier: node.identifier ?? '', url: node.url ?? '' });
+    if (node.type === 'definition') {
+      found.push({ identifier: node.identifier ?? '', url: node.url ?? '', title: node.title ?? null });
+    }
     for (const child of ('children' in node ? node.children : []) as MdastNode[]) walk(child);
   };
   walk(tree(markdown));
@@ -146,19 +154,22 @@ function definitions(markdown: string): { identifier: string; url: string }[] {
 }
 
 /**
- * One reusable HTML parser for the rendered `alt`.
+ * One reusable HTML parser for the rendered `alt` and `title`.
  *
- * The `alt` attribute is HTML-escaped by the renderer, so comparing it as bytes
+ * Both attributes are HTML-escaped by the renderer, so comparing them as bytes
  * would compare the renderer's escaping rather than the text a reader gets.
  * happy-dom is already a runtime dependency (the Mermaid gate), and it is a
  * real HTML parser, so this is not a decoder written to agree with the emitter.
  */
 const htmlWindow = new Window();
 
-/** The `alt` each `<img>` carries after the shipped renderer, as decoded HTML. */
-function renderedAlts(html: string): string[] {
+/** The `alt` and `title` each `<img>` carries after the shipped renderer. */
+function renderedImages(html: string): { alt: string; title: string | null }[] {
   htmlWindow.document.body.innerHTML = html;
-  return [...htmlWindow.document.querySelectorAll('img')].map((image) => image.getAttribute('alt') ?? '');
+  return [...htmlWindow.document.querySelectorAll('img')].map((image) => ({
+    alt: image.getAttribute('alt') ?? '',
+    title: image.getAttribute('title'),
+  }));
 }
 
 /**
@@ -219,12 +230,52 @@ const LABEL_ROWS: readonly { readonly source: string; readonly alt: string }[] =
   { source: '![a&#13;b](assets/chart.png)', alt: 'a\rb' },
   // Whitespace at the edges of the label.
   { source: '![  leading and trailing  ](assets/chart.png)', alt: '  leading and trailing  ' },
+  // A decoded run of two backslashes before ordinary text: the C4 row. Emitted
+  // raw it re-parsed as one, because each pair escapes itself.
+  { source: '![\\\\\\\\x](assets/chart.png)', alt: '\\\\x' },
+  // A quote is inert in a label but is the title's delimiter; one shared set
+  // escapes it in both fields.
+  { source: '![a "b" c](assets/chart.png)', alt: 'a "b" c' },
   // Honest labels: the text must reach the reader unchanged.
   { source: '![C++ & C#](assets/chart.png)', alt: 'C++ & C#' },
   { source: '![A & B](assets/chart.png)', alt: 'A & B' },
   { source: '![50%](assets/chart.png)', alt: '50%' },
   { source: '![图 1](assets/chart.png)', alt: '图 1' },
 ];
+
+/**
+ * Title spellings and the title each one decodes to.
+ *
+ * The title is the second field the rewrite serialises, and it used to carry a
+ * second copy of the escaping rule: `&` decoded a second time and whitespace was
+ * collapsed and trimmed away. The first two rows are C5; the whitespace rows are
+ * the old collapse; the backslash rows are C4 in the title; the rest are inert
+ * constructs that must survive as text.
+ */
+const TITLE_ROWS: readonly { readonly titleSource: string; readonly title: string }[] = [
+  { titleSource: 'literal &amp;copy;', title: 'literal &copy;' },
+  { titleSource: 'literal &copy;', title: 'literal ©' },
+  { titleSource: 'A & B', title: 'A & B' },
+  { titleSource: 'a  b', title: 'a  b' },
+  { titleSource: ' a ', title: ' a ' },
+  { titleSource: 'a\nb', title: 'a\nb' },
+  { titleSource: 'a\\\\b', title: 'a\\b' },
+  { titleSource: 'a\\\\\\\\b', title: 'a\\\\b' },
+  { titleSource: 'ends\\\\', title: 'ends\\' },
+  { titleSource: 'a\\"b', title: 'a"b' },
+  { titleSource: 'tick `x`', title: 'tick `x`' },
+  { titleSource: '~~gone~~', title: '~~gone~~' },
+  { titleSource: 'math $$x$$', title: 'math $$x$$' },
+  { titleSource: 'Figure 1: overview', title: 'Figure 1: overview' },
+  { titleSource: '图 1', title: '图 1' },
+];
+
+/** Source spelling for `run` literal backslashes followed by one follower. */
+function backslashSource(run: number, follower: string): string {
+  const pairs = '\\\\'.repeat(run);
+  if (follower === '') return pairs;
+  return `${pairs}${follower === 'x' || follower === ' ' ? '' : '\\'}${follower}`;
+}
 
 test('every emitted inline image label round-trips to the alt it started from', async () => {
   for (const { source, alt } of LABEL_ROWS) {
@@ -234,13 +285,19 @@ test('every emitted inline image label round-trips to the alt it started from', 
     const authored = images(source);
     assert.equal(authored.length, 1, `${JSON.stringify(source)}: the fixture is not one image`);
     assert.equal(authored[0]!.alt, alt, `${JSON.stringify(source)}: the source no longer decodes to the recorded alt`);
+    assert.equal(authored[0]!.title, null, `${JSON.stringify(source)}: the fixture grew a title`);
 
     const result = await run(`${source}\n`);
     const parsed = images(result.markdown);
     assert.equal(parsed.length, 1, `${JSON.stringify(source)}: not one image after rewrite: ${result.markdown}`);
     assert.equal(parsed[0]!.alt, alt, `${JSON.stringify(source)}: the rewritten alt changed: ${result.markdown}`);
+    assert.equal(parsed[0]!.title, authored[0]!.title, `${JSON.stringify(source)}: the rewritten title changed: ${result.markdown}`);
     assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(source)}: wrong destination`);
-    assert.deepEqual(renderedAlts(result.html), [alt], `${JSON.stringify(source)}: the rendered alt changed: ${result.html}`);
+    assert.deepEqual(
+      renderedImages(result.html),
+      [{ alt, title: authored[0]!.title }],
+      `${JSON.stringify(source)}: the rendered attributes changed: ${result.html}`,
+    );
     assert.ok(!result.html.includes('!['), `${JSON.stringify(source)}: literal Markdown reached the page: ${result.html}`);
   }
 });
@@ -248,23 +305,173 @@ test('every emitted inline image label round-trips to the alt it started from', 
 test('every emitted reference-style image label round-trips and its definition label survives', async () => {
   for (const { source, alt } of LABEL_ROWS) {
     const reference = source.replace('](assets/chart.png)', '][c]');
+    const authored = images(`See ${reference} here.\n\n[c]: assets/chart.png\n`);
+    assert.equal(authored.length, 1, `${JSON.stringify(reference)}: the fixture is not one image`);
+    assert.equal(authored[0]!.type, 'imageReference', `${JSON.stringify(reference)}: not a reference`);
+    assert.equal(authored[0]!.alt, alt, `${JSON.stringify(reference)}: the source no longer decodes to the recorded alt`);
+
     const result = await run(`See ${reference} here.\n\n[c]: assets/chart.png\n`);
     const parsed = images(result.markdown);
     assert.equal(parsed.length, 1, `${JSON.stringify(reference)}: not one image after rewrite: ${result.markdown}`);
     assert.equal(parsed[0]!.alt, alt, `${JSON.stringify(reference)}: the rewritten alt changed: ${result.markdown}`);
+    assert.equal(parsed[0]!.title, authored[0]!.title, `${JSON.stringify(reference)}: the rewritten title changed: ${result.markdown}`);
     assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(reference)}: wrong destination`);
-    assert.deepEqual(renderedAlts(result.html), [alt], `${JSON.stringify(reference)}: the rendered alt changed: ${result.html}`);
+    assert.deepEqual(
+      renderedImages(result.html),
+      [{ alt, title: authored[0]!.title }],
+      `${JSON.stringify(reference)}: the rendered attributes changed: ${result.html}`,
+    );
     // The reference is rewritten inline and only the definition's destination
     // moves: the `[c]` label is byte-untouched and still parses as identifier
-    // `c`, so a later reference to it would bind to the asset.
+    // `c`, so a later reference to it would bind to the asset. The definition
+    // is unused after the inline rewrite, so its title is dropped with the old
+    // destination; the title that renders is the one on the inline image.
     assert.deepEqual(
       definitions(result.markdown),
-      [{ identifier: 'c', url: CHART_URL }],
+      [{ identifier: 'c', url: CHART_URL, title: null }],
       `${JSON.stringify(reference)}: the definition label or destination changed: ${result.markdown}`,
     );
     assert.ok(result.markdown.includes(`[c]: ${CHART_URL}`), `${JSON.stringify(reference)}: ${result.markdown}`);
     assert.ok(!result.markdown.includes('assets/chart'), `${JSON.stringify(reference)}: the source path survived`);
     assert.ok(!result.html.includes('!['), `${JSON.stringify(reference)}: literal Markdown reached the page: ${result.html}`);
+  }
+});
+
+test('every emitted inline image title round-trips to the title it started from', async () => {
+  for (const { titleSource, title } of TITLE_ROWS) {
+    const source = `![x](assets/chart.png "${titleSource}")`;
+    const authored = images(source);
+    assert.equal(authored.length, 1, `${JSON.stringify(source)}: the fixture is not one image`);
+    assert.equal(authored[0]!.title, title, `${JSON.stringify(source)}: the source no longer decodes to the recorded title`);
+
+    const result = await run(`${source}\n`);
+    const parsed = images(result.markdown);
+    assert.equal(parsed.length, 1, `${JSON.stringify(source)}: not one image after rewrite: ${result.markdown}`);
+    assert.equal(parsed[0]!.alt, 'x', `${JSON.stringify(source)}: the alt changed: ${result.markdown}`);
+    assert.equal(parsed[0]!.title, title, `${JSON.stringify(source)}: the rewritten title changed: ${result.markdown}`);
+    assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(source)}: wrong destination`);
+    assert.deepEqual(
+      renderedImages(result.html),
+      [{ alt: 'x', title }],
+      `${JSON.stringify(source)}: the rendered title changed: ${result.html}`,
+    );
+  }
+});
+
+test('every emitted reference-style image title round-trips and the definition label survives', async () => {
+  for (const { titleSource, title } of TITLE_ROWS) {
+    const source = `See ![x][c] here.\n\n[c]: assets/chart.png "${titleSource}"\n`;
+    assert.deepEqual(
+      definitions(source),
+      [{ identifier: 'c', url: 'assets/chart.png', title }],
+      `${JSON.stringify(titleSource)}: the fixture definition no longer decodes to the recorded title`,
+    );
+
+    const result = await run(source);
+    const parsed = images(result.markdown);
+    assert.equal(parsed.length, 1, `${JSON.stringify(titleSource)}: not one image after rewrite: ${result.markdown}`);
+    assert.equal(parsed[0]!.alt, 'x', `${JSON.stringify(titleSource)}: the alt changed: ${result.markdown}`);
+    assert.equal(parsed[0]!.title, title, `${JSON.stringify(titleSource)}: the rewritten title changed: ${result.markdown}`);
+    assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(titleSource)}: wrong destination`);
+    assert.deepEqual(
+      renderedImages(result.html),
+      [{ alt: 'x', title }],
+      `${JSON.stringify(titleSource)}: the rendered title changed: ${result.html}`,
+    );
+    // The definition label is untouched; its old destination and title are
+    // replaced because the reference is now inline and the definition is unused.
+    assert.deepEqual(
+      definitions(result.markdown),
+      [{ identifier: 'c', url: CHART_URL, title: null }],
+      `${JSON.stringify(titleSource)}: the definition changed: ${result.markdown}`,
+    );
+    assert.ok(!result.markdown.includes('assets/chart'), `${JSON.stringify(titleSource)}: the source path survived`);
+  }
+});
+
+/**
+ * Followers for the generated backslash matrix: a letter, a space, ASCII
+ * punctuation, both label delimiters, another construct character, and the end
+ * of the text. Each row is encoded independently with CommonMark's own escape
+ * rules and checked against the parser before the rewrite runs, so the matrix
+ * does not share the serializer's belief.
+ */
+const MATRIX_FOLLOWERS = ['x', ' ', '.', '[', ']', '*', ''] as const;
+
+test('a generated 1–5 backslash matrix round-trips in both fields and both shapes', async () => {
+  for (let slashes = 1; slashes <= 5; slashes += 1) {
+    for (const follower of MATRIX_FOLLOWERS) {
+      const text = '\\'.repeat(slashes) + follower;
+      const spelling = backslashSource(slashes, follower);
+      const what = `${slashes} backslash(es), follower ${JSON.stringify(follower)}`;
+
+      // Label, inline.
+      const inlineLabel = `![${spelling}](assets/chart.png)`;
+      let authored = images(inlineLabel);
+      assert.equal(authored.length, 1, `${what}: inline label fixture is not one image: ${inlineLabel}`);
+      assert.equal(authored[0]!.alt, text, `${what}: inline label fixture alt: ${inlineLabel}`);
+      let result = await run(`${inlineLabel}\n`);
+      let parsed = images(result.markdown);
+      assert.equal(parsed.length, 1, `${what}: inline label: ${result.markdown}`);
+      assert.equal(parsed[0]!.alt, text, `${what}: inline label: ${result.markdown}`);
+      assert.equal(parsed[0]!.title, null, `${what}: inline label grew a title`);
+      assert.deepEqual(
+        renderedImages(result.html),
+        [{ alt: text, title: null }],
+        `${what}: inline label rendered: ${result.html}`,
+      );
+
+      // Label, reference-style.
+      const referenceLabel = `![${spelling}][c]\n\n[c]: assets/chart.png\n`;
+      authored = images(referenceLabel);
+      assert.equal(authored.length, 1, `${what}: reference label fixture is not one image: ${referenceLabel}`);
+      assert.equal(authored[0]!.type, 'imageReference', `${what}: reference label fixture is not a reference`);
+      assert.equal(authored[0]!.alt, text, `${what}: reference label fixture alt: ${referenceLabel}`);
+      result = await run(referenceLabel);
+      parsed = images(result.markdown);
+      assert.equal(parsed.length, 1, `${what}: reference label: ${result.markdown}`);
+      assert.equal(parsed[0]!.alt, text, `${what}: reference label: ${result.markdown}`);
+      assert.equal(parsed[0]!.title, null, `${what}: reference label grew a title`);
+      assert.deepEqual(
+        renderedImages(result.html),
+        [{ alt: text, title: null }],
+        `${what}: reference label rendered: ${result.html}`,
+      );
+
+      // Title, inline.
+      const inlineTitleSource = `![x](assets/chart.png "${spelling}")`;
+      authored = images(inlineTitleSource);
+      assert.equal(authored.length, 1, `${what}: inline title fixture is not one image: ${inlineTitleSource}`);
+      assert.equal(authored[0]!.title, text, `${what}: inline title fixture: ${inlineTitleSource}`);
+      result = await run(`${inlineTitleSource}\n`);
+      parsed = images(result.markdown);
+      assert.equal(parsed.length, 1, `${what}: inline title: ${result.markdown}`);
+      assert.equal(parsed[0]!.alt, 'x', `${what}: inline title alt: ${result.markdown}`);
+      assert.equal(parsed[0]!.title, text, `${what}: inline title: ${result.markdown}`);
+      assert.deepEqual(
+        renderedImages(result.html),
+        [{ alt: 'x', title: text }],
+        `${what}: inline title rendered: ${result.html}`,
+      );
+
+      // Title, reference-style.
+      const referenceTitle = `![x][c]\n\n[c]: assets/chart.png "${spelling}"\n`;
+      assert.deepEqual(
+        definitions(referenceTitle),
+        [{ identifier: 'c', url: 'assets/chart.png', title: text }],
+        `${what}: reference title fixture: ${referenceTitle}`,
+      );
+      result = await run(referenceTitle);
+      parsed = images(result.markdown);
+      assert.equal(parsed.length, 1, `${what}: reference title: ${result.markdown}`);
+      assert.equal(parsed[0]!.alt, 'x', `${what}: reference title alt: ${result.markdown}`);
+      assert.equal(parsed[0]!.title, text, `${what}: reference title: ${result.markdown}`);
+      assert.deepEqual(
+        renderedImages(result.html),
+        [{ alt: 'x', title: text }],
+        `${what}: reference title rendered: ${result.html}`,
+      );
+    }
   }
 });
 
@@ -280,8 +487,26 @@ test('an honest image label emits readable source and the same rendered alt', as
   ] as const) {
     const result = await run(`![${label}](assets/chart.png)\n`);
     assert.ok(result.markdown.includes(`![${emitted}](${CHART_URL})`), `${label}: emitted ${result.markdown}`);
-    assert.deepEqual(renderedAlts(result.html), [label], `${label}: ${result.html}`);
-    assert.ok(!renderedAlts(result.html)[0]!.includes('\\'), `${label}: a backslash reached the reader`);
+    assert.deepEqual(renderedImages(result.html), [{ alt: label, title: null }], `${label}: ${result.html}`);
+    assert.ok(!renderedImages(result.html)[0]!.alt.includes('\\'), `${label}: a backslash reached the reader`);
+  }
+});
+
+test('an honest image title emits readable source and the same rendered title', async () => {
+  // Same no-visual-regression rule for the title path. `&` is the one honest
+  // character the shared rule escapes (it can begin a character reference);
+  // everything else here is emitted unchanged.
+  for (const [title, emitted] of [
+    ['Figure 1: overview', 'Figure 1: overview'],
+    ['A & B', 'A \\& B'],
+    ['C++', 'C++'],
+    ['50%', '50%'],
+    ['图 1', '图 1'],
+  ] as const) {
+    const result = await run(`![x](assets/chart.png "${title}")\n`);
+    assert.ok(result.markdown.includes(`"${emitted}"`), `${title}: emitted ${result.markdown}`);
+    assert.deepEqual(renderedImages(result.html), [{ alt: 'x', title }], `${title}: ${result.html}`);
+    assert.ok(!renderedImages(result.html)[0]!.title!.includes('\\'), `${title}: a backslash reached the reader`);
   }
 });
 
@@ -295,7 +520,7 @@ test('an image label inside a table cell keeps the cell and its alt', async () =
   const parsed = images(result.markdown);
   assert.equal(parsed.length, 1, `the rewritten table lost its image: ${result.markdown}`);
   assert.equal(parsed[0]!.alt, 'a | b', result.markdown);
-  assert.deepEqual(renderedAlts(result.html), ['a | b'], result.html);
+  assert.deepEqual(renderedImages(result.html), [{ alt: 'a | b', title: null }], result.html);
   assert.equal((result.html.match(/<td>/g) ?? []).length, 1, `the cell split: ${result.html}`);
   assert.equal((result.html.match(/<img\b/g) ?? []).length, 1, `the image vanished: ${result.html}`);
 });

@@ -274,63 +274,63 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
 }
 
 /**
- * A label safe to place inside `[…]`, re-encoded from **decoded** text.
+ * Decoded text → Markdown inline source. **The only place that conversion
+ * happens**, for both an image's `alt` and its `title`.
  *
- * The input here is the parser's decoded value — an image's `alt` — not source
- * bytes. Re-emitting that value raw is not round-trip-safe, because decoded text
- * is not Markdown source: an `&` that begins a character reference decodes a
- * second time, a `*` the author escaped becomes emphasis, and `<` starts raw
- * HTML. Measured on the previous rule, which escaped only brackets and
- * backslash runs:
- *
- * ```
- * ![literal &amp;copy;](pic.png)  ->  alt "literal &copy;"
- *                                        re-emit "&copy;"  ->  alt "©"
- * ![a\*b\*c](pic.png)             ->  alt "a*b*c"
- *                                        re-emit "a*b*c"   ->  alt "abc"
- * ![<b>x</b>](pic.png)            ->  alt "<b>x</b>"
- *                                        re-emit raw       ->  inline HTML
- * ```
- *
- * So the label serialiser escapes **every character that can begin or
- * participate in an inline construct this renderer enables**, one backslash
- * each, and nothing else:
+ * The rule, in one sentence: escape every decoded character that Markdown or
+ * the renderer can interpret, encode a line feed or carriage return as a numeric
+ * character reference, and emit everything else unchanged. The escaped set is
  *
  * | escaped | why leaving it raw changes the text |
  * | --- | --- |
- * | `\` | the escape introducer: it consumes the next byte (emitted twice only where the next byte would consume it, below) |
+ * | `\` | the escape introducer: **every** decoded backslash is emitted as `\\`, unconditionally |
+ * | `"` | the title's delimiter (a label never needs it, but one uniform set is the point) |
  * | `` ` `` | a code span, which discards its delimiters |
  * | `*`, `_` | emphasis and strong, which discard their markers |
- * | `[`, `]` | the label's own delimiters, and nested link/image syntax |
+ * | `[`, `]` | a label's own delimiters, and nested link/image syntax |
  * | `<` | raw HTML and autolinks, which reprocess the text as markup |
  * | `&` | a character reference, which decodes the text a second time |
  * | `~` | GFM strikethrough |
  * | `\|` | a GFM table cell separator, when the image sits in a table |
  * | `$` | the math feature's delimiters (`$$…$$`) |
  *
- * A line feed or carriage return cannot be backslash-escaped, and a raw one
- * would let the next character start a block construct (a heading or list after
- * the break) or end the construct at a blank line. Both are emitted as numeric
- * character references (`&#10;` / `&#13;`), which keep the label on one line and
- * still decode to the same character. Everything else — letters, digits,
- * spaces, `\u00a0`, `!`, `(`, `)`, `+`, `%`, `#`, `:`, `/`, `.`, `>` — is
- * ordinary text inside a link label, so it is emitted unchanged; an unescaped
- * `!` cannot form an image because the `[` after it is escaped.
+ * **A decoded backslash is always doubled; there is no conditional run logic.**
+ * The round-2 rule doubled a run only before punctuation, a line break, or the
+ * end of the label. That is wrong for a run before ordinary text: two decoded
+ * backslashes emitted raw re-parse as one, because each pair escapes itself.
+ * Emitting `2n` bytes for `n` decoded backslashes decodes back to `n` in every
+ * position — before a letter, a space, punctuation, a bracket, or the closing
+ * delimiter — so the uniform rule is also the simpler one. Measured before this
+ * change:
  *
- * **Backslash runs are handled separately, and the round-2 rule is unchanged.**
- * A decoded backslash is data, not source: emit it twice when the following
- * character is ASCII punctuation, a line break, or the end of the label, and
- * once when it is ordinary text, where the parser leaves a lone backslash
- * alone. That is why `has \ backslash` still comes out byte-identical, while a
- * trailing backslash cannot escape the closing `]`.
+ * ```
+ * alt "ends with \\"  emitted raw "ends with \\"  ->  alt "ends with \"
+ * ```
  *
- * **This is the decoded-text half of {@link escapeLabelEdits}.** That function
- * works on *source* bytes, where the author's own escapes are already present
- * and escaping anything beyond an unescaped bracket would corrupt the label, so
- * its set is exactly the two delimiters. Here the input is decoded text, so
- * every construct-forming character has to be reintroduced as escaped
- * punctuation. The two sets differ because the inputs differ; the guarantee is
- * the same.
+ * LF/CR cannot be backslash-escaped, and a raw one would let the next line start
+ * a block construct or a blank line end it, so both are emitted as `&#10;` /
+ * `&#13;`; the parser decodes them back to the same character. Everything else —
+ * letters, digits, spaces, `\u00a0`, `!`, `(`, `)`, `+`, `%`, `#`, `:`, `/`,
+ * `.`, `>` — is ordinary text in a label and a title, so it is emitted
+ * unchanged; an unescaped `!` cannot form an image because the `[` after it is
+ * escaped.
+ *
+ * The two fields this serves are an image's `alt` and its `title`, and they
+ * differ only in the title's surrounding quotes (added by {@link inlineTitle}).
+ * The title path used to carry a second copy of the escaping rule, and it
+ * decoded a second time for exactly the reason this function exists:
+ *
+ * ```
+ * title "literal &copy;"  emitted raw inside quotes  ->  title "literal ©"
+ * ```
+ *
+ * **Compared with {@link escapeLabelEdits}, this is a different input, not a
+ * second rule.** That function receives *source* bytes, where the author's own
+ * escapes are already present, so it must add a byte only to an unescaped
+ * bracket; escaping anything else there would corrupt text that was already
+ * Markdown. This function receives decoded text, where every construct-forming
+ * character has to be reintroduced. There is no decoded text anywhere else in
+ * this module that is turned back into Markdown.
  *
  * The alternative — copy the label's source span — is what the split rewrite
  * does for an anchor's label, and it is not available here: an image's `alt`
@@ -340,10 +340,9 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
  * the one re-encoded.
  *
  * Text taken from one construct and written into another has to be re-escaped
- * for the construct it lands in, and this is the one place that happens: a
- * wikilink's display half and an image's `alt` are *not* link-label syntax, so
- * a `[` or `]` inside either is ordinary text there and a delimiter here.
- * Measured, from the same defect:
+ * for the construct it lands in: a wikilink's display half and an image's `alt`
+ * are *not* link-label syntax, so a `[` or `]` inside either is ordinary text
+ * there and a delimiter here. Measured, from the same defect:
  *
  * ```
  * ![[t|before ] after]]  ->  [before ] after](/t/)     the link ends early
@@ -356,19 +355,15 @@ function labelSpan(node: MdastNode): { start: number; end: number } | undefined 
  * spelling at once.
  */
 
-/** CommonMark's escapable ASCII punctuation, as one code-unit range set. */
-const ASCII_PUNCTUATION = /[\u0021-\u002F\u003A-\u0040\u005B-\u0060\u007B-\u007E]/;
-
 /**
- * Every character that begins or participates in an inline construct.
+ * Every character that begins or participates in Markdown/HTML syntax.
  *
  * A record rather than a `Set` because the table is static: each key names one
- * construct above, and a reader can audit the whole rule in one place. `\` is
- * included for completeness although the accumulator consumes it before this
- * lookup; keeping the set whole is what makes its coverage checkable here.
+ * construct above, and a reader can audit the whole rule in one place.
  */
-const LABEL_SYNTAX: Readonly<Record<string, true>> = {
+const MARKDOWN_SYNTAX: Readonly<Record<string, true>> = {
   '\\': true,
+  '"': true,
   '`': true,
   '*': true,
   _: true,
@@ -381,40 +376,25 @@ const LABEL_SYNTAX: Readonly<Record<string, true>> = {
   $: true,
 };
 
-function escapeLabel(text: string): string {
+function serializeText(text: string): string {
   let result = '';
-  let slashes = 0;
-  /** Emit the pending run, doubled when `following` is what would consume it. */
-  const flush = (following: string): void => {
-    const consumed = following === '' || following === '\n' || following === '\r' || ASCII_PUNCTUATION.test(following);
-    result += '\\'.repeat(slashes * (consumed ? 2 : 1));
-    slashes = 0;
-  };
   for (const character of text) {
-    if (character === '\\') {
-      slashes += 1;
-      continue;
-    }
-    flush(character);
     if (character === '\n') result += '&#10;';
     else if (character === '\r') result += '&#13;';
-    else if (LABEL_SYNTAX[character] === true) result += `\\${character}`;
+    else if (MARKDOWN_SYNTAX[character] === true) result += `\\${character}`;
     else result += character;
   }
-  // End of the label: the next byte is the closing `]`, a delimiter a lone
-  // backslash would escape.
-  flush('');
   return result;
 }
 
 /**
  * The edits that make a label's own text safe to sit inside `[…]`.
  *
- * **This is the split rewrite's half of {@link escapeLabel}, and it existed as a
- * defect for as long as the split rewrite has.** An outer link is rewritten as
- * two edits *around* its label so a nested node can write into the middle
- * (see {@link labelSpan}) — which means the label's bytes are copied through
- * untouched, escaper included. Measured on `2405cb2` and still live at
+ * **This is the source-byte counterpart of {@link serializeText}, and it
+ * existed as a defect for as long as the split rewrite has.** An outer link is
+ * rewritten as two edits *around* its label so a nested node can write into the
+ * middle (see {@link labelSpan}) — which means the label's bytes are copied
+ * through untouched, escaper included. Measured on `2405cb2` and still live at
  * `ebd53ff`:
  *
  * ```
@@ -642,18 +622,19 @@ function rawImageSources(html: string): string[] | undefined {
 }
 
 /**
- * A Markdown title, safe to write inside a quoted destination title.
+ * An image title, quoted and serialised from the parser's decoded value.
  *
  * Only reached when an image is republished under its asset URL and the author
- * wrote `![alt](path "title")`. The title is their words and is kept; a literal
- * `"` or `\` is what can end the construct early, so those are escaped. Line
- * breaks collapse to one space because the rewrite is one line.
+ * wrote a title, inline or on the reference's definition. The parsed title is
+ * the author's text with character references and escapes already resolved, so
+ * it goes through the same {@link serializeText} the label does; the only
+ * title-specific part is the surrounding `"`. Whitespace is **not** collapsed
+ * or trimmed: the parser preserved it, and the old collapse changed titles like
+ * ` a  b ` and turned a decoded `&copy;` into `©` a second time.
  */
 function inlineTitle(title: string | null | undefined): string {
-  if (typeof title !== 'string') return '';
-  const collapsed = title.replace(/\s+/g, ' ').trim();
-  if (collapsed === '') return '';
-  return ` "${collapsed.replace(/[\\"]/g, (character) => `\\${character}`)}"`;
+  if (typeof title !== 'string' || title === '') return '';
+  return ` "${serializeText(title)}"`;
 }
 
 /**
@@ -764,7 +745,7 @@ export function resolveLinksIn(
         edits.push({
           start: span.start,
           end: span.end,
-          text: `![${escapeLabel(label)}](${outcome.url}${inlineTitle(title)})`,
+          text: `![${serializeText(label)}](${outcome.url}${inlineTitle(title)})`,
         });
         if (definition !== undefined) publishedDefinitions.set(definition, outcome.url);
         continue;
@@ -772,7 +753,7 @@ export function resolveLinksIn(
       mediaFailures.push({ source: sourcePath, line: span.line, link: written, reason: outcome.reason });
       // Degraded to its own alt text so the returned body is self-consistent.
       // The caller stops the build; this value is never written.
-      edits.push({ start: span.start, end: span.end, text: escapeLabel(label) });
+      edits.push({ start: span.start, end: span.end, text: serializeText(label) });
       continue;
     }
 
@@ -798,18 +779,18 @@ export function resolveLinksIn(
     // nothing nested to protect and is replaced whole.
     //
     // The whole-span form is also the only one that could escape its label
-    // *through* {@link escapeLabel}: the split form leaves the label's own bytes
-    // in place, which is what preserves a nested node's rewrite. So the split
-    // form escapes its label separately, in edits scoped to the label's own text
-    // nodes — see {@link escapeLabelEdits}, which is where that had been missing
-    // for as long as the split form existed.
+    // *through* {@link serializeText}: the split form leaves the label's own
+    // bytes in place, which is what preserves a nested node's rewrite. So the
+    // split form escapes its label separately, in edits scoped to the label's
+    // own text nodes — see {@link escapeLabelEdits}, which is where that had
+    // been missing for as long as the split form existed.
     const inner = node.type === 'link' || node.type === 'linkReference' ? labelSpan(node) : undefined;
     const rewrite = (before: string, after: string, fallbackLabel = label): void => {
       if (inner === undefined) {
         edits.push({
           start: span.start,
           end: span.end,
-          text: before + escapeLabel(fallbackLabel) + after,
+          text: before + serializeText(fallbackLabel) + after,
         });
         return;
       }
