@@ -105,7 +105,7 @@ import {
   type ImagePublisher,
   type MediaFailureReason,
 } from '../src/lib/media.ts';
-import { MEDIA_LIMITS, prepareImage, type PrepareResult } from '../src/lib/media-codec.ts';
+import type { PrepareResult } from '../src/lib/media-codec.ts';
 import { SLUG_MAX_BYTES, compareSlugs, slugSegment, utf8Length } from '../src/lib/route-path.ts';
 import {
   BuildFailure,
@@ -1404,6 +1404,12 @@ function mediaPublisher(discovery: Discovery): { publisher: ImagePublisher; asse
     if (entry.verdict === 'excluded') return { kind: 'failed', reason: 'excluded' };
     if (entry.verdict === 'escaping') return { kind: 'failed', reason: 'outside' };
 
+    // `media-codec` imports sharp, a per-platform native binding. Load it only
+    // when an authorized local reference actually reaches this boundary; a
+    // corpus with no images must not evaluate it. `resolve-links` below documents
+    // the same class of failure for its parser.
+    const { MEDIA_LIMITS, prepareImage } = await import('../src/lib/media-codec.ts');
+
     // The codec enforces this after the bytes are in memory; this check keeps a
     // multi-gigabyte source from being allocated at all. `stat` follows the same
     // resolved path the read would, and a failure here is the same "not there"
@@ -1554,7 +1560,10 @@ export async function resolveCorpusLinks(
   // gate loads *this module* under WSL to compare the two walks, and a static
   // import made that load throw `Cannot find native binding` before discovery
   // ran at all, turning a green gate red on a property this ticket does not
-  // touch. The walk needs no parser; only the traversal does.
+  // touch. The walk needs no parser; only the traversal does. `media-codec.ts`
+  // is the second instance of the same class: it imports `sharp`, whose native
+  // binding is likewise installed per platform, so it is imported inside the
+  // media boundary rather than here or at module scope.
   const { resolveLinksIn } = await import('./resolve-links.ts');
 
   const findings: LinkFindingRow[] = [];
