@@ -1054,7 +1054,10 @@ function jpegComplete(bytes: Uint8Array): void {
           if (after + 1 !== bytes.length) failIncomplete('JPEG trailing');
           return;
         }
-        offset = after;
+        // Resume at the marker's 0xFF prefix, not at the code byte `after`.
+        // The outer loop's invariant is `bytes[offset] === 0xff`; progressive
+        // JPEGs have several scans, so another DHT/SOS segment follows here.
+        offset = after - 1;
         nextSegment = true;
         break;
       }

@@ -46,6 +46,7 @@ import {
   WEBP_ANIMATED,
   WEBP_LOSSLESS,
   WEBP_LOSSY,
+  progressiveJpeg,
 } from './support/media.ts';
 
 /** A small deterministic PRNG, so a generated fixture is the same bytes each run. */
@@ -324,6 +325,31 @@ test('every intact supported container passes the structural completeness gate',
   assert.doesNotThrow(() => assertCompleteContainer('gif', Buffer.from(GIF_ANIMATED), { pages: 3 }));
   assert.doesNotThrow(() => assertCompleteContainer('webp', Buffer.from(WEBP_LOSSY)));
   assert.doesNotThrow(() => assertCompleteContainer('avif', Buffer.from(AVIF)));
+});
+
+test('progressive JPEGs with multiple scans are accepted, truncated ones are corrupt', async () => {
+  const progressive = Buffer.from(await progressiveJpeg());
+  const metadata = await sharp(progressive).metadata();
+  assert.equal(metadata.isProgressive, true, 'the generated fixture is not a progressive JPEG');
+  assert.ok(progressive.length > Buffer.from(JPEG).length, 'the progressive fixture is not a multi-scan file');
+
+  assert.doesNotThrow(() => assertCompleteContainer('jpeg', progressive));
+  assert.doesNotThrow(() => assertCompleteContainer('jpeg', Buffer.from(JPEG)));
+
+  const image = accepted(await prepareImage(progressive, 'jpeg'));
+  assert.equal(image.transcoded, true, 'a progressive JPEG skipped the lossy-WebP policy row');
+  assert.equal(image.format, 'webp');
+  assert.ok(image.bytes.length < progressive.length, 'the accepted progressive candidate is not smaller');
+
+  const truncated = progressive.subarray(0, progressive.length - 2);
+  assert.throws(
+    () => assertCompleteContainer('jpeg', truncated),
+    /incomplete/,
+    'a progressive JPEG without EOI passed the walk',
+  );
+  const refused = await prepareImage(Buffer.from(truncated), 'jpeg');
+  assert.equal(refused.ok, false, 'a truncated progressive JPEG was accepted');
+  if (!refused.ok) assert.equal(refused.reason, 'corrupt');
 });
 
 test('truncated containers are refused before a decoder can report partial success', async () => {
