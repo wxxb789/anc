@@ -76,6 +76,17 @@ export const ENCODER_SETTINGS = Object.freeze({
   colourspace: 'srgb',
 });
 
+/**
+ * libwebp's maximum supported dimension, `WEBP_MAX_DIMENSION` in
+ * `webp/encode.h`: 16383 pixels per side, inclusive.
+ *
+ * A source at or below this bound may have a WebP candidate; a valid image with
+ * either side above it cannot, so it must take the passthrough path rather than
+ * being mislabeled `corrupt` by the encoder. This is the library's format
+ * boundary, not a second project budget.
+ */
+export const WEBP_MAX_DIMENSION = 16_383;
+
 /** The per-call budgets one prepare invocation obeys. Tests inject smaller ones. */
 export interface MediaLimits {
   readonly maxSourceBytes: number;
@@ -366,6 +377,20 @@ export async function prepareImage(
   // (16-bit and other depths) is likewise published unchanged, even when an
   // 8-bit candidate would be smaller: that candidate is a visible reduction.
   if (format === 'png' && (isAnimatedPng(bytes) || !pngCanUseLosslessWebp(bytes))) {
+    return passthrough();
+  }
+
+  // WebP cannot represent a side above libwebp's 16,383-pixel limit. The source
+  // is valid, so publish it unchanged instead of asking the encoder for a
+  // candidate that cannot exist; the metadata read above already supplies the
+  // displayed dimensions, so this does not decode again.
+  let sourceDimensions: ImageDimensions;
+  try {
+    sourceDimensions = displayedDimensions(metadata);
+  } catch (error) {
+    return { ok: false, reason: classify(error) };
+  }
+  if (sourceDimensions.width > WEBP_MAX_DIMENSION || sourceDimensions.height > WEBP_MAX_DIMENSION) {
     return passthrough();
   }
 

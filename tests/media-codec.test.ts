@@ -29,6 +29,7 @@ import {
 import {
   ENCODER_SETTINGS,
   MEDIA_LIMITS,
+  WEBP_MAX_DIMENSION,
   prepareImage,
   type MediaLimits,
   type PreparedImage,
@@ -100,6 +101,23 @@ async function photograph(width = 640, height = 480): Promise<Buffer> {
   return sharp(raw, { raw: { width, height, channels: 3 } })
     .jpeg({ quality: 92, chromaSubsampling: '4:4:4' })
     .toBuffer();
+}
+
+/** A deterministic tall image, for WebP's dimension boundary and above it. */
+async function tallSource(width: number, height: number, format: 'jpeg' | 'png'): Promise<Buffer> {
+  const raw = Buffer.alloc(width * height * 3);
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 3;
+      raw[index] = (x * 3 + y * 7) & 0xff;
+      raw[index + 1] = (x * 11 + y * 5) & 0xff;
+      raw[index + 2] = (x * 7 + y * 13) & 0xff;
+    }
+  }
+  const source = sharp(raw, { raw: { width, height, channels: 3 } });
+  return format === 'jpeg'
+    ? source.jpeg({ quality: 90, chromaSubsampling: '4:4:4' }).toBuffer()
+    : source.png().toBuffer();
 }
 
 /** Decode both images to their displayed RGBA pixels, applying EXIF orientation. */
@@ -474,6 +492,46 @@ test('a 16-bit PNG is published unchanged instead of being reduced to 8-bit', as
   assert.equal((await sharp(candidate).metadata()).depth, 'uchar');
   assert.ok(candidate.length < source.length, 'the generated 16-bit fixture no longer proves the depth rule');
 });
+
+test('a source beyond WebP dimensions publishes unchanged; the boundary is exact', async () => {
+  const tallJpeg = await tallSource(100, 20_000, 'jpeg');
+  const tallPng = await tallSource(100, 20_000, 'png');
+  assert.equal((await sharp(tallPng).metadata()).depth, 'uchar', 'the tall PNG is not 8-bit');
+
+  for (const [source, format] of [
+    [tallJpeg, 'jpeg'],
+    [tallPng, 'png'],
+  ] as const) {
+    const image = accepted(await prepareImage(source, format));
+    assert.equal(image.transcoded, false, `${format}: a source beyond WebP dimensions was encoded`);
+    assert.equal(image.format, format);
+    assert.ok(image.bytes.equals(source), `${format}: the unrepresentable source changed bytes`);
+    assert.equal(image.dimensions?.height, 20_000);
+  }
+
+  for (const [name, source, format, cut] of [
+    ['tall JPEG', tallJpeg, 'jpeg', 2],
+    ['tall PNG', tallPng, 'png', 12],
+  ] as const) {
+    const truncated = source.subarray(0, source.length - cut);
+    const result = await prepareImage(Buffer.from(truncated), format);
+    assert.equal(result.ok, false, `${name} truncated to ${truncated.length} bytes was accepted`);
+    if (!result.ok) assert.equal(result.reason, 'corrupt', `${name}: a truncated source was not corrupt`);
+  }
+
+  const atLimit = await tallSource(100, WEBP_MAX_DIMENSION, 'jpeg');
+  const encoded = accepted(await prepareImage(atLimit, 'jpeg'));
+  assert.equal(encoded.transcoded, true, 'the inclusive WebP dimension was treated as unrepresentable');
+  assert.equal(encoded.format, 'webp');
+  assert.equal(encoded.dimensions?.height, WEBP_MAX_DIMENSION);
+  assert.ok(encoded.bytes.length < atLimit.length, 'the boundary source no longer has a smaller candidate');
+
+  const overLimit = await tallSource(100, WEBP_MAX_DIMENSION + 1, 'jpeg');
+  const retained = accepted(await prepareImage(overLimit, 'jpeg'));
+  assert.equal(retained.transcoded, false, 'one pixel past WebP dimensions was sent to the encoder');
+  assert.equal(retained.format, 'jpeg');
+  assert.ok(retained.bytes.equals(overLimit), 'the over-limit JPEG changed bytes');
+}, 30_000);
 
 test('an EXIF-rotated JPEG publishes upright, at its displayed size', async () => {
   const image = accepted(await prepareImage(Buffer.from(ORIENTED_JPEG), 'jpeg'));

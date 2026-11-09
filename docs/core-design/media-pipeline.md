@@ -203,8 +203,8 @@ Initial encoding policy is deliberately small:
 
 | Validated input | Initial candidate | Acceptance rule |
 | --- | --- | --- |
-| JPEG (ordinary photo) | Lossy WebP at quality 80, effort 4 | Keep WebP only if its emitted bytes are smaller; otherwise retain the original JPEG. Visual acceptability is a fixture-qualification gate, not a per-build comparison |
-| 8-bit PNG (screenshot, text, diagrams, alpha) | Lossless WebP, effort 4 | Compare actual published bytes with PNG; keep PNG if there is no saving. Lossless conversion preserves displayed pixels and alpha. Only 8-bit samples with a colour model WebP lossless carries faithfully |
+| JPEG (ordinary photo) | Lossy WebP at quality 80, effort 4 | Keep WebP only if its emitted bytes are smaller and libwebp can represent the dimensions; otherwise retain the original JPEG. Visual acceptability is a fixture-qualification gate, not a per-build comparison |
+| 8-bit PNG (screenshot, text, diagrams, alpha) | Lossless WebP, effort 4 | Compare actual published bytes with PNG; keep PNG if there is no saving or libwebp cannot represent the dimensions. Lossless conversion preserves displayed pixels and alpha. Only 8-bit samples with a colour model WebP lossless carries faithfully |
 | 16-bit or other-depth PNG | Unchanged | WebP lossless is 8-bit; an encoder candidate would reduce visible values. Publish the PNG bytes exactly |
 | Existing WebP or AVIF | Unchanged | Do not pay for speculative generation loss or re-encode an already effective format |
 | Animated GIF / animated WebP / animated PNG | Unchanged | No first-frame-only conversion, lost timing, changed loop count, or unreviewed full-animation encoder cost. APNG is detected structurally because sharp does not report its frame count |

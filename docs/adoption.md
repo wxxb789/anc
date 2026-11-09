@@ -198,6 +198,8 @@ preferred when it is worthwhile, not compulsory:
   replaces the PNG only when the lossless candidate is smaller, and the visible pixels and
   alpha are preserved exactly. A 16-bit PNG, or any PNG with a depth WebP lossless cannot
   carry without reducing values, is published unchanged as PNG.
+- WebP's 16,383-pixel-per-side limit is a representability bound: a JPEG or 8-bit PNG with
+  either side above it is published unchanged, not reported as corrupt.
 - An existing WebP or AVIF is published unchanged. So is every GIF, every animated WebP,
   and every animated PNG (APNG): no frame, delay, or loop count is altered, and no first
   frame is extracted. APNG frame extents are not fully validated, but its PNG chunk stream
