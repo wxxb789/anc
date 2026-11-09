@@ -10,24 +10,43 @@ project makes no backward-compatibility promise.
 ### Added
 
 - Local images referenced by a published note are published. PNG, JPEG, GIF, WebP, and AVIF
-  are copied byte-identically to `/_assets/<sha256>-<name>` and deduplicated by content, so
-  an animation keeps every frame and one picture is one file however many notes embed it.
+  are published under `/_assets/<sha256>-<name>` and deduplicated by content, so an animation
+  keeps every frame and one picture is one file however many notes embed it. (JPEG and PNG may
+  be replaced by a smaller WebP candidate; the entry below states that policy.)
   A reference resolves relative to the note and then to the content root, with no basename
   fallback. A missing, excluded, escaping, or unsupported image — an SVG included — fails
   the build rather than shipping a broken picture, and the previously built site stays in
-  place. Remote images are left as written and never fetched. No new configuration key,
-  dependency, deployment step, or browser script is added; the bytes are passthrough, so
-  this is not metadata scrubbing.
+  place. Remote images are left as written and never fetched. That change added no
+  configuration key, deployment step, or browser script; the 0011 entry below adds the
+  encoder and may replace JPEG/PNG bytes, while passthrough originals are not scrubbed.
+- Referenced JPEG and PNG images are published WebP-first when that is worthwhile, with no
+  author configuration. A JPEG photograph becomes lossy WebP at quality 80 / effort 4 and is
+  kept only when its emitted bytes are smaller; an 8-bit PNG screenshot, diagram, or alpha
+  graphic becomes **lossless** WebP and is kept only when smaller. A 16-bit or other-depth
+  PNG is published unchanged because WebP lossless cannot carry it without reducing visible
+  values. Existing WebP/AVIF, every GIF or animated WebP, and every APNG publish unchanged,
+  frame for frame. The encoder is pinned `sharp` 0.35.5 with its prebuilt platform packages:
+  no system CLI, `cwebp`, `libvips` install, new configuration key, browser script, resizing,
+  or responsive-variant matrix. Public identity is the SHA-256 of the emitted bytes, so
+  duplicate outputs deduplicate and unchanged builds keep their URLs. EXIF orientation is
+  applied before metadata removal on a transcode, dimensions come from the emitted bytes,
+  and output format, size, and orientation are validated. A structural completeness gate
+  checks every source before decoding — PNG chunk lengths, CRCs and final `IEND`; GIF trailer
+  and descriptor count; JPEG `EOI`; WebP RIFF size; AVIF boxes and primary extent — so
+  corrupt, truncated, or over-budget images fail the build under finite decoded-pixel,
+  source-byte, and deadline limits, preserving the previous output. **Passthrough originals
+  keep their metadata**, and ANC does not promise to scrub them.
 - A block image's explicit Markdown title — in its own paragraph or alone in a list item —
   becomes a visible `<figcaption>` inside a semantic `<figure>`; `alt` stays the
   accessible alternative and is never promoted to visible prose. Uncaptioned,
   decorative, inline, and link-wrapped images keep their existing markup. The build
   reads intrinsic PNG/JPEG/GIF/WebP/AVIF dimensions from the already-published bytes
-  and emits `width`/`height` so layout space is reserved; a malformed or truncated
-  header, or a JPEG/WebP/PNG EXIF or AVIF transform that changes the displayed
-  orientation, yields no attributes rather than a guess. The first image loads eagerly,
-  later images lazily, and all decode asynchronously, with no new dependency, browser
-  script, configuration key, or image metadata store.
+  and emits `width`/`height` so layout space is reserved; a malformed dimension header,
+  or a JPEG/WebP/PNG EXIF or AVIF transform that changes the displayed orientation,
+  yields no attributes rather than a guess. That is separate from source completeness:
+  a truncated container is a build failure. The first image loads eagerly, later images
+  lazily, and all decode asynchronously; that change added no dependency, browser script,
+  configuration key, or image metadata store.
 
 ### Changed
 

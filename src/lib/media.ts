@@ -4,21 +4,23 @@
  *
  * Goal 0009's contract in one sentence: **an image is published because a
  * published note references it, at a URL its content digest names, as the exact
- * bytes the author wrote.** Everything in this module serves that sentence and
- * nothing else is allowed to decide any of it.
+ * bytes the author wrote.** Goal 0011 keeps that authorization and identity
+ * boundary but changes which bytes are emitted for an ordinary JPEG or 8-bit
+ * PNG: a smaller WebP candidate may replace them. Everything in this module
+ * serves the publication decision and nothing else is allowed to make it.
  *
  * ## What is deliberately *not* here
  *
- * - **No transcoding, resizing, or metadata rewriting.** The bytes copied are
- *   the bytes on disk. A photograph keeps its EXIF and GPS tags, because
- *   removing them is a metadata-sanitization policy this phase does not claim
- *   and a future one must state separately. Do not describe 0009 as scrubbing
- *   metadata; it does not.
+ * - **No author-facing resize, crop, or metadata scrub.** The encoder may
+ *   remove metadata only on a transcode, where orientation is applied first.
+ *   Passthrough originals keep their EXIF and GPS tags. Do not describe
+ *   passthrough as scrubbing metadata; it is not.
  * - **No SVG.** An SVG can carry a script, and rasterization is Goal 0012's.
  *   `looksLikeSvg` exists only to give that refusal a diagnostic an author can
  *   act on, never to publish one.
- * - **No optimizer, no encoder, no dependency.** There is no image codec in
- *   this build; format detection reads signature bytes.
+ * - **One encoder decision.** `media-codec.ts` owns the WebP policy; this module
+ *   owns format identity, structural completeness, dimensions, resolution and
+ *   URL naming.
  *
  * ## Public identity is the digest, and the name is decoration
  *
@@ -48,7 +50,7 @@
  * nearest plausible file.
  */
 
-/** A raster format this build publishes unchanged. */
+/** A raster format this build can publish. */
 export type ImageFormat = 'png' | 'jpeg' | 'gif' | 'webp' | 'avif';
 
 interface ImageFormatInfo {
@@ -60,12 +62,12 @@ interface ImageFormatInfo {
 /**
  * The formats, and the extension each one publishes under.
  *
- * The extension is **derived from the detected bytes rather than from the source
+ * The extension is **derived from the emitted bytes rather than from the source
  * filename**, because a static host decides `Content-Type` from the extension.
  * `photo.jpeg` and `photo.jpg` are the same format and both publish as `.jpg`;
- * a PNG misnamed `diagram.jpg` publishes as `.png` rather than being served as
- * `image/jpeg` by every host that trusts the extension. The bytes are never
- * touched — only the name of the file they land in.
+ * a PNG misnamed `diagram.jpg` publishes as `.webp` when the policy keeps its
+ * candidate, or `.png` when it is retained. A static host never serves
+ * `image/jpeg` for bytes that are not JPEG.
  */
 const IMAGE_FORMATS: Readonly<Record<ImageFormat, ImageFormatInfo>> = {
   png: { extension: '.png', mime: 'image/png' },
@@ -324,9 +326,9 @@ function matchesAt(bytes: Uint8Array, offset: number, text: string): boolean {
  * an SVG named `diagram.png` is not a PNG.
  *
  * The signatures are the formats' own, and the function is deliberately not a
- * validator — a truncated PNG is detected as PNG here. Nothing in this phase
- * decodes the image (there is no codec), and the goal is passthrough, so the only
- * question asked is "which type is this to serve as".
+ * validator — a truncated PNG is detected as PNG here. Structural completeness
+ * is a separate gate, {@link assertCompleteContainer}, which runs before the
+ * decoder can turn a partial container into pixels.
  */
 export function sniffImageFormat(bytes: Uint8Array): ImageFormat | undefined {
   if (bytes.length >= 8 && bytes[0] === 0x89 && matchesAt(bytes, 1, 'PNG')) return 'png';
@@ -452,6 +454,29 @@ function exifOrientation(bytes: Uint8Array, start: number, end: number): ExifOri
   return undefined;
 }
 
+/** One PNG chunk's type and data bounds, from the chunk's length word. */
+interface PngChunk {
+  readonly type: string;
+  readonly dataStart: number;
+  readonly dataEnd: number;
+  readonly next: number;
+}
+
+/** The chunk at one offset, or `undefined` when its length/type header is absent. */
+function pngChunkAt(bytes: Uint8Array, offset: number): PngChunk | undefined {
+  if (offset + 8 > bytes.length) return undefined;
+  const length = u32be(bytes, offset);
+  const type = String.fromCharCode(
+    bytes[offset + 4]!,
+    bytes[offset + 5]!,
+    bytes[offset + 6]!,
+    bytes[offset + 7]!,
+  );
+  const dataStart = offset + 8;
+  const dataEnd = dataStart + length;
+  return { type, dataStart, dataEnd, next: dataEnd + 4 };
+}
+
 /**
  * PNG: signature, then a 13-byte `IHDR` chunk whose width and height are
  * big-endian.
@@ -471,29 +496,47 @@ function pngDimensions(bytes: Uint8Array): ImageDimensions | undefined {
 
   let offset = 8;
   while (offset + 8 <= bytes.length) {
-    const length = u32be(bytes, offset);
-    const type = String.fromCharCode(
-      bytes[offset + 4]!,
-      bytes[offset + 5]!,
-      bytes[offset + 6]!,
-      bytes[offset + 7]!,
-    );
-    const dataStart = offset + 8;
-    const dataEnd = dataStart + length;
-    if (dataEnd > bytes.length) {
+    const chunk = pngChunkAt(bytes, offset);
+    if (chunk === undefined) break;
+    if (chunk.dataEnd > bytes.length) {
       // A truncated metadata chunk is unreadable; a truncated file with no
       // eXIf encountered keeps its IHDR pair, exactly as Goal 0009 publishes it.
-      return type === 'eXIf' ? undefined : dimensions;
+      return chunk.type === 'eXIf' ? undefined : dimensions;
     }
-    if (type === 'eXIf') {
-      const tiffStart = matchesAt(bytes, dataStart, 'Exif\0\0') ? dataStart + 6 : dataStart;
-      const orientation = exifOrientation(bytes, tiffStart, dataEnd);
+    if (chunk.type === 'eXIf') {
+      const tiffStart = matchesAt(bytes, chunk.dataStart, 'Exif\0\0') ? chunk.dataStart + 6 : chunk.dataStart;
+      const orientation = exifOrientation(bytes, tiffStart, chunk.dataEnd);
       if (orientation === 'malformed' || (orientation !== undefined && orientation !== 1)) return undefined;
     }
-    if (type === 'IEND') break;
-    offset = dataEnd + 4;
+    if (chunk.type === 'IEND') break;
+    offset = chunk.next;
   }
   return dimensions;
+}
+
+/**
+ * Whether PNG bytes carry an `acTL` chunk, which makes them an animated PNG.
+ *
+ * Sharp's metadata does not report an APNG frame count (measured: `pages` is
+ * absent for a PNG whose `acTL` chunk precedes `IDAT`), so a publisher that
+ * inferred animation from `pages` would transcode the first frame and silently
+ * drop the animation. The walk is structural — lengths and type names at the
+ * same chunk boundaries {@link pngDimensions} uses — not a search for the four
+ * bytes inside compressed image data.
+ */
+export function isAnimatedPng(bytes: Uint8Array): boolean {
+  if (bytes.length < 8 || bytes[0] !== 0x89 || !matchesAt(bytes, 1, 'PNG')) return false;
+  let offset = 8;
+  while (offset + 8 <= bytes.length) {
+    const chunk = pngChunkAt(bytes, offset);
+    if (chunk === undefined || chunk.dataEnd > bytes.length) return false;
+    if (chunk.type === 'acTL') return true;
+    // `acTL` must precede the first image data; stopping here also bounds the
+    // walk on a malformed length that would otherwise step past the buffer.
+    if (chunk.type === 'IDAT' || chunk.type === 'IEND') return false;
+    offset = chunk.next;
+  }
+  return false;
 }
 
 /**
@@ -620,51 +663,53 @@ function webpDimensions(bytes: Uint8Array): ImageDimensions | undefined {
  * after `ispe`; this reader does not apply those transforms, so their presence
  * vetoes the pair. Properties associated with other items do not.
  */
-function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
-  interface Box {
-    readonly type: string;
-    readonly payload: number;
-    readonly end: number;
+interface IsoBox {
+  readonly type: string;
+  readonly payload: number;
+  readonly end: number;
+}
+
+/** One ISO BMFF box at `offset`, bounded by `end`. */
+function isoBoxAt(bytes: Uint8Array, offset: number, end: number): IsoBox | undefined {
+  if (offset + 8 > end) return undefined;
+  let size = u32be(bytes, offset);
+  const type = String.fromCharCode(
+    bytes[offset + 4]!,
+    bytes[offset + 5]!,
+    bytes[offset + 6]!,
+    bytes[offset + 7]!,
+  );
+  let header = 8;
+  if (size === 1) {
+    if (offset + 16 > end) return undefined;
+    const high = u32be(bytes, offset + 8);
+    const low = u32be(bytes, offset + 12);
+    size = high * 2 ** 32 + low;
+    header = 16;
+  } else if (size === 0) {
+    size = end - offset;
   }
+  if (size < header || !Number.isSafeInteger(size) || offset + size > end) {
+    return undefined;
+  }
+  return { type, payload: offset + header, end: offset + size };
+}
 
-  const boxAt = (offset: number, end: number): Box | undefined => {
-    if (offset + 8 > end) return undefined;
-    let size = u32be(bytes, offset);
-    const type = String.fromCharCode(
-      bytes[offset + 4]!,
-      bytes[offset + 5]!,
-      bytes[offset + 6]!,
-      bytes[offset + 7]!,
-    );
-    let header = 8;
-    if (size === 1) {
-      if (offset + 16 > end) return undefined;
-      const high = u32be(bytes, offset + 8);
-      const low = u32be(bytes, offset + 12);
-      size = high * 2 ** 32 + low;
-      header = 16;
-    } else if (size === 0) {
-      size = end - offset;
-    }
-    if (size < header || !Number.isSafeInteger(size) || offset + size > end) {
-      return undefined;
-    }
-    return { type, payload: offset + header, end: offset + size };
-  };
+/** Every sibling box from `start` to `end`; `undefined` if one overruns. */
+function isoBoxes(bytes: Uint8Array, start: number, end: number): IsoBox[] | undefined {
+  const boxes: IsoBox[] = [];
+  let offset = start;
+  while (offset < end) {
+    const box = isoBoxAt(bytes, offset, end);
+    if (box === undefined) return undefined;
+    boxes.push(box);
+    offset = box.end;
+  }
+  return boxes;
+}
 
-  const children = (start: number, end: number): Box[] | undefined => {
-    const boxes: Box[] = [];
-    let offset = start;
-    while (offset < end) {
-      const box = boxAt(offset, end);
-      if (box === undefined) return undefined;
-      boxes.push(box);
-      offset = box.end;
-    }
-    return boxes;
-  };
-
-  const top = children(0, bytes.length);
+function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
+  const top = isoBoxes(bytes, 0, bytes.length);
   if (top === undefined) return undefined;
   const metaBoxes = top.filter((box) => box.type === 'meta');
   if (metaBoxes.length !== 1) return undefined;
@@ -675,7 +720,7 @@ function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
   if (bytes[meta.payload + 1] !== 0 || bytes[meta.payload + 2] !== 0 || bytes[meta.payload + 3] !== 0) {
     return undefined;
   }
-  const metaChildren = children(meta.payload + 4, meta.end);
+  const metaChildren = isoBoxes(bytes, meta.payload + 4, meta.end);
   if (metaChildren === undefined) return undefined;
 
   const pitms = metaChildren.filter((box) => box.type === 'pitm');
@@ -701,7 +746,7 @@ function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
   const iprps = metaChildren.filter((box) => box.type === 'iprp');
   if (iprps.length !== 1) return undefined;
   const iprp = iprps[0]!;
-  const iprpChildren = children(iprp.payload, iprp.end);
+  const iprpChildren = isoBoxes(bytes, iprp.payload, iprp.end);
   if (iprpChildren === undefined) return undefined;
 
   const ipcos = iprpChildren.filter((box) => box.type === 'ipco');
@@ -709,7 +754,7 @@ function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
   if (ipcos.length !== 1 || ipmas.length !== 1) return undefined;
   const ipco = ipcos[0]!;
   const ipma = ipmas[0]!;
-  const properties = children(ipco.payload, ipco.end);
+  const properties = isoBoxes(bytes, ipco.payload, ipco.end);
   if (properties === undefined) return undefined;
 
   if (ipma.payload + 4 > ipma.end) return undefined;
@@ -762,7 +807,7 @@ function avifDimensions(bytes: Uint8Array): ImageDimensions | undefined {
   if (offset !== ipma.end || primaryAssociations === undefined) return undefined;
   if (indices.some((index) => index > properties.length)) return undefined;
 
-  let ispe: Box | undefined;
+  let ispe: IsoBox | undefined;
   let transformed = false;
   for (const index of primaryAssociations) {
     if (index === 0) continue;
@@ -809,6 +854,442 @@ export function imageDimensions(bytes: Uint8Array, format: ImageFormat): ImageDi
       return webpDimensions(bytes);
     case 'avif':
       return avifDimensions(bytes);
+  }
+}
+
+/**
+ * Whether an 8-bit PNG's colour model is one WebP lossless carries faithfully.
+ *
+ * WebP lossless is an 8-bit format. A 16-bit PNG — or any depth other than 8 —
+ * would be reduced by the encoder, changing visible values, so the policy
+ * publishes those bytes unchanged. The palette and grayscale colour types are
+ * still 8-bit samples; converting them to RGB8 preserves every displayed value.
+ */
+export function pngCanUseLosslessWebp(bytes: Uint8Array): boolean {
+  if (bytes.length < 26 || bytes[0] !== 0x89 || !matchesAt(bytes, 1, 'PNG')) return false;
+  if (u32be(bytes, 8) !== 13 || !matchesAt(bytes, 12, 'IHDR')) return false;
+  if (bytes[24] !== 8) return false;
+  return [0, 2, 3, 4, 6].includes(bytes[25]!);
+}
+
+/**
+ * What a completeness gate knows after its caller read the container header.
+ *
+ * GIF is the one format whose structural walk can be cross-checked against a
+ * decoded count: libvips reports how many image descriptors it saw, and a
+ * truncated animation reports fewer than the file's trailer promises. Other
+ * formats are structurally self-describing and need no expectation.
+ */
+export interface ContainerExpectation {
+  /** The page count the decoder reported; required for GIF's count check. */
+  readonly pages?: number;
+}
+
+/** The CRC-32 table PNG chunks use, built once. */
+const CRC32_TABLE: Uint32Array = (() => {
+  const table = new Uint32Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value & 1) === 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    table[index] = value >>> 0;
+  }
+  return table;
+})();
+
+/** CRC-32 over `[start, end)`, as PNG computes it over chunk type and data. */
+function crc32Of(bytes: Uint8Array, start: number, end: number): number {
+  let crc = 0xffffffff;
+  for (let index = start; index < end; index += 1) {
+    crc = CRC32_TABLE[(crc ^ bytes[index]!) & 0xff]! ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function failIncomplete(what: string): never {
+  throw new Error(`incomplete ${what} container`);
+}
+
+/**
+ * PNG: every chunk fits, each CRC-32 matches, and a zero-length `IEND` is the
+ * final chunk with no trailing bytes.
+ *
+ * This is what makes a truncated PNG a build failure rather than a plausible
+ * decode. Measured, libvips decodes a 96×96 PNG with its final 20 bytes missing
+ * and reports success; the chunk walk sees a short stream before libvips is
+ * asked. APNG still passes this walk: `fdAT` frames are chunks like any other,
+ * and their animation semantics remain 0011's disclosed limit.
+ */
+function pngComplete(bytes: Uint8Array): void {
+  if (bytes.length < 8 || bytes[0] !== 0x89 || !matchesAt(bytes, 1, 'PNG')) failIncomplete('PNG');
+  let offset = 8;
+  let first = true;
+  while (offset < bytes.length) {
+    const chunk = pngChunkAt(bytes, offset);
+    if (chunk === undefined || chunk.dataEnd > bytes.length || chunk.next > bytes.length) {
+      failIncomplete('PNG chunk');
+    }
+    if (first && (chunk.type !== 'IHDR' || chunk.dataEnd - chunk.dataStart !== 13)) {
+      failIncomplete('PNG header');
+    }
+    first = false;
+    if (crc32Of(bytes, offset + 4, chunk.dataEnd) !== u32be(bytes, chunk.dataEnd)) {
+      failIncomplete('PNG chunk CRC');
+    }
+    if (chunk.type === 'IEND') {
+      if (chunk.dataEnd !== chunk.dataStart) failIncomplete('PNG IEND');
+      if (chunk.next !== bytes.length) failIncomplete('PNG trailing');
+      return;
+    }
+    offset = chunk.next;
+  }
+  failIncomplete('PNG without IEND');
+}
+
+/**
+ * GIF: walk the block stream to the trailer and count image descriptors.
+ *
+ * A truncated GIF often keeps a decodable prefix; libvips then reports fewer
+ * pages and `raw()` agrees, so neither is evidence of completeness. The walk
+ * refuses a block that does not fit, a missing trailer, a trailer followed by a
+ * non-zero byte, and — when the caller supplies the decoder's page count — a
+ * descriptor count that disagrees with it.
+ */
+function gifComplete(bytes: Uint8Array, expectedPages: number | undefined): void {
+  if (bytes.length < 13) failIncomplete('GIF header');
+  if (!matchesAt(bytes, 0, 'GIF87a') && !matchesAt(bytes, 0, 'GIF89a')) failIncomplete('GIF signature');
+  const packed = bytes[10]!;
+  let offset = 13;
+  if ((packed & 0x80) !== 0) offset += 3 * (1 << ((packed & 0x07) + 1));
+  if (offset > bytes.length) failIncomplete('GIF colour table');
+
+  let descriptors = 0;
+  while (offset < bytes.length) {
+    const block = bytes[offset++]!;
+    if (block === 0x3b) {
+      for (let index = offset; index < bytes.length; index += 1) {
+        if (bytes[index] !== 0) failIncomplete('GIF after trailer');
+      }
+      if (descriptors === 0) failIncomplete('GIF without image');
+      if (expectedPages !== undefined && descriptors !== expectedPages) {
+        failIncomplete('GIF frame stream');
+      }
+      return;
+    }
+    if (block === 0x00) continue;
+    if (block === 0x21) {
+      if (offset >= bytes.length) failIncomplete('GIF extension');
+      offset += 1; // extension label
+      while (true) {
+        if (offset >= bytes.length) failIncomplete('GIF extension data');
+        const length = bytes[offset++]!;
+        if (length === 0) break;
+        if (offset + length > bytes.length) failIncomplete('GIF extension data');
+        offset += length;
+      }
+      continue;
+    }
+    if (block !== 0x2c) failIncomplete('GIF block');
+    if (offset + 9 > bytes.length) failIncomplete('GIF image descriptor');
+    const localPacked = bytes[offset + 8]!;
+    offset += 9;
+    if ((localPacked & 0x80) !== 0) offset += 3 * (1 << ((localPacked & 0x07) + 1));
+    if (offset > bytes.length) failIncomplete('GIF local colour table');
+    if (offset >= bytes.length) failIncomplete('GIF image data');
+    offset += 1; // LZW minimum code size
+    while (true) {
+      if (offset >= bytes.length) failIncomplete('GIF image data');
+      const length = bytes[offset++]!;
+      if (length === 0) break;
+      if (offset + length > bytes.length) failIncomplete('GIF image data');
+      offset += length;
+    }
+    descriptors += 1;
+  }
+  failIncomplete('GIF without trailer');
+}
+
+/**
+ * JPEG: walk every marker segment and require `EOI` exactly at the end.
+ *
+ * The scan's entropy-coded bytes are walked with stuffing and restart markers
+ * understood, so a `0xFFD9` inside compressed data is not a false end marker.
+ * A file missing its final two bytes fails here even when libvips decodes it.
+ */
+function jpegComplete(bytes: Uint8Array): void {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) failIncomplete('JPEG header');
+  let offset = 2;
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) failIncomplete('JPEG marker');
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) failIncomplete('JPEG marker');
+    const marker = bytes[offset++]!;
+    if (marker === 0xd9) {
+      if (offset !== bytes.length) failIncomplete('JPEG trailing');
+      return;
+    }
+    if (marker === 0x00 || marker === 0xd8) failIncomplete('JPEG marker');
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) failIncomplete('JPEG segment');
+    const length = u16be(bytes, offset);
+    if (length < 2 || offset + length > bytes.length) failIncomplete('JPEG segment');
+    if (marker === 0xda) {
+      offset += length;
+      let nextSegment = false;
+      while (offset < bytes.length) {
+        if (bytes[offset] !== 0xff) {
+          offset += 1;
+          continue;
+        }
+        let after = offset + 1;
+        while (after < bytes.length && bytes[after] === 0xff) after += 1;
+        if (after >= bytes.length) failIncomplete('JPEG scan');
+        const next = bytes[after]!;
+        if (next === 0x00 || (next >= 0xd0 && next <= 0xd7)) {
+          offset = after + 1;
+          continue;
+        }
+        if (next === 0xd9) {
+          if (after + 1 !== bytes.length) failIncomplete('JPEG trailing');
+          return;
+        }
+        // Resume at the marker's 0xFF prefix, not at the code byte `after`.
+        // The outer loop's invariant is `bytes[offset] === 0xff`; progressive
+        // JPEGs have several scans, so another DHT/SOS segment follows here.
+        offset = after - 1;
+        nextSegment = true;
+        break;
+      }
+      if (!nextSegment) failIncomplete('JPEG without EOI');
+      continue;
+    }
+    offset += length;
+  }
+  failIncomplete('JPEG without EOI');
+}
+
+/**
+ * WebP: RIFF's size is the whole file less 8 bytes, every chunk fits with its
+ * pad byte, and at least one bitstream chunk is present.
+ */
+function webpComplete(bytes: Uint8Array): void {
+  if (bytes.length < 12 || !matchesAt(bytes, 0, 'RIFF') || !matchesAt(bytes, 8, 'WEBP')) {
+    failIncomplete('WebP header');
+  }
+  if (u32le(bytes, 4) + 8 !== bytes.length) failIncomplete('WebP RIFF size');
+  let offset = 12;
+  let image = false;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) failIncomplete('WebP chunk');
+    const type = String.fromCharCode(
+      bytes[offset]!,
+      bytes[offset + 1]!,
+      bytes[offset + 2]!,
+      bytes[offset + 3]!,
+    );
+    const size = u32le(bytes, offset + 4);
+    const dataEnd = offset + 8 + size;
+    const next = dataEnd + (size & 1);
+    if (dataEnd > bytes.length || next > bytes.length) failIncomplete('WebP chunk');
+    if (type === 'VP8 ' || type === 'VP8L' || type === 'VP8X') image = true;
+    offset = next;
+  }
+  if (offset !== bytes.length || !image) failIncomplete('WebP image chunk');
+}
+
+/** The primary item ID `pitm` names, or `undefined` when the box is unusable. */
+function avifPrimaryItem(bytes: Uint8Array, meta: IsoBox): number | undefined {
+  const children = isoBoxes(bytes, meta.payload + 4, meta.end);
+  if (children === undefined) return undefined;
+  const pitms = children.filter((box) => box.type === 'pitm');
+  if (pitms.length !== 1) return undefined;
+  const pitm = pitms[0]!;
+  if (pitm.payload + 4 > pitm.end) return undefined;
+  if (bytes[pitm.payload + 1] !== 0 || bytes[pitm.payload + 2] !== 0 || bytes[pitm.payload + 3] !== 0) {
+    return undefined;
+  }
+  const version = bytes[pitm.payload]!;
+  if (version === 0) {
+    if (pitm.payload + 6 !== pitm.end) return undefined;
+    return u16be(bytes, pitm.payload + 4);
+  }
+  if (version === 1) {
+    if (pitm.payload + 8 !== pitm.end) return undefined;
+    return u32be(bytes, pitm.payload + 4);
+  }
+  return undefined;
+}
+
+interface AvifExtent {
+  readonly method: number;
+  readonly offset: number;
+  readonly length: number;
+}
+
+/**
+ * The primary item's `iloc` extents, with absolute file offsets.
+ *
+ * `iloc` versions 0-2 share a layout except for item-ID width and the optional
+ * construction method. Sizes are read as unsigned big-endian fields of the
+ * widths the box declares; an absent field (size 0) contributes zero.
+ * Construction method 0 addresses the file directly; method 1 addresses the
+ * payload of `meta/idat`. An item naming a non-zero data reference points at
+ * data outside this file and is not addressable by this gate.
+ */
+function avifPrimaryExtents(bytes: Uint8Array, meta: IsoBox, primary: number): AvifExtent[] | undefined {
+  const children = isoBoxes(bytes, meta.payload + 4, meta.end);
+  if (children === undefined) return undefined;
+  const ilocs = children.filter((box) => box.type === 'iloc');
+  if (ilocs.length !== 1) return undefined;
+  const iloc = ilocs[0]!;
+  if (iloc.payload + 6 > iloc.end) return undefined;
+  const version = bytes[iloc.payload]!;
+  if (version > 2) return undefined;
+  const offsetSize = bytes[iloc.payload + 4]! >>> 4;
+  const lengthSize = bytes[iloc.payload + 4]! & 0x0f;
+  const baseSize = bytes[iloc.payload + 5]! >>> 4;
+  const indexSize = version === 0 ? 0 : bytes[iloc.payload + 5]! & 0x0f;
+  if (offsetSize > 8 || lengthSize > 8 || baseSize > 8 || indexSize > 8) return undefined;
+
+  let cursor = iloc.payload + 6;
+  const take = (width: number): number | undefined => {
+    if (width === 0) return 0;
+    if (cursor + width > iloc.end) return undefined;
+    let value = 0;
+    for (let index = 0; index < width; index += 1) value = value * 256 + bytes[cursor++]!;
+    return Number.isSafeInteger(value) ? value : undefined;
+  };
+  const countWidth = version === 2 ? 4 : 2;
+  if (cursor + countWidth > iloc.end) return undefined;
+  const itemCount = countWidth === 2 ? u16be(bytes, cursor) : u32be(bytes, cursor);
+  cursor += countWidth;
+  const itemIdWidth = version === 2 ? 4 : 2;
+  const found: AvifExtent[] = [];
+
+  for (let item = 0; item < itemCount; item += 1) {
+    if (cursor + itemIdWidth > iloc.end) return undefined;
+    const itemId = itemIdWidth === 2 ? u16be(bytes, cursor) : u32be(bytes, cursor);
+    cursor += itemIdWidth;
+    let method = 0;
+    if (version !== 0) {
+      if (cursor + 2 > iloc.end) return undefined;
+      method = u16be(bytes, cursor) & 0x0f;
+      cursor += 2;
+    }
+    if (cursor + 2 > iloc.end) return undefined;
+    const dataReferenceIndex = u16be(bytes, cursor);
+    cursor += 2;
+    if (itemId === primary && dataReferenceIndex !== 0) return undefined;
+    const base = take(baseSize);
+    if (base === undefined || cursor + 2 > iloc.end) return undefined;
+    const extentCount = u16be(bytes, cursor);
+    cursor += 2;
+    // Every item's extents are walked even when it is not the primary one:
+    // stopping early would leave the cursor inside this item's record and make
+    // a valid multi-item `iloc` look truncated.
+    for (let extent = 0; extent < extentCount; extent += 1) {
+      if (version !== 0 && indexSize > 0) {
+        if (cursor + indexSize > iloc.end) return undefined;
+        cursor += indexSize;
+      }
+      const relative = take(offsetSize);
+      const length = take(lengthSize);
+      if (relative === undefined || length === undefined) return undefined;
+      if (!Number.isSafeInteger(base + relative)) return undefined;
+      if (itemId === primary) found.push({ method, offset: base + relative, length });
+    }
+  }
+  if (cursor !== iloc.end) return undefined;
+  return found;
+}
+
+/**
+ * AVIF: top-level boxes consume the file exactly, and each primary-item extent
+ * lies inside a container that its construction method names: a top-level
+ * `mdat` for method 0, or `meta/idat`'s payload for method 1. A file with
+ * neither container is incomplete; an extent may not span two containers.
+ */
+function avifComplete(bytes: Uint8Array): void {
+  const top = isoBoxes(bytes, 0, bytes.length);
+  if (top === undefined) failIncomplete('AVIF box stream');
+  const metas = top.filter((box) => box.type === 'meta');
+  if (metas.length !== 1) failIncomplete('AVIF meta box');
+  const meta = metas[0]!;
+  if (meta.payload + 4 > meta.end || bytes[meta.payload] !== 0) failIncomplete('AVIF meta header');
+  if (bytes[meta.payload + 1] !== 0 || bytes[meta.payload + 2] !== 0 || bytes[meta.payload + 3] !== 0) {
+    failIncomplete('AVIF meta header');
+  }
+  const primary = avifPrimaryItem(bytes, meta);
+  if (primary === undefined || primary === 0) failIncomplete('AVIF primary item');
+  const mdats = top.filter((box) => box.type === 'mdat');
+  const metaChildren = isoBoxes(bytes, meta.payload + 4, meta.end);
+  if (metaChildren === undefined) failIncomplete('AVIF meta children');
+  const idats = metaChildren.filter((box) => box.type === 'idat');
+  const extents = avifPrimaryExtents(bytes, meta, primary);
+  if (extents === undefined || extents.length === 0) failIncomplete('AVIF item location');
+  for (const extent of extents) {
+    if (extent.method !== 0 && extent.method !== 1) failIncomplete('AVIF item location method');
+    // Method 0 offsets are file-relative; method 1 offsets are relative to the
+    // idat payload the spec names. Both must end inside that same container;
+    // an extent never spans two.
+    const inside =
+      extent.method === 0
+        ? mdats.some(
+            (mdat) =>
+              extent.offset >= mdat.payload &&
+              extent.offset + extent.length <= mdat.end &&
+              Number.isSafeInteger(extent.offset + extent.length),
+          )
+        : idats.some((idat) => {
+            const start = idat.payload + extent.offset;
+            return (
+              start >= idat.payload &&
+              start + extent.length <= idat.end &&
+              Number.isSafeInteger(start + extent.length)
+            );
+          });
+    if (!inside) failIncomplete(extent.method === 0 ? 'AVIF mdat' : 'AVIF idat');
+  }
+}
+
+/**
+ * Refuse a structurally incomplete image container before a pixel decoder or
+ * encoder sees it.
+ *
+ * This is the gate that separates "the header parsed" from "the file is
+ * complete". Each format's own self-description is walked: PNG chunks and their
+ * CRCs, the GIF block stream and its descriptor count, JPEG markers through EOI,
+ * WebP's RIFF size and chunks, and AVIF's box tree with the primary item's
+ * `mdat` or `meta/idat` extent. A failure is the existing `corrupt` reason; no
+ * caller may publish the bytes anyway.
+ *
+ * An unreadable *dimension* header is still a different case: a complete
+ * container whose header this module cannot interpret publishes without
+ * `width`/`height` and does not fail the build. The distinction is between a
+ * missing hint and missing bytes.
+ */
+export function assertCompleteContainer(
+  format: ImageFormat,
+  bytes: Uint8Array,
+  expectation: ContainerExpectation = {},
+): void {
+  switch (format) {
+    case 'png':
+      pngComplete(bytes);
+      return;
+    case 'jpeg':
+      jpegComplete(bytes);
+      return;
+    case 'gif':
+      gifComplete(bytes, expectation.pages);
+      return;
+    case 'webp':
+      webpComplete(bytes);
+      return;
+    case 'avif':
+      avifComplete(bytes);
+      return;
   }
 }
 
@@ -1010,8 +1491,23 @@ export function resolveImageTarget(
  * - `unsupported` — a file whose bytes are not PNG/JPEG/GIF/WebP/AVIF.
  * - `html-form` — an `<img>` written as raw HTML, which the accepted resolver
  *   does not cover.
+ * - `corrupt` — bytes of a supported format that the decoder could not read.
+ * - `too-large` — the source exceeds the encoder's finite byte or decoded-pixel
+ *   budget. Goal 0011's bound, stated rather than discovered as an OOM.
+ * - `timeout` — a decode or encode exceeded its deadline.
+ * - `encode-failed` — the encoder returned bytes this build cannot publish and
+ *   cannot explain by the input alone. Never a silent fallback to the source.
  */
-export type MediaFailureReason = 'missing' | 'outside' | 'excluded' | 'svg' | 'unsupported' | 'html-form';
+export type MediaProcessingFailureReason = 'corrupt' | 'too-large' | 'timeout' | 'encode-failed';
+
+export type MediaFailureReason =
+  | 'missing'
+  | 'outside'
+  | 'excluded'
+  | 'svg'
+  | 'unsupported'
+  | 'html-form'
+  | MediaProcessingFailureReason;
 
 /** What publishing one local reference produced. */
 export type ImageOutcome =
@@ -1024,14 +1520,18 @@ export type ImageOutcome =
  *
  * `resolveLinksIn` owns *where* an image reference sits in a note; the publisher
  * owns *which bytes* it publishes and under what URL. Keeping the split means
- * the traversal stays a pure Markdown rewrite a test can drive without a
- * filesystem, while the one function that reads bytes lives with the producer
- * that owns the publication boundary.
+ * the traversal stays a Markdown rewrite a test can drive without a filesystem,
+ * while the one function that reads bytes lives with the producer that owns the
+ * publication boundary.
+ *
+ * `publish` is asynchronous because Goal 0011's encoder is: producing a WebP
+ * candidate cannot be done synchronously, and blocking the traversal on a
+ * second thread would replace one clear await with a deadlock risk.
  */
 export interface ImagePublisher {
   publish(request: {
     readonly notePath: string;
     readonly target: string;
     readonly isWikilink: boolean;
-  }): ImageOutcome;
+  }): Promise<ImageOutcome>;
 }

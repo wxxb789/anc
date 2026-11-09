@@ -194,15 +194,23 @@ a disclosure there; that is why the names and the counts are split.
 - Frontmatter can set `slug`, `language`, `description`, `tags`, and `aliases`.
   Aliases are public, searchable metadata with no route of their own — deliberately
   not alternate link targets.
-- Local images referenced by a published note are published. PNG, JPEG, GIF, WebP, and
-  AVIF are copied byte-identically to `/_assets/<sha256>-<name>` and deduplicated by
-  content, so an animation keeps its frames and one picture is one file however many notes
-  embed it. A reference resolves relative to the note, then the content root; a missing,
-  excluded, escaping, or unsupported one — SVG included — fails the build rather than
-  shipping a broken picture. Remote images are left as written and never fetched. A
-  standalone image's explicit Markdown title becomes a visible `<figcaption>` while `alt`
-  stays the accessible alternative, intrinsic dimensions are read from the published bytes
-  so layout space is reserved, and the first image loads eagerly while later ones defer.
+- Local images referenced by a published note are published under
+  `/_assets/<sha256>-<name>`, identified by the **emitted** bytes and deduplicated by content,
+  so one picture is one file however many notes embed it. A JPEG photograph becomes lossy
+  WebP only when the candidate is smaller; a PNG screenshot, diagram, or alpha graphic
+  becomes lossless WebP only when that is smaller. Existing WebP/AVIF and every animation
+  are published unchanged, with every frame and delay. No resize, crop, responsive matrix,
+  image CDN, browser script, or per-image setting exists. A reference resolves relative to
+  the note, then the content root; a missing, excluded, escaping, corrupt, over-limit, or
+  unsupported one — SVG included — fails the build rather than shipping a broken picture.
+  Remote images are left as written and never fetched. A standalone image's explicit
+  Markdown title becomes a visible `<figcaption>` while `alt` stays the accessible
+  alternative; intrinsic dimensions come from the emitted bytes so layout space is reserved,
+  and the first image loads eagerly while later ones defer.
+- The encoder is the pinned `sharp` package, installed as an ordinary dependency with its
+  prebuilt platform binary: no system CLI, `cwebp`, or `libvips` install step. Linux x64 is
+  the platform exercised by this repository's gates; Windows and macOS use sharp's prebuilt
+  packages but were not exercised here.
 
 ## Architecture
 

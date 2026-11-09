@@ -196,7 +196,8 @@ function snapshotOutput(root: string, workspace?: string): Set<string> {
  * bytes a build step dropped there.
  *
  * Each file is checked against the two things its URL claims: the digest prefix is
- * the SHA-256 of the bytes, and the extension is the format the bytes actually are.
+ * the SHA-256 of the **emitted** bytes (Goal 0011 may have replaced the source with
+ * a WebP candidate), and the extension is the format those bytes actually are.
  * A static host infers `Content-Type` from the extension, so a URL that disagrees
  * with its own bytes would be served as the wrong type by every host that trusts
  * the name — which is all of them.

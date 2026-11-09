@@ -382,11 +382,13 @@ const TEXT_NAMES: ReadonlySet<string> = new Set(['_headers', '_redirects']);
  * *unscanned by accident* — they are declared, which is what separates them from
  * a file kind nobody has considered.
  *
- * A published image is copied byte-identically (Goal 0009 does not transcode or
- * scrub metadata), so there is nothing in one for a marker search to find that
- * the author's own file did not already contain; credential scanning still runs
- * over the same bytes through Gitleaks, which is a different rule set with its
- * own false-positive policy.
+ * A published image is either a passthrough of the author's bytes or a WebP
+ * encoded from them. A passthrough can contain any marker the author's file
+ * already contained; a transcode is metadata-free but its pixels are the
+ * author's. Neither is a text surface a residue marker search can interpret, so
+ * the bytes are declared binary here; credential scanning still runs over the
+ * same bytes through Gitleaks, which is a different rule set with its own
+ * false-positive policy.
  */
 const BINARY_EXTENSIONS: ReadonlySet<string> = new Set([
   '.avif',

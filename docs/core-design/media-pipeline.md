@@ -1,12 +1,13 @@
 # Media processing and delivery
 
-Status: accepted **target design** for Goals 0009–0013, 2026-11-08.
-**Goals 0009 and 0010 are implemented and verified**; their completion records
-([0009](../goals/archive/0009-zero-config-static-images.md) and
-[0010](../goals/archive/0010-readable-image-figures.md)) carry the evidence.
-0011–0013 have not shipped, and this document is not evidence that they have: the
-sections below are the target for those outcomes, and the ones for 0009 and
-0010 describe the implemented contracts.
+Status: accepted design for Goals 0009–0013, 2026-11-08.
+**Goals 0009, 0010 and 0011 are implemented and verified**; their completion records
+([0009](../goals/archive/0009-zero-config-static-images.md),
+[0010](../goals/archive/0010-readable-image-figures.md) and
+[0011](../goals/archive/0011-webp-first-image-delivery.md)) carry the evidence.
+0012–0013 have not shipped, and this document is not evidence that they have: the
+sections below are the target for those outcomes, and the ones for 0009–0011 describe
+the implemented contracts.
 
 ## Product contract and ownership
 
@@ -42,7 +43,8 @@ Order of outcomes:
      the staged file keeps the raw bytes, so `#`, `&`, `?` and `%` round-trip
      through the artifact, the copy step, and the exact output inventory.
    - Bytes are copied byte-identically: no transcoding, resize, or metadata
-     rewrite. An animated GIF or WebP keeps every frame. **This phase is not
+     rewrite. (This is Goal 0009's contract; Goal 0011 adds a WebP candidate for
+     JPEG and PNG before publication, with the exemptions in its row below.) An animated GIF or WebP keeps every frame. **This phase is not
      metadata sanitization** — a passthrough photo keeps its EXIF/GPS, and a
      later privacy policy that strips it is a separate product decision.
    - The bytes are staged beside the private artifact and emitted after Astro
@@ -60,13 +62,14 @@ Order of outcomes:
    keeps its existing shape and gains no caption. The build reads intrinsic
    pixel dimensions from the already-authorized emitted bytes (PNG `IHDR`,
    JPEG `SOFn`, GIF logical screen descriptor, WebP `VP8`/`VP8L`/`VP8X`, AVIF
-   `ispe`) and emits `width`/`height`; a malformed or truncated header yields
-   neither attribute and does not fail the build. The first image in rendered
-   document order is `loading="eager"`; every later image is `loading="lazy"`;
-   all get `decoding="async"`. Identity, authorization, bytes, and the
-   `/_assets/<sha256>-<name>` URL are unchanged, no codec or new dependency is
-   added, and no browser script or SQLite metadata is introduced.
-3. **0011:** automatic WebP-preferred optimization, without changing how an
+   `ispe`) and emits `width`/`height`; a malformed dimension header yields
+   neither attribute and does not fail the build. That is a missing layout hint,
+   not an incomplete file: an incomplete source container is refused before it
+   can publish (see the 0011 completeness gate below). The first image in
+   rendered document order is `loading="eager"`; every later image is
+   `loading="lazy"`; all get `decoding="async"`. The 0010 change itself added no
+   codec or dependency and no browser script or SQLite metadata.
+3. **0011 — shipped:** automatic WebP-preferred delivery, without changing how an
    author embeds an image or where it is hosted.
 4. **0012:** self-contained *static* SVG is accepted as **build-only input** and
    becomes WebP; the original SVG is never served.
@@ -164,11 +167,13 @@ The implemented reading rules are deliberately narrow:
   publishing; the artifact carries it as private IR beside the public URL. The
   renderer emits `width`/`height` and the global CSS keeps `max-width: 100%;
   height: auto`, so a portrait, a wide screenshot, and transparent artwork
-  reserve their ratio without overflow or distortion. A malformed or truncated
-  header yields no attributes, never a build failure and never a guess. So does an
-  orientation or transform that would make the stored pixels differ from the
-  displayed pixels — a JPEG/WebP/PNG EXIF orientation other than 1, or an AVIF
-  `irot`/`imir` — because a transposed pair would reserve the wrong box.
+  reserve their ratio without overflow or distortion. A malformed dimension
+  header yields no attributes, never a guess. It does not fail the build on its
+  own, but it does not excuse an incomplete container: the completeness gate
+  described under 0011 refuses truncated source bytes before publication. So
+  does an orientation or transform that would make the stored pixels differ from
+  the displayed pixels — a JPEG/WebP/PNG EXIF orientation other than 1, or an
+  AVIF `irot`/`imir` — because a transposed pair would reserve the wrong box.
 - **Loading follows rendered order.** The first `<img>` that keeps a source is
   `loading="eager"`; every later one is `loading="lazy"`; all are
   `decoding="async"`. No IntersectionObserver, placeholder script, or client-side
@@ -180,6 +185,17 @@ The implemented reading rules are deliberately narrow:
 
 ## 0011 — Automatic WebP-preferred raster policy
 
+**Implemented 2026-11-09** by `src/lib/media-codec.ts` and the producer's existing
+authorization point in `scripts/markdown-to-artifact.ts`. The table below is the shipped
+decision. Settings are quality 80 / effort 4 for JPEG and lossless effort 4 for PNG,
+applied after `autoOrient()` and a conversion to sRGB. Finite limits are 32 MiB per source,
+50 megapixels per frame, 50 megapixels across an animation, and 20-second decode/encode
+deadlines, with no `unlimited` opt-out. The per-build cache is keyed by source digest alone
+(encoder settings are fixed module constants), identity is the emitted SHA-256, and the
+hostile-input, orientation,
+alpha and colour evidence is in the
+[0011 completion record](../goals/archive/0011-webp-first-image-delivery.md).
+
 Source bytes are identified by validated content and actual supported image
 format, never trusted merely because of an extension. No image is automatically
 resized, cropped, sharpened, animated, or made into several responsive variants.
@@ -187,11 +203,27 @@ Initial encoding policy is deliberately small:
 
 | Validated input | Initial candidate | Acceptance rule |
 | --- | --- | --- |
-| JPEG (ordinary photo) | Lossy WebP, start near sharp's quality 80 and default effort 4 | Keep WebP only if it is smaller and visual review confirms no material degradation; otherwise retain original JPEG |
-| PNG (screenshot, text, diagrams, alpha) | Lossless WebP | Compare actual published bytes with PNG; preserve exact visible detail and alpha, keep PNG if no saving |
+| JPEG (ordinary photo) | Lossy WebP at quality 80, effort 4 | Keep WebP only if its emitted bytes are smaller and libwebp can represent the dimensions; otherwise retain the original JPEG. Visual acceptability is a fixture-qualification gate, not a per-build comparison |
+| 8-bit PNG (screenshot, text, diagrams, alpha) | Lossless WebP, effort 4 | Compare actual published bytes with PNG; keep PNG if there is no saving or libwebp cannot represent the dimensions. Lossless conversion preserves displayed pixels and alpha. Only 8-bit samples with a colour model WebP lossless carries faithfully |
+| 16-bit or other-depth PNG | Unchanged | WebP lossless is 8-bit; an encoder candidate would reduce visible values. Publish the PNG bytes exactly |
 | Existing WebP or AVIF | Unchanged | Do not pay for speculative generation loss or re-encode an already effective format |
-| Animated GIF / animated WebP | Unchanged | No first-frame-only conversion, lost timing, changed loop count, or unreviewed full-animation encoder cost |
-| Any decoded invalid/corrupt or unsupported image | Build failure | Never put unidentified or unsafe bytes into public assets |
+| Animated GIF / animated WebP / animated PNG | Unchanged | No first-frame-only conversion, lost timing, changed loop count, or unreviewed full-animation encoder cost. APNG is detected structurally because sharp does not report its frame count |
+| Static GIF | Unchanged | No policy row selects an encoder for it; the file is copied byte-identically |
+| Any decoded invalid/corrupt or structurally incomplete image | Build failure | Never put unidentified, truncated, or unsafe bytes into public assets. A header read is not evidence the container is complete |
+
+Before any image reaches a pixel decode or encoder, one structural gate checks the container
+the bytes claim to be: PNG chunks are walked with their CRC-32 checks and a
+final zero-length `IEND` with no trailing bytes; GIF is walked to its trailer
+and its image-descriptor count must match the decoded page count; JPEG markers
+must reach `EOI` exactly at the end; WebP's RIFF size must be the whole file and
+every chunk must fit; AVIF top-level boxes must consume the file exactly and the
+primary item's extent must lie inside the `mdat` or `meta/idat` payload its
+construction method names. A failure is the
+existing `corrupt` reason, never a fallback to publishing the bytes. This is
+required because libvips decodes a truncated PNG prefix and a partial GIF
+successfully: decoder success alone is not container completeness. APNG's
+frame-extent semantics remain the disclosed limit, but its PNG chunk stream is
+still walked.
 
 The approximately 80-quality JPEG setting and effort 4 are **initial encoder
 settings**, not a universal proof of visual quality or an immutable user-facing

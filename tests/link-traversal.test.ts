@@ -93,7 +93,7 @@ const MEDIA: ReadonlyMap<string, string> = new Map([
 /** The publisher the traversal is given: virtual paths in, URLs out. */
 function virtualPublisher(media: ReadonlyMap<string, string> = MEDIA): ImagePublisher {
   return {
-    publish({ notePath, target, isWikilink }) {
+    async publish({ notePath, target, isWikilink }) {
       const resolved = resolveImageTarget(
         target,
         notePath,
@@ -109,20 +109,20 @@ function virtualPublisher(media: ReadonlyMap<string, string> = MEDIA): ImagePubl
 }
 
 /** Resolve one body written at one path, against {@link CORPUS}. */
-function traverse(markdown: string, source = 'index.md', slug = 'index', media = virtualPublisher()) {
+async function traverse(markdown: string, source = 'index.md', slug = 'index', media = virtualPublisher()) {
   return resolveLinksIn(markdown, source, indexCorpus(CORPUS), slug, (target) => `/${target}/`, media);
 }
 
-test('a standard Markdown link contributes an edge, which it did not before', () => {
+test('a standard Markdown link contributes an edge, which it did not before', async () => {
   // The defect this ticket removes, stated as the plan states it:
   // `{markdown: 'See [B](/b/).', outgoing: []}` was a valid entry — a live
   // anchor with no backlink on B, and no gate anywhere that could see it.
-  const result = traverse('See [beta](notes/beta.md) for more.');
+  const result = await traverse('See [beta](notes/beta.md) for more.');
   assert.deepEqual(result.outgoing, ['notes-beta']);
   assert.equal(result.markdown, 'See [beta](/notes-beta/) for more.');
 });
 
-test('one traversal produces the edge and the href, for every form at once', () => {
+test('one traversal produces the edge and the href, for every form at once', async () => {
   // Five forms in one body, and the assertion is the *pair*: each form's href
   // and its edge. A rewrite without an edge, or an edge without a rewrite,
   // fails here — which is what makes this a gate on the single resolution
@@ -137,7 +137,7 @@ test('one traversal produces the edge and the href, for every form at once', () 
     'Labelled [[notes/beta|shown]] here.',
   ].join('\n');
 
-  const result = traverse(body, 'notes/alpha.md', 'notes-alpha');
+  const result = await traverse(body, 'notes/alpha.md', 'notes-alpha');
 
   // Every edge, by content and not by count: two wrong edges of the same
   // cardinality is exactly the failure a length check passes. `[[alpha]]` from
@@ -161,7 +161,7 @@ test('one traversal produces the edge and the href, for every form at once', () 
   assert.ok(!result.markdown.includes('[['), 'a wikilink survived the traversal');
 });
 
-test('a link inside a code fence is neither rewritten nor an edge', () => {
+test('a link inside a code fence is neither rewritten nor an edge', async () => {
   // `export.py` ran a regex over raw Markdown, so a note *documenting* wikilink
   // syntax had its own examples rewritten and a phantom edge injected into
   // `outgoing` — which `checkCorpus` then proved symmetric and passed. Asserted
@@ -178,7 +178,7 @@ test('a link inside a code fence is neither rewritten nor an edge', () => {
     '```',
   ].join('\n');
 
-  const result = traverse(body);
+  const result = await traverse(body);
   assert.deepEqual(result.outgoing, ['notes-beta']);
   // The fence's own bytes survive, brackets and all.
   assert.ok(result.markdown.includes('```text\n[[notes/alpha]]\n[link](notes/alpha.md)\n```'));
@@ -198,7 +198,7 @@ test('a link inside a code fence is neither rewritten nor an edge', () => {
   );
 });
 
-test('a percent sign in a wikilink is not decoded, and one in an href is', () => {
+test('a percent sign in a wikilink is not decoded, and one in an href is', async () => {
   // The two syntaxes differ in exactly one place, and this is it. A wikilink is
   // not percent-encoded, so decoding one corrupts what the author typed:
   // `[[100% done]]` would become `[[100 done]]` under a naive decode, or throw
@@ -212,24 +212,24 @@ test('a percent sign in a wikilink is not decoded, and one in an href is', () =>
     { path: '100% done.md', slug: 'done' },
     { path: 'two words.md', slug: 'two-words' },
   ];
-  const run = (body: string) =>
+  const run = async (body: string) =>
     resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher());
 
   // The wikilink is used verbatim: `100% done` is a real filename.
-  assert.equal(run('See [[100% done]].').markdown, 'See [100% done](/done/).');
+  assert.equal((await run('See [[100% done]].')).markdown, 'See [100% done](/done/).');
   // The href is decoded: `%20` is a space.
-  assert.equal(run('See [x](two%20words.md).').markdown, 'See [x](/two-words/).');
+  assert.equal((await run('See [x](two%20words.md).')).markdown, 'See [x](/two-words/).');
   // And a wikilink carrying what looks like an escape is *not* decoded — under
   // a decode this resolves to `two words.md` and silently links somewhere the
   // author did not name.
-  assert.equal(run('See [[two%20words]].').findings[0]?.outcome, 'unresolved');
+  assert.equal((await run('See [[two%20words]].')).findings[0]?.outcome, 'unresolved');
 });
 
-test('an unresolved link degrades to its display text and is reported', () => {
+test('an unresolved link degrades to its display text and is reported', async () => {
   // Not silently dropped and not left as a live-looking dead anchor. The
   // finding carries the text and the position, never a count — "zero because
   // there were none" and "zero because I never looked" are the same number.
-  const result = traverse('# T\n\nSee [[nothing-here]] and [the label](gone.md).');
+  const result = await traverse('# T\n\nSee [[nothing-here]] and [the label](gone.md).');
 
   assert.deepEqual(result.outgoing, []);
   assert.match(result.markdown, /See nothing-here and the label\./);
@@ -246,7 +246,7 @@ test('an unresolved link degrades to its display text and is reported', () => {
   assert.ok(result.findings.every((finding) => finding.candidates === undefined));
 });
 
-test('a link to an excluded note is a publication-boundary event, not a broken link', () => {
+test('a link to an excluded note is a publication-boundary event, not a broken link', async () => {
   // The most useful line in the report: the user excluded a note that something
   // links to. It is the mistyped-exclusion hazard seen from the other side, and
   // merging it with `unresolved` would hide it.
@@ -258,7 +258,7 @@ test('a link to an excluded note is a publication-boundary event, not a broken l
   // is the corpus's one media file) or stops the build; it is never a `/private/`
   // link. Keeping the old assertion would have pinned the behaviour the goal
   // replaced.
-  const result = traverse('See [[secret]] and ![[assets/diagram.png]].');
+  const result = await traverse('See [[secret]] and ![[assets/diagram.png]].');
 
   assert.deepEqual(result.outgoing, []);
   assert.deepEqual(
@@ -276,8 +276,8 @@ test('a link to an excluded note is a publication-boundary event, not a broken l
   assert.equal(result.markdown, `See [secret](/private/) and ![assets/diagram.png](${DIAGRAM_URL}).`);
 });
 
-test('an ambiguous link renders, and the finding names every candidate and the winner', () => {
-  const result = traverse('See [[alpha]].', 'index.md', 'index');
+test('an ambiguous link renders, and the finding names every candidate and the winner', async () => {
+  const result = await traverse('See [[alpha]].', 'index.md', 'index');
 
   // It renders — ambiguity warns, it does not fail. The winner matches the
   // oracle: from a corpus-root source every candidate is "near", so tier 5
@@ -295,8 +295,8 @@ test('an ambiguous link renders, and the finding names every candidate and the w
   assert.equal(finding.resolvedTo, 'notes/alpha.md');
 });
 
-test('a resolved link produces no finding, so the report is readable', () => {
-  const result = traverse('See [[notes/beta]] and [x](https://example.com/) and [y](#local).');
+test('a resolved link produces no finding, so the report is readable', async () => {
+  const result = await traverse('See [[notes/beta]] and [x](https://example.com/) and [y](#local).');
   assert.deepEqual(result.findings, []);
   assert.deepEqual(result.outgoing, ['notes-beta']);
   // External links and bare fragments are untouched, byte for byte.
@@ -304,16 +304,16 @@ test('a resolved link produces no finding, so the report is readable', () => {
   assert.ok(result.markdown.includes('[y](#local)'));
 });
 
-test('a note linking to its own heading renders the link and contributes no edge', () => {
+test('a note linking to its own heading renders the link and contributes no edge', async () => {
   // `checkCorpus` rejects an entry listing itself in `outgoing`, and a note
   // linking to its own section is an ordinary thing to write. The link is real,
   // so it renders; it is simply not an edge.
-  const result = traverse('See [[index#Some Section]].', 'index.md', 'index');
+  const result = await traverse('See [[index#Some Section]].', 'index.md', 'index');
   assert.deepEqual(result.outgoing, []);
   assert.equal(result.markdown, 'See [index#Some Section](/index/#some-section).');
 });
 
-test('an undisplayed wikilink keeps the text its author typed', () => {
+test('an undisplayed wikilink keeps the text its author typed', async () => {
   // Obsidian derives a display string for a subpath link by splitting on `#`
   // and joining with ` > `, so `[[note#head]]` shows as `note > head`. That is
   // deliberately **not** reproduced: it is a rendering convention rather than a
@@ -322,30 +322,30 @@ test('an undisplayed wikilink keeps the text its author typed', () => {
   // The `|` form exists for authors who want different text, and it is honoured
   // exactly.
   assert.equal(
-    traverse('See [[notes/beta#Deep Heading]].').markdown,
+    (await traverse('See [[notes/beta#Deep Heading]].')).markdown,
     'See [notes/beta#Deep Heading](/notes-beta/#deep-heading).',
   );
   assert.equal(
-    traverse('See [[notes/beta#Deep Heading|the deep bit]].').markdown,
+    (await traverse('See [[notes/beta#Deep Heading|the deep bit]].')).markdown,
     'See [the deep bit](/notes-beta/#deep-heading).',
   );
 });
 
-test('a subpath becomes this site own anchor, on the target route', () => {
-  const result = traverse('See [[notes/beta#Deep Heading]].');
+test('a subpath becomes this site own anchor, on the target route', async () => {
+  const result = await traverse('See [[notes/beta#Deep Heading]].');
   assert.match(result.markdown, /\(\/notes-beta\/#deep-heading\)/);
   assert.deepEqual(result.outgoing, ['notes-beta']);
 });
 
-test('inline markup inside a degraded label survives', () => {
+test('inline markup inside a degraded label survives', async () => {
   // The label is taken from the node's own child span rather than reconstructed
   // from its text, so `**bold**` degrades to `**bold**` and not to `bold`.
-  const result = traverse('Try [**bold** and `code`](gone.md).');
+  const result = await traverse('Try [**bold** and `code`](gone.md).');
   assert.equal(result.markdown, 'Try **bold** and `code`.');
 });
 
-test('the same target linked twice is one edge, and both links are rewritten', () => {
-  const result = traverse('One [[notes/beta]] two [again](notes/beta.md) three [[notes/beta|x]].');
+test('the same target linked twice is one edge, and both links are rewritten', async () => {
+  const result = await traverse('One [[notes/beta]] two [again](notes/beta.md) three [[notes/beta|x]].');
   assert.deepEqual(result.outgoing, ['notes-beta']);
   assert.equal(
     result.markdown,
@@ -353,12 +353,12 @@ test('the same target linked twice is one edge, and both links are rewritten', (
   );
 });
 
-test('an embed of a note becomes a link rather than an image, and says so', () => {
+test('an embed of a note becomes a link rather than an image, and says so', async () => {
   // Obsidian transcludes `![[note]]`; nothing here does, and an `<img src>`
   // pointing at an HTML page is the one outcome that is certainly wrong. The
   // demotion is reported rather than left for the author to discover as a
   // missing image.
-  const result = traverse('Embedded ![[notes/beta]] here.');
+  const result = await traverse('Embedded ![[notes/beta]] here.');
   assert.equal(result.markdown, 'Embedded [notes/beta](/notes-beta/) here.');
   assert.deepEqual(result.outgoing, ['notes-beta']);
   assert.deepEqual(
@@ -367,11 +367,11 @@ test('an embed of a note becomes a link rather than an image, and says so', () =
   );
 });
 
-test('a CJK body keeps its bytes, and its links still resolve', () => {
+test('a CJK body keeps its bytes, and its links still resolve', async () => {
   // Node positions are UTF-16 offsets into the exact string handed to the
   // parser, so a body whose links sit after multi-byte text is where an
   // offset-arithmetic mistake shows up as text sliced mid-character.
-  const result = traverse('中文段落，参见 [[notes/beta]]，以及 [标签](notes/alpha.md)。结束。');
+  const result = await traverse('中文段落，参见 [[notes/beta]]，以及 [标签](notes/alpha.md)。结束。');
   assert.equal(
     result.markdown,
     '中文段落，参见 [notes/beta](/notes-beta/)，以及 [标签](/notes-alpha/)。结束。',
@@ -379,9 +379,9 @@ test('a CJK body keeps its bytes, and its links still resolve', () => {
   assert.deepEqual([...result.outgoing].sort(), ['notes-alpha', 'notes-beta']);
 });
 
-test('every finding carries a line a reader can open the file at', () => {
+test('every finding carries a line a reader can open the file at', async () => {
   const body = ['# T', '', 'first [[gone-one]]', '', 'and', '', 'later [[gone-two]]'].join('\n');
-  const result = traverse(body);
+  const result = await traverse(body);
   assert.deepEqual(
     result.findings.map((finding) => [finding.link, finding.line]),
     [
@@ -566,7 +566,7 @@ test('a report with nothing to say still has a links array', () => {
   });
 });
 
-test('a linked image builds, which is the badge every README opens with', () => {
+test('a linked image builds, which is the badge every README opens with', async () => {
   // Measured across three drafts of the link traversal, and each fixed one
   // defect by introducing the next:
   //
@@ -586,7 +586,7 @@ test('a linked image builds, which is the badge every README opens with', () => 
   // publishing it: the badge keeps the anchor and the image, and the standalone
   // form keeps the image. The nesting property draft 3 established is what still
   // makes that possible, and it is asserted here on the same fixture.
-  const result = traverse('Badge: [![logo](assets/diagram.png)](notes/beta.md)');
+  const result = await traverse('Badge: [![logo](assets/diagram.png)](notes/beta.md)');
   assert.equal(result.markdown, `Badge: [![logo](${DIAGRAM_URL})](/notes-beta/)`);
   assert.deepEqual(result.outgoing, ['notes-beta']);
   assert.deepEqual(result.findings, []);
@@ -594,22 +594,22 @@ test('a linked image builds, which is the badge every README opens with', () => 
 
   // The two forms of the same image agree, which is the property draft 2 broke
   // and a gate on the badge alone cannot see.
-  assert.equal(traverse('![logo](assets/diagram.png)').markdown, `![logo](${DIAGRAM_URL})`);
+  assert.equal((await traverse('![logo](assets/diagram.png)')).markdown, `![logo](${DIAGRAM_URL})`);
 
   // An external image inside a link keeps its markup, which is what proves the
   // fix did not simply strip every nested node.
-  const external = traverse('Badge: [![b](https://img.example/x)](notes/beta.md)');
+  const external = await traverse('Badge: [![b](https://img.example/x)](notes/beta.md)');
   assert.equal(external.markdown, 'Badge: [![b](https://img.example/x)](/notes-beta/)');
 
   // An outer link that itself degrades still degrades — and does not throw,
   // which drafts 1 and 3 both did before the split reached this branch. The
   // nested image has already published; what the reader loses is the anchor.
-  assert.equal(traverse('[![logo](assets/diagram.png)](gone.md)').markdown, `![logo](${DIAGRAM_URL})`);
+  assert.equal((await traverse('[![logo](assets/diagram.png)](gone.md)')).markdown, `![logo](${DIAGRAM_URL})`);
 
   // Prose around a nested node survives. Draft 2's fix, applied naively,
   // deleted it.
   assert.equal(
-    traverse('[text with ![i](assets/diagram.png) inside](notes/beta.md)').markdown,
+    (await traverse('[text with ![i](assets/diagram.png) inside](notes/beta.md)')).markdown,
     `[text with ![i](${DIAGRAM_URL}) inside](/notes-beta/)`,
   );
 });
@@ -795,7 +795,7 @@ test('every withheld link form is live, keeps its label, and ships no withheld b
   });
 });
 
-test('every spelling of a withheld target renders as one live link, label intact', () => {
+test('every spelling of a withheld target renders as one live link, label intact', async () => {
   // **Replaces "an unpublished target path does not enter the body, even
   // undisplayed", which held the reduction the owner reversed on 2026-08-17.**
   // What that gate protected: the withheld note's *directory* never reached the
@@ -852,7 +852,7 @@ test('every spelling of a withheld target renders as one live link, label intact
       'I [drafts/secret%20plan.md](/private/) end',
     ],
   ] as const) {
-    assert.equal(run(body).markdown, expected, `${body} did not render as one live withheld link`);
+    assert.equal((await run(body)).markdown, expected, `${body} did not render as one live withheld link`);
   }
 
   // And the destination is the constant the site reserves, not a literal spelled
@@ -860,12 +860,12 @@ test('every spelling of a withheld target renders as one live link, label intact
   // rename of the route would leave nine green rows describing a page that no
   // longer exists.
   assert.ok(
-    run('J [[drafts/secret plan]] end').markdown.includes(`](${WITHHELD_ROUTE})`),
+    (await run('J [[drafts/secret plan]] end')).markdown.includes(`](${WITHHELD_ROUTE})`),
     'the withheld link does not point at the route the site reserves for it',
   );
 });
 
-test('a withheld node inside a reference link does not open an anchor inside one', () => {
+test('a withheld node inside a reference link does not open an anchor inside one', async () => {
   // **The defect this exists for was shipped and found by review.** The nesting
   // set was filled by testing `node.type === 'link' || node.type === 'image'` —
   // the two types this walk *rewrites* — and mdast's reference-style link is
@@ -888,8 +888,8 @@ test('a withheld node inside a reference link does not open an anchor inside one
     { path: 'assets/badge.png', slug: undefined },
     { path: 'drafts/secret.md', slug: undefined },
   ];
-  const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
+  const run = async (body: string) =>
+    (await resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher())).markdown;
 
   const definition = '\n\n[ci]: https://ci.example/\n';
   for (const [body, expected, what] of [
@@ -927,20 +927,20 @@ test('a withheld node inside a reference link does not open an anchor inside one
       'a reference link wrapping an external image',
     ],
   ] as const) {
-    assert.equal(run(body), expected, `${what} was rewritten wrongly`);
+    assert.equal(await run(body), expected, `${what} was rewritten wrongly`);
   }
 
   // Non-vacuity: the same image *outside* a reference link publishes too, so the
   // row above is a statement about the reference form rather than about a build
   // that stopped publishing images.
   assert.equal(
-    run('C ![build](assets/badge.png) end'),
+    await run('C ![build](assets/badge.png) end'),
     `C ![build](/_assets/${'c'.repeat(64)}-badge.png) end`,
     'the unnested form did not publish, so the row above proves nothing about the reference form',
   );
 });
 
-test('a withheld link with no label of its own still has an accessible name', () => {
+test('a withheld link with no label of its own still has an accessible name', async () => {
   // `[](note.md)` carries no label at all. Under the rule this replaced it
   // degraded to nothing and the shape did not exist; now it is an anchor, and an
   // anchor with no text is announced by a screen reader as its URL. Measured
@@ -962,11 +962,11 @@ test('a withheld link with no label of its own still has an accessible name', ()
     { path: 'src.md', slug: 'src' },
     { path: 'drafts/secret.md', slug: undefined },
   ];
-  const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
+  const run = async (body: string) =>
+    (await resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher())).markdown;
 
   assert.equal(
-    run('[](drafts/secret.md) end'),
+    await run('[](drafts/secret.md) end'),
     `[${WITHHELD_LINK_TEXT}](${WITHHELD_ROUTE}) end`,
     'an unlabelled withheld link produced an anchor with no accessible name',
   );
@@ -974,7 +974,7 @@ test('a withheld link with no label of its own still has an accessible name', ()
   // And a label the author *did* write is never replaced by the fallback, which
   // is what stops this from being "always use the fixed text".
   assert.equal(
-    run('[their words](drafts/secret.md) end'),
+    await run('[their words](drafts/secret.md) end'),
     `[their words](${WITHHELD_ROUTE}) end`,
     "the author's own label was replaced by the fallback",
   );
@@ -1098,7 +1098,7 @@ test('the title and the excerpt carry a link\'s text, never its syntax', async (
   });
 });
 
-test('a bracket in a label cannot truncate the link it lands in', () => {
+test('a bracket in a label cannot truncate the link it lands in', async () => {
   // Text moved from one construct into another has to be re-escaped for the one
   // it lands in. A wikilink's display half and an image's `alt` are not
   // link-label syntax, so a `[` or `]` inside either is ordinary text there and
@@ -1129,19 +1129,19 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
     // would measure degradation rather than the escape stepping around a span.
     { path: 'a.md', slug: 'a' },
   ];
-  const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
+  const run = async (body: string) =>
+    (await resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher())).markdown;
 
   for (const [syntax, spell] of [
     ['wikilink, the split rewrite', (label: string) => `[[t|${label}]]`],
     ['embed, the whole-span rewrite', (label: string) => `![[t|${label}]]`],
   ] as const) {
-    assert.equal(run(spell('has ] bracket')), '[has \\] bracket](/t/)', syntax);
-    assert.equal(run(spell('has [ bracket')), '[has \\[ bracket](/t/)', syntax);
-    assert.equal(run(spell('has [x] bracket')), '[has \\[x\\] bracket](/t/)', syntax);
+    assert.equal(await run(spell('has ] bracket')), '[has \\] bracket](/t/)', syntax);
+    assert.equal(await run(spell('has [ bracket')), '[has \\[ bracket](/t/)', syntax);
+    assert.equal(await run(spell('has [x] bracket')), '[has \\[x\\] bracket](/t/)', syntax);
     // A label with no bracket gains no backslash, so the escape is not applied
     // indiscriminately — the constraint that an ordinary label must not change.
-    assert.equal(run(spell('plain label')), '[plain label](/t/)', syntax);
+    assert.equal(await run(spell('plain label')), '[plain label](/t/)', syntax);
   }
 
   // **For the source-byte path the set is `[` and `]` and nothing else, and
@@ -1160,17 +1160,17 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // the embed row asserts the escape is present while the wikilink row asserts
   // the source-byte path is untouched.
   for (const label of ['has ( paren', 'has ) paren']) {
-    assert.equal(run(`[[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
-    assert.equal(run(`![[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
+    assert.equal(await run(`[[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
+    assert.equal(await run(`![[t|${label}]]`), `[${label}](/t/)`, 'an ordinary label was escaped');
   }
   // A backslash differs by path. The source-byte split path copies the author's
   // one backslash through; the decoded whole-span path re-serialises it as two,
   // because a decoded backslash is data and `\\` is the only spelling that
   // decodes back to one. Both render `has \ backslash`.
-  assert.equal(run('[[t|has \\ backslash]]'), '[has \\ backslash](/t/)', 'the source-byte path changed a single backslash');
-  assert.equal(run('![[t|has \\ backslash]]'), '[has \\\\ backslash](/t/)', 'the decoded path did not double a backslash');
-  assert.equal(run('[[t|has ` backtick]]'), '[has ` backtick](/t/)', 'the source-byte path escaped a backtick');
-  assert.equal(run('![[t|has ` backtick]]'), '[has \\` backtick](/t/)', 'the decoded path did not escape a backtick');
+  assert.equal(await run('[[t|has \\ backslash]]'), '[has \\ backslash](/t/)', 'the source-byte path changed a single backslash');
+  assert.equal(await run('![[t|has \\ backslash]]'), '[has \\\\ backslash](/t/)', 'the decoded path did not double a backslash');
+  assert.equal(await run('[[t|has ` backtick]]'), '[has ` backtick](/t/)', 'the source-byte path escaped a backtick');
+  assert.equal(await run('![[t|has ` backtick]]'), '[has \\` backtick](/t/)', 'the decoded path did not escape a backtick');
 
   // **The invariant that actually matters on the source-byte path: a label with
   // no bracket comes out byte-identical to what the author wrote.** The
@@ -1201,8 +1201,8 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
     'a &#93; b',
     'plain label',
   ]) {
-    assert.equal(run(`[[t|${label}]]`), `[${label}](/t/)`, 'a bracket-free label was rewritten');
-    assert.equal(run(`[${label}](t.md)`), `[${label}](/t/)`, 'a bracket-free label was rewritten');
+    assert.equal(await run(`[[t|${label}]]`), `[${label}](/t/)`, 'a bracket-free label was rewritten');
+    assert.equal(await run(`[${label}](t.md)`), `[${label}](/t/)`, 'a bracket-free label was rewritten');
   }
 
   // **A trailing backslash, both spellings, because they differ.** One `\`
@@ -1212,9 +1212,9 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // come through untouched. The second is where the regression lived — escaping
   // the parser's decoded `value` re-emitted it as one raw backslash, which then
   // escaped the label's own `]` and the anchor vanished.
-  assert.equal(run('[[t|ends with \\]]'), '[[t|ends with \\]]', 'one backslash should not form a link');
-  assert.equal(run('[[t|ends with \\\\]]'), '[ends with \\\\](/t/)', 'a literal backslash was rewritten');
-  assert.equal(run('[ends with \\\\](t.md)'), '[ends with \\\\](/t/)', 'a literal backslash was rewritten');
+  assert.equal(await run('[[t|ends with \\]]'), '[[t|ends with \\]]', 'one backslash should not form a link');
+  assert.equal(await run('[[t|ends with \\\\]]'), '[ends with \\\\](/t/)', 'a literal backslash was rewritten');
+  assert.equal(await run('[ends with \\\\](t.md)'), '[ends with \\\\](/t/)', 'a literal backslash was rewritten');
 
   // The same property through the renderer, because two of those three
   // regressions were invisible in the Markdown and only showed as HTML: what
@@ -1228,12 +1228,12 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // has already resolved the span and the backticks are gone before anything
   // here runs. Measured at `ebd53ff` and unchanged by this fix — asserted so a
   // later change to the escape cannot quietly move either one.
-  assert.equal(run('[[t|has (parens) and `code`]]'), '[has (parens) and `code`](/t/)');
-  assert.equal(run('![[t|has (parens) and `code`]]'), '[has (parens) and code](/t/)');
+  assert.equal(await run('[[t|has (parens) and `code`]]'), '[has (parens) and `code`](/t/)');
+  assert.equal(await run('![[t|has (parens) and `code`]]'), '[has (parens) and code](/t/)');
 
   // A `]` inside inline code cannot close a label, so escaping there would put
   // a visible backslash inside code the author wrote.
-  assert.equal(run('[[t|code `has ] bracket` here]]'), '[code `has ] bracket` here](/t/)');
+  assert.equal(await run('[[t|code `has ] bracket` here]]'), '[code `has ] bracket` here](/t/)');
 
   // **An author who escaped it correctly must not be escaped again.** The
   // parser resolves `\]` before this module sees it, so the node's `value` is
@@ -1242,13 +1242,13 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // backslash followed by an unescaped delimiter, which renders as a backslash
   // and then closes the label. That is worse than the defect, because the input
   // was already right. Both spellings must normalise to one output.
-  assert.equal(run('[[t|has \\] pre-escaped]]'), '[has \\] pre-escaped](/t/)');
-  assert.equal(run('![[t|has \\] pre-escaped]]'), '[has \\] pre-escaped](/t/)');
+  assert.equal(await run('[[t|has \\] pre-escaped]]'), '[has \\] pre-escaped](/t/)');
+  assert.equal(await run('![[t|has \\] pre-escaped]]'), '[has \\] pre-escaped](/t/)');
 
   // **An `unresolved` link degrades to plain text, where a bracket is not
   // syntax.** Escaping there would ship the author a visible backslash in
   // ordinary prose, so the escape is scoped to the branch that opens an anchor.
-  assert.equal(run('[[gone|has ] bracket]]'), 'has ] bracket');
+  assert.equal(await run('[[gone|has ] bracket]]'), 'has ] bracket');
 
   // **A nested node's own region is left alone.** An `![[embed]]` inside a
   // wikilink label is an image node whose span is where its own rewrite writes;
@@ -1256,7 +1256,7 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // `applyEdits` refuses with a build failure. The text *beside* it still
   // escapes, in both directions around the nested node.
   assert.equal(
-    run('[[t|a ] bracket ![logo](assets/diagram.png) here]]'),
+    await run('[[t|a ] bracket ![logo](assets/diagram.png) here]]'),
     `[a \\] bracket ![logo](${DIAGRAM_URL}) here](/t/)`,
   );
   // **Only a wikilink can reach that shape, and it is worth saying why.** A
@@ -1267,7 +1267,7 @@ test('a bracket in a label cannot truncate the link it lands in', () => {
   // nested node and a bracket. Measured; an earlier version of this row used the
   // Markdown spelling and was asserting a parse rather than an escape.
   assert.equal(
-    run('[a ] bracket ![logo](assets/diagram.png) here](t.md)'),
+    await run('[a ] bracket ![logo](assets/diagram.png) here](t.md)'),
     `[a ] bracket ![logo](${DIAGRAM_URL}) here](t.md)`,
   );
 });
@@ -1288,8 +1288,8 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
     { path: 'src.md', slug: 'src' },
     { path: 't.md', slug: 't' },
   ];
-  const run = (body: string) =>
-    resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher()).markdown;
+  const run = async (body: string) =>
+    (await resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher())).markdown;
 
   for (const [what, body, expected] of [
     ['a wikilink, right bracket', 'See [[t|has ] bracket]] here.', 'has ] bracket'],
@@ -1298,7 +1298,7 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
     ['an embed, right bracket', 'See ![[t|has ] bracket]] here.', 'has ] bracket'],
     ['an author escape', 'See [[t|has \\] pre-escaped]] here.', 'has ] pre-escaped'],
   ] as const) {
-    const { html } = await renderMarkdown(run(body));
+    const { html } = await renderMarkdown(await run(body));
     const anchors = html.match(/<a\b/g) ?? [];
     assert.equal(anchors.length, 1, `${what}: rendered ${anchors.length} anchors, not one: ${html}`);
     assert.match(html, new RegExp(`<a href="/t/">${expected.replaceAll(/[[\]]/g, '\\$&')}</a>`), what);
@@ -1316,7 +1316,7 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
     ['an escaped underscore stays literal', '[[t|a \\_b\\_ c]]', 'a _b_ c'],
     ['a trailing backslash keeps its link', '[[t|ends with \\\\]]', 'ends with \\'],
   ] as const) {
-    const { html } = await renderMarkdown(run(body));
+    const { html } = await renderMarkdown(await run(body));
     const anchors = html.match(/<a\b/g) ?? [];
     assert.equal(anchors.length, 1, `${what}: rendered ${anchors.length} anchors, not one: ${html}`);
     assert.ok(!/<em>|<strong>/.test(html), `${what}: an escaped marker became emphasis: ${html}`);
@@ -1330,7 +1330,7 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
   // issued one. Asserted on the *absence of a live element*, not on the entity
   // spelling, because a renderer is free to re-encode.
   const entity = await renderMarkdown(
-    run('[label &lt;img src="https://tracker.invalid/p.gif"&gt; here](t.md)'),
+    await run('[label &lt;img src="https://tracker.invalid/p.gif"&gt; here](t.md)'),
   );
   assert.ok(!/<img\b/.test(entity.html), `an entity became a live element: ${entity.html}`);
   // The URL is *present* either way — it is the author's own text — so the
@@ -1344,7 +1344,7 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
   // **A trailing backslash through the renderer.** The escaped-backslash form
   // makes a link whose text ends in one literal `\`; the regression made it make
   // no link at all.
-  const trailing = await renderMarkdown(run('[[t|ends with \\\\]]'));
+  const trailing = await renderMarkdown(await run('[[t|ends with \\\\]]'));
   assert.equal((trailing.html.match(/<a\b/g) ?? []).length, 1, trailing.html);
   assert.match(trailing.html, /<a href="\/t\/">ends with \\<\/a>/);
 
@@ -1354,7 +1354,7 @@ test('an escaped bracket renders as one anchor, with the bracket in its text', a
   // the nested guard, `href="https://x.invalid/p%5C%5Dq"`. With it, the URL
   // percent-encodes the bracket and nothing else, and the text beside it still
   // escapes.
-  const autolink = await renderMarkdown(run('[[t|a ] b <https://x.invalid/p]q> c]]'));
+  const autolink = await renderMarkdown(await run('[[t|a ] b <https://x.invalid/p]q> c]]'));
   assert.match(autolink.html, /href="https:\/\/x\.invalid\/p%5Dq"/);
   assert.ok(!autolink.html.includes('%5C'), `a backslash reached the URL: ${autolink.html}`);
 });
@@ -1381,7 +1381,7 @@ test('a withheld link with a bracket in its label is still one anchor', async ()
     ['an open bracket', 'See [[drafts/secret|has [ bracket]] here.', 'has [ bracket'],
     ['no label at all', 'See [[drafts/secret]] here.', 'drafts/secret'],
   ] as const) {
-    const result = run(body);
+    const result = await run(body);
     const { html } = await renderMarkdown(result.markdown);
     const anchors = html.match(/<a\b/g) ?? [];
     assert.equal(anchors.length, 1, `${what}: rendered ${anchors.length} anchors, not one: ${html}`);
@@ -1398,7 +1398,7 @@ test('a withheld link with a bracket in its label is still one anchor', async ()
   }
 });
 
-test('an NFC link finds an NFD filename in every segment, not only the last', () => {
+test('an NFC link finds an NFD filename in every segment, not only the last', async () => {
   // Obsidian normalises the link text and not the filename; this normalises
   // both, so the answer does not depend on which machine checked the repository
   // out. Measured when only the *key* was normalised: the single-segment form
@@ -1418,9 +1418,9 @@ test('an NFC link finds an NFD filename in every segment, not only the last', ()
     resolveLinksIn(body, 'src.md', indexCorpus(corpus), 'src', (slug) => `/${slug}/`, virtualPublisher());
 
   // A normalised directory segment, which the basename key never sees.
-  assert.equal(run(`A [[${nfc}/note]] end`).markdown, 'A [café/note](/cafe-note/) end');
+  assert.equal((await run(`A [[${nfc}/note]] end`)).markdown, 'A [café/note](/cafe-note/) end');
   // …and a normalised basename in a multi-segment path.
-  assert.equal(run(`B [[dir/${nfc}]] end`).markdown, 'B [dir/café](/dir-cafe/) end');
+  assert.equal((await run(`B [[dir/${nfc}]] end`)).markdown, 'B [dir/café](/dir-cafe/) end');
 });
 
 test('resolving one discovery twice is refused rather than silently corrupting it', async () => {
@@ -1523,7 +1523,7 @@ test('a wikilink in prose cannot survive into the rendered page', async () => {
   });
 });
 
-test('the traversal imports no package absent from the manifest', () => {
+test('the traversal imports no package absent from the manifest', async () => {
   // The same rule `tests/discovery.test.ts` holds over the producer, applied to
   // the module that actually pulls the parser in. pnpm's symlinked
   // `node_modules` makes this a real failure mode: a module importing a
@@ -1546,7 +1546,7 @@ test('the traversal imports no package absent from the manifest', () => {
   }
 });
 
-test('the walk itself loads without a parser, which the cross-platform gate needs', () => {
+test('the walk itself loads without a parser, which the cross-platform gate needs', async () => {
   // `satteri`'s parser is a native binding installed per platform — a win32
   // install carries `@bruits/satteri-win32-x64-msvc` and nothing else. TK-26's
   // cross-platform gate loads `markdown-to-artifact.ts` under WSL to compare

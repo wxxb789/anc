@@ -1,6 +1,9 @@
 /**
- * Goals 0009 and 0010's display surface: a generated site, served statically,
- * showing its images and figures with **JavaScript disabled**.
+ * Goals 0009–0011's display surface: a generated site, served statically,
+ * showing its images and figures with **JavaScript disabled**. Goal 0011 means
+ * the corpus now exercises both encoder rows — a JPEG photograph and PNG
+ * screenshots/diagrams — so the byte-identity checks compare the served file
+ * with the emitted candidate rather than with the source.
  *
  * The goal is not "the bytes exist in `dist/`" — it is "a reader sees the
  * picture, with truthful captions and without the layout moving". So this gate
@@ -9,7 +12,8 @@
  * Chromium with scripting off. Each check fails on its own:
  *
  * 1. the response for every `/_assets/` URL is 200, with the content type the
- *    extension claims and the exact source bytes;
+ *    extension claims and bytes that hash to the URL's digest and equal the
+ *    emitted representation (a WebP candidate where the policy chose one);
  * 2. every `<img>` decoded (`naturalWidth > 0`) under the served CSP, after the
  *    test scrolls a lazy image into view — JavaScript in the page remains off;
  * 3. exactly the titled standalone image is a `figure` with its `figcaption`,
@@ -32,6 +36,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, test } from 'vitest';
 import type { Browser, BrowserContext, Route } from 'playwright';
+import sharp from 'sharp';
 
 import {
   buildSiteWithMedia,
@@ -40,6 +45,8 @@ import {
   type BuiltSite,
   type ServedSite,
 } from './support/browser-site.ts';
+import { prepareImage } from '../src/lib/media-codec.ts';
+import { sniffImageFormat } from '../src/lib/media.ts';
 import {
   AVIF,
   GIF_ANIMATED,
@@ -124,18 +131,26 @@ const MEDIA: Record<string, Uint8Array> = {
   'assets/unused.png': PNG_SECOND,
 };
 
-/** The intrinsic size the header of each published fixture declares. */
+/** The exact bytes Goal 0011 publishes for one fixture. */
+async function emitted(bytes: Uint8Array): Promise<Buffer> {
+  const format = sniffImageFormat(bytes);
+  assert.ok(format, 'a fixture is not a supported image by its bytes');
+  const result = await prepareImage(Buffer.from(bytes), format);
+  assert.ok(result.ok, `a fixture could not be prepared: ${result.ok ? '' : result.reason}`);
+  return result.image.bytes;
+}
+
 const EXPECTED_SIZE: Readonly<Record<string, { width: number; height: number }>> = {
-  'portrait.png': { width: 24, height: 72 },
-  'screenshot.png': { width: 480, height: 120 },
-  'transparent.png': { width: 96, height: 96 },
-  'photo.jpg': { width: 8, height: 6 },
+  'portrait.webp': { width: 24, height: 72 },
+  'screenshot.webp': { width: 480, height: 120 },
+  'transparent.webp': { width: 96, height: 96 },
+  'photo.webp': { width: 8, height: 6 },
   'anim.gif': { width: 4, height: 4 },
   'anim.webp': { width: 4, height: 4 },
   'lossy.webp': { width: 333, height: 47 },
   'still.avif': { width: 8, height: 6 },
-  'chart%23one.png': { width: 4, height: 4 },
-  '%E5%9B%BE%20%E8%A1%A8%20one.png': { width: 8, height: 6 },
+  'chart%23one.webp': { width: 4, height: 4 },
+  '%E5%9B%BE%20%E8%A1%A8%20one.webp': { width: 8, height: 6 },
 };
 
 let built: BuiltSite;
@@ -175,25 +190,28 @@ function filesUnder(root: string): string[] {
   return found;
 }
 
-test('the published output carries one file per referenced image and nothing else', () => {
+test('the published output carries one file per referenced image and nothing else', async () => {
   const assets = filesUnder(join(built.dist, '_assets')).sort();
-  // Ten unique byte sets were referenced by a published note; the withheld
-  // note's image is not among them.
+  // Ten unique sources were referenced by a published note; the withheld note's
+  // image is not among them.
   assert.equal(assets.length, 10, `the output carries ${assets.length} assets: ${assets.join(', ')}`);
   const digests = new Set(assets.map((name) => name.slice(0, 64)));
   assert.equal(digests.size, 10, 'two published assets share a digest');
 
-  // The withheld image's bytes are nowhere in the output. Compared by content
-  // rather than by name, because the name is not what would leak.
-  const withheld = Buffer.from(PNG_SECOND);
+  // The withheld image's published bytes are nowhere in the output. Goal 0011's
+  // encoder means "the source bytes" is no longer the question: a withheld PNG
+  // would have reached the build as a WebP candidate, so that candidate is what
+  // the comparison looks for.
+  const withheld = await emitted(PNG_SECOND);
   for (const file of filesUnder(built.dist)) {
     const bytes = readFileSync(join(built.dist, file));
-    if (file.endsWith('.html') || file.endsWith('.js') || !bytes.equals(withheld)) continue;
-    assert.fail(`the withheld image's bytes reached ${file}`);
+    assert.ok(!bytes.equals(withheld), `the withheld image's bytes reached ${file}`);
+    assert.ok(!bytes.equals(Buffer.from(PNG_SECOND)), `the withheld image's source bytes reached ${file}`);
   }
-  // Non-vacuity: the same comparison finds the shared photograph, so it is
-  // looking at image bytes rather than at text that never matches.
-  const shared = Buffer.from(JPEG);
+  // Non-vacuity: the same comparison finds the shared photograph's emitted
+  // bytes, so it is looking at image bytes rather than at text that never
+  // matches.
+  const shared = await emitted(JPEG);
   assert.ok(
     filesUnder(built.dist).some((file) => readFileSync(join(built.dist, file)).equals(shared)),
     'the comparison above found nothing at all, so it proves nothing',
@@ -265,6 +283,16 @@ test('a JavaScript-disabled browser decodes every published image under the serv
     assert.equal(image.naturalWidth, size.width, `${image.src}: natural width`);
     assert.equal(image.naturalHeight, size.height, `${image.src}: natural height`);
   }
+
+  // The rendered corpus really contains both encoder rows and an exempt
+  // animated source. Without these three assertions a corpus of only passthrough
+  // images would still pass every check above.
+  const renderedUrls = images.map((image) => image.src);
+  assert.ok(renderedUrls.some((url) => url.endsWith('-photo.webp')), 'no JPEG photograph was transcoded');
+  assert.ok(renderedUrls.some((url) => url.endsWith('-screenshot.webp')), 'no PNG screenshot was converted');
+  assert.ok(renderedUrls.some((url) => url.endsWith('-anim.gif')), 'the animated GIF was not published unchanged');
+  const gifPages = (await sharp(Buffer.from(GIF_ANIMATED)).metadata()).pages ?? 1;
+  assert.ok(gifPages >= 3, `the fixture behind anim.gif has ${gifPages} page(s), not a real animation`);
 
   // The lead image is the first in document order and stays eager; everything
   // after it defers. The inline image and the linked badge appear later, so
@@ -372,26 +400,53 @@ test('width and height reserve the same layout space before the image bytes arri
   );
 });
 
-test('a served asset returns the exact source bytes it was made from', async () => {
+test('a served asset is the exact emitted representation its digest names', async () => {
   const gallery = readFileSync(join(built.dist, 'notes', 'gallery', 'index.html'), 'utf8');
   const sources = [...gallery.matchAll(/<img src="(\/_assets\/[^"]+)"/g)].map((match) => match[1]!);
   assert.ok(sources.length > 0, 'the built page carries no asset URL');
-  const sourceBytes = Object.values(MEDIA).map((bytes) => Buffer.from(bytes));
-  let compared = 0;
+
+  // Every representation this corpus can legitimately publish: a passthrough
+  // source for the exempt rows, a WebP candidate for JPEG and PNG. The served
+  // bytes must be one of them *and* hash to the URL, which is the pair 0011's
+  // identity rule states. Comparing only against sources would fail on every
+  // transcoded image; comparing only against the digest would not prove the
+  // encoder's output is what a reader receives.
+  const expected = new Map<string, Buffer>();
+  for (const [path, bytes] of Object.entries(MEDIA)) {
+    expected.set(path, await emitted(bytes));
+  }
+  const emittedBytes = [...expected.values()];
+  const servedBytes: Buffer[] = [];
+
   for (const url of new Set(sources)) {
     const response = await fetch(`${server.origin}${url}`);
     assert.equal(response.status, 200, `${url} returned ${response.status}`);
     const served = Buffer.from(await response.arrayBuffer());
-    // Identity is the digest in the URL, so the served bytes must hash to it,
-    // and must be one of the sources unchanged — no transcode, no metadata edit.
     assert.equal(
       createHash('sha256').update(served).digest('hex'),
       url.slice('/_assets/'.length, '/_assets/'.length + 64),
       `${url} served bytes that do not hash to its own digest`,
     );
-    if (sourceBytes.some((source) => source.equals(served))) compared += 1;
+    assert.ok(
+      emittedBytes.some((candidate) => candidate.equals(served)),
+      `${url} served bytes no source in this corpus produces`,
+    );
+    servedBytes.push(served);
   }
-  assert.equal(compared, new Set(sources).size, 'a served asset matches no source image, so byte identity is unproven');
+
+  // The two encoder rows reach a browser as WebP, and the bytes are the
+  // candidates rather than the sources. Asserted by source path, because a
+  // count of WebP files would also be satisfied by the corpus's already-WebP
+  // fixtures.
+  for (const sourcePath of ['assets/photo.jpeg', 'assets/screenshot.png'] as const) {
+    const candidate = expected.get(sourcePath)!;
+    assert.equal(sniffImageFormat(candidate), 'webp', `${sourcePath} produced no WebP candidate`);
+    assert.ok(!candidate.equals(Buffer.from(MEDIA[sourcePath]!)), `${sourcePath} published its source bytes`);
+    assert.ok(
+      servedBytes.some((served) => served.equals(candidate)),
+      `${sourcePath}: the WebP candidate is not the file a reader fetched`,
+    );
+  }
 });
 
 test('the shared photograph is one file on disk and two references on the pages', () => {

@@ -31,7 +31,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
@@ -1244,5 +1244,50 @@ test('the packaged artifact omits producer-resolved edges', async () => {
       ),
       'the default writer no longer carries the producer edge',
     );
+  });
+});
+
+test('the no-image discovery path never evaluates the native image codec', async () => {
+  await scratch('no-codec-', async (root) => {
+    put(root, 'note.md', '# Plain note\n\nNo local image is referenced here.\n');
+    const out = join(root, 'out');
+    mkdirSync(out);
+
+    // The counter is a Node loader hook observing real module loads, not a mock
+    // of the producer. The final explicit import is the positive control: if it
+    // did not set the flag, the hook would be blind and the first assertion
+    // would pass vacuously.
+    const script =
+      `import { registerHooks } from 'node:module';` +
+      `import { pathToFileURL } from 'node:url';` +
+      `let codecLoaded = false;` +
+      `registerHooks({ load(url, context, nextLoad) {` +
+      `  if (url.endsWith('/src/lib/media-codec.ts')) codecLoaded = true;` +
+      `  return nextLoad(url, context);` +
+      `} });` +
+      `const producer = await import(${JSON.stringify(pathToFileURL(join(ROOT, 'scripts/markdown-to-artifact.ts')).href)});` +
+      `const found = await producer.discover(${JSON.stringify(root)});` +
+      `await producer.resolveCorpusLinks(found);` +
+      `await producer.writeArtifact(found, ${JSON.stringify(join(out, 'content.json'))}, { includeEdges: false });` +
+      `const duringDiscovery = codecLoaded;` +
+      `await import(${JSON.stringify(pathToFileURL(join(ROOT, 'src/lib/media-codec.ts')).href)});` +
+      `console.log(JSON.stringify({ duringDiscovery, hookWorks: codecLoaded, entries: found.entries.length }));`;
+
+    const result = spawnSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', script], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, `the no-image child failed:\n${result.stdout}${result.stderr}`);
+
+    const lastLine = result.stdout.trim().split('\n').at(-1) ?? '';
+    let observed: { duringDiscovery: boolean; hookWorks: boolean; entries: number };
+    try {
+      observed = JSON.parse(lastLine) as typeof observed;
+    } catch {
+      assert.fail(`the no-image child produced no JSON result:\n${result.stdout}${result.stderr}`);
+    }
+    assert.equal(observed.entries, 1, 'the no-image fixture discovered the wrong number of notes');
+    assert.equal(observed.duringDiscovery, false, 'discovery loaded the native image codec');
+    assert.equal(observed.hookWorks, true, 'the loader hook did not observe the positive control');
   });
 });

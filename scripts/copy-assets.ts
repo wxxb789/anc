@@ -6,7 +6,9 @@
  * this step asks the artifact for the resulting URL list and moves those bytes
  * into `dist/_assets/`. No second decision lives here — no image is inferred from
  * a directory, no reference is re-parsed out of Markdown, and nothing is
- * transformed.
+ * transformed. Under Goal 0011 the staged bytes may already be a WebP candidate;
+ * this step still only verifies and copies them, because identity is the emitted
+ * bytes the producer hashed.
  *
  * ## Why the bytes come from beside the artifact
  *

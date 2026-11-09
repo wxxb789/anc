@@ -31,7 +31,7 @@ export interface ContentEntry {
 /**
  * One image asset the producer publishes.
  *
- * `url` is the public identity. `width`/`height` are the raster header's own
+ * `url` is the public identity: the SHA-256 of the emitted bytes. `width`/`height` are the emitted raster header's own
  * pixel size, recorded only because the producer already read the authorized
  * bytes; the renderer uses them to reserve layout space. They are optional as a
  * pair: a malformed or truncated header yields neither, and no consumer invents

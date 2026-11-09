@@ -15,14 +15,16 @@
  */
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
+import sharp from 'sharp';
 
 import type { ContentArtifact } from '../src/lib/schema.ts';
 import { imageDimensions, parseAssetUrl, sniffImageFormat, imageExtension } from '../src/lib/media.ts';
+import { MEDIA_LIMITS } from '../src/lib/media-codec.ts';
 import { renderMarkdown } from '../src/lib/markdown.ts';
 import { discover, resolveCorpusLinks, writeArtifact } from '../scripts/markdown-to-artifact.ts';
 import type { BuildFailure } from '../scripts/write-report.ts';
@@ -40,6 +42,7 @@ import {
   ORIENTED_PNG,
   ORIENTED_WEBP,
   PNG_SECOND,
+  PNG_SCREENSHOT,
   PNG_UNICODE,
   SVG,
   WEBP_ANIMATED,
@@ -163,18 +166,30 @@ test('resolution is note-relative first, then content-root, and an explicit path
     const assets = assetsOf(artifact);
     // Three distinct sources: notes/pic.png, pic.png, and — because the note-root
     // is the same file as the bare root file — one more reference to it. So two
-    // assets, and the note-relative reference must be the one with a different
-    // digest.
+    // assets, and the note-relative reference must be the one with different
+    // pixels. The property is about *which source* resolved; source bytes are no
+    // longer the published identity, so the emitted pair is what identifies them.
     assert.equal(assets.length, 2, 'the corpus produced an unexpected number of assets');
-    assert.ok(assets.some((asset) => asset.digest === digestOf(PNG_UNICODE)), 'the note-relative file did not publish');
-    assert.ok(assets.some((asset) => asset.digest === digestOf(PNG_SECOND)), 'the content-root file did not publish');
 
     const near = produced.markdown.get('notes-a')!;
-    assert.match(near, new RegExp(`!\\[near\\]\\(/_assets/${digestOf(PNG_UNICODE)}-[^)]+\\)`), near);
-    assert.match(near, new RegExp(`!\\[explicit\\]\\(/_assets/${digestOf(PNG_UNICODE)}-[^)]+\\)`), near);
-    assert.match(near, new RegExp(`!\\[root\\]\\(/_assets/${digestOf(PNG_SECOND)}-[^)]+\\)`), near);
-    assert.match(near, new RegExp(`!\\[anchored\\]\\(/_assets/${digestOf(PNG_SECOND)}-[^)]+\\)`), near);
-    assert.match(produced.markdown.get('root')!, new RegExp(`!\\[from-root\\]\\(/_assets/${digestOf(PNG_SECOND)}-`), 'a root note resolved somewhere else');
+    const urlFor = (label: string): string => {
+      const match = new RegExp(`!\\[${label}\\]\\((/[^)]+)\\)`).exec(near);
+      assert.ok(match, `${label}: no published URL`);
+      return match[1]!;
+    };
+    const dimensionsOf = (url: string): readonly [number, number] => {
+      const asset = artifact.assets!.find((candidate) => candidate.url === url)!;
+      assert.ok(asset, `${url}: not declared`);
+      return [asset.width ?? 0, asset.height ?? 0];
+    };
+    // PNG_UNICODE is 8×6, PNG_SECOND is 5×5; both candidates are WebP.
+    assert.deepEqual(dimensionsOf(urlFor('near')), [8, 6], 'the note-relative file did not publish');
+    assert.deepEqual(dimensionsOf(urlFor('explicit')), [8, 6], 'the explicit note-relative file did not publish');
+    assert.deepEqual(dimensionsOf(urlFor('root')), [5, 5], 'the content-root file did not publish');
+    assert.deepEqual(dimensionsOf(urlFor('anchored')), [5, 5], 'the anchored root file did not publish');
+    assert.match(produced.markdown.get('root')!, /!\[from-root\]\(\/_assets\//, 'a root note resolved somewhere else');
+    const staged = [...produced.staged.values()];
+    assert.ok(staged.every((bytes) => sniffImageFormat(bytes) === 'webp'), 'a PNG did not transcode in this corpus');
   });
 
   // The explicit-path control, in its own corpus: `./only-at-root.png` misses
@@ -234,9 +249,15 @@ test('identical bytes publish one asset, whatever name or how many references', 
     assert.equal(assets.length, 1, `identical bytes published ${assets.length} assets`);
     assert.equal(produced.staged.size, 1, 'the staged directory holds more than the one asset');
     const [asset] = assets;
-    assert.equal(asset!.digest, digestOf(PNG_UNICODE));
+    // Identity is the emitted bytes: these four references all reach one WebP
+    // candidate, so the digest names that candidate and not the source PNG.
+    const stagedBytes = produced.staged.get(`${asset!.digest}-${asset!.fileName}`);
+    assert.ok(stagedBytes, 'the declared asset was not staged under its own digest');
+    assert.equal(asset!.digest, digestOf(stagedBytes), 'the URL digest does not hash the staged bytes');
+    assert.equal(sniffImageFormat(stagedBytes), 'webp', 'the identical PNGs did not become one WebP candidate');
+    assert.ok(stagedBytes.length < PNG_UNICODE.length, 'the accepted candidate is not smaller than the source');
     // The name is decoration: whichever deterministic reference reached it first.
-    assert.match(asset!.fileName, /one\.png$/, `the published name lost its identity: ${asset!.fileName}`);
+    assert.match(asset!.fileName, /one\.webp$/, `the published name lost its identity: ${asset!.fileName}`);
     // Every reference points at that one URL, in both notes.
     for (const entry of ['notes-a', 'notes-b']) {
       const urls = [...produced.markdown.get(entry)!.matchAll(/!\[[^\]]*\]\((\/_assets\/[^)]+)\)/g)].map((match) => match[1]);
@@ -269,7 +290,36 @@ test('two unchanged builds produce identical artifact bytes, URLs, names and pix
   });
 });
 
-test('every supported format is copied byte-identically, including animated sources', async () => {
+test('two sources that encode to identical bytes publish one asset', async () => {
+  await scratch('media-dedupe-emitted-', async (directories) => {
+    // The two sources have the same pixels and different EXIF. Their JPEG bytes
+    // differ, so a source-digest cache would publish two assets; a transcode that
+    // strips metadata produces identical WebP, and final-byte identity must
+    // collapse them.
+    const pixels = PNG_SCREENSHOT;
+    const one = await sharp(pixels).jpeg({ quality: 92 }).toBuffer();
+    const two = await sharp(pixels).jpeg({ quality: 92 }).withExif({ IFD0: { Copyright: 'two' } }).toBuffer();
+    assert.ok(!one.equals(two), 'the two sources are byte-identical, so this is the source-digest case');
+    putBytes(directories.content, 'assets/one.jpg', one);
+    putBytes(directories.content, 'assets/two.jpg', two);
+    put(directories.content, 'notes/a.md', '# A\n\n![one](../assets/one.jpg)\n\n![two](../assets/two.jpg)\n');
+
+    const produced = await produce(directories);
+    const assets = assetsOf(produced.artifact);
+    assert.equal(assets.length, 1, `${assets.length} emitted-identical sources published separately`);
+    assert.equal(produced.staged.size, 1, 'the staging directory holds more than one copy');
+    const [asset] = assets;
+    assert.equal(asset!.fileName, 'one.webp', 'the first deterministic source name did not win');
+    const url = produced.artifact.assets![0]!.url;
+    const references = [...produced.markdown.get('notes-a')!.matchAll(/!\[[^\]]*\]\((\/_assets\/[^)]+)\)/g)].map((match) => match[1]);
+    assert.equal(references.length, 2);
+    for (const reference of references) assert.equal(reference, url, `a reference points at ${reference}`);
+    assert.notEqual(asset!.digest, digestOf(one));
+    assert.notEqual(asset!.digest, digestOf(two));
+  });
+});
+
+test('every supported format publishes under the policy row it belongs to', async () => {
   await scratch('media-formats-', async (directories) => {
     const sources: readonly (readonly [string, Uint8Array])[] = [
       ['assets/one.png', PNG_UNICODE],
@@ -289,24 +339,39 @@ test('every supported format is copied byte-identically, including animated sour
     const produced = await produce(directories);
     assert.equal(produced.staged.size, sources.length, 'a format did not publish');
     for (const [path, bytes] of sources) {
-      const digest = digestOf(bytes);
-      const asset = assetsOf(produced.artifact).find((candidate) => candidate.digest === digest);
-      assert.ok(asset, `${path} published nothing`);
-      const stagedBytes = produced.staged.get(`${digest}-${asset.fileName}`);
+      const sourceFormat = sniffImageFormat(bytes);
+      assert.ok(sourceFormat, `${path} is not a supported image by its bytes`);
+      const emitted = sourceFormat === 'png' || sourceFormat === 'jpeg';
+      const extension = emitted ? '.webp' : imageExtension(sourceFormat);
+      const stem = path.slice('assets/'.length).replace(/\.[^.]+$/, '');
+      const asset = assetsOf(produced.artifact).find((candidate) => candidate.fileName === `${stem}${extension}`);
+      assert.ok(asset, `${path} did not publish under ${stem}${extension}`);
+      const stagedBytes = produced.staged.get(`${asset.digest}-${asset.fileName}`);
       assert.ok(stagedBytes, `${path} staged under an unexpected name`);
-      assert.ok(stagedBytes.equals(Buffer.from(bytes)), `${path} was not copied byte-identically`);
-      // The extension names the detected format, not the source spelling: a host
-      // infers Content-Type from it.
-      const format = sniffImageFormat(bytes);
-      assert.ok(format, `${path} is not a supported image by its bytes`);
-      assert.equal(asset.fileName.slice(asset.fileName.lastIndexOf('.')), imageExtension(format), `${path} published under the wrong extension`);
+      assert.equal(digestOf(stagedBytes), asset.digest, `${path}: the URL digest does not hash the staged bytes`);
+      if (emitted) {
+        // JPEG and PNG are the two policy rows with an encoder: the candidate is
+        // WebP, is smaller, and is not the source bytes.
+        assert.equal(sniffImageFormat(stagedBytes), 'webp', `${path} did not publish a WebP candidate`);
+        assert.notEqual(asset.digest, digestOf(bytes), `${path} published its source under a WebP name`);
+        assert.ok(stagedBytes.length < bytes.length, `${path}: a larger candidate was accepted`);
+      } else {
+        // Existing WebP/AVIF and every GIF publish unchanged, byte for byte, so
+        // animation frames, timing and loop count are exactly the author's.
+        assert.equal(asset.digest, digestOf(bytes), `${path} was re-encoded`);
+        assert.ok(stagedBytes.equals(Buffer.from(bytes)), `${path} was not copied byte-identically`);
+      }
+      assert.equal(asset.fileName.slice(asset.fileName.lastIndexOf('.')), extension, `${path} published under the wrong extension`);
     }
 
-    // Animated sources are the ones a naive pipeline destroys. Byte identity is
-    // the whole claim: the three frames are still there because the file is the
-    // file. The fixtures really are animated — asserted here so a future edit
-    // that replaces them with static images cannot quietly retire the property.
-    assert.ok(Buffer.from(GIF_ANIMATED).includes(Buffer.from('NETSCAPE2.0')), 'the GIF fixture is no longer animated');
+    // Animated sources are the ones a naive pipeline destroys. For the exempt
+    // forms, byte identity is the whole claim: the three frames are still there
+    // because the file is the file. The fixtures really are animated — asserted
+    // here so a future edit that replaces them with static images cannot quietly
+    // retire the property.
+    const gifPages = (await sharp(Buffer.from(GIF_ANIMATED)).metadata()).pages ?? 1;
+    assert.ok(gifPages >= 3, `the GIF fixture has ${gifPages} page(s), not a real animation`);
+    assert.ok(Buffer.from(GIF_ANIMATED).includes(Buffer.from('NETSCAPE2.0')), 'the GIF fixture lost its loop extension');
     assert.ok(Buffer.from(WEBP_ANIMATED).includes(Buffer.from('ANIM')), 'the WebP fixture is no longer animated');
   });
 });
@@ -320,7 +385,9 @@ test('changing a source image changes the public reference and the published byt
     const first = await produce(directories);
     const [before] = assetsOf(first.artifact);
     assert.ok(before, 'the first build published nothing');
-    assert.ok(first.staged.get(`${before.digest}-${before.fileName}`)?.equals(Buffer.from(PNG_SECOND)));
+    const beforeBytes = first.staged.get(`${before.digest}-${before.fileName}`);
+    assert.ok(beforeBytes, 'the first build staged nothing under its declared digest');
+    assert.equal(digestOf(beforeBytes), before.digest, 'the first URL digest does not hash its staged bytes');
 
     // The author replaces the file and rebuilds. Both notes reference it by the
     // same source path, so both must move to the new URL — a content-addressed
@@ -334,9 +401,11 @@ test('changing a source image changes the public reference and the published byt
     const [after] = assetsOf(second.artifact);
     assert.ok(after, 'the second build published nothing');
     assert.notEqual(after.digest, before.digest, 'the published URL survived a source change');
-    assert.equal(after.digest, digestOf(PNG_UNICODE));
+    const afterBytes = second.staged.get(`${after.digest}-${after.fileName}`);
+    assert.ok(afterBytes, 'the second build staged nothing');
+    assert.equal(digestOf(afterBytes), after.digest, 'the new URL digest does not hash the staged bytes');
+    assert.notEqual(after.digest, digestOf(PNG_UNICODE), 'the source PNG was published under its own digest');
     assert.deepEqual([...second.staged.keys()], [`${after.digest}-${after.fileName}`], 'a stale asset stayed staged');
-    assert.ok(second.staged.get(`${after.digest}-${after.fileName}`)!.equals(Buffer.from(PNG_UNICODE)));
     for (const slug of ['notes-a', 'notes-b']) {
       const url = second.artifact.assets![0]!.url;
       assert.ok(second.markdown.get(slug)!.includes(url), `${slug} still points at the old image: ${second.markdown.get(slug)}`);
@@ -355,7 +424,9 @@ test('a source named like another format publishes under the format its bytes ar
     const produced = await produce(directories);
     const [asset] = assetsOf(produced.artifact);
     assert.ok(asset, 'the misnamed image did not publish');
-    assert.match(asset.fileName, /\.png$/, `the published extension followed the source name: ${asset.fileName}`);
+    assert.match(asset.fileName, /\.webp$/, `the published extension followed the source name: ${asset.fileName}`);
+    const staged = produced.staged.get(`${asset.digest}-${asset.fileName}`)!;
+    assert.equal(sniffImageFormat(staged), 'webp', 'the PNG bytes were not detected and transcoded');
   });
 });
 
@@ -373,7 +444,7 @@ test('spaces and Unicode in a path publish through both legal destination spelli
     const produced = await produce(directories);
     const [asset] = assetsOf(produced.artifact);
     assert.ok(asset, 'the Unicode image did not publish');
-    assert.equal(asset.fileName, '图 表 one.png', 'the published name lost its characters');
+    assert.equal(asset.fileName, '图 表 one.webp', 'the published name lost its characters');
     // The URL is percent-encoded — and canonically so, which `parseAssetUrl`
     // enforces; the staged file keeps the raw name a host will decode to.
     const url = produced.artifact.assets![0]!.url;
@@ -421,24 +492,24 @@ test('a filename carrying a URL-reserved character resolves from its encoded des
       readonly bytes: Uint8Array;
       readonly fileName: string;
       readonly encoded: string;
+      readonly passthrough: boolean;
     }[] = [
-      { label: 'hash', bytes: PNG_UNICODE, fileName: 'chart#one.png', encoded: 'chart%23one.png' },
-      { label: 'amp', bytes: PNG_SECOND, fileName: 'amp&one.png', encoded: 'amp%26one.png' },
-      { label: 'query', bytes: JPEG, fileName: 'query?one.jpg', encoded: 'query%3Fone.jpg' },
-      { label: 'percent', bytes: GIF_ANIMATED, fileName: 'percent%one.gif', encoded: 'percent%25one.gif' },
-      { label: 'escape', bytes: AVIF, fileName: 'chart%23one.avif', encoded: 'chart%2523one.avif' },
+      { label: 'hash', bytes: PNG_UNICODE, fileName: 'chart#one.webp', encoded: 'chart%23one.webp', passthrough: false },
+      { label: 'amp', bytes: PNG_SECOND, fileName: 'amp&one.webp', encoded: 'amp%26one.webp', passthrough: false },
+      { label: 'query', bytes: JPEG, fileName: 'query?one.webp', encoded: 'query%3Fone.webp', passthrough: false },
+      { label: 'percent', bytes: GIF_ANIMATED, fileName: 'percent%one.gif', encoded: 'percent%25one.gif', passthrough: true },
+      { label: 'escape', bytes: AVIF, fileName: 'chart%23one.avif', encoded: 'chart%2523one.avif', passthrough: true },
     ];
 
     const produced = await produce(directories);
     const declared = produced.artifact.assets ?? [];
     assert.equal(declared.length, expected.length, `the corpus published ${declared.length} assets, not ${expected.length}`);
-    const urlByDigest = new Map(declared.map((asset) => [parseAssetUrl(asset.url)!.digest, asset.url]));
-    assert.equal(urlByDigest.size, expected.length, 'two reserved-character sources shared one digest');
+    const urlByFileName = new Map(declared.map((asset) => [parseAssetUrl(asset.url)!.fileName, asset.url]));
+    assert.equal(urlByFileName.size, expected.length, 'two reserved-character sources shared one name');
     const markdown = produced.markdown.get('notes-a')!;
 
     for (const row of expected) {
-      const digest = digestOf(row.bytes);
-      const url = urlByDigest.get(digest);
+      const url = urlByFileName.get(row.fileName);
       assert.ok(url, `${row.label}: published nothing`);
       assert.ok(url.endsWith(`-${row.encoded}`), `${row.label}: the URL is ${url}, not the encoded name ${row.encoded}`);
       assert.ok(!/[#?&]/.test(url), `${row.label}: a reserved character stayed raw in ${url}`);
@@ -448,16 +519,24 @@ test('a filename carrying a URL-reserved character resolves from its encoded des
       const asUrl = new URL(url, 'https://example.test');
       assert.equal(asUrl.hash, '', `${row.label}: the URL starts a fragment: ${url}`);
       assert.equal(asUrl.search, '', `${row.label}: the URL starts a query: ${url}`);
-      const fileName = `${digest}-${row.fileName}`;
-      assert.equal(decodeURIComponent(asUrl.pathname), `/_assets/${fileName}`, `${row.label}: the URL path does not decode to the staged name`);
-      const staged = produced.staged.get(fileName);
-      assert.ok(staged?.equals(Buffer.from(row.bytes)), `${row.label}: ${fileName} is not the source bytes`);
+      const digest = parseAssetUrl(url)!.digest;
+      const stagedName = `${digest}-${row.fileName}`;
+      assert.equal(decodeURIComponent(asUrl.pathname), `/_assets/${stagedName}`, `${row.label}: the URL path does not decode to the staged name`);
+      const staged = produced.staged.get(stagedName);
+      assert.ok(staged, `${row.label}: ${stagedName} was not staged`);
+      assert.equal(digestOf(staged), digest, `${row.label}: the URL digest does not hash the staged bytes`);
+      if (row.passthrough) {
+        assert.ok(staged.equals(Buffer.from(row.bytes)), `${row.label}: the exempt source is not byte-identical`);
+      } else {
+        assert.equal(sniffImageFormat(staged), 'webp', `${row.label}: an encoder-eligible source did not become WebP`);
+        assert.ok(staged.length < row.bytes.length, `${row.label}: a larger candidate was accepted`);
+      }
       assert.ok(markdown.includes(`![${row.label}](${url})`), `${row.label}: the reference was not rewritten to ${url}`);
     }
 
     // The fragment was split before decoding, so it did not become part of the
     // name even though the path component is percent-decoded on its own.
-    const hashUrl = urlByDigest.get(digestOf(PNG_UNICODE))!;
+    const hashUrl = urlByFileName.get('chart#one.webp')!;
     assert.ok(markdown.includes(`![fragment](${hashUrl})`), 'a fragment on an encoded destination broke the reference');
 
     // Stability: two identical builds produce identical artifact bytes and names.
@@ -688,6 +767,30 @@ test('every unauthorized local image is a build failure with its own reason', as
     },
     { name: 'svg', body: '![x](../assets/vector.svg)', files: { 'assets/vector.svg': SVG }, label: 'unsupported local SVG', reason: 'svg' },
     { name: 'unsupported', body: '![x](../assets/notes.txt)', files: { 'assets/notes.txt': NOT_AN_IMAGE }, label: 'unsupported file type', reason: 'unsupported' },
+    {
+      // A supported signature with a truncated body. 0011 owns decode
+      // validation, so this now fails rather than publishing a header-only
+      // image; 0010's own header reader still fails open when asked directly.
+      name: 'corrupt',
+      body: '![x](../assets/broken.png)',
+      files: { 'assets/broken.png': PNG_UNICODE.subarray(0, 8) },
+      label: 'corrupt or undecodable',
+      reason: 'corrupt',
+    },
+    {
+      // Over the finite source-byte cap, before libvips parses it.
+      name: 'too-large',
+      body: '![x](../assets/huge.png)',
+      files: {
+        'assets/huge.png': (() => {
+          const oversized = new Uint8Array(MEDIA_LIMITS.maxSourceBytes + 1);
+          oversized.set(PNG_UNICODE.subarray(0, 8));
+          return oversized;
+        })(),
+      },
+      label: 'over the size limit',
+      reason: 'too-large',
+    },
     { name: 'escape', body: '![x](../../outside.png)', label: 'outside the content root', reason: 'outside' },
     {
       name: 'html',
@@ -744,6 +847,39 @@ test('every unauthorized local image is a build failure with its own reason', as
       assert.equal(existsSync(join(directories.out, 'assets')), false, `${row.name}: a failed build staged asset bytes`);
     });
   }
+});
+
+test.skipIf(process.platform === 'win32' || (process.getuid?.() ?? 1) === 0)('an oversized source is rejected from its size before it is read', async () => {
+  await scratch('media-too-large-stat-', async (directories) => {
+    // The file's size makes it over the cap, and its mode makes a read fail.
+    // If the producer read first, the EACCES would be reported as `missing`;
+    // `too-large` therefore proves the stat gate ran before the read. The
+    // post-read limit in the codec remains the TOCTOU-safe authority.
+    const path = join(directories.content, 'assets', 'huge.png');
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '');
+    truncateSync(path, MEDIA_LIMITS.maxSourceBytes + 1);
+    chmodSync(path, 0o000);
+    put(directories.content, 'notes/a.md', '# A\n\n![x](../assets/huge.png)\n');
+
+    const failure = await refusalFrom(directories);
+    assert.equal(failure.code, 'image-not-publishable', 'the oversized source did not fail publication');
+    assert.match(failure.message, /over the size limit/, failure.message);
+    assert.match(failure.detail, /\(too-large\)/, failure.detail);
+    assert.ok(!failure.message.includes('huge'), 'the public message named the private source path');
+  });
+});
+
+test('the public failure breakdown keeps the documented reason order', async () => {
+  await scratch('media-reason-order-', async (directories) => {
+    // The corpus mentions the later table reason first; the breakdown must still
+    // be `missing` before `corrupt`, because the count order is documented and
+    // consumers read it as a stable sentence.
+    putBytes(directories.content, 'assets/broken.png', PNG_UNICODE.subarray(0, 8));
+    put(directories.content, 'notes/a.md', '# A\n\n![corrupt](../assets/broken.png)\n\n![gone](../assets/gone.png)\n');
+    const failure = await refusalFrom(directories);
+    assert.match(failure.message, /1 missing, 1 corrupt or undecodable/, failure.message);
+  });
 });
 
 test('an <img> a note only documents is not a reference, and does not fail the build', async () => {
@@ -926,16 +1062,14 @@ test('every supported raster header yields its own pixel size, and a truncated o
   assert.equal(imageDimensions(PNG_UNICODE.subarray(0, 8), 'png'), undefined);
 });
 
-test('the producer records header dimensions, and a truncated header publishes without attributes', async () => {
+test('the producer records dimensions from the emitted bytes, and an oriented transcode publishes upright', async () => {
   await scratch('media-dimensions-', async (directories) => {
-    const truncated = PNG_UNICODE.subarray(0, 8);
     putBytes(directories.content, 'assets/one.png', PNG_UNICODE);
     putBytes(directories.content, 'assets/photo.jpeg', JPEG);
     putBytes(directories.content, 'assets/anim.gif', GIF_ANIMATED);
     putBytes(directories.content, 'assets/anim.webp', WEBP_ANIMATED);
     putBytes(directories.content, 'assets/lossless.webp', WEBP_LOSSLESS);
     putBytes(directories.content, 'assets/still.avif', AVIF);
-    putBytes(directories.content, 'assets/broken.png', truncated);
     putBytes(directories.content, 'assets/oriented.jpg', ORIENTED_JPEG);
     put(
       directories.content,
@@ -955,8 +1089,6 @@ test('the producer records header dimensions, and a truncated header publishes w
         '',
         '![six](../assets/lossless.webp)',
         '',
-        '![a truncated header](../assets/broken.png)',
-        '',
         '![an oriented photograph](../assets/oriented.jpg)',
         '',
       ].join('\n'),
@@ -964,32 +1096,31 @@ test('the producer records header dimensions, and a truncated header publishes w
 
     const produced = await produce(directories);
     const assets = assetsOf(produced.artifact);
-    const byDigest = new Map(assets.map((asset) => [asset.digest, asset]));
-    const expected: readonly (readonly [Uint8Array, number, number])[] = [
-      [PNG_UNICODE, 8, 6],
-      [JPEG, 8, 6],
-      [GIF_ANIMATED, 4, 4],
-      [WEBP_ANIMATED, 4, 4],
-      [WEBP_LOSSLESS, 12, 20],
-      [AVIF, 8, 6],
+    const expected: readonly (readonly [string, number, number])[] = [
+      ['one.webp', 8, 6],
+      ['photo.webp', 8, 6],
+      ['anim.gif', 4, 4],
+      ['anim.webp', 4, 4],
+      ['lossless.webp', 12, 20],
+      ['still.avif', 8, 6],
+      // The coded frame is 8×6 with EXIF Orientation 6; the emitted WebP is
+      // already upright, so the declared pair is the displayed 6×8.
+      ['oriented.webp', 6, 8],
     ];
-    for (const [bytes, width, height] of expected) {
-      const asset = byDigest.get(digestOf(bytes));
-      assert.ok(asset, `a supported format published nothing`);
-      assert.equal(asset.width, width, `${asset.fileName}: width`);
-      assert.equal(asset.height, height, `${asset.fileName}: height`);
+    for (const [fileName, width, height] of expected) {
+      const asset = assets.find((candidate) => candidate.fileName === fileName);
+      assert.ok(asset, `${fileName} published nothing`);
+      assert.equal(asset.width, width, `${fileName}: width`);
+      assert.equal(asset.height, height, `${fileName}: height`);
+      // Every declared pair is 0010's reader over the emitted header, not a
+      // second opinion: assert it against the staged bytes as well.
+      const staged = produced.staged.get(`${asset.digest}-${asset.fileName}`)!;
+      const format = sniffImageFormat(staged)!;
+      assert.deepEqual(imageDimensions(staged, format), { width, height }, `${fileName}: declared pair is not the emitted header`);
     }
-    const broken = byDigest.get(digestOf(truncated));
-    assert.ok(broken, 'the truncated PNG was not published');
-    assert.equal(broken.width, undefined, 'the truncated PNG claimed a width');
-    assert.equal(broken.height, undefined, 'the truncated PNG claimed a height');
-    const oriented = byDigest.get(digestOf(ORIENTED_JPEG));
-    assert.ok(oriented, 'the EXIF-rotated JPEG was not published');
-    assert.equal(oriented.width, undefined, 'the EXIF-rotated JPEG claimed a coded width');
-    assert.equal(oriented.height, undefined, 'the EXIF-rotated JPEG claimed a coded height');
 
-    // The rendered page uses the recorded values, and the unreadable header
-    // gives no attributes at all rather than a zero or a guess.
+    // The rendered page uses the recorded values, including the upright pair a
+    // transposed source would have leaked before the orientation was applied.
     const markdown = produced.markdown.get('notes-a')!;
     const declared = produced.artifact.assets ?? [];
     const dimensions = new Map(
@@ -1003,9 +1134,6 @@ test('the producer records header dimensions, and a truncated header publishes w
     const rendered = await renderMarkdown(markdown, { publishedAssets: urls, assetDimensions: dimensions });
     assert.match(rendered.html, /width="8" height="6"/, rendered.html);
     assert.match(rendered.html, /width="4" height="4"/, rendered.html);
-    const brokenUrl = produced.artifact.assets!.find((asset) => parseAssetUrl(asset.url)!.digest === digestOf(truncated))!.url;
-    const brokenTag = new RegExp(`<img src="${brokenUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>`).exec(rendered.html);
-    assert.ok(brokenTag, 'the truncated image rendered no tag');
-    assert.doesNotMatch(brokenTag[0], /\swidth=|\sheight=/, `a truncated header produced dimensions: ${brokenTag[0]}`);
+    assert.match(rendered.html, /width="6" height="8"/, rendered.html);
   });
 });
