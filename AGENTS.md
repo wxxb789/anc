@@ -327,7 +327,11 @@ are separate external actions, and so is publication — it runs in
 `.github/workflows/release-npm.yml` and is started by hand from the `release` workflow.
 Version 0.1 adds the local-image pipeline of [goal 0009](docs/goals/archive/0009-zero-config-static-images.md)
 — authorized, referenced PNG/JPEG/GIF/WebP/AVIF copied byte-identically to `/_assets/<sha256>-<name>`,
-an SVG refused until it has a rasterizer — and no other non-Markdown asset handling: no optimizer,
+an SVG refused until it has a rasterizer — and the reading rules of [goal 0010](docs/goals/archive/0010-readable-image-figures.md):
+a standalone image's explicit Markdown title is a visible `<figcaption>` (a tight or loose list item
+containing only that image is promoted the same way), `width`/`height` are emitted only when the stored
+pixels are the displayed pixels, and the first surviving image is eager while later ones defer. It adds
+no other non-Markdown asset handling: no optimizer,
 no WebP conversion, no external image host, no corpus redirects. GitHub Pages *project* sites at
 `/<repo>/` remain unsupported; the hosting contract is a site at the domain root.
 `0.0.1` was published by hand to reserve the `@wxxb789/anc` name and create the page a

@@ -98,8 +98,22 @@ excluded, escaping, SVG, or otherwise unsupported local image fails the build
 rather than shipping a broken picture. The coalesced gates are the exact output
 inventory over the emitted bytes, the extended column of residue/secret scans,
 a real-Chromium JavaScript-disabled display gate, and a packaged foreign-repository
-smoke. Seven goals are archived and 0008 remains active; 0010–0013 are still
-`Ready`.
+smoke. Seven goals are archived and 0008 remains active; 0010–0013 were still
+`Ready` at that point.
+
+On 2026-11-09, [0010](archive/0010-readable-image-figures.md) was completed on
+branch `feat/0010-readable-image-figures` (implementation left uncommitted for
+the orchestrator; the file records branch, files, commands and real counts).
+Standalone block images with an authored Markdown title now render as semantic
+`figure`/`figcaption` with the title as the visible caption and `alt` still the
+accessible alternative; alt-only, decorative, inline and link-wrapped images
+keep their existing shape. The producer reads intrinsic PNG/JPEG/GIF/WebP/AVIF
+dimensions from the authorized emitted bytes and the renderer emits
+`width`/`height`, with the lead image eager and later images lazy and
+asynchronously decoded. The gates extend to real Chromium observations of
+caption presence and absence, header-matching dimensions, script-free decoding,
+narrow-viewport overflow and reserved layout space. Eight goals are archived and
+0008 remains active; 0011–0013 are still `Ready`.
 
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
@@ -126,14 +140,13 @@ not in an implementer's interpretation of a goal prompt.
 The user's agreed priority is **correct local-image display through the existing
 GitHub Pages and Cloudflare Pages static hosting paths first**, with no new CDN
 account or image-specific setup. ANC builds and ships static bytes; it does not
-need a provider SDK merely to use a static host's CDN. Image presentation, WebP
-optimization, SVG rasterization and optional managed hosting are subsequent,
-separately assessable outcomes. Goal 0008 continues independently; its browser
-cost acceptance is not a prerequisite for 0009.
+need a provider SDK merely to use a static host's CDN. Image presentation shipped
+in 0010; WebP optimization, SVG rasterization and optional managed hosting remain
+subsequent, separately assessable outcomes. Goal 0008 continues independently;
+its browser cost acceptance is not a prerequisite for 0009.
 
 | Goal | Status | Single completion judgment | Material prerequisites |
 | --- | --- | --- | --- |
-| [0010 — Readable image figures](0010-readable-image-figures.md) | Ready | Local images have truthful captions, accessibility and responsive layout without another authoring interface | 0009 (completed) |
 | [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md) | Ready | Automatic format choice improves typical image costs while protecting legibility, behavior and package simplicity | 0009 (completed); 0010 is nonblocking |
 | [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009 (completed), 0011 |
 | [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009 (completed); 0011 nonblocking |
@@ -141,7 +154,8 @@ cost acceptance is not a prerequisite for 0009.
 `Ready` here means a downstream agent can pursue the stated outcome once its
 prerequisite is accepted; it does **not** mean implemented, deployed or approved
 as a release. `Provisional` goals preserve accepted direction but require
-refinement before activation. 0009 is completed; 0010–0013 have not started.
+refinement before activation. 0009 and 0010 are completed; 0011–0013 have not
+started.
 
 **Scope boundary.** Current ANC deployment supports root-of-origin sites, not a
 GitHub Pages project site's `/<repo>/` prefix. Extending site-wide base-path
@@ -150,9 +164,9 @@ Media RFC #31 also proposes external-link behavior, numbered captions,
 references sections and wide-table accessibility. This initiative does not
 silently commit those still-unresolved proposals; such choices can be evaluated
 as separate future goals. 0009 reconciled the accepted core design's former
-no-asset-pipeline stance as part of its change; the owning media design, content
-semantics, architecture index, `AGENTS.md`, and adoption docs now describe the
-implemented contract rather than a target.
+no-asset-pipeline stance and 0010 added the caption/layout reading rules; the
+owning media design, content semantics, architecture index, `AGENTS.md`, and
+adoption docs now describe both implemented contracts rather than a target.
 
 ## Completed goals
 
@@ -165,6 +179,7 @@ implemented contract rather than a target.
 | [0006 — Safe release output](archive/0006-safe-release-output.md) | 2026-09-17 | Implementation commit `3e65a12`, PR #8, CI run `35231482566`; the reviewed-set failures, exact-output refusals, reconstructed-row scanner controls, withdrawal-after-rebuild, whole-tree failed-build preservation, and concurrent-build binding isolation are recorded in the file. |
 | [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md) | 2026-09-18 | Implementation commits `2c9772e`, `33aa0ae`, `12ff781`, `ebd02f9`, `c159802`, `65f89d4`, PR #10; local `pnpm run verify` and CI run `35253591403` (80 files / 952 passed / 34 skipped) green on `65f89d4`, Action-parity CI run `35253591383` green with the shallow-clone refusal, and the recorded `pack:tarball` digest plus `smoke:tarball` result — all six evaluation rows in the file. |
 | [0009 — Zero-config static images](archive/0009-zero-config-static-images.md) | 2026-11-09 | Branch `feat/0009-zero-config-static-images`, production commit `be6b6cf`, implementation uncommitted for landing; the packaged producer publishes only referenced, authorized raster bytes under `/_assets/<sha256>-<name>`, the exact inventory owns the namespace, and each "Done when" row carries its executed evidence in the file — including a JavaScript-disabled Chromium display gate and a packaged foreign-repository smoke with images. |
+| [0010 — Readable image figures](archive/0010-readable-image-figures.md) | 2026-11-09 | Branch `feat/0010-readable-image-figures`, created off `origin/main` at `69f0f85`; implementation uncommitted for landing. The completion record maps each “Done when” row to its executed evidence, including packaged-build Chromium measurements for figures, dimensions, lazy/eager loading, no-script decoding, narrow-width overflow and reserved layout space. |
 
 One SQLite goal remains `in progress`, and three media goals remain `Ready`.
 Schema creation, query-module code,

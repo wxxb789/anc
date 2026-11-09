@@ -163,12 +163,22 @@ function definitions(markdown: string): { identifier: string; url: string; title
  */
 const htmlWindow = new Window();
 
-/** The `alt` and `title` each `<img>` carries after the shipped renderer. */
-function renderedImages(html: string): { alt: string; title: string | null }[] {
+/**
+ * The `alt`, `title` and visible caption each `<img>` carries after the shipped
+ * renderer.
+ *
+ * Goal 0010 promotes a titled standalone image to `figure > img + figcaption`,
+ * so the title moves out of the attribute and into the caption's text. These
+ * resolver tests are about the title *text* surviving its Markdown round trip,
+ * not about where the renderer places it; recording both fields lets them assert
+ * the value without pinning one output shape.
+ */
+function renderedImages(html: string): { alt: string; title: string | null; caption: string | null }[] {
   htmlWindow.document.body.innerHTML = html;
   return [...htmlWindow.document.querySelectorAll('img')].map((image) => ({
     alt: image.getAttribute('alt') ?? '',
     title: image.getAttribute('title'),
+    caption: image.closest('figure')?.querySelector('figcaption')?.textContent ?? null,
   }));
 }
 
@@ -295,7 +305,7 @@ test('every emitted inline image label round-trips to the alt it started from', 
     assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(source)}: wrong destination`);
     assert.deepEqual(
       renderedImages(result.html),
-      [{ alt, title: authored[0]!.title }],
+      [{ alt, title: authored[0]!.title, caption: null }],
       `${JSON.stringify(source)}: the rendered attributes changed: ${result.html}`,
     );
     assert.ok(!result.html.includes('!['), `${JSON.stringify(source)}: literal Markdown reached the page: ${result.html}`);
@@ -318,7 +328,7 @@ test('every emitted reference-style image label round-trips and its definition l
     assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(reference)}: wrong destination`);
     assert.deepEqual(
       renderedImages(result.html),
-      [{ alt, title: authored[0]!.title }],
+      [{ alt, title: authored[0]!.title, caption: null }],
       `${JSON.stringify(reference)}: the rendered attributes changed: ${result.html}`,
     );
     // The reference is rewritten inline and only the definition's destination
@@ -352,7 +362,7 @@ test('every emitted inline image title round-trips to the title it started from'
     assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(source)}: wrong destination`);
     assert.deepEqual(
       renderedImages(result.html),
-      [{ alt: 'x', title }],
+      [{ alt: 'x', title: null, caption: title }],
       `${JSON.stringify(source)}: the rendered title changed: ${result.html}`,
     );
   }
@@ -375,7 +385,7 @@ test('every emitted reference-style image title round-trips and the definition l
     assert.equal(parsed[0]!.url, CHART_URL, `${JSON.stringify(titleSource)}: wrong destination`);
     assert.deepEqual(
       renderedImages(result.html),
-      [{ alt: 'x', title }],
+      [{ alt: 'x', title, caption: null }],
       `${JSON.stringify(titleSource)}: the rendered title changed: ${result.html}`,
     );
     // The definition label is untouched; its old destination and title are
@@ -417,7 +427,7 @@ test('a generated 1–5 backslash matrix round-trips in both fields and both sha
       assert.equal(parsed[0]!.title, null, `${what}: inline label grew a title`);
       assert.deepEqual(
         renderedImages(result.html),
-        [{ alt: text, title: null }],
+        [{ alt: text, title: null, caption: null }],
         `${what}: inline label rendered: ${result.html}`,
       );
 
@@ -434,7 +444,7 @@ test('a generated 1–5 backslash matrix round-trips in both fields and both sha
       assert.equal(parsed[0]!.title, null, `${what}: reference label grew a title`);
       assert.deepEqual(
         renderedImages(result.html),
-        [{ alt: text, title: null }],
+        [{ alt: text, title: null, caption: null }],
         `${what}: reference label rendered: ${result.html}`,
       );
 
@@ -450,7 +460,7 @@ test('a generated 1–5 backslash matrix round-trips in both fields and both sha
       assert.equal(parsed[0]!.title, text, `${what}: inline title: ${result.markdown}`);
       assert.deepEqual(
         renderedImages(result.html),
-        [{ alt: 'x', title: text }],
+        [{ alt: 'x', title: null, caption: text }],
         `${what}: inline title rendered: ${result.html}`,
       );
 
@@ -468,7 +478,7 @@ test('a generated 1–5 backslash matrix round-trips in both fields and both sha
       assert.equal(parsed[0]!.title, text, `${what}: reference title: ${result.markdown}`);
       assert.deepEqual(
         renderedImages(result.html),
-        [{ alt: 'x', title: text }],
+        [{ alt: 'x', title: null, caption: text }],
         `${what}: reference title rendered: ${result.html}`,
       );
     }
@@ -487,7 +497,7 @@ test('an honest image label emits readable source and the same rendered alt', as
   ] as const) {
     const result = await run(`![${label}](assets/chart.png)\n`);
     assert.ok(result.markdown.includes(`![${emitted}](${CHART_URL})`), `${label}: emitted ${result.markdown}`);
-    assert.deepEqual(renderedImages(result.html), [{ alt: label, title: null }], `${label}: ${result.html}`);
+    assert.deepEqual(renderedImages(result.html), [{ alt: label, title: null, caption: null }], `${label}: ${result.html}`);
     assert.ok(!renderedImages(result.html)[0]!.alt.includes('\\'), `${label}: a backslash reached the reader`);
   }
 });
@@ -505,8 +515,8 @@ test('an honest image title emits readable source and the same rendered title', 
   ] as const) {
     const result = await run(`![x](assets/chart.png "${title}")\n`);
     assert.ok(result.markdown.includes(`"${emitted}"`), `${title}: emitted ${result.markdown}`);
-    assert.deepEqual(renderedImages(result.html), [{ alt: 'x', title }], `${title}: ${result.html}`);
-    assert.ok(!renderedImages(result.html)[0]!.title!.includes('\\'), `${title}: a backslash reached the reader`);
+    assert.deepEqual(renderedImages(result.html), [{ alt: 'x', title: null, caption: title }], `${title}: ${result.html}`);
+    assert.ok(!renderedImages(result.html)[0]!.caption!.includes('\\'), `${title}: a backslash reached the reader`);
   }
 });
 
@@ -520,7 +530,7 @@ test('an image label inside a table cell keeps the cell and its alt', async () =
   const parsed = images(result.markdown);
   assert.equal(parsed.length, 1, `the rewritten table lost its image: ${result.markdown}`);
   assert.equal(parsed[0]!.alt, 'a | b', result.markdown);
-  assert.deepEqual(renderedImages(result.html), [{ alt: 'a | b', title: null }], result.html);
+  assert.deepEqual(renderedImages(result.html), [{ alt: 'a | b', title: null, caption: null }], result.html);
   assert.equal((result.html.match(/<td>/g) ?? []).length, 1, `the cell split: ${result.html}`);
   assert.equal((result.html.match(/<img\b/g) ?? []).length, 1, `the image vanished: ${result.html}`);
 });

@@ -14,6 +14,7 @@
  */
 
 import { loadArtifact } from './artifact-source.ts';
+import type { ImageDimensions } from './media.ts';
 import { notesForSlugs } from './relations.ts';
 import { routeKey, tagFacets as producerTagFacets, tagRoute, type Facet } from './routes.ts';
 import type { ContentArtifact, ContentEntry } from './schema.ts';
@@ -37,10 +38,28 @@ export const entries: readonly ContentEntry[] = artifact.entries;
  * last gate over an image reference — so every caller rendering an *artifact*
  * entry has to hand it this set. It is exported here rather than recomputed in
  * each caller because the artifact is the only authority for it, and a second
- * `new Set(artifact.assets)` per page is both wasted work and a second place for
- * the expression to drift.
+ * `new Set(...)` per page is both wasted work and a second place for the
+ * expression to drift.
  */
-export const publishedAssets: ReadonlySet<string> = new Set(artifact.assets ?? []);
+export const publishedAssets: ReadonlySet<string> = new Set(
+  (artifact.assets ?? []).map((asset) => asset.url),
+);
+
+/**
+ * The intrinsic pixel size of each published asset whose header declared one.
+ *
+ * The producer records this from the bytes it already authorized and emits; the
+ * renderer uses it for `width`/`height` attributes so the browser reserves
+ * layout space. An asset whose header was unreadable is absent, not zero — the
+ * renderer then emits no dimensions rather than a guess.
+ */
+export const assetDimensions: ReadonlyMap<string, ImageDimensions> = new Map(
+  (artifact.assets ?? []).flatMap((asset) =>
+    asset.width === undefined
+      ? []
+      : [[asset.url, { width: asset.width, height: asset.height }] as const],
+  ),
+);
 
 const bySlug = new Map(entries.map((entry) => [entry.slug, entry]));
 

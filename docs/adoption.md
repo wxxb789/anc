@@ -196,6 +196,31 @@ The extension comes from the bytes rather than from your filename, so a PNG name
 still served as `image/png`. **This is not a metadata scrubber**: a photograph keeps its
 EXIF and GPS block, because stripping it is a separate policy this build does not claim.
 
+Write the image's description in `alt`, and use Markdown's own title for a caption:
+
+```markdown
+![A chart of revenue by quarter](charts/revenue.png "Figure 1: revenue by quarter")
+```
+
+That title is the caption a reader sees under the picture. `alt` is not repeated as a
+caption, and an image without a title gets none — there is no automatic "Figure N" label.
+An image written in the middle of a sentence, or wrapped in a link, keeps its inline form;
+a decorative image can be marked `![](artwork.png)` and stays uncaptioned. A titled image
+that is the only content of a list item becomes the same figure whether the list is tight
+or loose. A `title` on an inline image remains a tooltip, because only a standalone block
+image becomes a figure.
+
+For PNG, JPEG, GIF, WebP and AVIF the build reads the picture's own pixel dimensions from
+its header and writes `width`/`height`, so the browser reserves the right space before the
+bytes arrive and a portrait, a wide screenshot or transparent artwork stays inside the
+article at any width. A malformed or truncated header simply produces no dimension
+attributes; the image still publishes and the build does not guess. Dimensions are emitted
+only when the stored pixels are the displayed pixels: a JPEG, WebP or PNG EXIF orientation
+other than 1, or an AVIF `irot`/`imir` transform, makes the build omit `width`/`height`
+rather than reserve space for a different frame. The first image in an article loads eagerly,
+later images load lazily, and all use asynchronous decoding. This is ordinary static HTML:
+nothing here needs JavaScript, an image CDN, or a configuration key.
+
 An image that cannot be published **fails the build**, and the previously built site stays
 where it was. The public message counts the reasons; the private report names the file and
 the line. The reasons are:

@@ -656,6 +656,35 @@ main:focus:not(:focus-visible) {
 }
 
 /*
+ * A captioned block image. `<figure>` carries a UA `margin-inline: 40px` that
+ * would indent the picture away from the prose, so the margin is set explicitly
+ * like the code-block and diagram figures. `min-width: 0` keeps a wide image
+ * from forcing the article's grid wider; the image itself is already capped by
+ * the global `max-width: 100%; height: auto` rule, so its intrinsic
+ * `width`/`height` attributes reserve the right aspect ratio without pinning a
+ * pixel size that would overflow a narrow viewport.
+ */
+.image-figure {
+  margin-block: var(--space-6);
+  margin-inline: 0;
+  min-width: 0;
+}
+
+/* A block-level image removes the inline baseline gap; centring keeps a
+   portrait or a small transparent illustration from hugging the text edge. */
+.image-figure > img {
+  display: block;
+  margin-inline: auto;
+}
+
+.image-figure > figcaption {
+  margin-top: var(--space-2);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+/*
  * A fenced code block. `<figure>` carries a UA `margin-inline: 40px` that would
  * indent every code block away from the prose, so the margin is set explicitly.
  * `min-width: 0` stops the figure from being sized by its widest line — the

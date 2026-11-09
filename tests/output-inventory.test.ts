@@ -116,7 +116,7 @@ const ASSET_URL = `/_assets/${ASSET_NAME}`;
  * make these rows measure the ambient fixture instead of the one asset each row
  * is about.
  */
-const WITH_ASSET: ContentArtifact = { ...ARTIFACT, assets: [ASSET_URL] };
+const WITH_ASSET: ContentArtifact = { ...ARTIFACT, assets: [{ url: ASSET_URL }] };
 
 /**
  * A dist copy with no `_assets/` namespace at all, so a row can add exactly what
@@ -192,7 +192,7 @@ test('a declared image asset is exactly the inventory the artifact describes', (
     writeFileSync(join(misnamed, ASSET_DIRECTORY, `${ASSET_DIGEST}-chart.gif`), ASSET_BYTES);
     let thrown: BuildFailure | undefined;
     try {
-      assertOutputInventory(misnamed, { ...ARTIFACT, assets: [wrongUrl] });
+      assertOutputInventory(misnamed, { ...ARTIFACT, assets: [{ url: wrongUrl }] });
     } catch (error) {
       thrown = error as BuildFailure;
     }
@@ -252,7 +252,7 @@ test('asset URLs with reserved characters name one file each and the inventory a
     }
 
     assert.ok(
-      assertOutputInventory(root, { ...ARTIFACT, assets: urls.sort() }) > 0,
+      assertOutputInventory(root, { ...ARTIFACT, assets: urls.sort().map((url) => ({ url })) }) > 0,
       'the inventory accepted nothing',
     );
 
@@ -260,7 +260,7 @@ test('asset URLs with reserved characters name one file each and the inventory a
     // and it names no canonical asset.
     let thrown: BuildFailure | undefined;
     try {
-      assertOutputInventory(root, { ...ARTIFACT, assets: [`/_assets/${rows[0]!.digest}-chart#one.png`] });
+      assertOutputInventory(root, { ...ARTIFACT, assets: [{ url: `/_assets/${rows[0]!.digest}-chart#one.png` }] });
     } catch (error) {
       thrown = error as BuildFailure;
     }

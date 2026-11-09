@@ -199,7 +199,10 @@ a disclosure there; that is why the names and the counts are split.
   content, so an animation keeps its frames and one picture is one file however many notes
   embed it. A reference resolves relative to the note, then the content root; a missing,
   excluded, escaping, or unsupported one — SVG included — fails the build rather than
-  shipping a broken picture. Remote images are left as written and never fetched.
+  shipping a broken picture. Remote images are left as written and never fetched. A
+  standalone image's explicit Markdown title becomes a visible `<figcaption>` while `alt`
+  stays the accessible alternative, intrinsic dimensions are read from the published bytes
+  so layout space is reserved, and the first image loads eagerly while later ones defer.
 
 ## Architecture
 

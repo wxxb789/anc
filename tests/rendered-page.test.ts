@@ -42,7 +42,7 @@ import { afterAll, beforeAll, test, type TestContext } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import type { Browser, BrowserContext, ConsoleMessage, Page } from 'playwright';
 
-import { entries, getEntry } from '../src/lib/content.ts';
+import { assetDimensions, entries, getEntry } from '../src/lib/content.ts';
 import { collectionNeighbours } from '../src/lib/relations.ts';
 import { localGraph } from '../src/lib/graph.ts';
 import { noteRoute } from '../src/lib/routes.ts';
@@ -512,6 +512,106 @@ async function forEachRenderedRoute(
     await page.close();
   }
 }
+
+/**
+ * The page-level half of Goal 0010: the fixture corpus's own image note, laid
+ * out at the narrowest width with scripting off.
+ *
+ * `media-display.test.ts` builds a purpose-made corpus and measures the rules in
+ * isolation. This gate asks the same questions of a page the real build emitted
+ * from a producer artifact, so the attributes have to survive the actual page
+ * anatomy rather than the test's own render call. It skips on a corpus with no
+ * local images (the repository's own artifact), which is why it is a `runIf`
+ * rather than an assumption.
+ */
+test.runIf(entries.some((entry) => entry.markdown.includes('/_assets/')))(
+  'a built image page reserves dimensions and keeps its figures readable at 320 px',
+  async (context) => {
+    const browser = requireBrowser(context);
+    const entry = entries.find((candidate) => candidate.markdown.includes('/_assets/'))!;
+    const page = await browser.newPage({ viewport: { width: NARROWEST_PX, height: VIEWPORT_HEIGHT_PX } });
+    try {
+      await visit(page, noteRoute(entry.slug));
+      const count = await page.locator('article img').count();
+      assert.ok(count > 0, 'the image page carries no img');
+      for (let index = 0; index < count; index += 1) {
+        await page.locator('article img').nth(index).scrollIntoViewIfNeeded();
+      }
+      await page.waitForFunction(() =>
+        [...document.querySelectorAll('article img')].every((image) => (image as HTMLImageElement).complete),
+      );
+
+      const measured = await page.evaluate(() => {
+        const article = document.querySelector('article.prose') as HTMLElement;
+        const images = [...document.querySelectorAll('article img')] as HTMLImageElement[];
+        return {
+          articleClient: article.clientWidth,
+          articleScroll: article.scrollWidth,
+          images: images.map((image) => ({
+            src: image.getAttribute('src') ?? '',
+            width: image.getAttribute('width'),
+            height: image.getAttribute('height'),
+            naturalWidth: image.naturalWidth,
+            naturalHeight: image.naturalHeight,
+            loading: image.getAttribute('loading'),
+            decoding: image.getAttribute('decoding'),
+            caption: image.closest('figure')?.querySelector('figcaption')?.textContent ?? null,
+          })),
+          captions: [...document.querySelectorAll('article figcaption')].map((caption) => ({
+            text: caption.textContent ?? '',
+            parent: caption.parentElement?.tagName ?? '',
+            images: caption.parentElement?.querySelectorAll('img').length ?? 0,
+          })),
+        };
+      });
+
+      assert.ok(measured.articleScroll <= measured.articleClient,
+        `the image page overflows at ${NARROWEST_PX} px: ${JSON.stringify(measured)}`);
+      assert.equal(measured.images[0]!.loading, 'eager', 'the lead image does not load eagerly');
+      for (const [index, image] of measured.images.entries()) {
+        assert.ok(image.naturalWidth > 0 && image.naturalHeight > 0, `the browser decoded nothing for ${image.src}`);
+        assert.equal(image.decoding, 'async', `${image.src}: decoding hint`);
+        if (index > 0) assert.equal(image.loading, 'lazy', `${image.src}: below-the-fold loading`);
+      }
+      // The published assets are the ones this goal can reserve space for; the
+      // fixture note also carries a `data:` inline raster, which has no artifact
+      // declaration and therefore no dimension attributes.
+      const published = measured.images.filter((image) => image.src.startsWith('/_assets/'));
+      assert.ok(published.length > 0, 'the image page carries no published asset');
+      const withoutDimensions: typeof published = [];
+      for (const image of published) {
+        const reserved = assetDimensions.get(image.src);
+        if (reserved === undefined) {
+          assert.equal(image.width, null, `${image.src}: an undeclared asset got a width attribute`);
+          assert.equal(image.height, null, `${image.src}: an undeclared asset got a height attribute`);
+          withoutDimensions.push(image);
+          continue;
+        }
+        assert.equal(image.width, String(reserved.width), `${image.src}: width disagrees with the artifact`);
+        assert.equal(image.height, String(reserved.height), `${image.src}: height disagrees with the artifact`);
+        assert.equal(image.naturalWidth, reserved.width, `${image.src}: natural width disagrees with the header`);
+        assert.equal(image.naturalHeight, reserved.height, `${image.src}: natural height disagrees with the header`);
+      }
+      // The fixture carries exactly one EXIF-oriented JPEG: its coded frame is
+      // 8x6, the browser displays 6x8, and the artifact therefore declares no
+      // dimensions. That is the fail-open case, not a missing measurement.
+      assert.equal(withoutDimensions.length, 1, `unexpected no-dimension assets: ${JSON.stringify(withoutDimensions)}`);
+      assert.match(withoutDimensions[0]!.src, /-oriented\.jpg$/, 'the no-dimension asset is not the oriented fixture');
+      assert.equal(withoutDimensions[0]!.naturalWidth, 6, 'the oriented fixture was not displayed at its rotated width');
+      assert.equal(withoutDimensions[0]!.naturalHeight, 8, 'the oriented fixture was not displayed at its rotated height');
+
+      assert.ok(measured.captions.length >= 1, 'the fixture page carried no caption to inspect');
+      for (const caption of measured.captions) {
+        assert.equal(caption.parent, 'FIGURE', 'a figcaption is not inside a figure');
+        assert.ok(caption.text.trim() !== '', 'an empty figcaption shipped');
+        assert.equal(caption.images, 1, 'a captioned figure does not hold exactly one image');
+      }
+    } finally {
+      await page.close();
+    }
+  },
+  90_000,
+);
 
 /**
  * The JavaScript-only controls do not render when scripting is unavailable.

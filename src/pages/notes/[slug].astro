@@ -32,7 +32,7 @@ import Layout from '../../layouts/Layout.astro';
 import LinkedNotes from '../../components/LinkedNotes.astro';
 import NoteGraph from '../../components/NoteGraph.astro';
 import TableOfContents from '../../components/TableOfContents.astro';
-import { entries, getEntry, publishedAssets, tagFacets, tagRouteForLabel } from '../../lib/content.ts';
+import { assetDimensions, entries, getEntry, publishedAssets, tagFacets, tagRouteForLabel } from '../../lib/content.ts';
 import { hasDrawableGraph, localGraph } from '../../lib/graph.ts';
 import { renderMarkdown } from '../../lib/markdown.ts';
 import {
@@ -103,6 +103,10 @@ const { html, toc, hasCode, hasMath, hasMermaid } = await renderMarkdown(entry.m
   // list rather than letting the renderer infer one is what makes "the producer
   // authorized it" the only way an image reaches a reader.
   publishedAssets,
+  // The producer's header-read pixel sizes, so the browser reserves a figure's
+  // layout space before its bytes arrive. Absent for an asset whose header did
+  // not yield a size; the renderer then omits the attributes rather than guess.
+  assetDimensions,
   // The two strings the renderer writes into the article that are this
   // repository's words rather than the author's: a heading anchor's accessible
   // name and an untitled diagram's caption. They are chrome, so they follow the
