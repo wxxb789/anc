@@ -643,14 +643,14 @@ function inlineTitle(title: string | null | undefined): string {
  *   avoid: every local image reference must either publish or be recorded as a
  *   failure, and the caller is the only one that can say which.
  */
-export function resolveLinksIn(
+export async function resolveLinksIn(
   markdown: string,
   sourcePath: string,
   index: LinkIndex,
   selfSlug: string,
   routeFor: (slug: string) => string,
   media: ImagePublisher,
-): TraversalResult {
+): Promise<TraversalResult> {
   const tree = markdownToMdast(markdown, { features: { wikilinks: true, gfm: true } });
   const nodes: MdastNode[] = [];
   const nestedNodes = new Set<MdastNode>();
@@ -721,7 +721,7 @@ export function resolveLinksIn(
     const mediaOwned = isImage && (!isWikilink || namesNonNoteFile(url));
 
     if (mediaOwned) {
-      const outcome = media.publish({ notePath: sourcePath, target: url, isWikilink });
+      const outcome = await media.publish({ notePath: sourcePath, target: url, isWikilink });
       const title =
         node.type === 'image' ? node.title : definition?.type === 'definition' ? definition.title : null;
       if (outcome.kind === 'external') continue;

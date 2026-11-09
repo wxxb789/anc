@@ -40,7 +40,7 @@ const CHART_URL = `/_assets/${'b'.repeat(64)}-chart.png`;
 
 /** The corpus's one media file, resolved the way the producer resolves it. */
 const publisher: ImagePublisher = {
-  publish({ notePath, target, isWikilink }) {
+  async publish({ notePath, target, isWikilink }) {
     const resolved = resolveImageTarget(target, notePath, (path) => (path === 'assets/chart.png' ? path : undefined), isWikilink);
     if (resolved.kind === 'external') return { kind: 'external' };
     if (resolved.kind !== 'local') return { kind: 'failed', reason: resolved.kind };
@@ -50,7 +50,7 @@ const publisher: ImagePublisher = {
 
 /** Resolve one body written as `src.md`, then render what it became. */
 async function run(body: string) {
-  const result = resolveLinksIn(body, 'src.md', indexCorpus(CORPUS), 'src', (slug) => `/${slug}/`, publisher);
+  const result = await resolveLinksIn(body, 'src.md', indexCorpus(CORPUS), 'src', (slug) => `/${slug}/`, publisher);
   // The renderer refuses a local image `src` the build did not publish, so the
   // one asset this corpus has is handed to it. That is what the note page does
   // with the artifact's own list.
@@ -592,7 +592,7 @@ test('the producer and renderer classify raw image sources with one predicate', 
   for (const row of RAW_IMAGE_ROWS) {
     assert.equal(classifyImageSource(row.src), row.expected, `${row.name}: shared classifier`);
     const body = `<img src="${row.src}" alt="probe">\n`;
-    const result = resolveLinksIn(body, 'src.md', indexCorpus([{ path: 'src.md', slug: 'src' }]), 'src', (slug) => `/${slug}/`, publisher);
+    const result = await resolveLinksIn(body, 'src.md', indexCorpus([{ path: 'src.md', slug: 'src' }]), 'src', (slug) => `/${slug}/`, publisher);
     const failures = result.mediaFailures.map((failure) => failure.reason);
     if (row.expected === 'remote') {
       assert.deepEqual(failures, [], `${row.name}: the producer refused a remote source`);
@@ -624,7 +624,7 @@ test('the producer and renderer classify raw image sources with one predicate', 
 
   // An `<img>` with no src keeps its current split treatment: the producer
   // reports the form, the renderer leaves the element without a src attribute.
-  const noSrc = resolveLinksIn('<img alt="probe">\n', 'src.md', indexCorpus([{ path: 'src.md', slug: 'src' }]), 'src', (slug) => `/${slug}/`, publisher);
+  const noSrc = await resolveLinksIn('<img alt="probe">\n', 'src.md', indexCorpus([{ path: 'src.md', slug: 'src' }]), 'src', (slug) => `/${slug}/`, publisher);
   assert.deepEqual(noSrc.mediaFailures.map((failure) => failure.reason), ['html-form'], 'an img with no src was accepted');
   const renderedNoSrc = await renderMarkdown('<img alt="probe">\n', { publishedAssets: new Set() });
   assert.doesNotMatch(renderedNoSrc.html, /\ssrc=/, renderedNoSrc.html);

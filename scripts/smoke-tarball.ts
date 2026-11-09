@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
+import sharp from 'sharp';
 import { chromium, type Browser } from 'playwright';
 import { serveDist, sqliteAssetRequests, tabTo, workerScriptPath, type ServedSite } from '../tests/support/browser-site.ts';
 import {
@@ -365,6 +366,34 @@ async function checkShippedPreview(binary: string, scratch: string): Promise<voi
   }
 }
 
+/** A deterministic photograph large enough to exercise a real q80 candidate. */
+async function representativePhotograph(width: number, height: number): Promise<Buffer> {
+  let state = 0x51f15e;
+  const random = (): number => {
+    state ^= state << 13;
+    state ^= state >>> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 4_294_967_296;
+  };
+  const raw = Buffer.alloc(width * height * 3);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const index = (y * width + x) * 3;
+      const u = x / width;
+      const v = y / height;
+      const structure = Math.sin(u * 12.5) * 0.11 + Math.cos(v * 9.1) * 0.09;
+      const grain = (random() - 0.5) * 0.05;
+      const clamp = (value: number): number => Math.max(0, Math.min(255, Math.round(255 * value)));
+      raw[index] = clamp(0.5 + 0.35 * v + structure + grain);
+      raw[index + 1] = clamp(0.42 + 0.3 * (1 - v) + structure * 0.7 + grain);
+      raw[index + 2] = clamp(0.28 + 0.4 * u + structure * 0.4 + grain);
+    }
+  }
+  return sharp(raw, { raw: { width, height, channels: 3 } })
+    .jpeg({ quality: 92, chromaSubsampling: '4:4:4' })
+    .toBuffer();
+}
+
 /**
  * The packaged path's image evidence, with scripting off.
  *
@@ -408,7 +437,7 @@ async function checkImages(browser: Browser, server: ServedSite, expectedFiles: 
         caption: image.closest('figure')?.querySelector('figcaption')?.textContent ?? null,
       })),
     );
-    assert(images.length >= 6, 'the foreign note rendered fewer images than it embeds: ' + JSON.stringify(images));
+    assert(images.length >= 7, 'the foreign note rendered fewer images than it embeds: ' + JSON.stringify(images));
     for (const image of images) {
       assert(image.src.startsWith('/_assets/'), 'an image points outside the published assets: ' + image.src);
       assert(image.complete, 'an image never finished loading: ' + image.src);
@@ -420,9 +449,10 @@ async function checkImages(browser: Browser, server: ServedSite, expectedFiles: 
       assert(image.loading === 'lazy', 'a below-the-fold image is not lazy: ' + image.src);
     }
     const sized = Object.entries({
-      'portrait.png': [24, 72],
-      'screenshot.png': [480, 120],
-      'transparent.png': [96, 96],
+      'portrait.webp': [24, 72],
+      'screenshot.webp': [480, 120],
+      'transparent.webp': [96, 96],
+      'photo-large.webp': [800, 600],
     } as const);
     for (const [suffix, [width, height]] of sized) {
       const image = images.find((candidate) => candidate.src.endsWith(`-${suffix}`));
@@ -436,7 +466,7 @@ async function checkImages(browser: Browser, server: ServedSite, expectedFiles: 
       images.some((image) => image.caption === 'A packaged portrait caption' && image.alt === 'a narrow portrait gradient'),
       'the packaged figure lost its caption or replaced its alt: ' + JSON.stringify(images),
     );
-    assert(images.find((image) => image.src.endsWith('-transparent.png'))?.alt === '',
+    assert(images.find((image) => image.src.endsWith('-transparent.webp'))?.alt === '',
       'the decorative image lost its empty alt');
 
     const contentTypes: Record<string, string> = {
@@ -490,6 +520,7 @@ async function main(): Promise<number> {
     writeFileSync(join(scratch, 'media', 'portrait.png'), PNG_PORTRAIT);
     writeFileSync(join(scratch, 'media', 'screenshot.png'), PNG_SCREENSHOT);
     writeFileSync(join(scratch, 'media', 'transparent.png'), PNG_TRANSPARENT);
+    writeFileSync(join(scratch, 'media', 'photo-large.jpg'), await representativePhotograph(800, 600));
     writeFileSync(
       join(scratch, 'welcome.md'),
       [
@@ -516,6 +547,10 @@ async function main(): Promise<number> {
         'An untitled wide screenshot stays a plain image:',
         '',
         '![a wide screenshot](media/screenshot.png)',
+        '',
+        'A representative photograph is not a tiny fixture:',
+        '',
+        '![a larger photograph](media/photo-large.jpg)',
         '',
         'Decorative artwork keeps an empty alternative and no caption:',
         '',
@@ -609,21 +644,28 @@ async function main(): Promise<number> {
     assert(welcome.includes('language-mermaid'), 'client diagram fallback did not ship');
     assert(!welcome.includes('PRIVATE-BODY-MUST-NOT-SHIP'), 'withheld body reached its linking page');
 
-    // --- Image assets: six files, one filename with a space and CJK, a
+    // --- Image assets: seven files, one filename with a space and CJK, a
     // photograph shared with the second note, and the figure/layout cases ---
     const assetFiles = readdirSync(join(dist, '_assets')).sort();
-    assert(assetFiles.length === 6, 'the foreign output carries ' + assetFiles.length + ' image assets: ' + assetFiles.join(', '));
+    assert(assetFiles.length === 7, 'the foreign output carries ' + assetFiles.length + ' image assets: ' + assetFiles.join(', '));
     for (const file of assetFiles) {
       const bytes = readFileSync(join(dist, '_assets', file));
       const digest = createHash('sha256').update(bytes).digest('hex');
       assert(digest === file.slice(0, 64), file + ' does not hash to the digest its URL names');
     }
+    // Goal 0011 in the packaged path: the six JPEG/PNG sources publish as WebP
+    // candidates and the animation keeps its own bytes. Asserted by extension so
+    // a build that silently stopped encoding fails here rather than looking
+    // green because every source still published.
+    const webpAssets = assetFiles.filter((file) => file.endsWith('.webp'));
+    assert(webpAssets.length === 6, 'the packaged build published ' + webpAssets.length + ' WebP assets, not six: ' + assetFiles.join(', '));
+    assert(assetFiles.some((file) => file.endsWith('-anim.gif')), 'the animated GIF was re-encoded or lost: ' + assetFiles.join(', '));
     assert(
-      assetFiles.some((file) => file.includes('图 表 one')),
-      'the Unicode-named image did not publish under its own name: ' + assetFiles.join(', '),
+      assetFiles.some((file) => file.includes('图 表 one.webp')),
+      'the Unicode-named image did not publish under its own WebP name: ' + assetFiles.join(', '),
     );
     const welcomeImages = [...welcome.matchAll(/<img src="(\/_assets\/[^"]+)"/g)].map((match) => match[1]!);
-    assert(welcomeImages.length === 8, 'the foreign page points at ' + welcomeImages.length + ' asset URLs');
+    assert(welcomeImages.length === 9, 'the foreign page points at ' + welcomeImages.length + ' asset URLs');
     // The packaged renderer, not a test fixture, produced these: one figure with
     // the author's caption, distinct alt text, header dimensions, and a lazy
     // rule for everything after the lead.
@@ -792,7 +834,7 @@ async function main(): Promise<number> {
       'a failed build replaced the last good output',
     );
 
-    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes, 6 images');
+    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes, 7 images');
     console.log('tarball: ' + basename(TARBALL));
     return 0;
   } finally {

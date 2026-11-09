@@ -10,14 +10,28 @@ project makes no backward-compatibility promise.
 ### Added
 
 - Local images referenced by a published note are published. PNG, JPEG, GIF, WebP, and AVIF
-  are copied byte-identically to `/_assets/<sha256>-<name>` and deduplicated by content, so
-  an animation keeps every frame and one picture is one file however many notes embed it.
+  are published under `/_assets/<sha256>-<name>` and deduplicated by content, so an animation
+  keeps every frame and one picture is one file however many notes embed it. (JPEG and PNG may
+  be replaced by a smaller WebP candidate; the entry below states that policy.)
   A reference resolves relative to the note and then to the content root, with no basename
   fallback. A missing, excluded, escaping, or unsupported image — an SVG included — fails
   the build rather than shipping a broken picture, and the previously built site stays in
   place. Remote images are left as written and never fetched. No new configuration key,
   dependency, deployment step, or browser script is added; the bytes are passthrough, so
   this is not metadata scrubbing.
+- Referenced JPEG and PNG images are published WebP-first when that is worthwhile, with no
+  author configuration. A JPEG photograph becomes lossy WebP at quality 80 / effort 4 and is
+  kept only when its emitted bytes are smaller; a PNG screenshot, diagram, or alpha graphic
+  becomes **lossless** WebP and is kept only when smaller. Existing WebP/AVIF and every GIF or
+  animated WebP publish unchanged, frame for frame. The encoder is pinned `sharp` 0.35.5 with
+  its prebuilt platform packages: no system CLI, `cwebp`, `libvips` install, new configuration
+  key, browser script, resizing, or responsive-variant matrix. Public identity is the SHA-256
+  of the emitted bytes, so duplicate outputs deduplicate and unchanged builds keep their URLs.
+  EXIF orientation is applied before metadata removal on a transcode, dimensions come from the
+  emitted bytes, and output format, size, and orientation are validated. Corrupt, truncated,
+  or over-budget images fail the build under finite decoded-pixel, source-byte, and deadline
+  limits, preserving the previous output; **passthrough originals keep their metadata**, and
+  ANC does not promise to scrub them.
 - A block image's explicit Markdown title — in its own paragraph or alone in a list item —
   becomes a visible `<figcaption>` inside a semantic `<figure>`; `alt` stays the
   accessible alternative and is never promoted to visible prose. Uncaptioned,

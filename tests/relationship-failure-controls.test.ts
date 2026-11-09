@@ -290,14 +290,14 @@ const HELPER_BODY = [
   'Control [beta](notes/beta.md).',
 ].join('\n');
 
-test('a helper-route link resolves to no edge and degrades to its label', () => {
+test('a helper-route link resolves to no edge and degrades to its label', async () => {
   // The pure-traversal half, driven exactly as `tests/link-traversal.test.ts`
   // drives `resolveLinksIn`, with the producer's default route shape
   // (`/${slug}/`, later rewritten to the real route by the renderer).
-  const result = resolveLinksIn(HELPER_BODY, 'index.md', indexCorpus(CORPUS), 'index', (slug) => `/${slug}/`, {
+  const result = await resolveLinksIn(HELPER_BODY, 'index.md', indexCorpus(CORPUS), 'index', (slug) => `/${slug}/`, {
     // The body carries no image, so this publisher is never consulted; it
     // exists because the traversal requires one.
-    publish: () => ({ kind: 'failed', reason: 'missing' }),
+    publish: async () => ({ kind: 'failed', reason: 'missing' }),
   });
 
   // By content, not by count: one wrong edge and the right one are the same

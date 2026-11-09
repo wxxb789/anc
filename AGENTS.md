@@ -244,9 +244,13 @@ deployment step. Read its run for 0007, not as a substitute for `verify`.
   host infers `Content-Type` from the extension, so a URL that disagrees with its own bytes would
   be served as the wrong type everywhere. An `_assets/` file the artifact does not declare is an
   unexpected member, which is what makes the namespace owned rather than allowed: the inventory
-  lists files, it does not permit a directory. The bytes are passthrough — no transcode, resize,
-  or metadata rewrite — so this phase is not metadata scrubbing; residue and secret scanning run
-  over them as declared binary and through Gitleaks respectively.
+  lists files, it does not permit a directory. Under goal 0011 a JPEG or PNG may be replaced by
+  a WebP candidate, but only after authorization and only when the emitted candidate is smaller;
+  identity is then the SHA-256 of the emitted bytes, not the source. Existing WebP/AVIF and every
+  GIF/animation pass through unchanged. Transcoded output is metadata-free after orientation is
+  applied; **passthrough originals keep their metadata** and this is not a scrubber. Encoding is
+  bounded by finite decoded-pixel, source-byte and deadline limits. Residue and secret scanning run
+  over the emitted bytes as declared binary and through Gitleaks respectively.
 - Gitleaks is exact-version pinned, cannot inherit user config or allow comments, scans one
   decode layer plus raw and explicitly inflated gzip, and never preserves or prints matched
   secret values.
@@ -326,13 +330,15 @@ that landing. Neither 0.1.0 nor 1.0.0 is ready. Deployment and post-deploy smoke
 are separate external actions, and so is publication — it runs in
 `.github/workflows/release-npm.yml` and is started by hand from the `release` workflow.
 Version 0.1 adds the local-image pipeline of [goal 0009](docs/goals/archive/0009-zero-config-static-images.md)
-— authorized, referenced PNG/JPEG/GIF/WebP/AVIF copied byte-identically to `/_assets/<sha256>-<name>`,
-an SVG refused until it has a rasterizer — and the reading rules of [goal 0010](docs/goals/archive/0010-readable-image-figures.md):
-a standalone image's explicit Markdown title is a visible `<figcaption>` (a tight or loose list item
-containing only that image is promoted the same way), `width`/`height` are emitted only when the stored
-pixels are the displayed pixels, and the first surviving image is eager while later ones defer. It adds
-no other non-Markdown asset handling: no optimizer,
-no WebP conversion, no external image host, no corpus redirects. GitHub Pages *project* sites at
+— authorized, referenced PNG/JPEG/GIF/WebP/AVIF published under `/_assets/<sha256>-<name>`,
+an SVG refused until it has a rasterizer — the reading rules of
+[goal 0010](docs/goals/archive/0010-readable-image-figures.md), and the WebP-preferred policy of
+[goal 0011](docs/goals/archive/0011-webp-first-image-delivery.md): lossy WebP for JPEG and lossless
+WebP for PNG only when the candidate is smaller, existing WebP/AVIF and animation unchanged, one
+pinned sharp encoder, and no resize, crop, responsive matrix, browser script, external image host,
+image index, CDN requirement, or author-facing quality setting. A standalone image's explicit
+Markdown title is a visible `<figcaption>`; `width`/`height` come from the emitted bytes, and the
+first surviving image is eager while later ones defer. GitHub Pages *project* sites at
 `/<repo>/` remain unsupported; the hosting contract is a site at the domain root.
 `0.0.1` was published by hand to reserve the `@wxxb789/anc` name and create the page a
 trusted publisher needs; `0.0.2` is the first release cut from a tag.

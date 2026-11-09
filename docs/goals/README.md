@@ -113,7 +113,19 @@ dimensions from the authorized emitted bytes and the renderer emits
 asynchronously decoded. The gates extend to real Chromium observations of
 caption presence and absence, header-matching dimensions, script-free decoding,
 narrow-viewport overflow and reserved layout space. Eight goals are archived and
-0008 remains active; 0011–0013 are still `Ready`.
+0008 remains active; 0011–0013 were still `Ready` at that point.
+
+On 2026-11-09, [0011](archive/0011-webp-first-image-delivery.md) was completed
+on branch `feat/0011-webp-first-image-delivery`, created off `origin/main` at
+`f167750` (implementation left uncommitted for the orchestrator; the file records
+files, commands and real counts). Referenced JPEG photographs now publish lossy
+WebP and PNG screenshots/diagrams/alpha graphics lossless WebP, each only when the
+emitted candidate is smaller; existing WebP/AVIF and every animation publish
+unchanged. The encoder is pinned `sharp` 0.35.5 at the producer's existing
+authorization point, public identity is the SHA-256 of the emitted bytes, orientation
+is applied before metadata removal, and finite pixel/byte/deadline limits fail
+hostile input boundedly while preserving the previous output. Nine goals are
+archived and 0008 remains active; 0012–0013 are still `Ready` and untouched.
 
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
@@ -147,15 +159,13 @@ its browser cost acceptance is not a prerequisite for 0009.
 
 | Goal | Status | Single completion judgment | Material prerequisites |
 | --- | --- | --- | --- |
-| [0011 — WebP-first image delivery](0011-webp-first-image-delivery.md) | Ready | Automatic format choice improves typical image costs while protecting legibility, behavior and package simplicity | 0009 (completed); 0010 is nonblocking |
-| [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009 (completed), 0011 |
-| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009 (completed); 0011 nonblocking |
+| [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009 and 0011 (completed) |
+| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009 (completed); 0011 nonblocking and completed |
 
 `Ready` here means a downstream agent can pursue the stated outcome once its
 prerequisite is accepted; it does **not** mean implemented, deployed or approved
 as a release. `Provisional` goals preserve accepted direction but require
-refinement before activation. 0009 and 0010 are completed; 0011–0013 have not
-started.
+refinement before activation. 0009–0011 are completed; 0012–0013 have not started.
 
 **Scope boundary.** Current ANC deployment supports root-of-origin sites, not a
 GitHub Pages project site's `/<repo>/` prefix. Extending site-wide base-path
@@ -166,7 +176,7 @@ silently commit those still-unresolved proposals; such choices can be evaluated
 as separate future goals. 0009 reconciled the accepted core design's former
 no-asset-pipeline stance and 0010 added the caption/layout reading rules; the
 owning media design, content semantics, architecture index, `AGENTS.md`, and
-adoption docs now describe both implemented contracts rather than a target.
+adoption docs now describe the 0009–0011 implemented contracts rather than a target.
 
 ## Completed goals
 
@@ -180,8 +190,9 @@ adoption docs now describe both implemented contracts rather than a target.
 | [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md) | 2026-09-18 | Implementation commits `2c9772e`, `33aa0ae`, `12ff781`, `ebd02f9`, `c159802`, `65f89d4`, PR #10; local `pnpm run verify` and CI run `35253591403` (80 files / 952 passed / 34 skipped) green on `65f89d4`, Action-parity CI run `35253591383` green with the shallow-clone refusal, and the recorded `pack:tarball` digest plus `smoke:tarball` result — all six evaluation rows in the file. |
 | [0009 — Zero-config static images](archive/0009-zero-config-static-images.md) | 2026-11-09 | Branch `feat/0009-zero-config-static-images`, production commit `be6b6cf`, implementation uncommitted for landing; the packaged producer publishes only referenced, authorized raster bytes under `/_assets/<sha256>-<name>`, the exact inventory owns the namespace, and each "Done when" row carries its executed evidence in the file — including a JavaScript-disabled Chromium display gate and a packaged foreign-repository smoke with images. |
 | [0010 — Readable image figures](archive/0010-readable-image-figures.md) | 2026-11-09 | Branch `feat/0010-readable-image-figures`, created off `origin/main` at `69f0f85`; implementation uncommitted for landing. The completion record maps each “Done when” row to its executed evidence, including packaged-build Chromium measurements for figures, dimensions, lazy/eager loading, no-script decoding, narrow-width overflow and reserved layout space. |
+| [0011 — WebP-first image delivery](archive/0011-webp-first-image-delivery.md) | 2026-11-09 | Branch `feat/0011-webp-first-image-delivery`, base `f167750`, implementation uncommitted for landing; the file records the packaged foreign-repository smoke, the emitter's final-byte identity and dedupe, bounded hostile-input preservation, and a twice-run baseline-vs-optimized corpus measurement on Linux x64 — including the rows where WebP wins and where bytes are retained. |
 
-One SQLite goal remains `in progress`, and three media goals remain `Ready`.
+One SQLite goal remains `in progress`, and two media goals remain `Ready`.
 Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
@@ -271,6 +282,8 @@ on 2026-09-14 into 0002–0008 without declaring completion. Its number is retai
 [archive](archive/README.md) on 2026-09-16,
 [0005](archive/0005-interactive-graph-exploration.md) and
 [0006](archive/0006-safe-release-output.md) on 2026-09-17,
-[0007](archive/0007-independent-publisher-adoption.md) on 2026-09-18, and
-[0009](archive/0009-zero-config-static-images.md) on 2026-11-09; 0008 remains
+[0007](archive/0007-independent-publisher-adoption.md) on 2026-09-18,
+[0009](archive/0009-zero-config-static-images.md) and
+[0010](archive/0010-readable-image-figures.md) on 2026-11-09, and
+[0011](archive/0011-webp-first-image-delivery.md) on 2026-11-09; 0008 remains
 active and no other number has been completed.

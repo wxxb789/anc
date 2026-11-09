@@ -452,6 +452,29 @@ function exifOrientation(bytes: Uint8Array, start: number, end: number): ExifOri
   return undefined;
 }
 
+/** One PNG chunk's type and data bounds, from the chunk's length word. */
+interface PngChunk {
+  readonly type: string;
+  readonly dataStart: number;
+  readonly dataEnd: number;
+  readonly next: number;
+}
+
+/** The chunk at one offset, or `undefined` when its length/type header is absent. */
+function pngChunkAt(bytes: Uint8Array, offset: number): PngChunk | undefined {
+  if (offset + 8 > bytes.length) return undefined;
+  const length = u32be(bytes, offset);
+  const type = String.fromCharCode(
+    bytes[offset + 4]!,
+    bytes[offset + 5]!,
+    bytes[offset + 6]!,
+    bytes[offset + 7]!,
+  );
+  const dataStart = offset + 8;
+  const dataEnd = dataStart + length;
+  return { type, dataStart, dataEnd, next: dataEnd + 4 };
+}
+
 /**
  * PNG: signature, then a 13-byte `IHDR` chunk whose width and height are
  * big-endian.
@@ -471,29 +494,47 @@ function pngDimensions(bytes: Uint8Array): ImageDimensions | undefined {
 
   let offset = 8;
   while (offset + 8 <= bytes.length) {
-    const length = u32be(bytes, offset);
-    const type = String.fromCharCode(
-      bytes[offset + 4]!,
-      bytes[offset + 5]!,
-      bytes[offset + 6]!,
-      bytes[offset + 7]!,
-    );
-    const dataStart = offset + 8;
-    const dataEnd = dataStart + length;
-    if (dataEnd > bytes.length) {
+    const chunk = pngChunkAt(bytes, offset);
+    if (chunk === undefined) break;
+    if (chunk.dataEnd > bytes.length) {
       // A truncated metadata chunk is unreadable; a truncated file with no
       // eXIf encountered keeps its IHDR pair, exactly as Goal 0009 publishes it.
-      return type === 'eXIf' ? undefined : dimensions;
+      return chunk.type === 'eXIf' ? undefined : dimensions;
     }
-    if (type === 'eXIf') {
-      const tiffStart = matchesAt(bytes, dataStart, 'Exif\0\0') ? dataStart + 6 : dataStart;
-      const orientation = exifOrientation(bytes, tiffStart, dataEnd);
+    if (chunk.type === 'eXIf') {
+      const tiffStart = matchesAt(bytes, chunk.dataStart, 'Exif\0\0') ? chunk.dataStart + 6 : chunk.dataStart;
+      const orientation = exifOrientation(bytes, tiffStart, chunk.dataEnd);
       if (orientation === 'malformed' || (orientation !== undefined && orientation !== 1)) return undefined;
     }
-    if (type === 'IEND') break;
-    offset = dataEnd + 4;
+    if (chunk.type === 'IEND') break;
+    offset = chunk.next;
   }
   return dimensions;
+}
+
+/**
+ * Whether PNG bytes carry an `acTL` chunk, which makes them an animated PNG.
+ *
+ * Sharp's metadata does not report an APNG frame count (measured: `pages` is
+ * absent for a PNG whose `acTL` chunk precedes `IDAT`), so a publisher that
+ * inferred animation from `pages` would transcode the first frame and silently
+ * drop the animation. The walk is structural — lengths and type names at the
+ * same chunk boundaries {@link pngDimensions} uses — not a search for the four
+ * bytes inside compressed image data.
+ */
+export function isAnimatedPng(bytes: Uint8Array): boolean {
+  if (bytes.length < 8 || bytes[0] !== 0x89 || !matchesAt(bytes, 1, 'PNG')) return false;
+  let offset = 8;
+  while (offset + 8 <= bytes.length) {
+    const chunk = pngChunkAt(bytes, offset);
+    if (chunk === undefined || chunk.dataEnd > bytes.length) return false;
+    if (chunk.type === 'acTL') return true;
+    // `acTL` must precede the first image data; stopping here also bounds the
+    // walk on a malformed length that would otherwise step past the buffer.
+    if (chunk.type === 'IDAT' || chunk.type === 'IEND') return false;
+    offset = chunk.next;
+  }
+  return false;
 }
 
 /**
@@ -1010,8 +1051,23 @@ export function resolveImageTarget(
  * - `unsupported` — a file whose bytes are not PNG/JPEG/GIF/WebP/AVIF.
  * - `html-form` — an `<img>` written as raw HTML, which the accepted resolver
  *   does not cover.
+ * - `corrupt` — bytes of a supported format that the decoder could not read.
+ * - `too-large` — the source exceeds the encoder's finite byte or decoded-pixel
+ *   budget. Goal 0011's bound, stated rather than discovered as an OOM.
+ * - `timeout` — a decode or encode exceeded its deadline.
+ * - `encode-failed` — the encoder returned bytes this build cannot publish and
+ *   cannot explain by the input alone. Never a silent fallback to the source.
  */
-export type MediaFailureReason = 'missing' | 'outside' | 'excluded' | 'svg' | 'unsupported' | 'html-form';
+export type MediaProcessingFailureReason = 'corrupt' | 'too-large' | 'timeout' | 'encode-failed';
+
+export type MediaFailureReason =
+  | 'missing'
+  | 'outside'
+  | 'excluded'
+  | 'svg'
+  | 'unsupported'
+  | 'html-form'
+  | MediaProcessingFailureReason;
 
 /** What publishing one local reference produced. */
 export type ImageOutcome =
@@ -1024,14 +1080,18 @@ export type ImageOutcome =
  *
  * `resolveLinksIn` owns *where* an image reference sits in a note; the publisher
  * owns *which bytes* it publishes and under what URL. Keeping the split means
- * the traversal stays a pure Markdown rewrite a test can drive without a
- * filesystem, while the one function that reads bytes lives with the producer
- * that owns the publication boundary.
+ * the traversal stays a Markdown rewrite a test can drive without a filesystem,
+ * while the one function that reads bytes lives with the producer that owns the
+ * publication boundary.
+ *
+ * `publish` is asynchronous because Goal 0011's encoder is: producing a WebP
+ * candidate cannot be done synchronously, and blocking the traversal on a
+ * second thread would replace one clear await with a deadlock risk.
  */
 export interface ImagePublisher {
   publish(request: {
     readonly notePath: string;
     readonly target: string;
     readonly isWikilink: boolean;
-  }): ImageOutcome;
+  }): Promise<ImageOutcome>;
 }

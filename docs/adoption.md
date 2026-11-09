@@ -188,13 +188,37 @@ called `chart%23one.png` — while a raw `#` still starts a fragment. The publis
 `/_assets/<sha256>-<name>` URL percent-encodes the character again, so the browser requests
 exactly the bytes the build wrote.
 
-The site serves the bytes you wrote. PNG, JPEG, GIF, WebP and AVIF are copied byte for byte —
-no resize, no recompression, and animations keep every frame — under
-`/_assets/<sha256>-<name>`, where the digest is the image's own content. The same picture
-referenced from five notes is one file on the site, and an unchanged picture keeps its URL.
-The extension comes from the bytes rather than from your filename, so a PNG named `.jpg` is
-still served as `image/png`. **This is not a metadata scrubber**: a photograph keeps its
-EXIF and GPS block, because stripping it is a separate policy this build does not claim.
+The site serves one representation of each referenced picture under
+`/_assets/<sha256>-<name>`, where the digest is the **emitted bytes'** own content. WebP is
+preferred when it is worthwhile, not compulsory:
+
+- An ordinary JPEG photograph becomes lossy WebP at quality 80 / effort 4. The candidate
+  replaces the JPEG only when its bytes are smaller; otherwise the JPEG is published.
+- A PNG screenshot, diagram, or transparent graphic becomes **lossless** WebP. It replaces
+  the PNG only when the lossless candidate is smaller, and the visible pixels and alpha are
+  preserved exactly.
+- An existing WebP or AVIF is published unchanged. So is every GIF, and every animated
+  WebP: no frame, delay, or loop count is altered, and no first frame is extracted.
+- A corrupt, truncated, over-limit, or unsupported image fails the build. There is no
+  fallback to publishing bytes the encoder could not decode.
+
+No resize, crop, sharpening, responsive variant matrix, image CDN, browser script, or
+per-image configuration is involved. The digest, the filename extension, and the bytes a
+reader receives all agree, so a PNG that became WebP is served as `image/webp`. The same
+picture referenced from five notes is one file, and an unchanged picture keeps its URL.
+
+**Metadata.** A transcoded image carries no EXIF, XMP, IPTC, or ICC profile from its source:
+orientation is applied to the pixels first and then the metadata is removed. **A passthrough
+original is not scrubbed.** A JPEG kept because its WebP candidate was larger, and every
+unchanged WebP, AVIF, or GIF, keeps its EXIF/GPS block exactly as the file had it. If you
+need unconditional metadata removal, do it before committing the image; ANC does not
+promise it for passthrough bytes.
+
+**Platforms.** The encoder is the pinned `sharp` package, installed as an ordinary npm
+dependency with its prebuilt platform binary; there is no system command, `cwebp`, or
+`libvips` installation step. Linux x64 is the platform this repository's gates and
+measurements ran on. Windows and macOS are covered by sharp's published prebuilt packages
+but were **not exercised here**; untested is not passed.
 
 Write the image's description in `alt`, and use Markdown's own title for a caption:
 
@@ -211,15 +235,16 @@ or loose. A `title` on an inline image remains a tooltip, because only a standal
 image becomes a figure.
 
 For PNG, JPEG, GIF, WebP and AVIF the build reads the picture's own pixel dimensions from
-its header and writes `width`/`height`, so the browser reserves the right space before the
-bytes arrive and a portrait, a wide screenshot or transparent artwork stays inside the
-article at any width. A malformed or truncated header simply produces no dimension
-attributes; the image still publishes and the build does not guess. Dimensions are emitted
-only when the stored pixels are the displayed pixels: a JPEG, WebP or PNG EXIF orientation
-other than 1, or an AVIF `irot`/`imir` transform, makes the build omit `width`/`height`
-rather than reserve space for a different frame. The first image in an article loads eagerly,
-later images load lazily, and all use asynchronous decoding. This is ordinary static HTML:
-nothing here needs JavaScript, an image CDN, or a configuration key.
+the **emitted** file and writes `width`/`height`, so the browser reserves the right space
+before the bytes arrive and a portrait, a wide screenshot or transparent artwork stays
+inside the article at any width. A transcode applies EXIF orientation to the pixels, so a
+rotated photograph publishes upright at its displayed size. An unchanged image whose EXIF
+orientation is not 1, or whose AVIF carries an `irot`/`imir` transform, is published as-is
+and gets no dimension attributes rather than a pair that would reserve the wrong box. A
+truncated or corrupt file now fails the build instead of publishing a header-only image.
+The first image in an article loads eagerly, later images load lazily, and all use
+asynchronous decoding. This is ordinary static HTML: nothing here needs JavaScript, an
+image CDN, or a configuration key.
 
 An image that cannot be published **fails the build**, and the previously built site stays
 where it was. The public message counts the reasons; the private report names the file and
@@ -230,7 +255,9 @@ the line. The reasons are:
 - the path leaves your content directory, or is a symbolic link to a file outside it;
 - it is an SVG — not publishable until it can be rasterized safely — or it is not one of the
   five formats;
-- it is written as raw HTML, `<img src="...">`, which the resolver does not cover.
+- it is written as raw HTML, `<img src="...">`, which the resolver does not cover;
+- its bytes are corrupt or truncated, it exceeds the finite source-size/decoded-pixel budget,
+  a decode or encode exceeds its deadline, or the encoder returns bytes it cannot validate.
 
 Remote images (`https://…`) are left exactly as you wrote them and are never downloaded during
 a build. Files no published note references are never published, which is why an excluded
@@ -452,9 +479,10 @@ that rule is not negotiable.
 ## What it will not do
 
 - Publish a non-Markdown file no published note references, or serve a local SVG. Images are
-  published only through a reference in a published note, only in the five raster formats, and
-  only as the bytes you wrote. Optimization, WebP conversion, and SVG rasterization are later
-  outcomes, not options here.
+  published only through a reference in a published note and only in the five raster formats.
+  WebP conversion is automatic for JPEG and PNG; there is no resize, crop, responsive-variant
+  matrix, external image host, or per-author quality setting, and SVG rasterization is a later
+  outcome, not an option here.
 - Publish a note whose derived slug is reserved by the site, such as root `about.md`,
   `search.md`, `tags.md`, or `private.md`. Rename the source file; the private report lists
   every conflicting note and slug together.

@@ -79,7 +79,6 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { readFile, readdir, mkdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, matchesGlob, relative } from 'node:path';
 import { parse as parseYaml } from 'yaml';
@@ -97,7 +96,6 @@ import { indexCorpus, type CorpusFile } from '../src/lib/link-resolution.ts';
 import {
   assetFileName,
   assetUrlFor,
-  imageDimensions,
   looksLikeSvg,
   parseAssetUrl,
   resolveImageTarget,
@@ -107,6 +105,7 @@ import {
   type ImagePublisher,
   type MediaFailureReason,
 } from '../src/lib/media.ts';
+import { MEDIA_LIMITS, prepareImage, type PrepareResult } from '../src/lib/media-codec.ts';
 import { SLUG_MAX_BYTES, compareSlugs, slugSegment, utf8Length } from '../src/lib/route-path.ts';
 import {
   BuildFailure,
@@ -1345,100 +1344,144 @@ const defaultRouteForSlug: RouteForSlug = (slug) => `/${slug}/`;
  */
 const resolved = new WeakSet<Discovery>();
 
-/** Reason labels, in the order the public summary counts them. */
-const MEDIA_REASON_LABELS: readonly (readonly [MediaFailureReason, string])[] = [
-  ['missing', 'missing'],
-  ['excluded', 'excluded'],
-  ['outside', 'outside the content root'],
-  ['svg', 'unsupported local SVG'],
-  ['unsupported', 'unsupported file type'],
-  ['html-form', 'unsupported HTML image form'],
-];
+/**
+ * Reason labels, in the order the public summary counts them.
+ *
+ * A `Record` rather than a list of pairs, so a new `MediaFailureReason` cannot
+ * reach the count and the private detail while silently disappearing from the
+ * public breakdown. `Object.entries` preserves this insertion order.
+ */
+const MEDIA_REASON_LABELS: Readonly<Record<MediaFailureReason, string>> = {
+  missing: 'missing',
+  excluded: 'excluded',
+  outside: 'outside the content root',
+  svg: 'unsupported local SVG',
+  unsupported: 'unsupported file type',
+  'html-form': 'unsupported HTML image form',
+  corrupt: 'corrupt or undecodable',
+  'too-large': 'over the size limit',
+  timeout: 'exceeded the processing deadline',
+  'encode-failed': 'encoder failure',
+};
 
 /**
  * The one function that reads image bytes, and the only writer of the asset set.
  *
  * Built per build and shared across notes, so deduplication is a property of the
- * build rather than of a note: two notes embedding the same file, or two files
- * with identical bytes, produce one asset because one digest names it. The cache
- * is keyed by *resolved source path* rather than by the authored reference,
- * because `../img/a.png` from one note and `img/a.png` from another are the same
- * file and must not be read twice.
+ * build rather than of a note. There are three caches, each with one job:
+ *
+ * - **by path**, so `../img/a.png` from one note and `img/a.png` from another are
+ *   the same resolved file and are read once;
+ * - **by source digest**, so two files with identical bytes transcode once. The
+ *   encoder settings are module constants for the build's lifetime, so they are
+ *   not part of the key. This is Goal 0011's "private per-build in-memory cache";
+ *   its lifetime is the build and it is not a public index or a durable contract;
+ * - **by emitted digest**, so two different sources that encode to the same bytes
+ *   publish one asset. Identity is the bytes that leave this build, not the bytes
+ *   that arrived.
  *
  * Authorization happens **before** the read: an excluded file, a symlink whose
  * target is outside the tree, and a name the walk never found are refused without
- * ever being opened. That ordering is the publication boundary — the pixels of a
- * withheld image are never in this process's memory, so no later step can leak
- * them by accident.
+ * ever being opened, and the codec is only reached after the sniff. That ordering
+ * is the publication boundary: a codec is never a publication authority, and the
+ * pixels of a withheld image are never in this process's memory.
  *
- * A failure is cached too, so an `unsupported` file is read once however many
- * notes embed it. Every reference still gets its own report row, because a
- * reference has a line and a spelling and the two are what an author edits.
+ * A failure is cached too, so an `unsupported` or corrupt file is processed once
+ * however many notes embed it. Every reference still gets its own report row,
+ * because a reference has a line and a spelling and the two are what an author
+ * edits.
  */
 function mediaPublisher(discovery: Discovery): { publisher: ImagePublisher; assets: AssetEmission[] } {
-  const byDigest = new Map<string, string>();
-  const byPath = new Map<string, ImageOutcome>();
+  const byPath = new Map<string, Promise<ImageOutcome>>();
+  const bySource = new Map<string, Promise<PrepareResult>>();
+  const byEmitted = new Map<string, string>();
   const assets: AssetEmission[] = [];
 
+  /** Publish one file the resolver has already found inside the content root. */
+  const publishLocal = async (resolvedPath: string): Promise<ImageOutcome> => {
+    const entry = discovery.media.get(resolvedPath.normalize('NFC'));
+    if (entry === undefined) return { kind: 'failed', reason: 'missing' };
+    if (entry.verdict === 'excluded') return { kind: 'failed', reason: 'excluded' };
+    if (entry.verdict === 'escaping') return { kind: 'failed', reason: 'outside' };
+
+    // The codec enforces this after the bytes are in memory; this check keeps a
+    // multi-gigabyte source from being allocated at all. `stat` follows the same
+    // resolved path the read would, and a failure here is the same "not there"
+    // answer. A file replaced between this call and the read is caught by the
+    // codec's byte-length limit and by the staging digest check.
+    const absolute = join(discovery.assetRoot, entry.path);
+    let size: number;
+    try {
+      size = (await stat(absolute)).size;
+    } catch {
+      return { kind: 'failed', reason: 'missing' };
+    }
+    if (size > MEDIA_LIMITS.maxSourceBytes) return { kind: 'failed', reason: 'too-large' };
+
+    let bytes: Buffer;
+    try {
+      bytes = await readFile(absolute);
+    } catch {
+      // The walk saw it and the read did not: it was removed between the two,
+      // or the process lacks permission. "Not there" is the honest answer and
+      // it fails the build like any other missing image.
+      return { kind: 'failed', reason: 'missing' };
+    }
+
+    const format = sniffImageFormat(bytes);
+    if (format === undefined) {
+      return { kind: 'failed', reason: looksLikeSvg(bytes) ? 'svg' : 'unsupported' };
+    }
+
+    // The source digest answers "have I already processed these exact bytes?".
+    // The emitted digest is what the URL will name.
+    const sourceDigest = createHash('sha256').update(bytes).digest('hex');
+    let prepared = bySource.get(sourceDigest);
+    if (prepared === undefined) {
+      prepared = prepareImage(bytes, format);
+      bySource.set(sourceDigest, prepared);
+    }
+    const result = await prepared;
+    if (!result.ok) return { kind: 'failed', reason: result.reason };
+
+    const emitted = result.image;
+    const digest = createHash('sha256').update(emitted.bytes).digest('hex');
+    const existing = byEmitted.get(digest);
+    if (existing !== undefined) return { kind: 'published', url: existing };
+
+    // Identity is the emitted digest; the name is decoration. Two sources whose
+    // published bytes are identical therefore share one asset under the first
+    // name the deterministic walk order reached, which is what makes the URL
+    // stable across builds even when a transcode changed the extension.
+    const url = assetUrlFor(digest, assetFileName(basename(entry.path), emitted.format));
+    byEmitted.set(digest, url);
+    assets.push({
+      url,
+      path: entry.path,
+      sourceDigest,
+      digest,
+      bytes: emitted.bytes,
+      ...(emitted.dimensions === undefined ? {} : { dimensions: emitted.dimensions }),
+    });
+    return { kind: 'published', url };
+  };
+
   const publisher: ImagePublisher = {
-    publish({ notePath, target, isWikilink }) {
+    publish(request) {
       const resolved = resolveImageTarget(
-        target,
-        notePath,
+        request.target,
+        request.notePath,
         (key) => discovery.media.get(key)?.path,
-        isWikilink,
+        request.isWikilink,
       );
-      if (resolved.kind === 'external') return { kind: 'external' };
-      if (resolved.kind !== 'local') return { kind: 'failed', reason: resolved.kind };
+      if (resolved.kind === 'external') return Promise.resolve({ kind: 'external' });
+      if (resolved.kind !== 'local') return Promise.resolve({ kind: 'failed', reason: resolved.kind });
 
       const cached = byPath.get(resolved.path);
       if (cached !== undefined) return cached;
-
-      const record = (outcome: ImageOutcome): ImageOutcome => {
-        byPath.set(resolved.path, outcome);
-        return outcome;
-      };
-
-      const entry = discovery.media.get(resolved.path.normalize('NFC'));
-      if (entry === undefined) return record({ kind: 'failed', reason: 'missing' });
-      if (entry.verdict === 'excluded') return record({ kind: 'failed', reason: 'excluded' });
-      if (entry.verdict === 'escaping') return record({ kind: 'failed', reason: 'outside' });
-
-      let bytes: Buffer;
-      try {
-        bytes = readFileSync(join(discovery.assetRoot, entry.path));
-      } catch {
-        // The walk saw it and the read did not: it was removed between the two,
-        // or the process lacks permission. "Not there" is the honest answer and
-        // it fails the build like any other missing image.
-        return record({ kind: 'failed', reason: 'missing' });
-      }
-
-      const format = sniffImageFormat(bytes);
-      if (format === undefined) {
-        return record({ kind: 'failed', reason: looksLikeSvg(bytes) ? 'svg' : 'unsupported' });
-      }
-
-      const digest = createHash('sha256').update(bytes).digest('hex');
-      const existing = byDigest.get(digest);
-      if (existing !== undefined) return record({ kind: 'published', url: existing });
-
-      // Identity is the digest; the name is decoration. Two files with identical
-      // bytes therefore publish one asset under the first name the deterministic
-      // walk order reached, which is what makes the URL stable across builds.
-      const url = assetUrlFor(digest, assetFileName(basename(entry.path), format));
-      byDigest.set(digest, url);
-      // The dimensions come from the same authorized bytes and are read after
-      // authorization, exactly like the digest. A header this build cannot read
-      // yields no fields rather than a guess; the image still publishes.
-      const dimensions = imageDimensions(bytes, format);
-      assets.push({
-        url,
-        path: entry.path,
-        digest,
-        ...(dimensions === undefined ? {} : { dimensions }),
-      });
-      return record({ kind: 'published', url });
+      const outcome = publishLocal(resolved.path);
+      byPath.set(resolved.path, outcome);
+      return outcome;
     },
   };
 
@@ -1525,7 +1568,7 @@ export async function resolveCorpusLinks(
 
     let result;
     try {
-      result = resolveLinksIn(entry.markdown, path, index, entry.slug, routeForSlug, publisher);
+      result = await resolveLinksIn(entry.markdown, path, index, entry.slug, routeForSlug, publisher);
     } catch (error) {
       // `applyEdits` refuses overlapping spans, which is a rewritten body that
       // would be neither of the two things it was built from. The public half
@@ -1573,7 +1616,7 @@ export async function resolveCorpusLinks(
   // public notes repository is world-readable and retained.
   if (mediaFailures.length > 0) {
     mediaFailures.sort(bySourceThenLine);
-    const counts = MEDIA_REASON_LABELS.flatMap(([reason, label]) => {
+    const counts = Object.entries(MEDIA_REASON_LABELS).flatMap(([reason, label]) => {
       const count = mediaFailures.filter((row) => row.reason === reason).length;
       return count === 0 ? [] : [`${count} ${label}`];
     }).join(', ');
@@ -1644,13 +1687,24 @@ export interface MediaEntry {
  *
  * `url` is public; `path` is the source file relative to the content root and is
  * private, so it never enters the artifact — {@link writeArtifact} copies the
- * bytes next to the artifact and records the public URL plus the header-declared
- * pixel size; never bytes or source paths.
+ * emitted bytes next to the artifact and records the public URL plus the
+ * published bytes' pixel size; never bytes or source paths.
+ *
+ * `bytes` is the **emitted** representation: the source bytes for an exempt or
+ * non-smaller candidate, or the accepted WebP candidate. `digest` hashes exactly
+ * `bytes`, so the URL, the staged file and the manifest all describe what a reader
+ * receives. `sourceDigest` is retained only to detect a source edited between
+ * encoding and staging; it is not a public identity and never enters the artifact.
  */
 export interface AssetEmission {
   readonly url: string;
   readonly path: string;
+  /** SHA-256 of {@link bytes}, which is what the public URL names. */
   readonly digest: string;
+  /** SHA-256 of the source file, for the mid-build change check. Private. */
+  readonly sourceDigest: string;
+  /** Exactly the bytes to publish. */
+  readonly bytes: Buffer;
   /** Intrinsic pixel size from the emitted bytes' own header, when readable. */
   readonly dimensions?: ImageDimensions;
 }
@@ -1735,7 +1789,8 @@ export interface ContentEntryInput {
 }
 
 /**
- * Stage the asset bytes beside the artifact, under the names their URLs publish.
+ * Stage the emitted asset bytes beside the artifact, under the names their URLs
+ * publish.
  *
  * **A sibling directory rather than source paths in the artifact.** The artifact
  * is the producer's IR and it carries only public URLs; the bytes it names live in
@@ -1745,10 +1800,13 @@ export interface ContentEntryInput {
  * the published one, so a reader can correlate a served URL with the file that
  * produced it.
  *
- * The digest is recomputed here rather than trusted. The publisher hashed these
- * bytes minutes ago, and a source image edited in between would otherwise publish
- * a URL that no longer describes its content — the one property a
- * content-addressed path cannot tolerate.
+ * **The bytes written are the bytes the encoder produced**, not a second read of
+ * the source. That is Goal 0011's identity rule: re-reading the source would
+ * either re-encode (a second, potentially disagreeing candidate) or write the
+ * original under a WebP name. The source is still read once, only to prove the
+ * file did not change between encoding and staging — a source edited mid-build
+ * would otherwise publish a URL that no longer describes its content, the one
+ * property a content-addressed path cannot tolerate.
  */
 async function stageAssets(discovery: Discovery, destination: string, assets: readonly AssetEmission[]): Promise<void> {
   const directory = join(dirname(destination), 'assets');
@@ -1764,19 +1822,30 @@ async function stageAssets(discovery: Discovery, destination: string, assets: re
     if (parsed === undefined) {
       throw new Error(`the producer built an asset URL this build cannot parse: ${asset.url}`);
     }
-    const bytes = await readFile(join(discovery.assetRoot, ...asset.path.split('/')));
-    const digest = createHash('sha256').update(bytes).digest('hex');
-    if (digest !== asset.digest) {
+    const source = await readFile(join(discovery.assetRoot, ...asset.path.split('/')));
+    const sourceDigest = createHash('sha256').update(source).digest('hex');
+    if (sourceDigest !== asset.sourceDigest) {
       // The source name is in the report's half of this failure; the stream gets
       // the sentence. An image that changed mid-build is a fault of the corpus or
       // the machine, never of a reader.
       throw new BuildFailure(
         'asset-source-changed',
         'a referenced image changed while the build ran, so its content address would name the wrong bytes',
+        `${asset.path}: expected ${asset.sourceDigest}, found ${sourceDigest}`,
+      );
+    }
+    const digest = createHash('sha256').update(asset.bytes).digest('hex');
+    if (digest !== asset.digest) {
+      // A producer defect rather than a corpus fault, and unreachable unless a
+      // later step mutates the buffer. Stated as a failure rather than trusted,
+      // because the URL would otherwise name bytes nobody wrote.
+      throw new BuildFailure(
+        'asset-emitted-digest',
+        'a published image does not hash to the digest its own content address names',
         `${asset.path}: expected ${asset.digest}, found ${digest}`,
       );
     }
-    await writeFile(join(directory, `${parsed.digest}-${parsed.fileName}`), bytes);
+    await writeFile(join(directory, `${parsed.digest}-${parsed.fileName}`), asset.bytes);
   }
 }
 

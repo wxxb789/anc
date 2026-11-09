@@ -105,6 +105,11 @@ function trackedMarkdown(): string[] {
   return listed.stdout
     .split('\0')
     .filter((path) => path.length > 0 && !path.startsWith(EXCLUDED_PREFIX))
+    // A goal file moved into the archive in the working tree is absent on disk
+    // while `git ls-files` still lists its old name until the move is staged.
+    // Nothing can link *from* a deleted document; the archive copy is inspected
+    // under its new path, and a committed deletion leaves `git ls-files` alone.
+    .filter((path) => existsSync(join(ROOT, path)))
     .sort();
 }
 

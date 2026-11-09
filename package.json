@@ -74,6 +74,8 @@
     "!scripts/benchmark-workload-ui.ts",
     "!scripts/benchmark-workload.ts",
     "!scripts/release-changelog.ts",
+    "!scripts/media-corpus.ts",
+    "!scripts/measure-media.ts",
     "!scripts/smoke-tarball.ts"
   ],
   "scripts": {
@@ -109,6 +111,7 @@
     "prismjs": "^1.30.0",
     "sanitize-html": "^2.18.1",
     "satteri": "^0.11.6",
+    "sharp": "0.35.5",
     "temml": "0.14.0",
     "yaml": "^2.9.1"
   },

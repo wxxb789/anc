@@ -1,12 +1,13 @@
 # Media processing and delivery
 
-Status: accepted **target design** for Goals 0009–0013, 2026-11-08.
-**Goals 0009 and 0010 are implemented and verified**; their completion records
-([0009](../goals/archive/0009-zero-config-static-images.md) and
-[0010](../goals/archive/0010-readable-image-figures.md)) carry the evidence.
-0011–0013 have not shipped, and this document is not evidence that they have: the
-sections below are the target for those outcomes, and the ones for 0009 and
-0010 describe the implemented contracts.
+Status: accepted design for Goals 0009–0013, 2026-11-08.
+**Goals 0009, 0010 and 0011 are implemented and verified**; their completion records
+([0009](../goals/archive/0009-zero-config-static-images.md),
+[0010](../goals/archive/0010-readable-image-figures.md) and
+[0011](../goals/archive/0011-webp-first-image-delivery.md)) carry the evidence.
+0012–0013 have not shipped, and this document is not evidence that they have: the
+sections below are the target for those outcomes, and the ones for 0009–0011 describe
+the implemented contracts.
 
 ## Product contract and ownership
 
@@ -42,7 +43,8 @@ Order of outcomes:
      the staged file keeps the raw bytes, so `#`, `&`, `?` and `%` round-trip
      through the artifact, the copy step, and the exact output inventory.
    - Bytes are copied byte-identically: no transcoding, resize, or metadata
-     rewrite. An animated GIF or WebP keeps every frame. **This phase is not
+     rewrite. (This is Goal 0009's contract; Goal 0011 adds a WebP candidate for
+     JPEG and PNG before publication, with the exemptions in its row below.) An animated GIF or WebP keeps every frame. **This phase is not
      metadata sanitization** — a passthrough photo keeps its EXIF/GPS, and a
      later privacy policy that strips it is a separate product decision.
    - The bytes are staged beside the private artifact and emitted after Astro
@@ -66,7 +68,7 @@ Order of outcomes:
    all get `decoding="async"`. Identity, authorization, bytes, and the
    `/_assets/<sha256>-<name>` URL are unchanged, no codec or new dependency is
    added, and no browser script or SQLite metadata is introduced.
-3. **0011:** automatic WebP-preferred optimization, without changing how an
+3. **0011 — shipped:** automatic WebP-preferred delivery, without changing how an
    author embeds an image or where it is hosted.
 4. **0012:** self-contained *static* SVG is accepted as **build-only input** and
    becomes WebP; the original SVG is never served.
@@ -180,6 +182,17 @@ The implemented reading rules are deliberately narrow:
 
 ## 0011 — Automatic WebP-preferred raster policy
 
+**Implemented 2026-11-09** by `src/lib/media-codec.ts` and the producer's existing
+authorization point in `scripts/markdown-to-artifact.ts`. The table below is the shipped
+decision. Settings are quality 80 / effort 4 for JPEG and lossless effort 4 for PNG,
+applied after `autoOrient()` and a conversion to sRGB. Finite limits are 32 MiB per source,
+50 megapixels per frame, 50 megapixels across an animation, and 20-second decode/encode
+deadlines, with no `unlimited` opt-out. The per-build cache is keyed by source digest alone
+(encoder settings are fixed module constants), identity is the emitted SHA-256, and the
+hostile-input, orientation,
+alpha and colour evidence is in the
+[0011 completion record](../goals/archive/0011-webp-first-image-delivery.md).
+
 Source bytes are identified by validated content and actual supported image
 format, never trusted merely because of an extension. No image is automatically
 resized, cropped, sharpened, animated, or made into several responsive variants.
@@ -187,10 +200,11 @@ Initial encoding policy is deliberately small:
 
 | Validated input | Initial candidate | Acceptance rule |
 | --- | --- | --- |
-| JPEG (ordinary photo) | Lossy WebP, start near sharp's quality 80 and default effort 4 | Keep WebP only if it is smaller and visual review confirms no material degradation; otherwise retain original JPEG |
-| PNG (screenshot, text, diagrams, alpha) | Lossless WebP | Compare actual published bytes with PNG; preserve exact visible detail and alpha, keep PNG if no saving |
+| JPEG (ordinary photo) | Lossy WebP at quality 80, effort 4 | Keep WebP only if its emitted bytes are smaller; otherwise retain the original JPEG. Visual acceptability is a fixture-qualification gate, not a per-build comparison |
+| PNG (screenshot, text, diagrams, alpha) | Lossless WebP, effort 4 | Compare actual published bytes with PNG; keep PNG if there is no saving. Lossless conversion preserves displayed pixels and alpha |
 | Existing WebP or AVIF | Unchanged | Do not pay for speculative generation loss or re-encode an already effective format |
-| Animated GIF / animated WebP | Unchanged | No first-frame-only conversion, lost timing, changed loop count, or unreviewed full-animation encoder cost |
+| Animated GIF / animated WebP / animated PNG | Unchanged | No first-frame-only conversion, lost timing, changed loop count, or unreviewed full-animation encoder cost. APNG is detected structurally because sharp does not report its frame count |
+| Static GIF | Unchanged | No policy row selects an encoder for it; the file is copied byte-identically |
 | Any decoded invalid/corrupt or unsupported image | Build failure | Never put unidentified or unsafe bytes into public assets |
 
 The approximately 80-quality JPEG setting and effort 4 are **initial encoder
