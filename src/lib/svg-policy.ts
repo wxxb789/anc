@@ -717,26 +717,38 @@ function pathMarkerPlacements(pathData: string | undefined): MarkerPlacements {
     finishSubpath(false);
     subpaths += 1;
   };
-  const arity = (letter: string): number => {
+  /**
+   * The upper bound on the vertices one command group's numbers produce.
+   *
+   * Every command has one lexical number per grammar value, so its arity
+   * divides the group exactly and a partial group rounds up. `A`/`a` is the
+   * exception: arc flags are single characters that need no separator, so
+   * `0110` is the flags `0 1` followed by the x coordinate `10`, and dividing
+   * a compact group by the seven-value arity under-counts its arcs. Every arc
+   * still consumes at least `rx ry rotation`, so `ceil(numbers / 3)` bounds
+   * the arcs in both the compact and the spaced spelling. The flags are not
+   * lexed: this is a placement bound, and over-counting is its safe direction.
+   */
+  const segmentBound = (letter: string, numbers: number): number => {
     switch (letter) {
+      case 'A':
+      case 'a':
+        return Math.ceil(numbers / 3);
       case 'H':
       case 'h':
       case 'V':
       case 'v':
-        return 1;
+        return numbers;
       case 'C':
       case 'c':
-        return 6;
+        return Math.ceil(numbers / 6);
       case 'S':
       case 's':
       case 'Q':
       case 'q':
-        return 4;
-      case 'A':
-      case 'a':
-        return 7;
+        return Math.ceil(numbers / 4);
       default:
-        return 2;
+        return Math.ceil(numbers / 2);
     }
   };
 
@@ -765,7 +777,7 @@ function pathMarkerPlacements(pathData: string | undefined): MarkerPlacements {
         // own argument.
         currentVertices = 1;
       }
-      currentVertices += Math.max(1, Math.ceil(numbers / arity(letter)));
+      currentVertices += Math.max(1, segmentBound(letter, numbers));
     }
   }
   finishSubpath(false);

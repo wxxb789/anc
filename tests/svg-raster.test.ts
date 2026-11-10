@@ -760,6 +760,53 @@ test('a marker reference is multiplied by the placements its shape produces', ()
   assert.match(fourPointPolygon.refusal.detail, /49149/, fourPointPolygon.refusal.detail);
 });
 
+test('compact arc flags cannot under-count marker placements', () => {
+  // Arc flags are single characters and need no separator: `0110` is the flags
+  // `0 1` followed by the x coordinate `10`. Dividing a compact arc group by
+  // the seven-value arity read this four-arc path as three arcs and two
+  // interior vertices — 16,382 instances at 13 chain levels, inside the
+  // 16,384 cap — while the spaced spelling of the same four arcs was refused
+  // at 24,573. Every arc consumes at least `rx ry rotation`, so `ceil(numbers
+  // / 3)` bounds a group's arcs: the compact spelling's 20 numbers bound seven
+  // arcs and six interior vertices, and the spaced spelling's four groups of
+  // seven numbers bound three arcs each and eleven interior vertices. One
+  // placement of the 13-level chain is 8,191 instances, so the two refusals
+  // are 6 × 8,191 = 49,146 and 11 × 8,191 = 90,101.
+  const compact =
+    '<path d="M0 0A10 10 0 0110 10 10 10 0 0120 20 10 10 0 0130 30 10 10 0 0140 40" marker-mid="url(#m)"/>';
+  const spaced =
+    '<path d="M0 0A10 10 0 0 1 10 10A10 10 0 0 1 20 20A10 10 0 0 1 30 30A10 10 0 0 1 40 40" marker-mid="url(#m)"/>';
+  const counts: Record<string, number> = {};
+  for (const [name, body] of Object.entries({ compact, spaced })) {
+    const inspection = inspectSvg(Buffer.from(markerChain(body, 13)));
+    if (inspection.ok) assert.fail(`${name}: four arcs did not bound the three interior vertices`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    const match = /creates (\d+) instances/.exec(inspection.refusal.detail);
+    if (match === null) assert.fail(`${name}: the refusal names no instance count: ${inspection.refusal.detail}`);
+    counts[name] = Number(match[1]);
+  }
+  assert.equal(counts.compact, 49146);
+  assert.equal(counts.spaced, 90101);
+  assert.ok(
+    counts.spaced! >= counts.compact!,
+    'the spaced spelling counted fewer placements than the compact one',
+  );
+});
+
+test('a compact arc inside the budget is still accepted', () => {
+  // One compact arc is five numbers after its command letter, because the two
+  // flags and the x coordinate share the token `0110`. The bound reads
+  // `ceil(5 / 3) = 2` arc segments, one interior placement, and a one-instance
+  // marker keeps the document accepted.
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs><symbol id="dot"><circle cx="1" cy="1" r="1"/></symbol>` +
+    `<marker id="m"><use href="#dot"/></marker></defs>` +
+    `<path d="M0 0A10 10 0 0110 10" marker-mid="url(#m)"/></svg>`;
+  const inspection = inspectSvg(Buffer.from(svg));
+  assert.equal(inspection.ok, true, inspection.ok ? '' : inspection.refusal.detail);
+});
+
 test('a closepath contributes the closing vertex to the interior bound', () => {
   // `M0 0 L10 10 Z` has three vertices: the moveto, the lineto, and the
   // closepoint back at the start. The lineto is therefore interior.

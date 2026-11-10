@@ -436,12 +436,17 @@ XML but expand to 131,071 instances. A marker reference is multiplied by the
 placements its shape can produce — once per subpath for `marker-start` and
 `marker-end`, once per interior vertex for `marker-mid` — because a marker
 renders per placement, not per declaration. The placement bound is lexical
-(`points` pairs, `d` command arguments, two vertices for `line`), and a
-closepath or polygon's closing point is the last vertex, so a subpath with at
-least two vertices has its previous endpoint in the interior; that is measured
-against the pinned librsvg. The 16,384 cap admits the largest practical
-chained symbol table (measured at 177 ms for 16,383 instances on the qualification
-host) and refuses that document before the renderer; the same shape measured
+(`points` pairs, `d` command arguments, two vertices for `line`). Arc flags are
+single characters that may be packed without a separator (`0110` is the flags
+`0 1` and the x coordinate `10`), so an `A`/`a` group's segments are bounded by
+`ceil(numbers / 3)` — every arc still consumes at least `rx ry rotation` —
+rather than divided by the seven-value arity; every other command has one
+lexical number per grammar value. A closepath or polygon's closing point is
+the last vertex, so a subpath with at least two vertices has its previous
+endpoint in the interior; that is measured against the pinned librsvg. The
+16,384 cap admits the largest practical chained symbol table (measured at
+177 ms for 16,383 instances on the qualification host) and refuses that
+document before the renderer; the same shape measured
 581 ms at 65,535 instances and 1,146 ms at 131,071 instances before the cap
 (reviewer measurement 2.4 s at 2^17). A cyclic `<use>` graph is refused as
 non-terminating. A source SVG larger than 8 MiB is refused before the policy
