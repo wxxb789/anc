@@ -44,6 +44,7 @@ import {
   PNG_UNICODE,
 } from '../tests/support/media.ts';
 import { openSnapshot, snapshotMembers } from '../tests/support/snapshot.ts';
+import { R2Fake } from '../tests/support/r2-fake.ts';
 import { spawnNpm } from './npm-command.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
@@ -80,6 +81,27 @@ function runNpm(args: string[], cwd: string): string {
     );
   }
   return result.stdout;
+}
+
+/**
+ * Run a child while this process's event loop stays free.
+ *
+ * The R2 phase below hosts a local protocol fake in *this* process; `run()` is
+ * synchronous and would block the fake from answering the child it just
+ * spawned. Everything else in this script may stay synchronous.
+ */
+async function runAsync(
+  command: string,
+  args: string[],
+  cwd: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<{ status: number | null; output: string }> {
+  const child = spawn(command, args, { cwd, env: { ...process.env, ...environment } });
+  const chunks: Buffer[] = [];
+  child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+  child.stderr.on('data', (chunk: Buffer) => chunks.push(chunk));
+  const [status] = (await once(child, 'exit')) as [number | null];
+  return { status, output: Buffer.concat(chunks).toString('utf8') };
 }
 
 function filesUnder(root: string): string[] {
@@ -392,6 +414,69 @@ async function representativePhotograph(width: number, height: number): Promise<
   return sharp(raw, { raw: { width, height, channels: 3 } })
     .jpeg({ quality: 92, chromaSubsampling: '4:4:4' })
     .toBuffer();
+}
+
+/**
+ * The packaged R2 page under the browser, with the custom domain fulfilled
+ * from the protocol fake's stored objects.
+ *
+ * The URL, the CSP and the `<img>` element are the product; the bytes are the
+ * ones the publisher verified. Page scripts stay disabled, so a green result
+ * also demonstrates that image display needs no new client JavaScript. Real
+ * Cloudflare DNS/TLS is the part this cannot cover; that is the disclosed
+ * live-integration gap.
+ */
+async function checkAbsoluteImages(
+  browser: Browser,
+  server: ServedSite,
+  objects: ReadonlyMap<string, { readonly bytes: Buffer; readonly contentType: string }>,
+): Promise<void> {
+  const context = await browser.newContext({ javaScriptEnabled: false });
+  try {
+    const page = await context.newPage();
+    await page.route('https://media.invalid/**', async (route) => {
+      const pathname = decodeURIComponent(new URL(route.request().url()).pathname);
+      const object = objects.get(pathname);
+      if (object === undefined) {
+        await route.fulfill({ status: 404, body: '' });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: object.contentType, body: object.bytes });
+    });
+
+    const response = await page.goto(`${server.origin}/notes/welcome/`, { waitUntil: 'load' });
+    const policy = response?.headers()['content-security-policy'] ?? '';
+    assert(
+      /img-src[^;]*https:/.test(policy),
+      'the packaged R2 output was not served under a policy that allows HTTPS images: ' +
+        JSON.stringify(policy),
+    );
+
+    const count = await page.locator('article img').count();
+    for (let index = 0; index < count; index += 1) {
+      await page.locator('article img').nth(index).scrollIntoViewIfNeeded();
+    }
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll('article img')].every((image) => (image as HTMLImageElement).complete),
+    );
+    const images = await page.locator('article img').evaluateAll((nodes) =>
+      (nodes as HTMLImageElement[]).map((image) => ({
+        src: image.getAttribute('src') ?? '',
+        width: image.naturalWidth,
+      })),
+    );
+    assert(images.length === 10, 'the packaged R2 page rendered ' + images.length + ' images');
+    assert(
+      images.every((image) => image.src.startsWith('https://media.invalid/_assets/')),
+      'a packaged R2 image did not use the custom-domain origin: ' + JSON.stringify(images),
+    );
+    assert(
+      images.every((image) => image.width > 0),
+      'the browser did not decode a packaged R2 image: ' + JSON.stringify(images),
+    );
+  } finally {
+    await context.close();
+  }
 }
 
 /**
@@ -822,6 +907,132 @@ async function main(): Promise<number> {
 
     // --- The shipped preview accepts this exact output, and only on loopback ---
     await checkShippedPreview(binary, scratch);
+
+    // --- Optional R2 media: the packaged signer, conditional uploads, and
+    // absolute custom-domain HTML, over a local protocol fake ---
+    //
+    // This runs against a separate `--out` directory, so the same-origin
+    // artifact asserted above is still the one the failure checks below read.
+    // The child's HTTPS hostnames are mapped to the fake by the repository's
+    // test-only preload; the configuration itself stays the documented HTTPS
+    // shape, and the signer really is the one installed from the tarball.
+    const installedSigner = [
+      join(scratch, 'node_modules', 'aws4fetch', 'package.json'),
+      join(scratch, 'node_modules', ...MANIFEST.name.split('/'), 'node_modules', 'aws4fetch', 'package.json'),
+    ].find((candidate) => existsSync(candidate));
+    assert(installedSigner !== undefined, 'npm did not install the R2 signer with the package');
+    const signerManifest = JSON.parse(readFileSync(installedSigner, 'utf8')) as { version?: string };
+    assert(signerManifest.version === '1.0.20', 'the tarball installed aws4fetch ' + String(signerManifest.version));
+
+    writeFileSync(
+      join(scratch, 'publish.config.yaml'),
+      [
+        'title: Foreign Garden',
+        'origin: https://notes.example.org/',
+        'exclude:',
+        '  - "drafts/**"',
+        'media:',
+        '  provider: r2',
+        '  bucket: foreign-images',
+        '  endpoint: https://r2.invalid',
+        '  public_base_url: https://media.invalid',
+        '  access_key_id_env: R2_ACCESS_KEY_ID',
+        '  secret_access_key_env: R2_SECRET_ACCESS_KEY',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const mediaFake = new R2Fake({ bucket: 'foreign-images', accessKeyId: 'AKIDSMOKE' });
+    const mediaOrigin = await mediaFake.start();
+    const mediaTrace = join(scratch, 'media.trace');
+    const mediaEnvironment = {
+      R2_ACCESS_KEY_ID: 'AKIDSMOKE',
+      R2_SECRET_ACCESS_KEY: 'smoke-secret-value',
+      ANC_FAKE_ORIGIN: mediaOrigin,
+      ANC_NETWORK_TRACE: mediaTrace,
+    };
+    try {
+      const mediaArgs = [
+        '--import',
+        join(ROOT, 'tests', 'support', 'network-trace.mjs'),
+        binary,
+        'build',
+        '--release',
+        '--media',
+        'r2',
+        '--out',
+        'dist-r2',
+      ];
+      const mediaBuild = await runAsync(process.execPath, mediaArgs, scratch, mediaEnvironment);
+      assert(mediaBuild.status === 0, 'the packaged R2 build failed:\n' + mediaBuild.output);
+      assert(!mediaBuild.output.includes('smoke-secret-value'), 'the R2 build printed a credential value');
+      const mediaLines = mediaBuild.output.trim().split(/\r?\n/);
+      assert(mediaLines.length === 6, 'the packaged R2 build wrote more or fewer than six lines: ' + mediaBuild.output);
+      assert(mediaLines[0]?.startsWith('secret scan ok:'), 'the R2 build skipped the secret scan');
+      assert(mediaLines[1]?.startsWith('residue scan ok:'), 'the R2 build skipped the residue scan');
+      assert(
+        mediaLines[2] === 'media: 8 referenced, 8 uploaded, 0 already present, 8 verified',
+        'the packaged R2 build published a different object set: ' + mediaLines[2],
+      );
+      assert(mediaLines[3] === 'site written', 'the R2 build did not report a written site');
+
+      const r2Dist = join(scratch, 'dist-r2');
+      const r2Welcome = readFileSync(join(r2Dist, 'notes', 'welcome', 'index.html'), 'utf8');
+      const mediaImages = [...r2Welcome.matchAll(/<img src="(https:\/\/media\.invalid\/_assets\/[^"]+)"/g)].map(
+        (match) => match[1]!,
+      );
+      assert(mediaImages.length === 10, 'the packaged R2 page points at ' + mediaImages.length + ' absolute media URLs');
+      assert(!r2Welcome.includes('src="/_assets/'), 'the packaged R2 page kept a same-origin image path');
+      assert(!r2Welcome.includes('r2.dev'), 'the packaged R2 page used the development-only hostname');
+      assert(
+        /img-src 'self' data: https:/.test(readFileSync(join(r2Dist, '_headers'), 'utf8')),
+        'the packaged R2 output changed the image CSP',
+      );
+
+      assert(mediaFake.objects.size === 8, 'the packaged R2 build stored ' + mediaFake.objects.size + ' objects');
+      for (const [key, object] of mediaFake.objects) {
+        assert(key.startsWith('/_assets/'), 'an object key was not the published asset path: ' + key);
+        const name = key.slice('/_assets/'.length);
+        const local = readFileSync(join(r2Dist, '_assets', name));
+        const digest = createHash('sha256').update(local).digest('hex');
+        assert(digest === name.slice(0, 64), 'a local R2 asset does not hash to its content address: ' + name);
+        assert(Buffer.compare(Buffer.from(object.bytes), local) === 0, 'a remote object differs from its local asset: ' + name);
+      }
+
+      const mediaTraceLines = readFileSync(mediaTrace, 'utf8');
+      assert(mediaTraceLines.includes('module:aws4fetch'), 'the packaged R2 build never loaded the shipped signer');
+      assert(
+        mediaTraceLines.includes('fetch:PUT:https://r2.invalid/foreign-images/_assets/'),
+        'the packaged R2 build issued no signed upload',
+      );
+      assert(
+        mediaTraceLines.includes('fetch:GET:https://media.invalid/_assets/'),
+        'the packaged R2 build did not verify the public custom domain',
+      );
+
+      const repeated = await runAsync(process.execPath, mediaArgs, scratch, mediaEnvironment);
+      assert(repeated.status === 0, 'the repeated packaged R2 build failed:\n' + repeated.output);
+      assert(
+        repeated.output.includes('media: 8 referenced, 0 uploaded, 8 already present, 8 verified'),
+        'the repeated packaged R2 build did not reuse the objects:\n' + repeated.output,
+      );
+      assert(mediaFake.objects.size === 8, 'the repeated build created another object');
+
+      // The same packaged output, under a real browser: absolute HTTPS URLs,
+      // the generated CSP, and bytes that decode. The custom domain is fulfilled
+      // from the fake because no live R2 host is authorized here.
+      const r2Server = await serveDist(r2Dist, { headersFile: join(r2Dist, '_headers') });
+      const r2Browser = await launchSmokeBrowser();
+      try {
+        await checkAbsoluteImages(r2Browser, r2Server, mediaFake.objects);
+      } finally {
+        await r2Browser.close();
+        await r2Server.close();
+      }
+    } finally {
+      await mediaFake.close();
+    }
 
     const planted = 'ghp_4fJ9xQ2mN7vL5sT8yR1cW6kP3dH0bA9eZ7uC';
     const sourcePath = join(scratch, 'welcome.md');

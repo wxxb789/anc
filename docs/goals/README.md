@@ -178,12 +178,14 @@ its browser cost acceptance is not a prerequisite for 0009.
 | Goal | Status | Single completion judgment | Material prerequisites |
 | --- | --- | --- | --- |
 | [0012 — Safe SVG rasterization](archive/0012-safe-svg-rasterization.md) | Completed 2026-11-10 | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009 and 0011 (completed) |
-| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009 (completed); 0011 nonblocking and completed |
+| [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | In progress | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009 (completed); 0011 nonblocking and completed; live R2/custom-domain round trip outstanding |
 
 `Ready` here means a downstream agent can pursue the stated outcome once its
 prerequisite is accepted; it does **not** mean implemented, deployed or approved
 as a release. `Provisional` goals preserve accepted direction but require
-refinement before activation. 0009–0012 are completed; 0013 has not started.
+refinement before activation. 0009–0012 are completed; 0013 is `In progress` with
+its implementation and local failure suite complete but its live R2/custom-domain
+round trip outstanding.
 
 **Scope boundary.** Current ANC deployment supports root-of-origin sites, not a
 GitHub Pages project site's `/<repo>/` prefix. Extending site-wide base-path

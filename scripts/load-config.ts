@@ -171,7 +171,50 @@ export const NEAR_MISS_NAMES: readonly string[] = [
 ];
 
 /** Every key the file may carry. The order is the order they are documented in. */
-const KNOWN_KEYS = ['title', 'origin', 'exclude', 'language'] as const;
+const KNOWN_KEYS = ['title', 'origin', 'exclude', 'language', 'media'] as const;
+
+/**
+ * Every key a `media:` table may carry.
+ *
+ * One provider and one shape, deliberately: Goal 0013 authorizes Cloudflare R2
+ * and nothing else, so this is a validated configuration table rather than a
+ * provider framework. The two credential entries are *names* of environment
+ * variables; a value written here would be a secret in the user's repository
+ * and is refused by the unknown-value rule of the shape itself.
+ */
+const MEDIA_KEYS = [
+  'provider',
+  'bucket',
+  'endpoint',
+  'public_base_url',
+  'access_key_id_env',
+  'secret_access_key_env',
+] as const;
+
+/**
+ * The opt-in managed-media configuration. Only Cloudflare R2 is implemented;
+ * the provider literal is what makes a future section fail here rather than in
+ * a publisher that would have to guess.
+ *
+ * The two URLs are normalized to bare origins (scheme, host, port) so every
+ * consumer forms one URL from one spelling. `endpoint` is the S3 API origin;
+ * `publicBaseUrl` is the custom domain a reader fetches. `bucket` is the R2
+ * bucket both are scoped by.
+ */
+export interface MediaConfig {
+  readonly provider: 'r2';
+  readonly bucket: string;
+  readonly endpoint: string;
+  readonly publicBaseUrl: string;
+  readonly accessKeyIdEnv: string;
+  readonly secretAccessKeyEnv: string;
+}
+
+/** The longest bucket name the S3 API and R2 both accept. */
+const BUCKET_NAME = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
+
+/** The shape of a name that can address an environment variable. */
+const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * The configuration a build runs with, after defaults are applied.
@@ -208,6 +251,16 @@ export interface LoadedConfig {
    * means the interface's own default, English.
    */
   language: string | undefined;
+  /**
+   * The opt-in managed-media configuration, when the user wrote one.
+   *
+   * Its presence does **not** authorize anything. Only `anc build --release
+   * --media r2` reads it, so an ordinary build, a preview, and a release build
+   * without the flag remain offline even in a repository that holds this table
+   * and has the credentials exported. That separation is the product decision,
+   * not an implementation convenience.
+   */
+  media: MediaConfig | undefined;
 }
 
 /**
@@ -237,6 +290,7 @@ export const DEFAULTS: LoadedConfig = Object.freeze({
   origin: undefined,
   exclude: Object.freeze([]) as readonly string[],
   language: undefined,
+  media: undefined,
 });
 
 /** The defaults, as a value a caller may keep and a later caller cannot see. */
@@ -356,15 +410,15 @@ function editDistance(from: string, to: string): number {
  * is true of any substring: measured, a key of `e` was suggested as `title`,
  * `x` as `exclude`, and `o` as `origin`. A confidently wrong suggestion tells
  * the user to rename a key they did not mean to write, which is worse than
- * listing the three.
+ * listing the keys.
  */
-function suggestionFor(key: string): string | undefined {
+function suggestionFor(key: string, candidates: readonly string[] = KNOWN_KEYS): string | undefined {
   const folded = key.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (folded === '') return undefined;
-  for (const known of KNOWN_KEYS) {
+  for (const known of candidates) {
     if (folded.length >= 3 && (folded.includes(known) || known.includes(folded))) return known;
   }
-  for (const known of KNOWN_KEYS) {
+  for (const known of candidates) {
     if (editDistance(folded, known) <= 2) return known;
   }
   return undefined;
@@ -555,6 +609,271 @@ function checkLanguage(value: unknown, line: number | undefined, issues: string[
     issues.push(`${at}: must be a BCP 47 language tag such as en, zh-CN, or zh-Hans-CN`);
     details.push(`language = ${JSON.stringify(value)}`);
   }
+}
+
+/**
+ * A bare HTTPS origin for the R2 storage endpoint or its public custom domain.
+ *
+ * The two checks that are not obvious, and the reason they are here rather
+ * than in the publisher:
+ *
+ * - **HTTPS only.** Credentials travel on every signed request, so a plain
+ *   `http:` endpoint would put them on the wire. The public base is also where
+ *   a reader's browser fetches images, and mixed content would break the page
+ *   under the site's own CSP.
+ * - **No `r2.dev`.** That hostname is Cloudflare's development-only, rate
+ *   limited endpoint with no normal CDN caching. A published site that used it
+ *   would work in a test and degrade under real traffic, so it is refused at
+ *   configuration time rather than discovered later.
+ *
+ * A path, query, fragment, username or password is refused for the same class
+ * of reason `checkOrigin` gives: the publisher appends the object path, so a
+ * path here would silently move every object and a credential would appear in
+ * every signed request line.
+ */
+function checkMediaOrigin(
+  value: unknown,
+  at: string,
+  issues: string[],
+  details: string[],
+): string | undefined {
+  if (typeof value !== 'string') {
+    issues.push(`${at}: must be a string holding an HTTPS origin, found ${typeName(value)}`);
+    details.push(`${at} = ${JSON.stringify(value)}`);
+    return undefined;
+  }
+  if (value !== value.trim() || /\s/.test(value)) {
+    issues.push(`${at}: must not contain whitespace`);
+    details.push(`${at} = ${JSON.stringify(value)}`);
+    return undefined;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    issues.push(`${at}: must be an absolute HTTPS URL with a host, such as https://example.com/`);
+    details.push(`${at} = ${JSON.stringify(value)}`);
+    return undefined;
+  }
+
+  if (url.protocol !== 'https:') {
+    issues.push(`${at}: must use the https scheme`);
+    details.push(`${at} = ${JSON.stringify(value)}`);
+    return undefined;
+  }
+
+  if (url.username !== '' || url.password !== '') {
+    issues.push(`${at}: must not carry a username or password — credentials are read from the environment`);
+    // The value itself is the one string here that may be a secret.
+    details.push(`${at} carried credentials`);
+    return undefined;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  if (hostname === 'r2.dev' || hostname.endsWith('.r2.dev')) {
+    issues.push(
+      `${at}: must not use r2.dev — it is Cloudflare's development-only, rate-limited ` +
+        'hostname with no normal CDN caching; connect a custom domain to the bucket instead',
+    );
+    details.push(`${at} named an r2.dev host`);
+    return undefined;
+  }
+
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+    issues.push(
+      `${at}: must be a bare origin with no path, query, or fragment — ` +
+        'the object path is appended to it',
+    );
+    details.push(`${at} = ${JSON.stringify(value)}`);
+    return undefined;
+  }
+
+  return url.origin;
+}
+
+/**
+ * The `media:` table: one provider, one shape, and every required key present.
+ *
+ * Returns the normalized configuration only when this table contributed no
+ * issue. The caller still refuses the file if any other key did, which is why
+ * this does not throw: the loader accumulates every mistake in one pass.
+ *
+ * `bucket` is validated against the narrower of the S3 and R2 naming rules
+ * because both are addressed by the same value: 3–63 lowercase alphanumerics
+ * or hyphens, starting and ending with an alphanumeric. Rejecting a bucket the
+ * service would reject is cheaper than a 404 from a publisher that cannot say
+ * which of the two was wrong.
+ */
+function checkMedia(
+  value: unknown,
+  line: number | undefined,
+  memberLines: ReadonlyMap<string, number>,
+  tagged: ReadonlySet<string>,
+  issues: string[],
+  details: string[],
+): MediaConfig | undefined {
+  const at = line === undefined ? 'media' : `media (line ${line})`;
+  if (!isPlainObject(value)) {
+    issues.push(`${at}: must be a table, found ${typeName(value)}`);
+    details.push(`media = ${JSON.stringify(value)}`);
+    return undefined;
+  }
+
+  const before = issues.length;
+  const where = (key: string): string => {
+    const memberLine = memberLines.get(key);
+    return memberLine === undefined ? `media.${key}` : `media.${key} (line ${memberLine})`;
+  };
+
+  // A nested key is user-authored text exactly as a top-level one is: a pasted
+  // path or credential can be a valid YAML key, and this message reaches the
+  // public stderr stream. The line is where the fix goes; the bytes go to the
+  // private report. `where()` remains for the schema's own key names below.
+  for (const key of tagged) {
+    const memberLine = memberLines.get(key);
+    issues.push(
+      `${memberLine === undefined ? 'media' : `media (line ${memberLine})`}: the value carries a ` +
+        '"!" tag, which YAML discards — remove it, or quote the value if the "!" is part of it',
+    );
+    details.push(`media.${key} carried an eaten "!" tag`);
+  }
+
+  for (const key of Object.keys(value)) {
+    if ((MEDIA_KEYS as readonly string[]).includes(key)) continue;
+    const memberLine = memberLines.get(key);
+    const suggestion = suggestionFor(key, MEDIA_KEYS);
+    issues.push(
+      `${memberLine === undefined ? 'media' : `media (line ${memberLine})`}: unknown key is not allowed` +
+        (suggestion === undefined
+          ? `. The keys are ${MEDIA_KEYS.join(', ')}`
+          : `. Did you mean "${suggestion}"?`),
+    );
+    details.push(`unknown media key ${JSON.stringify(key)}`);
+  }
+
+  for (const key of MEDIA_KEYS) {
+    if (key in value) continue;
+    issues.push(`${where(key)}: is required`);
+  }
+
+  if ('provider' in value && value['provider'] !== 'r2') {
+    issues.push(`${where('provider')}: must be "r2"; it is the only supported provider`);
+    details.push(`media.provider = ${JSON.stringify(value['provider'])}`);
+  }
+
+  if ('bucket' in value) {
+    const bucket = value['bucket'];
+    if (typeof bucket !== 'string') {
+      issues.push(`${where('bucket')}: must be a string, found ${typeName(bucket)}`);
+      details.push(`media.bucket = ${JSON.stringify(bucket)}`);
+    } else if (bucket !== bucket.trim() || /\s/.test(bucket)) {
+      issues.push(`${where('bucket')}: must not contain whitespace`);
+      details.push(`media.bucket = ${JSON.stringify(bucket)}`);
+    } else if (!BUCKET_NAME.test(bucket)) {
+      issues.push(
+        `${where('bucket')}: must be 3–63 lowercase letters, digits, or hyphens, ` +
+          'starting and ending with a letter or digit',
+      );
+      details.push(`media.bucket = ${JSON.stringify(bucket)}`);
+    }
+  }
+
+  const endpoint =
+    'endpoint' in value ? checkMediaOrigin(value['endpoint'], where('endpoint'), issues, details) : undefined;
+  const publicBaseUrl =
+    'public_base_url' in value
+      ? checkMediaOrigin(value['public_base_url'], where('public_base_url'), issues, details)
+      : undefined;
+
+  const envNames = new Map<string, string>();
+  for (const key of ['access_key_id_env', 'secret_access_key_env'] as const) {
+    if (!(key in value)) continue;
+    const name = value[key];
+    if (typeof name !== 'string') {
+      issues.push(`${where(key)}: must be a string naming an environment variable, found ${typeName(name)}`);
+      details.push(`media.${key} = ${JSON.stringify(name)}`);
+      continue;
+    }
+    if (!ENVIRONMENT_NAME.test(name) || name.length > 128) {
+      issues.push(
+        `${where(key)}: must be an environment variable name — letters, digits, and ` +
+          'underscores, not starting with a digit',
+      );
+      details.push(`media.${key} = ${JSON.stringify(name)}`);
+      continue;
+    }
+    envNames.set(key, name);
+  }
+
+  const accessKeyIdEnv = envNames.get('access_key_id_env');
+  const secretAccessKeyEnv = envNames.get('secret_access_key_env');
+  if (accessKeyIdEnv !== undefined && accessKeyIdEnv === secretAccessKeyEnv) {
+    issues.push(
+      `${where('secret_access_key_env')}: must name a different environment variable from ` +
+        'media.access_key_id_env — one value cannot be both the key ID and the secret',
+    );
+    details.push('media.access_key_id_env and media.secret_access_key_env named the same variable');
+  }
+
+  if (issues.length !== before) return undefined;
+  return {
+    provider: 'r2',
+    bucket: value['bucket'] as string,
+    endpoint: endpoint!,
+    publicBaseUrl: publicBaseUrl!,
+    accessKeyIdEnv: accessKeyIdEnv!,
+    secretAccessKeyEnv: secretAccessKeyEnv!,
+  };
+}
+
+/**
+ * The nested `media:` members whose YAML value carried an eaten `!` tag.
+ *
+ * The top-level loop cannot see these: a tagged scalar inside a mapping is a
+ * different node, and `bucket: ! mybucket` would otherwise be accepted with the
+ * tag silently discarded. Same rule, one level down.
+ */
+function mediaEatenTags(document: { get(key: string, keepScalar: true): unknown }): ReadonlySet<string> {
+  const eaten = new Set<string>();
+  const node: unknown = document.get('media', true);
+  const items: unknown =
+    node !== null && typeof node === 'object' && 'items' in node ? node.items : undefined;
+  if (!Array.isArray(items)) return eaten;
+  for (const item of items) {
+    const pair = item as { key?: unknown; value?: unknown };
+    const key = pair.key as { value?: unknown } | undefined;
+    if (key === undefined || typeof key.value !== 'string') continue;
+    if (carriesEatenTag(pair.value, document)) eaten.add(key.value);
+  }
+  return eaten;
+}
+
+/**
+ * The 1-indexed line each `media:` member was written on.
+ *
+ * Per member, not per table: the entire disclosure design rests on the user
+ * opening their own file at that line and reading their own text there, so a
+ * line that points at `media:` for an error in `bucket` is worse than none.
+ */
+function mediaLines(
+  document: { get(key: string, keepScalar: true): unknown },
+  lineCounter: LineCounter,
+): ReadonlyMap<string, number> {
+  const lines = new Map<string, number>();
+  const node: unknown = document.get('media', true);
+  const items: unknown =
+    node !== null && typeof node === 'object' && 'items' in node ? node.items : undefined;
+  if (!Array.isArray(items)) return lines;
+  for (const item of items) {
+    const pair = item as { key?: unknown };
+    const key = pair.key as { value?: unknown; range?: unknown } | undefined;
+    if (key === undefined || typeof key.value !== 'string') continue;
+    const range = key.range;
+    if (!Array.isArray(range) || typeof range[0] !== 'number') continue;
+    lines.set(key.value, lineCounter.linePos(range[0]).line);
+  }
+  return lines;
 }
 
 /**
@@ -770,6 +1089,8 @@ function excludeLines(
 export function parseConfig(text: string): LoadedConfig {
   const issues: string[] = [];
   const details: string[] = [];
+  /** Filled only by a fully valid `media:` table; validation failures throw below. */
+  let media: MediaConfig | undefined;
 
   // A leading BOM is what Notepad writes, and it is not YAML. Stripped rather
   // than refused: the user did not type it and cannot see it.
@@ -927,6 +1248,16 @@ export function parseConfig(text: string): LoadedConfig {
   if ('title' in table) checkTitle(table['title'], lines.get('title'), issues, details);
   if ('origin' in table) checkOrigin(table['origin'], lines.get('origin'), issues, details);
   if ('language' in table) checkLanguage(table['language'], lines.get('language'), issues, details);
+  if ('media' in table) {
+    media = checkMedia(
+      table['media'],
+      lines.get('media'),
+      mediaLines(document, lineCounter),
+      mediaEatenTags(document),
+      issues,
+      details,
+    );
+  }
   if ('exclude' in table) {
     checkExclude(
       table['exclude'],
@@ -948,6 +1279,7 @@ export function parseConfig(text: string): LoadedConfig {
     origin: 'origin' in table ? (table['origin'] as string) : DEFAULTS.origin,
     exclude: 'exclude' in table ? [...(table['exclude'] as string[])] : [],
     language: 'language' in table ? (table['language'] as string) : DEFAULTS.language,
+    media,
   };
 }
 

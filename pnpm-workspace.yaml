@@ -12,6 +12,12 @@
 # scripts unnoticed.
 allowBuilds:
   esbuild: false
+  # aws4fetch 1.0.20 is the pinned SigV4 signer for optional R2 publishing. It
+  # ships plain JavaScript with no install script, no native binding, and no
+  # transitive dependencies, so there is nothing to grant. Listing it as denied
+  # records that it was reviewed rather than leaving it unreviewed; the entry
+  # changes nothing at install time.
+  aws4fetch: false
 
 # rolldown 1.2.2 — what vite 8.2's `~1.2.0` resolved to — folds a string
 # concatenation containing a lone-surrogate escape into U+FFFD, which broke
