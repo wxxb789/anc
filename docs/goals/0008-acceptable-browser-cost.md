@@ -169,19 +169,29 @@ and are **not** part of that target: they reach 395 ms (sparse) and
 maintainer has to accept or reject explicitly.
 
 Cold preview (empty HTTP cache, fresh context) is
-407-441 ms and does not grow with corpus size — it pays the
-Worker start-up (fetch, digest, SQLite WASM init, module import). Warm preview is
-217-251 ms. At 10,000 notes the snapshot is
-3880.0 KiB decoded / 1081.5 KiB gzip, plus 848.5 KiB (394.1 KiB gzip) of
-sqlite3 WASM and 621.0 KiB of glue.
+407-441 ms and does not grow with corpus size — it pays the Worker start-up (fetch,
+digest, SQLite WASM init, module import). Warm preview is 217-251 ms.
 
-Ordinary reading never requests any of it before intent: with the seam inactive the page
-transferred 14460 B; after one intent the same page transferred
-25422 B, a 10962 B delta for snapshot, Worker, WASM
-and glue. Peak main-thread JS heap during the cold-intent window was
-2964.3 KiB; the Worker's WASM linear memory was
-8 MiB. Worker heap, process RSS and total peak memory
-remain unobserved — the instrument says so and this record does not paper over it.
+The cost paid on first intent at 10,000 notes is the cold dependency transfer, 8
+requests totalling **6,040.5 KiB decoded / 1,838.0 KiB gzip**:
+
+| Component | Files | Decoded | gzip |
+|---|---|---|---|
+| snapshot DB | 1 | 3,880.0 KiB | 1,081.5 KiB |
+| sqlite3 WASM binary | 1 | 848.5 KiB | 394.1 KiB |
+| sqlite3 WASM glue | 3 | 1,280.5 KiB | 350.9 KiB |
+| snapshot Worker chunk | 1 | 18.1 KiB | 5.9 KiB |
+| snapshot client scripts | 2 | 13.3 KiB | 5.5 KiB |
+
+Ordinary reading requests none of it before intent: with JavaScript disabled the page
+transferred 14,460 B; with JavaScript enabled but no intent, 25,422 B. That 10,962 B
+difference is the script overhead of reading, **not** the snapshot cost — the snapshot
+and Worker assets are the 6,040.5 KiB above, and `zeroRequests` is true for both the
+reading page and the main page in all six reports.
+
+Peak main-thread JS heap during the cold-intent window was 1,073.9 KiB; the Worker's
+WASM linear memory was 8 MiB. Worker heap, process RSS and total peak memory remain
+unobserved — the instrument says so and this record does not paper over it.
 
 ### Overload controls
 
