@@ -251,10 +251,13 @@ failure; there were none).
 | Warm p95 | 125.9 / 134.1 ms | n/a (single observation) |
 | Fetched on first preview (observed) | 3,452,503 B decoded / 603,098 B encoded, one JSON index | 5,503,343 B decoded / 1,692,447 B encoded, 4 requests (inventory 6,040.5 KiB / 1,838.0 KiB) |
 
-Both trees arm the same 120 ms intent delay (`OPEN_DELAY_MS`), so the remainder is where the
-time goes: warm, the baseline spends ~5 ms on an in-memory map lookup and the candidate ~108 ms
-on Worker dispatch, DB query and mount; cold, the baseline needs ~393 ms to fetch and parse
-the 3.45 MB index and the candidate ~138 ms to start the Worker and query the DB.
+Both trees arm the same 120 ms intent delay (`OPEN_DELAY_MS`), and both totals include it
+plus each harness's own hover/`waitFor` overhead, so this record does not decompose the
+remainder into "query" and "render": the candidate instrument additionally records a page-clock
+hover delay (271 ms cold, 123 ms warm; it is not subtracted from the reported totals), while
+the baseline probe records none, so a post-delay subtraction would compare two different
+clocks. What is claimed is the end-to-end difference in the same emulation, same corpus and
+same observable — warm 90-106 ms slower, cold 70-104 ms faster — not a phase attribution.
 
 The trade-off is therefore two-sided and both directions are recorded, not one: **the first
 preview is 70-104 ms faster and fetches 2.8x more bytes over the wire, while every warm
