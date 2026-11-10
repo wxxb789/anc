@@ -665,6 +665,30 @@ JavaScript, SQLite, CORS preflight, or public asset index. The storage API
 endpoint is never an image-serving URL; a successful signed `HEAD`
 alone does not prove the public CDN hostname is functional.
 
+Implemented constraints found while building the barrier:
+
+- **The local copy stays.** `dist/_assets/<sha256>-<name>` is still written in
+  R2 mode, because the artifact declares that file and the exact output
+  inventory owns the namespace. The remote object is a second copy of one
+  identity, not a replacement that would let the artifact and the output
+  disagree. The HTML chooses the custom-domain origin; the local file proves the
+  artifact is internally complete.
+- **Every request uses `redirect: 'manual'`.** A `3xx` from the storage endpoint
+  is a failure, not a hop: a followed redirect could carry `Authorization` to a
+  different host, and the public URL is already HTTPS. The public read-back does
+  the same, so a misconfigured domain redirect is reported rather than silently
+  accepted.
+- **A negative read is never proof of absence.** After an ambiguous conditional
+  `PUT`, the retry is another conditional `PUT`; if it answers `412`, the object
+  is read and hashed. A `404` on that read fails the run rather than being
+  interpreted as "no object", matching R2's documented consistency rule that an
+  in-flight write may still commit after a negative read.
+- **The delivery origin is an environment seam, not a config read by pages.**
+  `anc build --release --media r2` sets `PUBLISH_MEDIA_BASE_URL` before Astro
+  renders; every ordinary build clears it. The renderer validates it again as a
+  bare HTTPS origin because the image sanitizer's scheme allowlist has already
+  run by the time the rewrite happens.
+
 ### Required verification
 
 Demonstrate foreign-repository **packaged** adoption, exactly one

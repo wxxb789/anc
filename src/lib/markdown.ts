@@ -34,6 +34,7 @@ import { RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH, type RenderedKind } f
 import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
 import { slugFromSegment } from './route-path.ts';
 import { classifyImageSource, type ImageDimensions } from './media.ts';
+import { deliveredMediaUrl, mediaDeliveryOrigin } from './media-delivery.ts';
 
 /** A heading authored in the Markdown body, in document order. */
 export interface Heading {
@@ -1482,6 +1483,12 @@ function sanitize(
   // transform, so the current tag is the stack's last entry and its parent is
   // the one before it.
   const openTags: string[] = [];
+  // The public custom-domain origin, when this build was explicitly opted into
+  // a managed image host (`anc build --release --media r2`). `undefined` is the
+  // ordinary same-origin build, and then every image `src` below is untouched.
+  // Read once per render, not per image: the environment cannot change while
+  // one note is being rendered.
+  const deliveryOrigin = mediaDeliveryOrigin();
 
   return sanitizeHtml(html, {
     ...POLICY,
@@ -1599,13 +1606,27 @@ function sanitize(
           source !== undefined && /^data:/i.test(source) && !SAFE_IMAGE_DATA_URI.test(source)
             ? undefined
             : source;
+        // **Delivery is not identity.** An authorized asset keeps its canonical
+        // `/_assets/<digest>-<name>` path in the artifact, the staged file, the
+        // output inventory, and the remote object key. Only when the build was
+        // opted into a managed host does the emitted `src` become the absolute
+        // custom-domain URL; the path after the origin is byte-identical, which
+        // is what lets the upload plan and the HTML agree without a second
+        // naming scheme. Remote author-supplied URLs and `data:` URIs are never
+        // rewritten. The value was validated when it crossed into the process
+        // (`media-delivery.ts`), so `https:` here is a checked fact rather than
+        // an assumption about the environment.
+        const delivered =
+          src !== undefined && publishedAssets.has(src) && deliveryOrigin !== undefined
+            ? deliveredMediaUrl(src, deliveryOrigin)
+            : src;
         // The lead is the first image whose source the sanitizer will actually
         // keep. A transform runs before the scheme allowlist, so testing only
         // `src !== undefined` spent it on a URL that was about to be stripped.
-        const survives = imageSourceSurvivesPolicy(src);
+        const survives = imageSourceSurvivesPolicy(delivered);
         let dimensions: ImageDimensions | undefined;
         let loading: 'eager' | 'lazy' | undefined;
-        if (survives) {
+        if (survives && src !== undefined) {
           // The intrinsic size the producer read from these exact bytes, if its
           // header yielded one. Serialized as strings because that is what an
           // HTML attribute is; `CSS height: auto` plus `max-width: 100%` keeps
@@ -1633,7 +1654,7 @@ function sanitize(
           tagName,
           attribs: {
             ...(survives ? attribs : withoutImageClaims),
-            ...(src === undefined ? { src: '' } : { src }),
+            ...(delivered === undefined ? { src: '' } : { src: delivered }),
             alt: typeof attribs['alt'] === 'string' ? attribs['alt'] : '',
             ...(dimensions === undefined
               ? {}

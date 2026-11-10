@@ -106,6 +106,7 @@
     "@astrojs/prism": "^4.1.2",
     "@sqlite.org/sqlite-wasm": "3.53.4-build1",
     "astro": "^7.4.5",
+    "aws4fetch": "1.0.20",
     "css-tree": "3.2.1",
     "github-slugger": "^2.0.0",
     "happy-dom": "20.14.5",

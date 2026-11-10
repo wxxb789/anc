@@ -124,6 +124,24 @@ export const CONFIG_TEMPLATE = `# ${CONFIG_FILENAME} — every key is optional, 
 # sentences. Without it, the default is English.
 # language: zh-CN
 
+# Optional managed image hosting (Cloudflare R2). This table is read only by
+# the installed command's "build --release --media r2"; every ordinary build
+# and preview stays offline even when this table and the credentials exist. Images publish under
+# their content-addressed /_assets/ path, the same path a same-origin build
+# uses, and the site then points at the public custom domain below. r2.dev is
+# refused: it is development-only, rate-limited, and not normally cached.
+#
+# Create an R2 API token with Object Read & Write for this bucket, connect a
+# custom domain to the bucket, and export the two variables in the build
+# environment. Never put their values in this file.
+# media:
+#   provider: r2
+#   bucket: my-images
+#   endpoint: https://<account-id>.r2.cloudflarestorage.com
+#   public_base_url: https://media.example.org
+#   access_key_id_env: R2_ACCESS_KEY_ID
+#   secret_access_key_env: R2_SECRET_ACCESS_KEY
+
 # A single note can also withhold itself, which no glob can re-include:
 #
 #   ---

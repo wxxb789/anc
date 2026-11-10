@@ -370,6 +370,89 @@ dropped rather than whether it is walked — and it adds one, because the config
 then discovered too. Nothing is published either way. `discovered` counts what the walk
 classified, not what it considered publishing.
 
+#### Optional: serving published images from Cloudflare R2
+
+Same-origin delivery is the default and needs no account. If you want images on a separate
+host, ANC can publish the images a release build already authorized to a Cloudflare R2 bucket
+and point the page at that bucket's **public custom domain**. This is the only mode that writes
+to the network, and it is one command:
+
+```bash
+anc build --release --media r2
+```
+
+The `--media r2` flag is refused without `--release`. A plain `anc build`, `anc preview`, or
+`anc build --release` stays offline and same-origin even if the media table and credentials
+exist. Only `--media r2` reads the table, uploads anything, or emits absolute image URLs.
+
+**Bucket and custom domain.** Create an R2 bucket, then connect a custom domain to it in the R2
+dashboard. `r2.dev` is refused: it is Cloudflare's development-only, rate-limited hostname with
+no normal CDN caching. The bucket needs a public custom domain, for example
+`https://media.example.org`.
+
+**API token.** Create an R2 API token with **Object Read & Write** for that one bucket. Put the
+access key ID and secret in the environment of the build — never in `publish.config.yaml`:
+
+```bash
+export R2_ACCESS_KEY_ID=…           # or your own variable names
+export R2_SECRET_ACCESS_KEY=…
+```
+
+**Configuration.** Add the table to the same `publish.config.yaml`; the two `_env` entries are
+the *names* of the variables above:
+
+```yaml
+media:
+  provider: r2
+  bucket: my-images
+  endpoint: https://<account-id>.r2.cloudflarestorage.com
+  public_base_url: https://media.example.org
+  access_key_id_env: R2_ACCESS_KEY_ID
+  secret_access_key_env: R2_SECRET_ACCESS_KEY
+```
+
+The endpoint is the S3 API origin from the R2 dashboard, not the public domain. Both URLs must
+be HTTPS, bare origins with no path, no credentials in them, and `public_base_url` must be the
+connected custom domain rather than `r2.dev`. Every key is required; an unknown key, a wrong
+type, a missing value, or a bucket name R2 would reject fails the build with the line to fix.
+
+**What is uploaded.** Only images that a *published* note references, under the same
+content-addressed path the local build writes: `_assets/<sha256>-<name>`. The digest is of the
+bytes ANC emitted (after the WebP policy), not of your source file. The object's
+`Content-Type` is that emitted format, its cache metadata is immutable, and the request is
+conditional (`If-None-Match: *`) so it can never overwrite an existing object. Re-running a
+release reuses the objects and verifies them; changing an image produces a new path and leaves
+the old object in place. Withheld and draft-only attachments are never uploaded.
+
+**The order matters.** ANC builds and qualifies the whole local candidate first — publish-set
+review, content contract, exact output inventory, secret scan, residue scan — and only then
+uploads. It then reads every object back through the public custom domain and checks the bytes
+against the digest before writing the deployable `dist/`. If any upload, read-back, content
+type, or public fetch fails, the command fails and the previous good `dist/` is untouched; the
+site is not presented as ready with broken image links. Objects uploaded before a later failure
+remain as harmless immutable orphans, and ANC does not delete them: an earlier deployed page
+may still reference them.
+
+**CI.** The normal Action path needs no media configuration and no secrets. The Action invokes
+`build --release` and does not pass `--media`, so its output stays same-origin. An opted-in
+release therefore runs the installed command itself in a workflow step, with the two variables
+supplied from repository or environment secrets:
+
+```yaml
+- run: >-
+    npx @wxxb789/anc@<version> build --content . --out dist --release --media r2
+  env:
+    R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+    R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+```
+
+Pin the version exactly, as with any release command. Run `review` locally when the public note
+set changes, inspect it, and commit `.publish-set.json`; the release build in CI refuses a
+missing, dirty, or stale ledger exactly as it does without media. The site deployment remains
+separate — ANC prepares the HTML and the objects, it does not deploy either. If you use the
+Action for the ordinary build instead, do not add `--media` to it and do not expect it to upload
+anything.
+
 ## Tags and collections
 
 Tags come from a YAML list in note frontmatter. A scalar is refused rather than guessed:

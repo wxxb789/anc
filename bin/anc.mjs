@@ -125,6 +125,15 @@ import { failureFor, isDisclosureChecked, openReport, BuildFailure } from '../sc
 /** This package's own root — the directory holding `astro.config.mjs`. */
 const PACKAGE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 
+// **No command in this tool reports telemetry.** Astro reports anonymous usage
+// over the network unless this variable is set, and both `build` and `preview`
+// reach Astro. Every workflow in this repository already set it, so the shipped
+// binary was the one path still making an outbound request the user did not ask
+// for — and `docs/adoption.md` now says plainly that ordinary builds and
+// previews are offline. Set before any command imports Astro, because the
+// telemetry module reads it when it loads.
+process.env['ASTRO_TELEMETRY_DISABLED'] = '1';
+
 const USAGE = `anc — build a static site from a directory of Markdown
 
 Usage
@@ -140,6 +149,9 @@ Options for build
   --content <dir>  directory holding the Markdown (default: the working directory)
   --out <dir>      where to write the site (default: <working directory>/dist)
   --release        require a non-loopback origin and committed exact publish-set review
+  --media r2       publish referenced images to the Cloudflare R2 bucket configured
+                   under the media: table in publish.config.yaml, and point the site
+                   at its public custom domain. Requires --release.
 
 Options for preview
   --dist <dir>     the built site to serve (default: <working directory>/dist)
@@ -188,7 +200,7 @@ function packageVersion() {
  * does not take the third argument as a promise that it is stored somewhere.
  */
 function parseArguments(argv) {
-  const options = { content: undefined, out: undefined, release: false };
+  const options = { content: undefined, out: undefined, release: false, media: undefined };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === '--help' || argument === '-h') return 'help';
@@ -196,16 +208,38 @@ function parseArguments(argv) {
       options.release = true;
       continue;
     }
-    const key = argument === '--content' ? 'content' : argument === '--out' ? 'out' : undefined;
+    const key =
+      argument === '--content'
+        ? 'content'
+        : argument === '--out'
+          ? 'out'
+          : argument === '--media'
+            ? 'media'
+            : undefined;
     if (key === undefined) {
       throw new BuildFailure('unknown-option', `unrecognised option\n\n${USAGE}`, argument);
     }
     const value = argv[index + 1];
-    // `argument` is `--content` or `--out` by construction here — the ternary
-    // above has already rejected everything else — so it is a literal of this
-    // tool's own source rather than a user-supplied string.
+    // `argument` is `--content`, `--out`, or `--media` by construction here —
+    // the ternary above has already rejected everything else — so it is a
+    // literal of this tool's own source rather than a user-supplied string.
     if (value === undefined || value.startsWith('--')) {
-      throw new BuildFailure('missing-value', `${argument} needs a directory\n\n${USAGE}`);
+      throw new BuildFailure(
+        'missing-value',
+        `${argument} needs ${key === 'media' ? 'a provider name' : 'a directory'}\n\n${USAGE}`,
+      );
+    }
+    // **The value is not echoed, even though it looks like a closed set.** A
+    // user who mistypes `--media` and then pastes a path is showing this tool a
+    // withheld name, and the refusal's job is to tell them the one supported
+    // value, not to repeat what they typed. Anything other than the literal
+    // `r2` is refused here so a misspelling cannot silently fall back to a
+    // local build.
+    if (key === 'media' && value !== 'r2') {
+      throw new BuildFailure(
+        'unknown-media-provider',
+        `unrecognised media provider; the only supported value is r2\n\n${USAGE}`,
+      );
     }
     options[key] = value;
     index += 1;
@@ -216,8 +250,9 @@ function parseArguments(argv) {
 function parseReviewArguments(argv) {
   const options = parseArguments(argv);
   if (options === 'help') return options;
-  if (options.out !== undefined || options.release) {
-    const option = options.out !== undefined ? '--out' : '--release';
+  if (options.out !== undefined || options.release || options.media !== undefined) {
+    const option =
+      options.out !== undefined ? '--out' : options.release ? '--release' : '--media';
     throw new BuildFailure('unknown-option', `review does not accept ${option}\n\n${USAGE}`, option);
   }
   return { content: options.content };
@@ -327,6 +362,19 @@ async function build(options) {
   const contentDirectory = resolve(userDirectory, options.content ?? '.');
   const outDirectory = resolve(userDirectory, options.out ?? 'dist');
 
+  // **Remote writes require both halves of the opt-in.** `--media r2` alone is
+  // refused before a report exists or a note is read: the release gate (public
+  // origin, committed exact publish set) is what makes the run deployable, and a
+  // media publication whose HTML was never released is the shape that produces
+  // remote objects nobody references. The reverse is fine — `--release` without
+  // `--media` is the ordinary offline release.
+  if (options.media !== undefined && !options.release) {
+    throw new BuildFailure(
+      'media-requires-release',
+      `--media r2 is only available with --release; an ordinary build cannot write remotely`,
+    );
+  }
+
   // Opened before anything can fail, and it writes its stub immediately. The
   // diagnostic is worth most on the run that failed, and a report written where
   // the counts are convenient — after validation — cannot exist on the run that
@@ -343,7 +391,7 @@ async function build(options) {
     }
     assertSafeOutput(outDirectory, contentDirectory, userDirectory);
 
-    await buildInto(contentDirectory, outDirectory, report, options.release);
+    await buildInto(contentDirectory, outDirectory, report, options.release, options.media);
     return report;
   } catch (error) {
     // Recording the failure must not *replace* it. If this second write throws —
@@ -361,7 +409,7 @@ async function build(options) {
   }
 }
 
-async function buildInto(contentDirectory, outDirectory, report, release) {
+async function buildInto(contentDirectory, outDirectory, report, release, media) {
   // Build inside the package, then copy out. Not an ad-hoc workaround but the
   // shape the two constraints in this file's header force: cwd must be inside
   // the package for prerender chunks to resolve their imports, Astro stages
@@ -407,6 +455,28 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
         'release-origin-missing',
         'release blocked: publish.config.yaml must declare a non-loopback public origin',
       );
+    }
+
+    // **The delivery location crosses into the renderer here, and only here.**
+    // The pages are evaluated by Astro after the `chdir` below; this environment
+    // variable is the same seam `CONFIG_DIRECTORY_VARIABLE` uses, and it is set
+    // before `astroBuild()` so every note renders the final absolute URL.
+    //
+    // Clearing it on an ordinary build is deliberate rather than defensive
+    // tidiness: the variable is this tool's internal channel, and a stale value
+    // left in a shell must not silently turn a same-origin build into a page
+    // that points at somebody's CDN without any object being uploaded.
+    const { MEDIA_BASE_URL_VARIABLE } = await import('../src/lib/media-delivery.ts');
+    if (media === undefined) {
+      delete process.env[MEDIA_BASE_URL_VARIABLE];
+    } else {
+      if (config.media === undefined) {
+        throw new BuildFailure(
+          'media-config-missing',
+          '--media r2 requires a `media:` table in publish.config.yaml',
+        );
+      }
+      process.env[MEDIA_BASE_URL_VARIABLE] = config.media.publicBaseUrl;
     }
 
     // Tell `astro.config.mjs` where to read the same file from, and this line is
@@ -546,7 +616,39 @@ async function buildInto(contentDirectory, outDirectory, report, release) {
     const { assertNoResidue } = await import('../scripts/scan-residue.ts');
     console.log(`residue scan ok: ${assertNoResidue(staging)} files, 0 findings`);
 
-    // Only now is the output fit to hand over. Copying after the scan rather than
+    // **Ordered publication, not a transaction.** Everything above qualified a
+    // private candidate: the publish set, the schema and route contract, the
+    // exact output inventory, the secret scan and the residue scan all ran over
+    // `staging`, and the user's `--out` has not been touched. Only now, with the
+    // gates passed and the HTML already carrying the final custom-domain URLs,
+    // may an object be written remotely. `publishMedia` uploads or reuses every
+    // declared asset and then reads each one back through the public domain and
+    // hashes it; a failure here throws before the promotion below, so the last
+    // good local output survives and no candidate with broken links is handed
+    // over.
+    //
+    // An ablation property, not a comment: `publish-media.ts` is imported
+    // dynamically only on this branch, and it imports `aws4fetch` only inside
+    // its publish function. `tests/media-r2-build.test.ts` records a
+    // child-process module trace proving an ordinary build resolves no signer.
+    if (media !== undefined) {
+      const { publishMedia, resolveMediaCredentials } = await import('../scripts/publish-media.ts');
+      const credentials = resolveMediaCredentials(config.media);
+      const result = await publishMedia({
+        assets: validated.assets ?? [],
+        assetDirectory: assetSourceDirectory(artifact),
+        config: config.media,
+        credentials,
+      });
+      // Integers and literals only. The object keys are public asset paths, but
+      // a stream is not the place to enumerate them — the site's own HTML is.
+      console.log(
+        `media: ${result.referenced} referenced, ${result.uploaded} uploaded, ` +
+          `${result.reused} already present, ${result.verified} verified`,
+      );
+    }
+
+    // Only now is the output fit to hand over. Copying after the scans rather than
     // before means a build that fails a gate leaves the user's `dist/` untouched,
     // holding whatever last passed — the same property `validate-content.ts`
     // argues for at the front of the chain.
