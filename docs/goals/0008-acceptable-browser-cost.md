@@ -186,16 +186,23 @@ Cold preview (empty HTTP cache, fresh context) is
 407-441 ms and does not grow with corpus size — it pays the Worker start-up (fetch,
 digest, SQLite WASM init, module import). Warm preview is 217-251 ms.
 
-The cost paid on first intent at 10,000 notes is the cold dependency transfer, 8
-requests totalling **6,040.5 KiB decoded / 1,838.0 KiB gzip**:
+Two different quantities, kept apart. The **shipped inventory** for the seam is 8 files,
+6,040.5 KiB decoded / 1,838.0 KiB gzip; the **observed first-intent transfer** is 4 of them,
+**1,652.8 KiB over the wire / 5,374.4 KiB decoded** (10,000/hub):
 
-| Component | Files | Decoded | gzip |
-|---|---|---|---|
-| snapshot DB | 1 | 3,880.0 KiB | 1,081.5 KiB |
-| sqlite3 WASM binary | 1 | 848.5 KiB | 394.1 KiB |
-| sqlite3 WASM glue | 3 | 1,280.5 KiB | 350.9 KiB |
-| snapshot Worker chunk | 1 | 18.1 KiB | 5.9 KiB |
-| snapshot client scripts | 2 | 13.3 KiB | 5.5 KiB |
+| Component | Shipped | Requested on first intent | Wire bytes | Decoded |
+|---|---|---|---|---|
+| snapshot DB | 1 | 1 | 1,081.5 KiB | 3,880.0 KiB |
+| sqlite3 WASM binary | 1 | 1 | 394.1 KiB | 848.5 KiB |
+| sqlite3 WASM glue | 3 | 1 | 171.3 KiB | 627.7 KiB |
+| snapshot Worker chunk | 1 | 1 | 5.9 KiB | 18.1 KiB |
+| snapshot client scripts | 2 | 0 | — | — |
+
+The other two glue files (`sqlite3-opfs-async-proxy.js`, `sqlite3-worker1.mjs`, 668,447 B
+decoded together) stay `not-requested`, and the two client scripts load during ordinary
+reading (started at 1,242 ms and 1,325 ms on a page load), which is why reading's resource
+count is 7. The baseline figure that is comparable to 1,652.8 KiB is the 596,853 B the
+pre-SQLite preview actually fetched, not that tree's artifact inventory.
 
 Ordinary reading requests none of it before intent: with JavaScript disabled the page
 transferred 14,460 B; with JavaScript enabled but no intent, 25,422 B. That 10,962 B
@@ -242,7 +249,7 @@ failure; there were none).
 | Cold intent-to-visible (1 observation) | 513 ms sparse / 512 ms hub | 409 ms sparse / 423 ms hub |
 | Warm intent-to-visible (baseline p50 over 30, candidate 1 observation) | 125.0 / 125.1 ms | 231 / 217 ms |
 | Warm p95 | 125.9 / 134.1 ms | n/a (single observation) |
-| Fetched on first preview | 3,452,503 B decoded / 603,098 B gzip, one JSON index | 6,185,421 B decoded / 1,882,095 B gzip, 8 assets |
+| Fetched on first preview (observed) | 3,452,503 B decoded / 603,098 B encoded, one JSON index | 5,503,343 B decoded / 1,692,447 B encoded, 4 requests (inventory 6,040.5 KiB / 1,838.0 KiB) |
 
 Both trees arm the same 120 ms intent delay (`OPEN_DELAY_MS`), so the remainder is where the
 time goes: warm, the baseline spends ~5 ms on an in-memory map lookup and the candidate ~108 ms
@@ -250,8 +257,8 @@ on Worker dispatch, DB query and mount; cold, the baseline needs ~393 ms to fetc
 the 3.45 MB index and the candidate ~138 ms to start the Worker and query the DB.
 
 The trade-off is therefore two-sided and both directions are recorded, not one: **the first
-preview is 70-104 ms faster and downloads 3.1x more bytes, while every warm preview is
-90-106 ms slower.** At this size the unfiltered global graph (395-408 ms, single renders) and
+preview is 70-104 ms faster and fetches 2.8x more bytes over the wire, while every warm
+preview is 90-106 ms slower.** At this size the unfiltered global graph (395-408 ms, single renders) and
 tag browsing (292-295 ms, p95 over 1,000 dispatches) remain the largest costs.
 
 ### Gates
@@ -292,7 +299,7 @@ maintainer's dated acceptance**, which has to name:
 
 - candidate: `@wxxb789/anc@0.0.3`, tarball sha256 `d9176a52…` reproduced from `2ce506f`;
 - cold first preview 409-441 ms, warm preview 217-251 ms — against a pre-SQLite warm preview
-  of 125 ms, i.e. the seam costs 90-106 ms on every warm preview while downloading 3.1x more
+  of 125 ms, i.e. the seam costs 90-106 ms on every warm preview while downloading 2.8x more
   bytes for the first one;
 - the material costs at 10,000 notes: global graph 395-408 ms (single renders) and tag
   browsing 292-295 ms (p95 over 1,000 dispatches);
