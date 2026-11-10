@@ -36,12 +36,25 @@ export type PutAction =
   /** Store bytes other than the request body, under the requested key. */
   | { readonly kind: 'store-substitute'; readonly bytes: Buffer; readonly contentType: string };
 
+/**
+ * A body written in chunks with no `Content-Length`, as a chunked origin may.
+ * `streamedBytes` records how much the fake managed to write before the client
+ * went away.
+ */
+export interface StreamAction {
+  readonly kind: 'stream';
+  readonly body: Buffer;
+  readonly chunkBytes?: number;
+  readonly contentType?: string;
+}
+
 /** What an S3 `GET` should do for one attempt. */
 export type S3GetAction =
   | { readonly kind: 'normal' }
   | { readonly kind: 'status'; readonly status: number }
   | { readonly kind: 'drop' }
-  | { readonly kind: 'redirect'; readonly location: string };
+  | { readonly kind: 'redirect'; readonly location: string }
+  | StreamAction;
 
 /** What a public custom-domain `GET` should do for one attempt. */
 export type PublicAction =
@@ -50,7 +63,8 @@ export type PublicAction =
   | { readonly kind: 'wrong-bytes'; readonly bytes: Buffer }
   | { readonly kind: 'wrong-type'; readonly contentType: string }
   | { readonly kind: 'redirect'; readonly location: string }
-  | { readonly kind: 'drop' };
+  | { readonly kind: 'drop' }
+  | StreamAction;
 
 /** One object as the fake holds it. */
 export interface StoredObject {
@@ -76,6 +90,8 @@ export class R2Fake {
   readonly objects = new Map<string, StoredObject>();
   readonly requests: FakeRequest[] = [];
   readonly putBodies: string[] = [];
+  /** Bytes a `stream` action wrote per request path before the client left. */
+  readonly streamedBytes = new Map<string, number>();
 
   /** The bucket name the S3 routes are scoped to. */
   readonly bucket: string;
@@ -339,6 +355,10 @@ export class R2Fake {
       response.end();
       return;
     }
+    if (action.kind === 'stream') {
+      await this.streamWithoutLength(response, path, action);
+      return;
+    }
     this.sendStored(response, objectPath);
   }
 
@@ -404,10 +424,52 @@ export class R2Fake {
         }
         return;
       }
+      case 'stream':
+        await this.streamWithoutLength(response, path, action);
+        return;
       case 'normal':
         this.sendStored(response, objectPath, request.method === 'HEAD');
         return;
     }
+  }
+
+  /**
+   * Write a body with no `Content-Length`, in chunks and under backpressure.
+   * Queueing the whole buffer would let the fake itself mask a client that
+   * never cancelled; respecting `drain` makes the recorded byte count evidence
+   * that the client stopped reading.
+   */
+  private streamWithoutLength(response: ServerResponse, path: string, action: StreamAction): Promise<void> {
+    response.statusCode = 200;
+    response.setHeader('Content-Type', action.contentType ?? 'application/octet-stream');
+    // Deliberately no `Content-Length`: the client cannot size it in advance.
+    const chunkBytes = Math.max(1, action.chunkBytes ?? 64 * 1024);
+    const streamed = Promise.withResolvers<void>();
+    let offset = 0;
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
+      streamed.resolve();
+    };
+    response.once('close', finish);
+    const writeNext = (): void => {
+      while (!finished && offset < action.body.length) {
+        const chunk = action.body.subarray(offset, Math.min(offset + chunkBytes, action.body.length));
+        offset += chunk.length;
+        this.streamedBytes.set(path, (this.streamedBytes.get(path) ?? 0) + chunk.length);
+        if (!response.write(chunk)) {
+          response.once('drain', writeNext);
+          return;
+        }
+      }
+      if (!finished) {
+        response.end();
+        finish();
+      }
+    };
+    writeNext();
+    return streamed.promise;
   }
 
   private sendStored(response: ServerResponse, objectPath: string, head = false): void {

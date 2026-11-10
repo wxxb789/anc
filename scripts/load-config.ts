@@ -726,19 +726,25 @@ function checkMedia(
     return memberLine === undefined ? `media.${key}` : `media.${key} (line ${memberLine})`;
   };
 
+  // A nested key is user-authored text exactly as a top-level one is: a pasted
+  // path or credential can be a valid YAML key, and this message reaches the
+  // public stderr stream. The line is where the fix goes; the bytes go to the
+  // private report. `where()` remains for the schema's own key names below.
   for (const key of tagged) {
+    const memberLine = memberLines.get(key);
     issues.push(
-      `${where(key)}: the value carries a "!" tag, which YAML discards — remove it, or ` +
-        'quote the value if the "!" is part of it',
+      `${memberLine === undefined ? 'media' : `media (line ${memberLine})`}: the value carries a ` +
+        '"!" tag, which YAML discards — remove it, or quote the value if the "!" is part of it',
     );
     details.push(`media.${key} carried an eaten "!" tag`);
   }
 
   for (const key of Object.keys(value)) {
     if ((MEDIA_KEYS as readonly string[]).includes(key)) continue;
+    const memberLine = memberLines.get(key);
     const suggestion = suggestionFor(key, MEDIA_KEYS);
     issues.push(
-      `${where(key)}: unknown key is not allowed` +
+      `${memberLine === undefined ? 'media' : `media (line ${memberLine})`}: unknown key is not allowed` +
         (suggestion === undefined
           ? `. The keys are ${MEDIA_KEYS.join(', ')}`
           : `. Did you mean "${suggestion}"?`),

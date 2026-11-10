@@ -218,30 +218,46 @@ result.
   gains exactly one resolved package entry; Astro/unstorage already listed it
   as an optional peer, so no other package entered the tree.
 - The tarball declares the signer instead of bundling its files. Packing this
-  tree produced **504,336 bytes** in **121 entries**, SHA-256
-  `03287f83620aa60b7db810042853faeb09d637e40de4e588332b273fe7534bba` — 12,890
+  tree produced **504,985 bytes** in **121 entries**, SHA-256
+  `95e30784309cac1dc2045633906ea7d058990dfb1687f6270d54e6e4e3bfe39b` — 13,539
   bytes more than `main`'s 491,446-byte 0012 tarball, which covers this goal's
   own compiled modules plus the one manifest line.
+
+### Review fixes
+
+Two findings from the first review round are closed with locked tests:
+
+- The `media:` table's unknown-key and eaten-tag diagnostics printed the
+  user-authored *key text* into the public stderr message. Both now report only
+  the member's line number and, where one exists, the known-key suggestion; the
+  key itself stays in the private report — tested with a key shaped like a home
+  path and a credential.
+- Both verification reads buffered the whole body before the 32 MiB budget was
+  checked, so a chunked response from a misconfigured domain could exhaust the
+  build host's memory. Both paths now hash incrementally and cancel at the
+  budget: measured by counting what the application itself pulled from the
+  stream, a 40 MiB body stops at 33,568,949 bytes (public) and 33,605,319
+  (existing object), i.e. one chunk past the budget rather than the whole body.
 
 ### Gates
 
 - `pnpm exec vitest run tests/media-r2.test.ts tests/media-r2-build.test.ts
-  --maxWorkers=1`: **2 files, 34 tests passed**.
+  --maxWorkers=1`: **2 files, 38 tests passed**.
 - `pnpm run lint`: exit 0. `pnpm run check`: 243 files, 0 errors, 0 warnings,
   2 hints.
 - `pnpm run build`: 10 pages; `output inventory ok: 150 files`; `residue scan ok:
   34 files, 0 findings`.
 - `pnpm run pack:tarball`: compiled 84 TypeScript files, rewrote specifiers in
-  24; tarball 504,336 bytes, 121 entries, SHA-256
-  `03287f83620aa60b7db810042853faeb09d637e40de4e588332b273fe7534bba`.
+  24; tarball 504,985 bytes, 121 entries, SHA-256
+  `95e30784309cac1dc2045633906ea7d058990dfb1687f6270d54e6e4e3bfe39b`.
 - `pnpm run smoke:tarball`: exit 0, `tarball adoption smoke ok: 2 published
   notes, 2 withheld notes, 8 images`; the media phase asserted 8 fresh uploads,
   8 remote objects matching local emitted bytes, 10 absolute image URLs, 8
   reused on the second release, and a real Chromium decode of every absolute
   image under the generated CSP.
-- `pnpm exec vitest run --maxWorkers=1`: **100 files, 1,248 tests passed, 35
-  skipped** (1,283 total; 665.67 s) — `main`'s baseline plus this goal's two
-  files and 34 tests.
+- `pnpm exec vitest run --maxWorkers=1`: **100 files, 1,252 tests passed, 35
+  skipped** (1,287 total; 655.56 s) — `main`'s baseline plus this goal's two
+  files and 38 tests.
 - `node scripts/build-site.ts --scan-secrets` (verify's build link, with the
   pinned Gitleaks 8.30.1 on `PATH`, run before the rebase onto 0012): 10 pages;
   `output inventory ok: 150 files`;

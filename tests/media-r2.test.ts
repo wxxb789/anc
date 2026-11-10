@@ -209,8 +209,10 @@ test('the loader refuses every malformed media table the goal names', () => {
     },
     {
       name: 'unknown nested key',
+      // The line, never the user-authored key: this table's keys are not
+      // literals of the loader, and the refusal is printed on a public stream.
       text: `${VALID_MEDIA}  region: auto\n`,
-      expected: 'media.region',
+      expected: 'media (line 8): unknown key is not allowed',
     },
     {
       name: 'wrong value type',
@@ -248,6 +250,67 @@ test('the loader refuses every malformed media table the goal names', () => {
       row.name,
     );
   }
+});
+
+test('an unknown or tagged media key reaches the private report, never the public message', () => {
+  const key = '/home/alice/secret-token-abcdef';
+  const quoted = JSON.stringify(key);
+  // The public list of known keys is this loader's own text, not the user's.
+  // A four-character run the key shares with it is safe by construction.
+  const schemaKeys = 'provider, bucket, endpoint, public_base_url, access_key_id_env, secret_access_key_env';
+
+  const refusal = (text: string): BuildFailure => {
+    try {
+      parseConfig(text);
+    } catch (error) {
+      assert.ok(error instanceof BuildFailure, `expected a BuildFailure, got ${String(error)}`);
+      return error;
+    }
+    assert.fail('the loader accepted a media key it must refuse');
+  };
+
+  const assertNoKeyText = (message: string): void => {
+    for (let index = 0; index + 4 <= key.length; index += 1) {
+      const piece = key.slice(index, index + 4);
+      if (schemaKeys.includes(piece)) continue;
+      assert.ok(!message.includes(piece), `the public message leaked ${JSON.stringify(piece)}`);
+    }
+    assert.ok(!message.includes('alice'));
+    assert.ok(!message.includes('secret-token'));
+    assert.ok(!message.includes('/home'));
+  };
+
+  const unknownText = `${VALID_MEDIA}  ${quoted}: 1\n`;
+  const unknown = refusal(unknownText);
+  const unknownLine = unknownText.split('\n').indexOf(`  ${quoted}: 1`) + 1;
+  assert.ok(
+    unknown.message.includes(`media (line ${unknownLine}): unknown key is not allowed`),
+    unknown.message,
+  );
+  assertNoKeyText(unknown.message);
+  assert.ok(unknown.detail.includes(`unknown media key ${quoted}`), 'the private report lost the raw key');
+
+  const taggedText = `${VALID_MEDIA}  ${quoted}: ! x\n`;
+  const tagged = refusal(taggedText);
+  const taggedLine = taggedText.split('\n').indexOf(`  ${quoted}: ! x`) + 1;
+  assert.ok(
+    tagged.message.includes(`media (line ${taggedLine}): the value carries a "!" tag`),
+    tagged.message,
+  );
+  assertNoKeyText(tagged.message);
+  assert.ok(
+    tagged.detail.includes(`media.${key} carried an eaten "!" tag`),
+    'the private report lost the raw tagged key',
+  );
+
+  const nearMissText = `${VALID_MEDIA}  bucketname: my-images\n`;
+  const nearMiss = refusal(nearMissText);
+  assert.ok(nearMiss.message.includes('Did you mean "bucket"?'), nearMiss.message);
+  assert.ok(!nearMiss.message.includes('bucketname'), nearMiss.message);
+  assert.ok(nearMiss.detail.includes('unknown media key "bucketname"'), nearMiss.detail);
+
+  // The privacy change must not have turned a valid table into a refusal.
+  assert.equal(parseConfig(VALID_MEDIA).media?.bucket, 'my-images');
 });
 
 test('a missing credential variable is named by key, and no value is printed', () => {
@@ -409,6 +472,34 @@ test('an existing object with the wrong MIME, size or bytes behind the claimed d
       });
       const failure = await refusalOf(publish(origin, directory, [png]));
       assert.equal(failure.code, 'media-object-mismatch');
+    });
+  });
+});
+
+test('an oversized existing object is cancelled before its body is buffered', async () => {
+  await scratch('r2-object-stream-', async (directory) => {
+    await withFake(async (fake, origin) => {
+      const png = stage(directory, PNG_SCREENSHOT, 'screenshot.png', 'png');
+      fake.objects.set(png, {
+        bytes: Buffer.from(PNG_SCREENSHOT),
+        contentType: 'image/png',
+        cacheControl: 'public, max-age=31536000, immutable',
+      });
+      const total = 40 * 1024 * 1024;
+      fake.s3GetAction = () => ({
+        kind: 'stream',
+        body: Buffer.alloc(total, 0x41),
+        chunkBytes: 64 * 1024,
+        contentType: 'image/png',
+      });
+
+      const failure = await refusalOf(publish(origin, directory, [png]));
+      assert.equal(failure.code, 'media-object-mismatch');
+      assert.match(failure.message, /exceeds the validated image size budget/);
+
+      const written = fake.streamedBytes.get(`/${BUCKET}${png}`) ?? 0;
+      assert.ok(written < total / 2, `the server wrote ${written} of ${total} bytes; the client did not cancel`);
+      assert.ok(written > FAST.maxObjectBytes, `the server wrote ${written} bytes, never reaching the budget`);
     });
   });
 });
@@ -625,6 +716,61 @@ test('public bytes, size or MIME that disagree with the content address fail the
       fake.publicAction = () => ({ kind: 'wrong-type', contentType: 'text/html' });
       const failure = await refusalOf(publish(origin, directory, [png]));
       assert.equal(failure.code, 'media-public-type');
+    });
+  });
+});
+
+test('an oversized public body with no content-length is cancelled before it is buffered', async () => {
+  await scratch('r2-public-stream-', async (directory) => {
+    await withFake(async (fake, origin) => {
+      const png = stage(directory, PNG_SCREENSHOT, 'screenshot.png', 'png');
+      const total = 40 * 1024 * 1024;
+      fake.publicAction = () => ({
+        kind: 'stream',
+        body: Buffer.alloc(total, 0x41),
+        chunkBytes: 64 * 1024,
+        contentType: 'image/png',
+      });
+
+      const failure = await refusalOf(publish(origin, directory, [png]));
+      assert.equal(failure.code, 'media-public-mismatch');
+      assert.match(failure.message, /served a body larger than the validated image size budget/);
+
+      const written = fake.streamedBytes.get(png) ?? 0;
+      assert.ok(written < total / 2, `the server wrote ${written} of ${total} bytes; the client did not cancel`);
+      assert.ok(written > FAST.maxObjectBytes, `the server wrote ${written} bytes, never reaching the budget`);
+    });
+  });
+});
+
+test('a streamed public body at the budget is accepted and one byte more is refused', async () => {
+  await scratch('r2-public-boundary-', async (directory) => {
+    const png = stage(directory, PNG_SCREENSHOT, 'screenshot.png', 'png');
+    const budget = PNG_SCREENSHOT.length;
+
+    await withFake(async (fake, origin) => {
+      fake.publicAction = () => ({
+        kind: 'stream',
+        body: Buffer.from(PNG_SCREENSHOT),
+        chunkBytes: 1024,
+        contentType: 'image/png',
+      });
+      const result = await publish(origin, directory, [png], { ...FAST, maxObjectBytes: budget });
+      assert.equal(result.verified, 1, 'a body exactly at the budget was refused');
+    });
+
+    await withFake(async (fake, origin) => {
+      fake.publicAction = () => ({
+        kind: 'stream',
+        body: Buffer.concat([Buffer.from(PNG_SCREENSHOT), Buffer.from([0])]),
+        chunkBytes: 1024,
+        contentType: 'image/png',
+      });
+      const failure = await refusalOf(
+        publish(origin, directory, [png], { ...FAST, maxObjectBytes: budget }),
+      );
+      assert.equal(failure.code, 'media-public-mismatch');
+      assert.match(failure.detail, new RegExp(`read ${budget + 1} bytes`), failure.detail);
     });
   });
 });

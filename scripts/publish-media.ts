@@ -264,6 +264,60 @@ function mediaType(header: string | null): string | undefined {
   return type === undefined || type === '' ? undefined : type;
 }
 
+/** What a bounded body read retained: a digest and a count, never the bytes. */
+interface BoundedBody {
+  readonly digest: string;
+  readonly bytes: number;
+}
+
+/**
+ * Hash and count a response body without ever holding more than one chunk.
+ *
+ * A public domain or storage endpoint can answer with a chunked body and no
+ * `Content-Length`. Buffering that body and comparing its length afterwards
+ * would let a remote response exhaust this host's memory before the intended
+ * budget failure could fire. This reads one chunk at a time, hashes it, and
+ * cancels the stream the moment the running count passes `limit`, so retained
+ * bytes stay bounded by one chunk plus the hash state. The caller checks a
+ * declared length first; this is the second, authoritative check.
+ *
+ * A `null` body has no stream to cancel. The runtime offers no other read, so
+ * that case buffers — but only after the caller's declared-length refusal —
+ * and still refuses on the measured count.
+ */
+async function readBoundedBody(
+  response: Response,
+  limit: number,
+  overBudget: (bytes: number) => BuildFailure,
+): Promise<BoundedBody> {
+  if (response.body === null) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > limit) throw overBudget(bytes.length);
+    return { digest: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length };
+  }
+
+  const reader = response.body.getReader();
+  const hash = createHash('sha256');
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) {
+        // The budget failure is the one to report; an already-closed or
+        // errored stream has nothing left to cancel.
+        await reader.cancel().catch(() => {});
+        throw overBudget(total);
+      }
+      hash.update(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return { digest: hash.digest('hex'), bytes: total };
+}
+
 /**
  * Send one signed request with `redirect: 'manual'`.
  *
@@ -358,21 +412,22 @@ async function verifyStoredObject(
           `${object.path}: content-length ${declared}`,
         );
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (bytes.length > limits.maxObjectBytes) {
-        throw new BuildFailure(
-          'media-object-mismatch',
-          'a media object already present at its content address exceeds the validated image size budget',
-          `${object.path}: read ${bytes.length} bytes`,
-        );
-      }
-      const digest = createHash('sha256').update(bytes).digest('hex');
-      if (digest !== object.digest || bytes.length !== object.bytes.length) {
+      const body = await readBoundedBody(
+        response,
+        limits.maxObjectBytes,
+        (bytes) =>
+          new BuildFailure(
+            'media-object-mismatch',
+            'a media object already present at its content address exceeds the validated image size budget',
+            `${object.path}: read ${bytes} bytes`,
+          ),
+      );
+      if (body.digest !== object.digest || body.bytes !== object.bytes.length) {
         throw new BuildFailure(
           'media-object-mismatch',
           'a media object already present at its content address holds different bytes',
           `${object.path}: expected ${object.digest}/${object.bytes.length} bytes, ` +
-            `found ${digest}/${bytes.length} bytes`,
+            `found ${body.digest}/${body.bytes} bytes`,
         );
       }
       const storedType = mediaType(response.headers.get('content-type'));
@@ -569,21 +624,22 @@ async function verifyPublicObject(
         `${object.publicUrl}: content-length ${declared}`,
       );
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.length > limits.maxObjectBytes) {
-      throw new BuildFailure(
-        'media-public-mismatch',
-        'the public media URL served a body larger than the validated image size budget',
-        `${object.publicUrl}: read ${bytes.length} bytes`,
-      );
-    }
-    const digest = createHash('sha256').update(bytes).digest('hex');
-    if (digest !== object.digest || bytes.length !== object.bytes.length) {
+    const body = await readBoundedBody(
+      response,
+      limits.maxObjectBytes,
+      (bytes) =>
+        new BuildFailure(
+          'media-public-mismatch',
+          'the public media URL served a body larger than the validated image size budget',
+          `${object.publicUrl}: read ${bytes} bytes`,
+        ),
+    );
+    if (body.digest !== object.digest || body.bytes !== object.bytes.length) {
       throw new BuildFailure(
         'media-public-mismatch',
         'the public media URL served bytes that do not match its content address',
         `${object.publicUrl}: expected ${object.digest}/${object.bytes.length} bytes, ` +
-          `found ${digest}/${bytes.length} bytes`,
+          `found ${body.digest}/${body.bytes} bytes`,
       );
     }
     const servedType = mediaType(response.headers.get('content-type'));
