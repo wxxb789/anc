@@ -139,7 +139,110 @@ browser emulation; CPU throttling applies to the page target rather than the
 Worker; loopback network is not a physical mobile network; and Worker heap,
 process RSS and total peak memory remain unavailable.
 
+## Qualified measurement campaign (2026-11-11)
+
+Clean tree at `2ce506f`; candidate `@wxxb789/anc@0.0.3` installed from a tarball that
+`pnpm run pack:tarball` reproduces byte-for-byte (504,986 B, sha256
+`d9176a5244998244a58e297631c441dd3c662ffa3e90e00c5fff06ec76fdbe3a`), so the measured
+package is reconstructible from the recorded tree. Instrument:
+`scripts/benchmark-snapshot.ts` and `scripts/benchmark-limits.ts`, source hash recorded
+in every report. Browser: **Chrome 157.0.8103.38**, device profile Pixel 7, CPU
+throttled 4x — Chrome is one of the two accepted emulation targets and this host has no
+Edge build; the goal's acceptance covers "Chrome or Edge mobile device emulation", so
+no physical device was used. Network is loopback. 30 samples per measurement.
+
+| Workload | Build | DB decoded | DB gzip | Cold preview | Warm preview | Local p95 | Global render p95 | Tag p95 | Failures |
+|---|---|---|---|---|---|---|---|---|---|
+| 100-sparse | 5.2s | 64.0 KiB | 14.2 KiB | 407 ms | 220 ms | **13.4 ms** | 140 ms | 124 ms | 0 |
+| 100-hub | 5.1s | 64.0 KiB | 13.9 KiB | 441 ms | 224 ms | **13.7 ms** | 143 ms | 117 ms | 0 |
+| 1000-sparse | 14.1s | 420.0 KiB | 124.8 KiB | 409 ms | 220 ms | **13.5 ms** | 179 ms | 48 ms | 0 |
+| 1000-hub | 13.2s | 416.0 KiB | 124.8 KiB | 407 ms | 251 ms | **21.7 ms** | 325 ms | 60 ms | 0 |
+| 10000-sparse | 265.4s | 3872.0 KiB | 1078.4 KiB | 409 ms | 231 ms | **13.8 ms** | 395 ms | 292 ms | 0 |
+| 10000-hub | 258.9s | 3880.0 KiB | 1081.5 KiB | 423 ms | 217 ms | **14.9 ms** | 408 ms | 295 ms | 0 |
+
+Local neighbourhood p95 (dispatch to validated Worker result, the 50 ms target) stays
+between 13.4 ms and 21.7 ms across all six workloads; the Worker-side operation alone
+stays under 7 ms. Graph drawing and the unfiltered global graph are reported separately
+and are **not** part of that target: they reach 395 ms (sparse) and
+408 ms (hub) at 10,000 notes, with tag browsing at
+292/295 ms. This is the material UX trade-off the
+maintainer has to accept or reject explicitly.
+
+Cold preview (empty HTTP cache, fresh context) is
+407-441 ms and does not grow with corpus size — it pays the
+Worker start-up (fetch, digest, SQLite WASM init, module import). Warm preview is
+217-251 ms. At 10,000 notes the snapshot is
+3880.0 KiB decoded / 1081.5 KiB gzip, plus 848.5 KiB (394.1 KiB gzip) of
+sqlite3 WASM and 621.0 KiB of glue.
+
+Ordinary reading never requests any of it before intent: with the seam inactive the page
+transferred 14460 B; after one intent the same page transferred
+25422 B, a 10962 B delta for snapshot, Worker, WASM
+and glue. Peak main-thread JS heap during the cold-intent window was
+2964.3 KiB; the Worker's WASM linear memory was
+8 MiB. Worker heap, process RSS and total peak memory
+remain unobserved — the instrument says so and this record does not paper over it.
+
+### Overload controls
+
+All eight controls pass against both the checkout and the installed 0.0.3 package: snapshot cap aborts a 72 MiB body at 64.06 MiB with `code=integrity`;
+WASM cap aborts a 10 MiB body at 8.06 MiB; the 20 s startup deadline terminates and
+recovers; the 8 s query deadline drops and the client stays usable; page size 10,000
+clamps to 200; the rendering policy holds local 12/15 and global 60/573; the pending
+bound admits 16 and answers later requests `busy`; and `tests/snapshot-client.test.ts`
+passes 7/7 as a child process with its JSON report parsed.
+
+Running these controls found a real instrument defect: Vitest 5 writes
+`--reporter=json` to `.vitest/json/output.json` instead of stdout, so the client-bound
+control failed closed and its stray directory dirtied the tree, which the run reported
+as benchmark identity drift. Fixed at `10e6cfd` (PR #42): the report is written to a
+temp directory outside the repository, parsed from that file, removed in `finally`, and
+`.vitest/` is ignored. The seven other controls passed before and after the fix, so the
+change affects evidence capture only.
+
+### Pre-SQLite baseline
+
+`7579cc16a4320f7410b71e784587a01fdf14333d` **cannot supply the required comparison**: it
+has no SQLite snapshot to verify against, so the finalized instrument rejects the
+workload (`expected one finalized snapshot, found 0`, see the evidence table)
+and no comparative latency exists or is claimed. Recorded instead as build shape on the
+same seeded 10,000-note corpus: that tree emits 20,184 files / 217 MB (sparse) and
+20,178 files / 218 MB (hub), with a 3.45 MB `content-index.json` and 3.8 MB listing
+pages, against the candidate's 3880.0 KiB DB and pages that do not embed the corpus.
+
+### Gates
+
+`pnpm run lint` clean; `pnpm run check` 0/0; build, snapshot/wasm binding, search index
+(10 pages), inventory (150 files), secret scan (0 findings) and residue scan (0 findings)
+pass; suite 100 files / **1,254 passed** / 35 skipped at `--maxWorkers=1` (the default
+4-worker `pnpm run verify` was OOM-killed twice on this 7.88 GiB host after the
+non-test gates had passed); `pack:tarball` reproduces the measured sha256;
+`smoke:tarball` ok (2 published, 2 withheld, 8 images). CI on `2ce506f` is green.
+
+### Evidence
+
+Raw reports stay out of the tree (the repository keeps measurement output in the private
+workspace, not in commits); these hashes pin what was measured:
+
+| Report | Size | sha256 |
+|---|---|---|
+| `id-pkg-100-sparse.json` | 92,026 B | `254a43e7ad1c2aff…` |
+| `id-pkg-100-hub.json` | 91,999 B | `09a9ddd0813ead92…` |
+| `id-pkg-1000-sparse.json` | 111,171 B | `741a08b3c17ef357…` |
+| `id-pkg-1000-hub.json` | 111,391 B | `2e4e9999cd5cf956…` |
+| `id-pkg-10000-sparse.json` | 204,034 B | `290482f4787a11a9…` |
+| `id-pkg-10000-hub.json` | 204,131 B | `f882853b51225b5e…` |
+| `limits-checkout.json` | 17,828 B | `3128a1dfd48964f1…` |
+| `limits-packaged.json` | 19,439 B | `18a7d529f014ccc2…` |
+| `baseline-probe-100.json` | 8,353 B | `8f6022784cc2f5e1…` |
+| `baseline-build-10000-sparse.json` | 1,667 B | `191bb28dc63765d2…` |
+| `baseline-build-10000-hub.json` | 1,661 B | `ff8d657425b39bd0…` |
+
 ## Completion record
 
-Not completed. The implementation is awaiting clean-tree qualified measurements
-and the maintainer acceptance named above.
+Measured and qualified; **awaiting the maintainer's dated acceptance** of this exact
+candidate, the finite policies above and the material UX trade-off (global graph
+395-408 ms and tag browsing
+292-295 ms at 10,000 notes, cold preview
+407-441 ms). The goal's own terms make that acceptance the last
+open item; it is not self-granted.
