@@ -625,6 +625,11 @@ function maskChain(body: string): string {
   );
 }
 
+/** `depth` nested `<g>` elements around `body`. */
+function nestedGroups(body: string, depth: number): string {
+  return '<g>'.repeat(depth) + body + '</g>'.repeat(depth);
+}
+
 test('a stylesheet reference is counted once per matched element, like the attribute spelling', () => {
   const attribute = maskChain(
     '<rect width="100" height="100" mask="url(#m)"/><rect width="100" height="100" mask="url(#m)"/>',
@@ -719,6 +724,65 @@ test('descendant and child selectors attribute a reference to their subject', ()
     assert.equal(inspection.refusal.reason, 'svg-workload', `${selector}: ${inspection.refusal.detail}`);
     assert.match(inspection.refusal.detail, /32766/, `${selector}: ${inspection.refusal.detail}`);
   }
+});
+
+test('a long descendant selector is matched in polynomial time', () => {
+  // The shapes measured against the recursive matcher: 698 ms, 16.6 s and
+  // 59.7 s. A regression to path enumeration exceeds the guard on the last two,
+  // while the fixed set propagation stays in single-digit milliseconds.
+  const shapes: readonly (readonly [number, number])[] = [
+    [32, 8],
+    [32, 12],
+    [40, 10],
+  ];
+  for (const [depth, steps] of shapes) {
+    const selector = ['missing', ...Array.from({ length: steps }, () => 'g'), 'rect'].join(' ');
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">` +
+      `<defs><mask id="m"><path d="M0 0h10v10H0z" fill="#ffffff"/></mask>` +
+      `<symbol id="s"><path d="M0 0h2v2H0z"/></symbol></defs>` +
+      `<style>${selector}{mask:url(#m)}</style>` +
+      nestedGroups('<rect width="10" height="10"/>', depth) +
+      // Attribution runs only for a document that also expands a <use>.
+      `<use href="#s"/>` +
+      `</svg>`;
+    const started = Date.now();
+    const inspection = inspectSvg(Buffer.from(svg));
+    const elapsed = Date.now() - started;
+    if (!inspection.ok) {
+      assert.fail(`depth ${depth}, ${steps} steps: a non-matching selector refused the document: ${inspection.refusal.detail}`);
+    }
+    assert.ok(elapsed < 5_000, `depth ${depth}, ${steps} steps: matching took ${elapsed} ms`);
+  }
+});
+
+test('a long matching descendant selector counts like its single compound', () => {
+  const depth = 32;
+  const selector = [...Array.from({ length: depth }, () => 'g'), 'rect'].join(' ');
+  const shapes = '<rect width="100" height="100"/><rect width="100" height="100"/>';
+  const descendant = inspectSvg(
+    Buffer.from(
+      maskChain(`<style>${selector}{mask:url(#m)}</style>` + nestedGroups(shapes, depth)),
+    ),
+  );
+  const compound = inspectSvg(
+    Buffer.from(maskChain(`<style>rect{mask:url(#m)}</style>` + nestedGroups(shapes, depth))),
+  );
+  const details: string[] = [];
+  for (const [name, inspection] of [
+    ['descendant', descendant],
+    ['compound', compound],
+  ] as const) {
+    if (inspection.ok) assert.fail(`the ${name} selector counted one reference instead of two`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
+    details.push(inspection.refusal.detail);
+  }
+  assert.equal(
+    details[0],
+    details[1],
+    'the descendant selector and the equivalent compound counted different instances',
+  );
 });
 
 test('a selector form the policy cannot attribute is refused, never dropped', () => {

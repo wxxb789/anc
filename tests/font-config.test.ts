@@ -200,11 +200,15 @@ function discoveryWith(environment: NodeJS.ProcessEnv): {
   readonly directories: readonly string[];
   readonly files: readonly string[];
   readonly missing: readonly number[];
+  readonly master: string;
+  readonly tried: readonly string[];
 } {
   const script =
-    `import { discoverFonts, missingCodePoints } from ${JSON.stringify(join(ROOT, 'src/lib/font-coverage.ts'))};\n` +
+    `import { discoverFonts, missingCodePoints, resolveFontConfigMaster } from ${JSON.stringify(join(ROOT, 'src/lib/font-coverage.ts'))};\n` +
+    `const configuredFile = process.env.FONTCONFIG_FILE;\n` +
+    `const resolution = resolveFontConfigMaster(configuredFile !== undefined && configuredFile !== '' ? configuredFile : 'fonts.conf', process.env.FONTCONFIG_PATH);\n` +
     `const discovery = discoverFonts();\n` +
-    `process.stdout.write(JSON.stringify({ directories: discovery.directories, files: discovery.files, missing: missingCodePoints([${FIXTURE_CODE_POINT}]).missing }));\n`;
+    `process.stdout.write(JSON.stringify({ directories: discovery.directories, files: discovery.files, missing: missingCodePoints([${FIXTURE_CODE_POINT}]).missing, master: resolution.master, tried: resolution.tried }));\n`;
   const module = spawnSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', script], {
     cwd: ROOT,
     env: environment,
@@ -215,6 +219,8 @@ function discoveryWith(environment: NodeJS.ProcessEnv): {
     directories: readonly string[];
     files: readonly string[];
     missing: readonly number[];
+    master: string;
+    tried: readonly string[];
   };
 }
 
@@ -350,6 +356,70 @@ test('a relative FONTCONFIG_FILE is found in a FONTCONFIG_PATH component', () =>
   }
 });
 
+test('a colon-separated FONTCONFIG_PATH is a search list, not one directory', () => {
+  const root = mkdtempSync(join(tmpdir(), 'font-config-list-'));
+  try {
+    const defaultDiscovery = discoveryWith(isolatedEnvironment(root));
+
+    const environment = isolatedEnvironment(root);
+    const absent = join(root, 'absent');
+    environment['FONTCONFIG_PATH'] = `${absent}:/etc/fonts`;
+    const discovery = discoveryWith(environment);
+
+    assert.equal(discovery.master, '/etc/fonts/fonts.conf', 'the master was joined as one directory name');
+    assert.deepEqual(
+      discovery.tried,
+      [`${absent}/fonts.conf`, '/etc/fonts/fonts.conf'],
+      'the components were not searched in order',
+    );
+    assert.deepEqual(
+      discovery.directories,
+      defaultDiscovery.directories,
+      'the search list read different directories than the default configuration',
+    );
+    assert.equal(
+      discovery.files.length,
+      defaultDiscovery.files.length,
+      'the search list found a different font count than the default configuration',
+    );
+    assert.ok(discovery.files.length > 0, 'the search list discovered no fonts at all');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('the implicit master searches FONTCONFIG_PATH components in order', () => {
+  const root = mkdtempSync(join(tmpdir(), 'font-config-implicit-'));
+  try {
+    const fonts = join(root, 'fonts');
+    const config = join(root, 'config');
+    mkdirSync(fonts);
+    mkdirSync(config);
+    const font = join(fonts, 'Fixture.ttf');
+    writeFileSync(font, syntheticFont(FIXTURE_CODE_POINT));
+    writeFileSync(
+      join(config, 'fonts.conf'),
+      `<?xml version="1.0"?><fontconfig><dir>${fonts}</dir></fontconfig>`,
+      'utf8',
+    );
+
+    const environment = isolatedEnvironment(root);
+    environment['FONTCONFIG_PATH'] = `${join(root, 'absent')}:${config}`;
+    const discovery = discoveryWith(environment);
+    assert.equal(discovery.master, join(config, 'fonts.conf'), 'the implicit master missed its component');
+    assert.deepEqual(
+      discovery.tried,
+      [join(root, 'absent', 'fonts.conf'), join(config, 'fonts.conf')],
+      'the implicit master was not resolved as a search list',
+    );
+    assert.deepEqual(discovery.directories, [fonts], 'the implicit master read the wrong directories');
+    assert.deepEqual(discovery.files, [font], 'the implicit master did not scan its directory');
+    assert.ok(!discovery.missing.includes(FIXTURE_CODE_POINT), 'the implicit master did not read its font');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a relative FONTCONFIG_FILE that exists nowhere contributes no coverage', () => {
   const root = mkdtempSync(join(tmpdir(), 'font-config-nowhere-'));
   try {
@@ -360,6 +430,20 @@ test('a relative FONTCONFIG_FILE that exists nowhere contributes no coverage', (
     assert.deepEqual(discovery.directories, [], 'an unresolved master borrowed a system directory');
     assert.deepEqual(discovery.files, [], 'an unresolved master credited a font');
     assert.ok(discovery.missing.includes(FIXTURE_CODE_POINT), 'an unresolved master still credited coverage');
+    assert.deepEqual(
+      discovery.tried,
+      [
+        join(root, 'absent-a', 'anc-no-such-master.conf'),
+        join(root, 'absent-b', 'anc-no-such-master.conf'),
+        '/etc/fonts/anc-no-such-master.conf',
+      ],
+      'the configured search list was not tried in order',
+    );
+    assert.equal(
+      discovery.master,
+      '/etc/fonts/anc-no-such-master.conf',
+      'the unresolved master did not report its last candidate',
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

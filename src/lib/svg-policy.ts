@@ -552,15 +552,35 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
  * linear rather than exponential. A cycle in either the `<use>` graph or the
  * reference graph is infinity, because the work is unbounded; the budget exists
  * to bound work, not to prove a picture's exact shape.
+ *
+ * Matching propagates a set left to right instead of backtracking per element:
+ * the leftmost compound marks every element it matches, and each compound to
+ * its right keeps the elements whose parent (`>`) or any ancestor (descendant)
+ * is in the previous set. One step is O(elements × compound width), using a
+ * parent-before-child pass to carry "an ancestor matches" down the tree once,
+ * so one selector costs O(length × elements) and one rule
+ * O(selectors × length × elements). The old
+ * recursive form explored every ancestor path for each descendant step, which
+ * is C(depth, steps) for a selector like `missing g g … rect`; that is what
+ * stalled the build.
+ *
+ * The ceiling is the polynomial bound itself, deliberately without a work
+ * counter: `steps` and `selectors` are capped by `maxStyleCharacters` and
+ * `elements` by `maxElements`, while a counter would add a new refusal for a
+ * document the earlier policy accepted, and this change must not alter a
+ * verdict. A future selector form must evaluate the same way — one pass per
+ * compound over the element set — to keep the bound; a form that cannot be
+ * decided by set propagation is refused by the CSS compiler instead.
  */
-function selectorMatches(
+function markSelectorMatches(
   selector: StaticSelector,
-  index: number,
   names: readonly string[],
   ids: readonly (string | undefined)[],
   classes: readonly (readonly string[] | undefined)[],
   parents: readonly (number | undefined)[],
-): boolean {
+  into: Uint8Array,
+): void {
+  const elements = names.length;
   const matchesCompound = (compound: StaticSelector[number], at: number): boolean => {
     if (compound.name !== undefined && names[at] !== compound.name) return false;
     if (compound.id !== undefined && ids[at] !== compound.id) return false;
@@ -569,20 +589,36 @@ function selectorMatches(
     }
     return true;
   };
-  const matchesFrom = (step: number, at: number): boolean => {
-    if (!matchesCompound(selector[step]!, at)) return false;
-    if (step === 0) return true;
-    if (selector[step]!.combinator === '>') {
-      const parent = parents[at];
-      return parent !== undefined && matchesFrom(step - 1, parent);
+  const last = selector.length - 1;
+  let matched = new Uint8Array(elements);
+  for (let at = 0; at < elements; at += 1) {
+    if (matchesCompound(selector[0]!, at)) matched[at] = 1;
+  }
+  for (let step = 1; step <= last; step += 1) {
+    const next = new Uint8Array(elements);
+    const compound = selector[step]!;
+    if (compound.combinator === '>') {
+      for (let at = 0; at < elements; at += 1) {
+        const parent = parents[at];
+        if (parent !== undefined && matched[parent] === 1 && matchesCompound(compound, at)) next[at] = 1;
+      }
+    } else {
+      // A parent is recorded before its children, so one ascending pass carries
+      // "some ancestor matches the preceding compound" without walking an
+      // ancestor chain per element. `matched[parent]` is the parent itself.
+      const ancestorMatched = new Uint8Array(elements);
+      for (let at = 0; at < elements; at += 1) {
+        const parent = parents[at];
+        const inherited = parent !== undefined && (matched[parent] === 1 || ancestorMatched[parent] === 1);
+        ancestorMatched[at] = inherited ? 1 : 0;
+        if (inherited && matchesCompound(compound, at)) next[at] = 1;
+      }
     }
-    // Descendant: any ancestor may satisfy the rest of the selector.
-    for (let ancestor = parents[at]; ancestor !== undefined; ancestor = parents[ancestor]) {
-      if (matchesFrom(step - 1, ancestor)) return true;
-    }
-    return false;
-  };
-  return matchesFrom(selector.length - 1, index);
+    matched = next;
+  }
+  for (let at = 0; at < elements; at += 1) {
+    if (matched[at] === 1) into[at] = 1;
+  }
 }
 
 function expandedUseInstances(
@@ -1022,13 +1058,17 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     // A stylesheet reference belongs to every element its selector matches, once
     // per matching rule. Two selectors in one list that both match an element
     // still apply that rule's declarations once, so the reference is pushed once.
+    // Each selector is matched once over the whole tree rather than once per
+    // element, which is what keeps attribution at O(selectors × steps × elements).
+    const matched = new Uint8Array(nodes.length);
     for (const rule of styleRules) {
       if (rule.references.length === 0) continue;
+      matched.fill(0);
+      for (const selector of rule.selectors) {
+        markSelectorMatches(selector, nodes, elementIds, elementClasses, elementParents, matched);
+      }
       for (let index = 0; index < nodes.length; index += 1) {
-        const matched = rule.selectors.some((selector) =>
-          selectorMatches(selector, index, nodes, elementIds, elementClasses, elementParents),
-        );
-        if (matched) (references[index] ??= []).push(...rule.references);
+        if (matched[index] === 1) (references[index] ??= []).push(...rule.references);
       }
     }
     const instances = expandedUseInstances(nodes, useTargets, childNodes, references, idNodes, 0);

@@ -295,27 +295,43 @@ function readTextFile(path: string): string {
 }
 
 /**
- * The master file a non-absolute `FONTCONFIG_FILE` names.
+ * The master configuration fontconfig would read, and every candidate tried.
  *
- * Fontconfig searches a relative master name through its configuration path:
- * each `FONTCONFIG_PATH` component in order, then `/etc/fonts`. The first
- * existing candidate is the master. When none exists the last candidate is
- * returned, so an explicitly configured master contributes nothing rather than
- * quietly falling back to the default configuration.
+ * An absolute name is used as written. Every other name — the implicit
+ * `fonts.conf` and an explicitly supplied relative `FONTCONFIG_FILE` alike — is
+ * searched through each colon-separated `FONTCONFIG_PATH` component in order and
+ * then `/etc/fonts`, with the first existing file winning. This is fontconfig's
+ * own search-list semantics: the path is a list of directories, not one
+ * directory whose name happens to contain colons.
+ *
+ * When no candidate exists the last one is returned, so the caller reads a path
+ * that does not exist and discovers nothing. An explicitly configured search
+ * list is not an invitation to borrow the default tree.
+ *
+ * Exported so the font-config test can lock the order of the candidates, not
+ * only the files that happen to be found at the end.
  */
-function relativeMaster(name: string, configuredPath: string | undefined): string {
+export function resolveFontConfigMaster(
+  name: string,
+  configuredPath: string | undefined,
+): { readonly master: string; readonly tried: readonly string[] } {
+  if (isAbsolute(name)) {
+    const absolute = resolve(name);
+    return { master: absolute, tried: [absolute] };
+  }
   const roots = (configuredPath ?? '').split(':').filter((component) => component !== '');
   roots.push('/etc/fonts');
-  let candidate = join(roots[0]!, name);
+  const tried: string[] = [];
   for (const root of roots) {
-    candidate = join(root, name);
+    const candidate = join(root, name);
+    tried.push(candidate);
     try {
-      if (statSync(candidate).isFile()) return candidate;
+      if (statSync(candidate).isFile()) return { master: candidate, tried };
     } catch {
       // Not in this component; try the next one.
     }
   }
-  return candidate;
+  return { master: tried[tried.length - 1]!, tried };
 }
 
 /** The host's font directories and the config includes followed to find them. */
@@ -337,24 +353,24 @@ function fontDirectories(): {
   };
   if (process.platform === 'linux') {
     // Read exactly the master configuration fontconfig reads. FONTCONFIG_FILE
-    // names it directly; otherwise FONTCONFIG_PATH (default /etc/fonts) locates
-    // `fonts.conf`. A custom master is followed as written, including its
-    // `<include>` and `<dir>` chain; a missing file or directory contributes no
-    // fonts rather than borrowing the default tree.
+    // names it directly; otherwise the implicit `fonts.conf` is searched through
+    // FONTCONFIG_PATH (default /etc/fonts). Both use the same resolution routine,
+    // so a colon-separated path is a search list for either spelling. A custom
+    // master is followed as written, including its `<include>` and `<dir>` chain;
+    // a missing candidate contributes no fonts rather than borrowing the default
+    // tree.
     const configuredFile = process.env['FONTCONFIG_FILE'];
     const configuredPath = process.env['FONTCONFIG_PATH'];
     const customMaster = configuredFile !== undefined && configuredFile !== '';
-    const defaultConfig = !customMaster && (configuredPath === undefined || configuredPath === '');
-    const master = customMaster
-      ? isAbsolute(configuredFile)
-        ? resolve(configuredFile)
-        : relativeMaster(configuredFile, configuredPath)
-      : join(configuredPath !== undefined && configuredPath !== '' ? configuredPath : '/etc/fonts', 'fonts.conf');
-    parseFontConfig(master, 0, state);
+    const { master } = resolveFontConfigMaster(customMaster ? configuredFile : 'fonts.conf', configuredPath);
     // /etc/fonts/conf.d is part of the *default* configuration, not of every
     // configuration: the stock fonts.conf includes it as a directory, and the
     // legacy loop keeps a host whose default fonts.conf omits that include
-    // working. A custom master did not ask for it, so it is never added here.
+    // working. The default is identified by the master it resolved to, so
+    // FONTCONFIG_PATH=/absent:/etc/fonts is the same configuration as no path at
+    // all, while a master found elsewhere never gains /etc/fonts/conf.d.
+    const defaultConfig = !customMaster && master === resolve('/etc/fonts/fonts.conf');
+    parseFontConfig(master, 0, state);
     if (defaultConfig) {
       const confDirectory = resolve('/etc/fonts/conf.d');
       if (!state.followedDirectories.has(confDirectory)) {
