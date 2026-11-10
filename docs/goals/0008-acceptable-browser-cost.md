@@ -149,9 +149,23 @@ package is reconstructible from the recorded tree. Instrument:
 in every report. Browser: **Chrome 157.0.8103.38**, device profile Pixel 7, CPU
 throttled 4x — Chrome is one of the two accepted emulation targets and this host has no
 Edge build; the goal's acceptance covers "Chrome or Edge mobile device emulation", so
-no physical device was used. Network is loopback. 30 samples per measurement.
+no physical device was used. Network is loopback.
 
-| Workload | Build | DB decoded | DB gzip | Cold preview | Warm preview | Local p95 | Global render p95 | Tag p95 | Failures |
+Sample populations are not uniform, and each number is labelled by what it actually is:
+
+| Measurement | Population |
+|---|---|
+| Build (per workload) | 1 |
+| Preview cold / warm (per workload) | 1 observation each |
+| Local-graph dispatch and SQL (UI, per workload) | 30 samples, exact count asserted |
+| Global graph, unfiltered and tag-filtered (UI) | 1 render each |
+| Tag browse (UI) | 10 / 100 / 1,000 dispatches at 100 / 1,000 / 10,000 notes |
+| Driver queries: local, backlinks, outgoing, byTag, global | 30 samples each (byTag 30 / 150 / 350) |
+| Reading, JS disabled and JS enabled without intent | 1 observation each |
+| Startup heap / Worker WASM memory | 1 observation |
+| Overload controls | 1 controlled run per control, bounds asserted |
+
+| Workload | Build | DB decoded | DB gzip | Cold preview (1) | Warm preview (1) | Local p95 (n=30) | Global render (1) | Tag p95 (n=10/100/1,000) | Failures |
 |---|---|---|---|---|---|---|---|---|---|
 | 100-sparse | 5.2s | 64.0 KiB | 14.2 KiB | 407 ms | 220 ms | **13.4 ms** | 140 ms | 124 ms | 0 |
 | 100-hub | 5.1s | 64.0 KiB | 13.9 KiB | 441 ms | 224 ms | **13.7 ms** | 143 ms | 117 ms | 0 |
@@ -163,9 +177,9 @@ no physical device was used. Network is loopback. 30 samples per measurement.
 Local neighbourhood p95 (dispatch to validated Worker result, the 50 ms target) stays
 between 13.4 ms and 21.7 ms across all six workloads; the Worker-side operation alone
 stays under 7 ms. Graph drawing and the unfiltered global graph are reported separately
-and are **not** part of that target: they reach 395 ms (sparse) and
-408 ms (hub) at 10,000 notes, with tag browsing at
-292/295 ms. This is the material UX trade-off the
+and are **not** part of that target: a single unfiltered render costs 395 ms (sparse) and
+408 ms (hub) at 10,000 notes, and tag browsing — p95 over 1,000 dispatches at that size —
+costs 292/295 ms. The global figure is one observation per workload, not a percentile. This is the material UX trade-off the
 maintainer has to accept or reject explicitly.
 
 Cold preview (empty HTTP cache, fresh context) is
@@ -252,7 +266,7 @@ workspace, not in commits); these hashes pin what was measured:
 
 Measured and qualified; **awaiting the maintainer's dated acceptance** of this exact
 candidate, the finite policies above and the material UX trade-off (global graph
-395-408 ms and tag browsing
-292-295 ms at 10,000 notes, cold preview
-407-441 ms). The goal's own terms make that acceptance the last
+395-408 ms as single renders and tag browsing
+292-295 ms as p95 over 1,000 dispatches at 10,000 notes, cold preview
+407-441 ms as one observation per workload). The goal's own terms make that acceptance the last
 open item; it is not self-granted.
