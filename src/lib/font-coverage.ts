@@ -67,6 +67,8 @@ export interface FontDiscovery {
   readonly files: readonly string[];
   /** Fontconfig `<include>` files followed, for the measurement report. */
   readonly includes: number;
+  /** Fontconfig `<include>` directories followed, for the measurement report. */
+  readonly includeDirectories: number;
   /** Includes seen but not followed: missing, unresolvable, repeated or too deep. */
   readonly skippedIncludes: number;
 }
@@ -93,8 +95,18 @@ function readSlice(fd: number, position: number, length: number): Buffer | undef
 interface FontConfigState {
   readonly directories: string[];
   readonly visited: Set<string>;
+  readonly followedDirectories: Set<string>;
+  readonly rules: FontRule[];
   includes: number;
+  includeDirectories: number;
   skippedIncludes: number;
+}
+
+/** One fontconfig `<rejectfont>`/`<acceptfont>` matcher, in configuration order. */
+interface FontRule {
+  readonly action: 'accept' | 'reject';
+  readonly glob?: string;
+  readonly family?: string;
 }
 
 /**
@@ -109,7 +121,14 @@ function resolveConfigPath(value: string, prefix: string | undefined, base: stri
   if (path === '') return undefined;
   if (prefix === 'cwd') return undefined;
   if (prefix === 'xdg') {
-    return join(process.env['XDG_DATA_HOME'] ?? join(homedir(), '.local', 'share'), path);
+    // Fontconfig resolves an XDG *directory* against XDG_DATA_HOME and an
+    // XDG *include* against XDG_CONFIG_HOME. Using the data directory for an
+    // include silently missed ~/.config/fontconfig/fonts.conf.
+    const xdg =
+      base === undefined
+        ? (process.env['XDG_DATA_HOME'] ?? join(homedir(), '.local', 'share'))
+        : (process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config'));
+    return join(xdg, path);
   }
   if (path === '~') return homedir();
   if (path.startsWith('~/')) return join(homedir(), path.slice(2));
@@ -153,20 +172,42 @@ function parseFontConfig(path: string, depth: number, state: FontConfigState): b
   let directoryPrefix: string | undefined;
   let include: string | undefined;
   let includePrefix: string | undefined;
+  let action: FontRule['action'] | undefined;
+  let globText: string | undefined;
+  let patternFamilies: string[] | undefined;
+  let pateltName: string | undefined;
+  let stringText: string | undefined;
 
   parser.on('opentag', (tag) => {
-    if (tag.name.toLowerCase() === 'dir') {
+    const name = tag.name.toLowerCase();
+    if (name === 'dir') {
       directory = '';
       directoryPrefix = tag.attributes['prefix'];
-    } else if (tag.name.toLowerCase() === 'include') {
+    } else if (name === 'include') {
       include = '';
       includePrefix = tag.attributes['prefix'];
+    } else if (name === 'rejectfont') {
+      action = 'reject';
+    } else if (name === 'acceptfont') {
+      action = 'accept';
+    } else if (name === 'glob') {
+      globText = '';
+    } else if (name === 'pattern') {
+      patternFamilies = [];
+    } else if (name === 'patelt') {
+      pateltName = tag.attributes['name']?.toLowerCase();
+    } else if (name === 'string') {
+      stringText = '';
     }
   });
-  parser.on('text', (value) => {
+  const collect = (value: string): void => {
     if (directory !== undefined) directory += value;
     else if (include !== undefined) include += value;
-  });
+    else if (globText !== undefined) globText += value;
+    else if (stringText !== undefined) stringText += value;
+  };
+  parser.on('text', collect);
+  parser.on('cdata', collect);
   parser.on('closetag', (tag) => {
     const name = tag.name.toLowerCase();
     if (name === 'dir' && directory !== undefined) {
@@ -174,26 +215,73 @@ function parseFontConfig(path: string, depth: number, state: FontConfigState): b
       directory = undefined;
       directoryPrefix = undefined;
       if (target !== undefined) state.directories.push(target);
+    } else if (name === 'glob' && globText !== undefined) {
+      const glob = globText.trim();
+      globText = undefined;
+      if (action !== undefined && glob !== '') state.rules.push({ action, glob });
+    } else if (name === 'string' && stringText !== undefined) {
+      const text = stringText.trim();
+      stringText = undefined;
+      if (patternFamilies !== undefined && pateltName === 'family' && text !== '') {
+        patternFamilies.push(text);
+      }
+    } else if (name === 'patelt') {
+      pateltName = undefined;
+    } else if (name === 'pattern') {
+      if (action !== undefined && patternFamilies !== undefined) {
+        for (const family of patternFamilies) state.rules.push({ action, family });
+      }
+      patternFamilies = undefined;
+    } else if (name === 'rejectfont' || name === 'acceptfont') {
+      action = undefined;
     } else if (name === 'include' && include !== undefined) {
       const target = resolveConfigPath(include, includePrefix, dirname(resolvedPath));
       include = undefined;
       includePrefix = undefined;
       if (target === undefined || depth >= MAX_CONFIG_INCLUDE_DEPTH) {
         state.skippedIncludes += 1;
-      } else if (parseFontConfig(target, depth + 1, state)) {
-        state.includes += 1;
       } else {
-        state.skippedIncludes += 1;
+        let targetIsDirectory = false;
+        try {
+          targetIsDirectory = statSync(target).isDirectory();
+        } catch {
+          state.skippedIncludes += 1;
+          return;
+        }
+        if (targetIsDirectory) {
+          const directory = resolve(target);
+          state.followedDirectories.add(directory);
+          state.includeDirectories += 1;
+          let entries: string[];
+          try {
+            entries = readdirSync(directory).sort();
+          } catch {
+            state.skippedIncludes += 1;
+            return;
+          }
+          for (const name of entries) {
+            if (!/^[0-9].*\.conf$/i.test(name)) continue;
+            if (parseFontConfig(join(directory, name), depth + 1, state)) state.includes += 1;
+            else state.skippedIncludes += 1;
+          }
+        } else if (parseFontConfig(target, depth + 1, state)) {
+          state.includes += 1;
+        } else {
+          state.skippedIncludes += 1;
+        }
       }
     }
   });
 
+  let malformed = false;
   try {
     parser.write(text).close();
   } catch {
-    // A malformed config is the host's, not the site's; keep what parsed.
+    // A malformed config is the host's, not the site's; keep what parsed and
+    // report the file as skipped rather than as a followed include.
+    malformed = true;
   }
-  return true;
+  return !malformed;
 }
 
 function readTextFile(path: string): string {
@@ -209,25 +297,37 @@ function readTextFile(path: string): string {
 /** The host's font directories and the config includes followed to find them. */
 function fontDirectories(): {
   readonly directories: string[];
+  readonly rules: readonly FontRule[];
   readonly includes: number;
+  readonly includeDirectories: number;
   readonly skippedIncludes: number;
 } {
   const state: FontConfigState = {
     directories: [],
     visited: new Set(),
+    followedDirectories: new Set(),
+    rules: [],
     includes: 0,
+    includeDirectories: 0,
     skippedIncludes: 0,
   };
   if (process.platform === 'linux') {
     parseFontConfig('/etc/fonts/fonts.conf', 0, state);
-    try {
-      for (const name of readdirSync('/etc/fonts/conf.d').sort()) {
-        if (name.endsWith('.conf')) parseFontConfig(join('/etc/fonts/conf.d', name), 0, state);
+    // The base config normally includes /etc/fonts/conf.d as a directory; when
+    // it does, following it again would only count every file as a repeated
+    // skip. The legacy loop remains for a config that does not include it.
+    const confDirectory = resolve('/etc/fonts/conf.d');
+    if (!state.followedDirectories.has(confDirectory)) {
+      try {
+        for (const name of readdirSync(confDirectory).sort()) {
+          if (/^[0-9].*\.conf$/i.test(name)) {
+            if (!parseFontConfig(join(confDirectory, name), 0, state)) state.skippedIncludes += 1;
+          }
+        }
+      } catch {
+        // No conf.d is ordinary; the base file and the per-user directories remain.
       }
-    } catch {
-      // No conf.d is ordinary; the base file and the per-user directories remain.
     }
-    state.directories.push(join(homedir(), '.fonts'), join(homedir(), '.local', 'share', 'fonts'));
   } else if (process.platform === 'darwin') {
     state.directories.push(
       '/System/Library/Fonts',
@@ -243,7 +343,9 @@ function fontDirectories(): {
   }
   return {
     directories: [...new Set(state.directories)],
+    rules: state.rules,
     includes: state.includes,
+    includeDirectories: state.includeDirectories,
     skippedIncludes: state.skippedIncludes,
   };
 }
@@ -273,17 +375,189 @@ function fontFilesUnder(directory: string, depth: number, into: string[]): void 
   }
 }
 
+/** Expand a fontconfig glob's home or relative spelling to a complete path. */
+function globPath(pattern: string): string {
+  if (pattern === '~') return homedir();
+  if (pattern.startsWith('~/')) return join(homedir(), pattern.slice(2));
+  return resolve(pattern);
+}
+
+/** Fontconfig `<glob>` semantics: a shell pattern over the complete file path. */
+function globMatchesFile(pattern: string, file: string): boolean {
+  return globMatches(globPath(pattern), resolve(file));
+}
+
+/** Fontconfig's glob subset: `*`, `?`, and every other character literally. */
+function globMatches(pattern: string, value: string): boolean {
+  let source = '^';
+  for (const character of pattern) {
+    if (character === '*') source += '.*';
+    else if (character === '?') source += '.';
+    else source += character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  source += '$';
+  try {
+    return new RegExp(source, 'u').test(value);
+  } catch {
+    return false;
+  }
+}
+
+/** Decode a UTF-16BE name-table string without allocating a swapped copy. */
+function decodeUtf16Be(bytes: Buffer): string {
+  let text = '';
+  for (let index = 0; index + 1 < bytes.length; index += 2) {
+    text += String.fromCharCode(bytes.readUInt16BE(index));
+  }
+  return text;
+}
+
+/** Family names (IDs 1 and 16) from one sfnt `name` table. */
+function familiesOfNameTable(table: Buffer): string[] {
+  if (table.length < 6) return [];
+  const count = table.readUInt16BE(2);
+  const stringOffset = table.readUInt16BE(4);
+  const families: string[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const at = 6 + index * 12;
+    if (at + 12 > table.length) break;
+    const platform = table.readUInt16BE(at);
+    const encoding = table.readUInt16BE(at + 2);
+    const nameId = table.readUInt16BE(at + 6);
+    if (nameId !== 1 && nameId !== 16) continue;
+    const length = table.readUInt16BE(at + 8);
+    const offset = table.readUInt16BE(at + 10);
+    const start = stringOffset + offset;
+    if (start + length > table.length) continue;
+    const raw = table.subarray(start, start + length);
+    let family: string | undefined;
+    if (platform === 0 || (platform === 3 && (encoding === 1 || encoding === 10))) {
+      family = decodeUtf16Be(raw);
+    } else if (platform === 1 && encoding === 0) {
+      family = raw.toString('latin1');
+    }
+    const trimmed = family?.replace(/\0/g, '').trim();
+    if (trimmed !== undefined && trimmed !== '') families.push(trimmed);
+  }
+  return [...new Set(families)];
+}
+
+/** Read the family names of every face in one font file. */
+function familiesOfFile(file: string): readonly string[] {
+  let fd: number;
+  let size: number;
+  try {
+    fd = openSync(file, 'r');
+    size = statSync(file).size;
+  } catch {
+    return [];
+  }
+  try {
+    let header = readSlice(fd, 0, 12);
+    if (header === undefined) return [];
+    if (header.toString('latin1', 0, 4) === 'ttcf') {
+      const count = Math.min(header.readUInt32BE(8), MAX_COLLECTION_FACES);
+      const extended = readSlice(fd, 0, 12 + count * 4);
+      if (extended !== undefined) header = extended;
+    }
+    const families: string[] = [];
+    for (const base of faceDirectories(header)) {
+      const directory = readSlice(fd, base, 12);
+      if (directory === undefined || directory.length < 12) continue;
+      const tables = Math.min(directory.readUInt16BE(4), MAX_TABLES);
+      const records = readSlice(fd, base + 12, tables * 16);
+      if (records === undefined) continue;
+      for (let index = 0; index < tables; index += 1) {
+        const at = index * 16;
+        if (at + 16 > records.length) break;
+        if (records.toString('latin1', at, at + 4) !== 'name') continue;
+        const offset = records.readUInt32BE(at + 8);
+        const length = records.readUInt32BE(at + 12);
+        if (offset + length > size) break;
+        const table = readSlice(fd, offset, Math.min(length, MAX_CMAP_BYTES));
+        if (table !== undefined) families.push(...familiesOfNameTable(table));
+        break;
+      }
+    }
+    return [...new Set(families)];
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Filter the discovered files through fontconfig's `<rejectfont>` and
+ * `<acceptfont>` rules. Rules are applied in configuration order and the last
+ * matching rule wins, so a later accept re-admits a glob rejected earlier. A
+ * `<glob>` matches the file's basename; a `<pattern>` is matched against family
+ * names parsed from the font's `name` table (IDs 1 and 16).
+ */
+function applyFontRules(files: readonly string[], rules: readonly FontRule[]): string[] {
+  // An accept rule of either kind can only protect a font from a reject rule;
+  // with no reject rule it cannot remove anything, and evaluating it would read
+  // every name table for no change.
+  if (!rules.some((rule) => rule.action === 'reject')) return [...files];
+  const families = new Map<string, readonly string[]>();
+  const matchesPattern = (file: string, rule: FontRule): boolean => {
+    if (rule.family === undefined) return false;
+    let names = families.get(file);
+    if (names === undefined) {
+      names = familiesOfFile(file);
+      families.set(file, names);
+    }
+    const expected = rule.family.toLowerCase();
+    return names.some((name) => name.toLowerCase() === expected);
+  };
+
+  const acceptGlobs = rules.filter((rule) => rule.action === 'accept' && rule.glob !== undefined);
+  const rejectGlobs = rules.filter((rule) => rule.action === 'reject' && rule.glob !== undefined);
+  const acceptPatterns = rules.filter((rule) => rule.action === 'accept' && rule.family !== undefined);
+  const rejectPatterns = rules.filter((rule) => rule.action === 'reject' && rule.family !== undefined);
+  const filenameAccepted = (path: string): boolean => {
+    if (acceptGlobs.some((rule) => globMatchesFile(rule.glob!, path))) return true;
+    return !rejectGlobs.some((rule) => globMatchesFile(rule.glob!, path));
+  };
+  const directoryRejected = (file: string): boolean => {
+    let directory = dirname(resolve(file));
+    const ancestors: string[] = [];
+    while (directory !== dirname(directory)) {
+      ancestors.unshift(directory);
+      directory = dirname(directory);
+    }
+    return ancestors.some((ancestor) => !filenameAccepted(ancestor));
+  };
+
+  return files.filter((file) => {
+    // fontconfig applies filename selectors to each scanned directory before it
+    // considers the font file, then to the file; a rejected directory is never
+    // searched, so no file accept can rescue a font inside it.
+    if (directoryRejected(file)) return false;
+    if (!filenameAccepted(file)) return false;
+    // Pattern selectors run after the filename selectors, with the accept set
+    // checked first. They cannot override a filename reject.
+    if (acceptPatterns.some((rule) => matchesPattern(file, rule))) return true;
+    return !rejectPatterns.some((rule) => matchesPattern(file, rule));
+  });
+}
+
 /** One discovery walk per process: a build cannot change the host font set. */
 let discoveryCache: FontDiscovery | undefined;
 
 /** The font files this host would offer fontconfig, deterministically ordered. */
 export function discoverFonts(): FontDiscovery {
   if (discoveryCache !== undefined) return discoveryCache;
-  const { directories, includes, skippedIncludes } = fontDirectories();
+  const { directories, rules, includes, includeDirectories, skippedIncludes } = fontDirectories();
   const files: string[] = [];
   for (const directory of directories) fontFilesUnder(directory, 0, files);
   files.sort();
-  return (discoveryCache = { directories, files, includes, skippedIncludes });
+  const offered = applyFontRules(files, rules);
+  return (discoveryCache = {
+    directories,
+    files: offered,
+    includes,
+    includeDirectories,
+    skippedIncludes,
+  });
 }
 
 /** Offset tables of the faces in one sfnt container. */

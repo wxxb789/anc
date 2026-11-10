@@ -349,8 +349,11 @@ image index, CDN requirement, or author-facing quality setting, and the SVG turn
 build-only input, validated by a namespace-aware XML/CSS policy (`saxes` + `css-tree`),
 rasterized from its bytes by the same pinned sharp/librsvg into **lossless WebP** at 2× its
 logical size, with every external reference, `data:` asset, script, animation, foreign
-namespace, DTD and CSS at-rule refused, host-font coverage checked per code point, and the
-source XML never published. A standalone image's explicit Markdown title is a visible
+namespace, DTD, nested `<style>` and CSS at-rule refused, a finite `<use>`-expansion budget,
+host-font coverage checked per code point against the fonts fontconfig actually offers
+(including its reject/accept rules), and the source XML never published. A one-sided
+`width`/`height` takes the other side from the `viewBox`. A standalone image's explicit
+Markdown title is a visible
 `<figcaption>`; `width`/`height` are the CSS layout size (the emitted header's pixels for a
 raster, **half the emitted raster** for a 2× SVG raster — the author's logical size unless the
 output budget clamped it, in which case the layout shrinks proportionally), and the first

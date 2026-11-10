@@ -286,7 +286,10 @@ The published picture is rasterized at **2× its logical size**. The logical siz
 is the author's absolute `width`/`height` when written (physical units converted
 at CSS's 96 dpi), otherwise a stable **720 CSS px** at the wide end of the
 article reading column — the stylesheet's `max-width: 100%` caps it on a narrower
-column, so the rendering never overflows. The render target is clamped
+column, so the rendering never overflows. When only one side is declared and a
+`viewBox` is present, the viewBox supplies the other side; that inferred pair is
+then treated as declared so the raster keeps the author's aspect ratio instead of
+falling back to the article measure. The render target is clamped
 proportionally by a **6,000,000-pixel output budget** and an 8,000-pixel side
 limit; nothing is cropped and the `viewBox` is never rewritten. The artifact's
 `width`/`height` are **half the emitted raster**. Without clamping that is the
@@ -321,7 +324,12 @@ the shipped implementation.
 ### Static subset and fail-closed resource policy
 
 The SVG input is untrusted XML, even when authored by the repository owner.
-`src/lib/svg-policy.ts` parses it with namespace-aware **saxes 6.0.0**. Every
+`src/lib/svg-policy.ts` parses it with namespace-aware **saxes 6.0.0**. The
+producer's byte signature looks for an optional-prefix `<svg>` root anywhere in
+the first 1024 bytes, so an XML declaration, a comment, a DOCTYPE, or a bounded
+sequence of processing instructions in the prologue reaches this policy and is
+refused for its actual reason rather than being misreported as a plain text file;
+a UTF-16 document does not match the byte signature and is unsupported. Every
 refusal is a stable reason the public summary counts and the private report
 names:
 
@@ -339,7 +347,8 @@ names:
   `file:`, `http(s):`, a relative path, an external stylesheet, `xml:base`,
   and every `<image>`/`<feImage>` element.
 - `svg-data` — any embedded `data:` payload.
-- `svg-css` — malformed CSS or an at-rule (`@import`, `@font-face`, `@media`, …).
+- `svg-css` — malformed CSS, a nested `<style>` element, or an at-rule
+  (`@import`, `@font-face`, `@media`, …).
 - `svg-invalid` — not well-formed UTF-8 XML, no `<svg>` root, no usable size, a
   mixed-unit width/height pair, or a budget argument that does not parse (a
   filter-region value or `numOctaves`).
@@ -379,16 +388,24 @@ same-document fragment. `tests/svg-raster.test.ts` proves the check reads the
 on, yet are refused as a script URL and an external URL respectively.
 
 **Work is bounded before a surface is allocated.** The policy caps 20,000
-elements, 128 nesting levels, 500 `<use>` elements, 100,000 UTF-16 code units of
-text in any `<text>` subtree (referenced or not), 4,096 distinct text
-characters, 1,000,000 characters of CSS across `<style>` elements and `style`
-attributes, 100 filter primitives, `stdDeviation` 1,000 user units, filter
-regions at 500% / 20,000 user units, convolution kernels at 100 entries, and
-turbulence octaves at 16. A source SVG larger than 8 MiB is refused before the
-policy parses it. The renderer then measures the document's natural size at 72
-dpi with sharp's `limitInputPixels` at 24,000,000, so a declared million-pixel
-square is refused by libvips before allocation, and the post-scale output budget
-is 6,000,000 pixels. `unlimited` is never set.
+elements, 128 nesting levels, 500 `<use>` elements, **16,384 instances after
+`<use>` expansion**, 100,000 UTF-16 code units of text in any `<text>` subtree
+(referenced or not), 4,096 distinct text characters, 1,000,000 characters of CSS
+across `<style>` elements and `style` attributes, 100 filter primitives,
+`stdDeviation` 1,000 user units, filter regions at 500% / 20,000 user units,
+convolution kernels at 100 entries, and turbulence octaves at 16. The `<use>`
+count is a dynamic-programming count over the id graph, not the number of
+`<use>` declarations: 17 chained symbols and 33 declarations are about 1 KB of
+XML but expand to 131,071 instances. The 16,384 cap admits the largest practical
+chained symbol table (measured at 177 ms for 16,383 instances on the qualification
+host) and refuses that document before the renderer; the same shape measured
+581 ms at 65,535 instances and 1,146 ms at 131,071 instances before the cap
+(reviewer measurement 2.4 s at 2^17). A cyclic `<use>` graph is refused as
+non-terminating. A source SVG larger than 8 MiB is refused before the policy
+parses it. The renderer then measures the document's natural size at 72 dpi with
+sharp's `limitInputPixels` at 24,000,000, so a declared million-pixel square is
+refused by libvips before allocation, and the post-scale output budget is
+6,000,000 pixels. `unlimited` is never set.
 
 The policy is not a native sandbox. A sharp-native decode has a process-crash
 risk pure JS cannot eliminate; the release qualification covers the patched
@@ -408,19 +425,44 @@ renders its own glyph — all three have ink, and the boxes differ from each oth
 so neither a blank check nor a single control bitmap detects tofu.
 
 `src/lib/font-coverage.ts` therefore answers the question Pango asks fontconfig:
-**is the code point in the `cmap` of any installed font?** It discovers font
-containers from `/etc/fonts/fonts.conf` and `conf.d/*.conf` on Linux and from the
-standard system/user directories on macOS and Windows. The fontconfig files are
-parsed as XML; `<dir>` entries and their `prefix` attribute are honoured, and
-`<include>` is followed relative to the including file or by its `prefix`, with a
-hard depth cap of 8 and a count reported by the measurement instrument. An
-`<include>` that is missing, unresolvable, or beyond the depth cap is skipped and
-is not counted as followed. It reads only each file's `cmap` table (formats 0, 4,
-6 and 12, including `.ttc` collections) and accepts only Unicode records
-(platform 0, and platform 3 encodings 1 and 10; symbol and other encodings are
-ignored). The scan is one pass over the files per process and stops when every
-code point is resolved; results are cached for the build. Whitespace, combining
-marks and Unicode format characters are excluded because they are not standalone
+**is the code point in the `cmap` of any font fontconfig would offer?** It
+discovers font containers from `/etc/fonts/fonts.conf` and `conf.d/*.conf` on
+Linux and from the standard system/user directories on macOS and Windows. The
+fontconfig files are parsed as XML; `<dir>` entries and their `prefix` attribute
+are honoured (an XDG `<dir>` resolves against `XDG_DATA_HOME`, while an XDG
+`<include>` resolves against `XDG_CONFIG_HOME`), and `<include>` is followed
+relative to the including file or by its `prefix`. An include that names a
+directory is followed as fontconfig does, through its `[0-9]*.conf` entries. The
+hard include depth cap is 8; missing, unresolvable, repeated, too-deep and
+malformed includes are counted as skipped, and followed files and directories are
+counted separately by the measurement instrument. System and user font
+directories come from the config; the module does not add `~/.fonts` or
+`~/.local/share/fonts` unconditionally, because that would credit a directory
+fontconfig does not use when `XDG_DATA_HOME` points elsewhere.
+
+`<selectfont>` selection is applied, not merely its `<dir>` list. Filename
+selectors run first, as fontconfig does: `<glob>` rules match the **complete
+path** (home and relative spellings are expanded), an accept glob protects a
+directory or file from a reject glob, and a rejected directory is not searched.
+Family-pattern selectors run after filename acceptance; their accept set is
+checked before their reject set, so a family accept protects a font from a family
+reject. `<pattern>` rules are matched against family names read from the font's
+`name` table (IDs 1 and 16). The gate maps the `family` predicate; other pattern
+predicates are outside this bounded matcher, and the module only reads scalable
+containers (`.ttf`, `.otf`, `.ttc`, `.otc`), so a bitmap-format reject predicate
+cannot select one of its files. `tests/font-config.test.ts` compares the result on
+a temporary HOME/XDG tree against fontconfig's own matching behavior, including
+include directories, reject/accept precedence, an absolute file glob and a family
+reject. Measured with fontconfig 2.15, `fc-list` does not apply a `<selectfont>`
+filename reject (it lists the configured directory), while `fc-match` does; the
+gate follows the latter.
+
+It reads only each file's `cmap` table (formats 0, 4, 6 and 12, including `.ttc`
+collections) and accepts only Unicode records (platform 0, and platform 3
+encodings 1 and 10; symbol and other encodings are ignored). The scan is one pass
+over the files per process and stops when every code point is resolved; results
+are cached for the build. A reject rule that removes a file also removes its
+cmap from this scan. Whitespace, combining marks and Unicode format characters are excluded because they are not standalone
 glyphs. A missing code point fails with `svg-font` and a diagnostic naming it and
 the number of font files searched. If no font files are found at all, every code
 point is missing and the build fails rather than publishing an unverified
@@ -452,19 +494,21 @@ a `viewBox`-only document, physical `mm` units, Latin text, CJK text, 9–11 px
 text, a `<style>` sheet with class selectors, `symbol`/`use`, and one document
 referenced from more than one note. `tests/svg-raster.test.ts` checks the emitted
 bytes, format, 2× pixel size, logical layout size, aspect ratio and
-duplicate/rebind behavior; `tests/svg-display.test.ts` decodes them in Chromium
+duplicate/rebind behavior; it also renders a one-sided `width` plus `viewBox` at
+the inferred aspect and proves the `<use>` expansion budget refuses a 33-declaration
+chain before rendering. `tests/svg-display.test.ts` decodes the corpus in Chromium
 at 1×/2× and measures a real screenshot for strong edge transitions.
 
 Negative fixtures, each failing the build with the reason named above:
 DTD and an entity declaration, XInclude, `script`, `foreignObject`, `onload`,
-`animate`/`set`, an external `xml-stylesheet`, `@import`, `@font-face`, an
-external `url()` in a `<style>` sheet, a `style` attribute and a presentation
-attribute, a CSS-escaped script URL, a `file:` reference, an `http(s)` reference
-through both `href` and `xlink:href`, an embedded `data:` asset in XML and in
-CSS, malformed XML, Inkscape/XHTML foreign namespaces, a million-pixel square, a
-filter-primitive flood, an oversized filter region, a huge `stdDeviation`, a
-fully transparent render and a structurally empty root, missing glyph coverage,
-`<metadata>`, a namespace-less root, and `xml:base`.
+`animate`/`set`, an external `xml-stylesheet`, `@import`, `@font-face`, a nested
+`<style>` element, an external `url()` in a `<style>` sheet, a `style` attribute
+and a presentation attribute, a CSS-escaped script URL, a `file:` reference, an
+`http(s)` reference through both `href` and `xlink:href`, an embedded `data:`
+asset in XML and in CSS, malformed XML, Inkscape/XHTML foreign namespaces, a
+million-pixel square, a filter-primitive flood, an oversized filter region, a huge
+`stdDeviation`, a fully transparent render and a structurally empty root, missing
+glyph coverage, `<metadata>`, a namespace-less root, and `xml:base`.
 
 `tests/svg-security.test.ts` adds the two controls the XML policy cannot supply
 for itself: a canary PNG outside the content root is not read — by the build and

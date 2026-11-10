@@ -25,18 +25,20 @@ project makes no backward-compatibility promise.
   `dist/`, Pagefind, SQLite, the asset inventory, or a browser. The build validates a
   namespace-aware, fail-closed subset (`saxes` 6.0.0 for XML, `css-tree` 3.2.1 for `<style>`,
   `style` attributes and URL-bearing presentation attributes): DTDs and entity declarations,
-  XInclude, `script`/event handlers, `foreignObject`, animation, external stylesheets, every
-  CSS at-rule, every non-fragment `url()`/`href`, `file:`/`http(s)`/relative references,
-  embedded `data:` assets, `xml:base`, `<metadata>`, and foreign namespaces are refused with
-  named reasons. Same-document fragment references remain available to gradients, patterns,
-  masks, clip paths, markers and filters. The document is rasterized from its bytes by the
-  pinned sharp/librsvg at 2× its logical size (absolute `width`/`height` honoured, `viewBox`-only
-  laid out at the article measure), encoded losslessly, and verified for WebP MIME, dimensions,
-  aspect ratio and visible pixels; a fully transparent render is a failure. A finite work
-  budget bounds the 8 MiB source, CSS, elements, text, filter primitives, filter regions,
-  convolution kernels and output pixels, and proportional downscale replaces an unbounded
-  surface. Missing host-font
-  coverage fails with the code point named rather than publishing tofu; no font is bundled.
+  XInclude, `script`/event handlers, `foreignObject`, animation, external stylesheets, a
+  nested `<style>`, every CSS at-rule, every non-fragment `url()`/`href`,
+  `file:`/`http(s)`/relative references, embedded `data:` assets, `xml:base`,
+  `<metadata>`, and foreign namespaces are refused with named reasons. Same-document
+  fragment references remain available to gradients, patterns, masks, clip paths, markers
+  and filters. The document is rasterized from its bytes by the pinned sharp/librsvg at 2×
+  its logical size (absolute `width`/`height` honoured, a missing side inferred from the
+  `viewBox`, `viewBox`-only laid out at the article measure), encoded losslessly, and
+  verified for WebP MIME, dimensions, aspect ratio and visible pixels; a fully transparent
+  render is a failure. A finite work budget bounds the 8 MiB source, CSS, elements, text,
+  `<use>` expansion (16,384 instances), filter primitives, filter regions, convolution
+  kernels and output pixels, and proportional downscale replaces an unbounded surface.
+  Missing host-font coverage fails with the code point named rather than publishing tofu;
+  the check follows the host's fontconfig accept/reject selection and no font is bundled.
   The published picture's artifact `width`/`height` is **half the emitted raster**: the author's
   logical CSS size when no clamp applies, so a 600-pixel diagram publishes a 1,200-pixel WebP
   and still lays out at 600; when the output budget clamps, the layout shrinks with the raster

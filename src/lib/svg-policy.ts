@@ -71,6 +71,8 @@ export interface SvgLimits {
   readonly maxDepth: number;
   /** `<use>` elements, the expansion primitive. */
   readonly maxUses: number;
+  /** Instances produced by expanding `<use>` references. */
+  readonly maxUseInstances: number;
   /** Characters of visible text across every `<text>` subtree. */
   readonly maxTextCharacters: number;
   /** Characters of CSS across every `<style>` element. */
@@ -101,6 +103,7 @@ export const SVG_POLICY_LIMITS: SvgLimits = Object.freeze({
   maxElements: 20_000,
   maxDepth: 128,
   maxUses: 500,
+  maxUseInstances: 16_384,
   maxTextCharacters: 100_000,
   maxStyleCharacters: 1_000_000,
   maxDistinctTextCharacters: 4_096,
@@ -122,9 +125,9 @@ interface SvgViewBox {
 
 /** The facts an accepted document contributes to the render decision. */
 export interface SvgSource {
-  /** Explicit absolute `width` in CSS pixels, when the author wrote a usable one. */
+  /** Logical `width` in CSS pixels: declared, or inferred from the viewBox. */
   readonly width?: number;
-  /** Explicit absolute `height` in CSS pixels, when the author wrote a usable one. */
+  /** Logical `height` in CSS pixels: declared, or inferred from the viewBox. */
   readonly height?: number;
   /**
    * Whether an absolute width or height was written.
@@ -132,7 +135,9 @@ export interface SvgSource {
    * A percentage, `em` or `ex` size follows the viewport or the font rather than
    * declaring a logical picture size, so it does not count: such a document is
    * laid out like a `viewBox`-only one. This flag is what lets the renderer give
-   * an explicit size precedence and derive the article width otherwise.
+   * an explicit size precedence and derive the article width otherwise. When one
+   * side was declared and the other came from the viewBox, this stays true and
+   * both fields carry the inferred pair.
    */
   readonly declaredSize: boolean;
   /**
@@ -502,6 +507,70 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
   }
 }
 
+/**
+ * Instances produced by expanding `<use>` references, with a DP over the id
+ * graph. A literal `<use>` counts once, plus the rendered subtree of its target;
+ * the total is the work librsvg would perform even though the XML is small.
+ *
+ * Elements in a definition container are not rendered on their own: a `<use>`
+ * inside `<defs>` or an unreferenced `<symbol>` contributes nothing until a
+ * resolving `<use>` expands it. A target's own subtree is rendered, but nested
+ * definition containers inside it are still skipped. The count is deliberately a
+ * conservative upper bound (every use counts, including a use under a hidden
+ * branch); the budget exists to bound work, not to prove a picture's exact shape.
+ */
+function expandedUseInstances(
+  nodes: readonly string[],
+  useTargets: readonly (string | undefined)[],
+  children: readonly (readonly number[])[],
+  idNodes: ReadonlyMap<string, number>,
+  root: number,
+): number {
+  const nonRendered: Readonly<Record<string, true>> = {
+    defs: true,
+    symbol: true,
+    clipPath: true,
+    mask: true,
+    pattern: true,
+    linearGradient: true,
+    radialGradient: true,
+    filter: true,
+    marker: true,
+    style: true,
+    title: true,
+    desc: true,
+    view: true,
+  };
+  const expansion = new Map<number, number>();
+  const visiting = new Set<number>();
+
+  const countSubtree = (index: number): number => {
+    let total = 0;
+    const target = useTargets[index];
+    if (target !== undefined) total = 1 + expand(target);
+    for (const child of children[index] ?? []) {
+      if (nonRendered[nodes[child] ?? ''] === true) continue;
+      total += countSubtree(child);
+    }
+    return total;
+  };
+
+  const expand = (id: string): number => {
+    const index = idNodes.get(id);
+    if (index === undefined) return 0;
+    const memo = expansion.get(index);
+    if (memo !== undefined) return memo;
+    if (visiting.has(index)) return Number.POSITIVE_INFINITY;
+    visiting.add(index);
+    const total = countSubtree(index);
+    visiting.delete(index);
+    expansion.set(index, total);
+    return total;
+  };
+
+  return countSubtree(root);
+}
+
 /** The reason a tag name or attribute has no place in this subset. */
 function namespaceFault(uri: string, name: string): SvgRefusal {
   if (uri === XINCLUDE_NAMESPACE) {
@@ -531,13 +600,18 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   let textDepth = 0;
   let styleDepth = 0;
   let titleDescDepth = 0;
-  let textBuffer = '';
+  const textBuffers: string[] = [];
   let styleBuffer = '';
   const textRuns: string[] = [];
   let textCharacters = 0;
   let rootWidth: ParsedLength | undefined;
   let rootHeight: ParsedLength | undefined;
   let rootViewBox: SvgViewBox | undefined;
+  const nodes: string[] = [];
+  const useTargets: (string | undefined)[] = [];
+  const childNodes: number[][] = [];
+  const elementStack: number[] = [];
+  const idNodes = new Map<string, number>();
 
   const fail = (fault: SvgRefusal): void => {
     if (refusal === undefined) refusal = fault;
@@ -623,6 +697,13 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
       fail({ reason: 'svg-unsafe', detail: '<metadata> is not drawn; delete the metadata block' });
       return;
     }
+    if (local === 'style' && styleDepth > 0) {
+      fail({
+        reason: 'svg-css',
+        detail: '<style> inside <style> is not part of the static subset; nested stylesheets are refused',
+      });
+      return;
+    }
 
     // Attributes are checked **before** the element allowlist, so a construct the
     // design names gets its own reason: `<image href="data:…">` reports an
@@ -662,6 +743,25 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
       return;
     }
 
+    // Record the accepted tree for the `<use>` expansion count. The element
+    // stack mirrors XML nesting; ids are first-wins here as in a renderer, and a
+    // same-document fragment is the only reference shape the policy admits.
+    const nodeIndex = nodes.length;
+    nodes.push(local);
+    useTargets.push(undefined);
+    childNodes.push([]);
+    const parentNode = elementStack.at(-1);
+    if (parentNode !== undefined) childNodes[parentNode]!.push(nodeIndex);
+    elementStack.push(nodeIndex);
+    const elementId = tag.attributes['id']?.value;
+    if (elementId !== undefined && !idNodes.has(elementId)) idNodes.set(elementId, nodeIndex);
+    if (local === 'use') {
+      const href = tag.attributes['href']?.value ?? tag.attributes['xlink:href']?.value;
+      if (href !== undefined && href.startsWith('#') && href.length > 1) {
+        useTargets[nodeIndex] = href.slice(1);
+      }
+    }
+
     if (local === 'style') {
       styleDepth += 1;
       styleBuffer = '';
@@ -669,7 +769,7 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     if (local === 'title' || local === 'desc') titleDescDepth += 1;
     if (local === 'text') {
       textDepth += 1;
-      textBuffer = '';
+      textBuffers.push('');
     }
   });
 
@@ -686,7 +786,8 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
       return;
     }
     if (textDepth > 0 && titleDescDepth === 0) {
-      textBuffer += value;
+      const index = textBuffers.length - 1;
+      if (index >= 0) textBuffers[index] = (textBuffers[index] ?? '') + value;
       textCharacters += value.length;
       if (textCharacters > limits.maxTextCharacters) {
         fail({ reason: 'svg-workload', detail: `more than ${limits.maxTextCharacters} characters of text` });
@@ -707,7 +808,8 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
       return;
     }
     if (textDepth > 0 && titleDescDepth === 0) {
-      textBuffer += value;
+      const index = textBuffers.length - 1;
+      if (index >= 0) textBuffers[index] = (textBuffers[index] ?? '') + value;
       textCharacters += value.length;
       if (textCharacters > limits.maxTextCharacters) {
         fail({ reason: 'svg-workload', detail: `more than ${limits.maxTextCharacters} characters of text` });
@@ -717,6 +819,7 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
 
   parser.on('closetag', (tag: SaxesTagNS) => {
     if (depth > 0) depth -= 1;
+    if (elementStack.length > 0) elementStack.pop();
     if (refusal !== undefined) {
       // Keep depth coherent for the remaining events, but stop inspecting.
       if (tag.local === 'style' && styleDepth > 0) {
@@ -724,7 +827,10 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
         styleBuffer = '';
       }
       if ((tag.local === 'title' || tag.local === 'desc') && titleDescDepth > 0) titleDescDepth -= 1;
-      if (tag.local === 'text' && textDepth > 0) textDepth -= 1;
+      if (tag.local === 'text' && textDepth > 0) {
+        textDepth -= 1;
+        textBuffers.pop();
+      }
       return;
     }
     if (tag.local === 'style' && styleDepth > 0) {
@@ -736,9 +842,11 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     if ((tag.local === 'title' || tag.local === 'desc') && titleDescDepth > 0) titleDescDepth -= 1;
     if (tag.local === 'text' && textDepth > 0) {
       textDepth -= 1;
-      if (textBuffer !== '') {
-        textRuns.push(textBuffer);
-        textBuffer = '';
+      const run = textBuffers.pop() ?? '';
+      if (run !== '') {
+        const parent = textBuffers.length - 1;
+        if (parent >= 0) textBuffers[parent] = (textBuffers[parent] ?? '') + run;
+        else textRuns.push(run);
       }
     }
   });
@@ -754,6 +862,21 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
 
   if (refusal !== undefined) return { ok: false, refusal };
   if (!rootSeen) return { ok: false, refusal: { reason: 'svg-invalid', detail: 'the document has no root element' } };
+
+  if (uses > 0) {
+    const instances = expandedUseInstances(nodes, useTargets, childNodes, idNodes, 0);
+    if (!Number.isFinite(instances) || instances > limits.maxUseInstances) {
+      return {
+        ok: false,
+        refusal: {
+          reason: 'svg-workload',
+          detail: Number.isFinite(instances)
+            ? `expanding <use> creates ${instances} instances, more than ${limits.maxUseInstances}; reduce references or replace them with drawn geometry`
+            : `the <use> graph never terminates or exceeds the instance budget of ${limits.maxUseInstances}; break the cycle`,
+        },
+      };
+    }
+  }
 
   // A width without a height (or the reverse) is only usable when a viewBox
   // supplies the other side; otherwise the document declares no shape at all.
@@ -803,8 +926,8 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   return {
     ok: true,
     source: {
-      ...(rootWidth === undefined ? {} : { width: rootWidth.px }),
-      ...(rootHeight === undefined ? {} : { height: rootHeight.px }),
+      width,
+      height,
       declaredSize: rootWidth !== undefined || rootHeight !== undefined,
       sizeScale: rootWidth?.physical === true || rootHeight?.physical === true ? 'physical' : 'linear',
       text: textRuns,

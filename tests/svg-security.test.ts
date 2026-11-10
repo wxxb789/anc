@@ -114,15 +114,18 @@ async function magentaPixels(bytes: Buffer): Promise<number> {
 
 test('a host canary outside the content root cannot be read through any SVG reference', async () => {
   const root = scratch('svg-canary-');
-  const canary = join(root, 'canary.png');
+  const outside = mkdtempSync(join(tmpdir(), 'svg-canary-outside-'));
+  scratchRoots.push(outside);
+  const canary = join(outside, 'canary.png');
   await canaryPixels(canary);
+  const relativeCanary = relative(join(root, 'notes', 'assets'), canary);
 
   const hostile = [
     `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="64" height="64">`,
     `<image href="file://${canary}" width="64" height="64"/>`,
     `<image xlink:href="file://${canary}" width="64" height="64"/>`,
-    `<image href="../../canary.png" width="64" height="64"/>`,
-    `<use href="../../canary.png#x" width="64" height="64"/>`,
+    `<image href="${relativeCanary}" width="64" height="64"/>`,
+    `<use href="${relativeCanary}#x" width="64" height="64"/>`,
     `</svg>`,
   ].join('\n');
   put(root, 'notes/assets/leak.svg', hostile);

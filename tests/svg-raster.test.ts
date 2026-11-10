@@ -58,6 +58,7 @@ const HOSTILE: Readonly<Record<string, { readonly reason: SvgRefusalReason }>> =
   'css-external-url.svg': { reason: 'svg-external' },
   'css-data-url.svg': { reason: 'svg-data' },
   'css-font-face.svg': { reason: 'svg-css' },
+  'nested-style.svg': { reason: 'svg-css' },
   'style-attribute.svg': { reason: 'svg-external' },
   'presentation-url.svg': { reason: 'svg-external' },
   'xlink-network.svg': { reason: 'svg-external' },
@@ -379,6 +380,7 @@ test('every finite policy budget refuses at its boundary', async () => {
     { name: 'elements', svg: wrap('<rect/>'), limits: { maxElements: 1 } },
     { name: 'depth', svg: wrap('<g><g><rect/></g></g>'), limits: { maxDepth: 2 } },
     { name: 'uses', svg: wrap('<use href="#a"/><use href="#a"/>'), limits: { maxUses: 1 } },
+    { name: 'use instances', svg: wrap('<use href="#a"/>'), limits: { maxUseInstances: 0 } },
     { name: 'text characters', svg: wrap('<text>ab</text>'), limits: { maxTextCharacters: 1 } },
     { name: 'style element', svg: wrap('<style>rect{fill:red}</style>'), limits: { maxStyleCharacters: 1 } },
     { name: 'style attribute', svg: wrap('<rect style="fill:red"/>'), limits: { maxStyleCharacters: 1 } },
@@ -409,6 +411,69 @@ test('every finite policy budget refuses at its boundary', async () => {
   const oversized = await prepareSvg(Buffer.from('<svg/>'), { ...SVG_RENDER_LIMITS, maxSourceBytes: 5 });
   if (oversized.ok) assert.fail('the source-byte budget accepted an oversized document');
   assert.equal(oversized.reason, 'too-large');
+});
+
+/** A legal chain of symbols, each referencing the next twice. */
+function useChain(levels: number): string {
+  const symbols = [`<symbol id="s${levels - 1}"><rect width="2" height="2"/></symbol>`];
+  for (let index = levels - 2; index >= 0; index -= 1) {
+    symbols.push(
+      `<symbol id="s${index}"><use href="#s${index + 1}"/><use href="#s${index + 1}"/></symbol>`,
+    );
+  }
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs>${symbols.join('')}</defs><use href="#s0"/></svg>`
+  );
+}
+
+test('the use expansion budget refuses a small document that would render 2^17 instances', async () => {
+  // 17 chained symbols and 33 <use> declarations are 1 KB of XML, but they expand
+  // to 131,071 instances. Measured before the budget: 1,146 ms on this host
+  // (the reviewer measured 2.4 s for the same shape); 2^16 was 581 ms and 2^14,
+  // the largest accepted chain, 177 ms. The cap is 16,384 instances.
+  const refused = inspectSvg(Buffer.from(useChain(17)));
+  if (refused.ok) assert.fail('the use-expansion budget accepted 131,071 instances');
+  assert.equal(refused.refusal.reason, 'svg-workload');
+  assert.match(refused.refusal.detail, /131071/, `the refusal did not report the count: ${refused.refusal.detail}`);
+
+  const accepted = inspectSvg(Buffer.from(useChain(14)));
+  if (!accepted.ok) assert.fail(`the budget refused its largest legitimate chain: ${accepted.refusal.detail}`);
+
+  const oneSided = `<svg xmlns="http://www.w3.org/2000/svg" width="200" viewBox="0 0 100 50"><rect width="100" height="50" fill="#8ad884"/></svg>`;
+  const inferred = inspectSvg(Buffer.from(oneSided));
+  if (!inferred.ok) assert.fail(`one declared side plus a viewBox was refused: ${inferred.refusal.detail}`);
+  assert.deepEqual(
+    { width: inferred.source.width, height: inferred.source.height },
+    { width: 200, height: 100 },
+    'the viewBox did not infer the missing side',
+  );
+  const rendered = await prepareSvg(Buffer.from(oneSided));
+  if (!rendered.ok) assert.fail(`the one-sided document did not render: ${rendered.reason}`);
+  assert.deepEqual(rendered.image.dimensions, { width: 400, height: 200 });
+  assert.deepEqual(rendered.image.displayDimensions, { width: 200, height: 100 });
+});
+
+test('a namespaced root and nested text keep their actual identity and content', () => {
+  const namespaced =
+    `<s:svg xmlns:s="http://www.w3.org/2000/svg" width="20" height="20">` +
+    `<s:text>A<s:text>CD</s:text></s:text></s:svg>`;
+  assert.equal(looksLikeSvg(Buffer.from(namespaced)), true, 'the signature missed a prefixed <svg>');
+  const inspection = inspectSvg(Buffer.from(namespaced));
+  if (!inspection.ok) assert.fail(`a prefixed root was refused: ${inspection.refusal.detail}`);
+  assert.deepEqual(inspection.source.text, ['ACD'], 'nested text lost the inner run or duplicated it');
+  assert.deepEqual(requiredCharacters(inspection.source), ['A', 'C', 'D']);
+
+  const processingInstruction = `<?php echo 1; ?><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"/>`;
+  assert.equal(looksLikeSvg(Buffer.from(processingInstruction)), true, 'a prologue hid the root from the signature');
+  const refused = inspectSvg(Buffer.from(processingInstruction));
+  if (refused.ok) assert.fail('the policy accepted a processing instruction');
+  assert.equal(refused.refusal.reason, 'svg-unsafe');
+
+  assert.equal(looksLikeSvg(Buffer.from('<svg/>')), true, 'a self-closing root did not match the signature');
+  const noNamespace = inspectSvg(Buffer.from('<svg/>'));
+  if (noNamespace.ok) assert.fail('the policy accepted a namespace-less root');
+  assert.equal(noNamespace.refusal.reason, 'svg-unsafe');
 });
 
 test('only Unicode cmap records count as coverage', () => {

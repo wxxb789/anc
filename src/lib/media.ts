@@ -356,27 +356,20 @@ export function sniffImageFormat(bytes: Uint8Array): ImageFormat | undefined {
 }
 
 /**
- * Whether the bytes begin an SVG document.
+ * Whether the first 1024 bytes contain an SVG root element.
  *
  * Consulted *after* {@link sniffImageFormat} declined, to select Goal 0012's SVG
  * path rather than "unsupported type". Like the raster sniffers this is a
- * signature test, not a validator: it recognises a UTF-8 XML declaration,
- * comments and a doctype before the root element so that a hostile `<!DOCTYPE>`
- * still reaches the parser and is refused there with its own diagnostic, instead
- * of being misreported as a plain text file. A UTF-16 document does not match
- * this byte signature and is reported as an unsupported file. It must not grow
- * into a parser — the policy module owns that.
+ * signature test, not a validator: it looks for `<svg>` (optionally namespaced) at
+ * any position in the bounded head, so an XML declaration, comments, a DOCTYPE, or
+ * processing instructions in the prologue still reach the policy and are refused
+ * there with their own diagnostics instead of being misreported as a plain text
+ * file. A UTF-16 document does not match this byte signature and is reported as an
+ * unsupported file. It must not grow into a parser — the policy module owns that.
  */
 export function looksLikeSvg(bytes: Uint8Array): boolean {
-  const head = Array.from(bytes.subarray(0, 1024), (byte) => String.fromCharCode(byte)).join('');
-  // A DOCTYPE's internal subset can contain `>` (`<!ENTITY …>`), so the prefix is
-  // stripped loosely and the root element is looked for in the whole head. A
-  // hostile DTD must reach the policy to be named as a DTD; refusing it earlier
-  // as "unsupported file type" would hide the reason an author can act on.
-  const prefix = /^(?:\uFEFF)?\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[\s\S]*?>\s*)?/i;
-  const rest = head.replace(prefix, '');
-  const trimmed = head.trimStart();
-  return /^<svg[\s>]/i.test(rest) || (trimmed.startsWith('<!') && /<svg[\s>]/i.test(head));
+  const head = new TextDecoder('utf-8').decode(bytes.subarray(0, 1024));
+  return /<(?:[A-Za-z_][\w.-]*:)?svg(?=[\s/>])/i.test(head);
 }
 
 /* ------------------------------------------------------------------------- *

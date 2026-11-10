@@ -218,15 +218,16 @@ it, rasterizes it from the file's bytes, and hands the rest of the pipeline only
 the WebP bytes. A rasterized SVG is laid out at **half the emitted raster**. When
 the output budget does not bite, that is the author's logical size: an absolute
 `width`/`height` in the document is honoured (`px`, `pt`, `pc`, `mm`, `cm`, `in`,
-converted at CSS's 96 dpi), and a `viewBox`-only document is laid out at 720 CSS
-pixels wide with its own aspect ratio. The published raster is normally 2× that
-size, so text stays sharp on a high-density display; a picture wider than the
-reading column is still capped by the page's CSS. When the finite output budget
-clamps the raster, the layout shrinks with it: a 4000×4000 SVG is emitted at
-2449×2449 and lays out at 1225×1225. Transparency is preserved, the encoding is
-lossless, and two notes that embed the same file get one asset. Nothing is
-cropped, no `viewBox` is rewritten, and a proportional downscale keeps a very
-large diagram inside a finite pixel budget.
+converted at CSS's 96 dpi), a `viewBox`-only document is laid out at 720 CSS
+pixels wide with its own aspect ratio, and a document with only one declared side
+takes the other side from its `viewBox` while keeping the declared scale. The
+published raster is normally 2× that size, so text stays sharp on a high-density
+display; a picture wider than the reading column is still capped by the page's
+CSS. When the finite output budget clamps the raster, the layout shrinks with it:
+a 4000×4000 SVG is emitted at 2449×2449 and lays out at 1225×1225. Transparency is
+preserved, the encoding is lossless, and two notes that embed the same file get
+one asset. Nothing is cropped, no `viewBox` is rewritten, and a proportional
+downscale keeps a very large diagram inside a finite pixel budget.
 
 The accepted subset is deliberate and fail-closed. The source must be UTF-8
 XML. A UTF-16 document does not match the byte signature and is reported as an
@@ -246,24 +247,34 @@ than parsed.
   filter defined in the same file is fine.
 - **Refused:** a DOCTYPE or entity declaration, XInclude, `script` or an `on*`
   handler, `foreignObject`, animation (`animate*`, `set`), an external stylesheet,
-  any CSS at-rule (`@import`, `@font-face`, `@media`, …), an external `url()`, a
-  `file:` or `http(s)` reference, a relative path, an embedded `data:` asset,
-  `xml:base`, `<metadata>`, a root without
+  a nested `<style>` element, any CSS at-rule (`@import`, `@font-face`, `@media`, …),
+  an external `url()`, a `file:` or `http(s)` reference, a relative path, an
+  embedded `data:` asset, `xml:base`, `<metadata>`, a root without
   `xmlns="http://www.w3.org/2000/svg"`, and any element or attribute outside the
   subset — including an Inkscape `sodipodi`/`inkscape` attribute or an RDF
   metadata block. Inert `role`, `aria-*`, `data-*`, `lang` and `tabindex`
   attributes and the legacy `xlink:title`/`xlink:role` are the documented
   exception; none can name a resource. Re-export the drawing as plain SVG if
   your editor adds anything else.
-- **Fonts:** text uses the fonts installed on the build machine; ANC does not
-  download or bundle one. Every `<text>` subtree is checked, including one in an
-  unused `defs` or `symbol`, because proving a symbol is unreferenced is not
-  worth the failure direction. If no installed font covers a character, the build
-  fails and names the code point — install a font with those glyphs, or convert
-  the labels to outlines in the editor. This is checked per character, not per
-  requested family. Latin and CJK render on a host that has them; the same
-  pinned engine and font set produce identical bytes across repeat builds, and
-  no cross-machine byte identity is promised.
+- **Work limits:** an SVG larger than 8 MiB is refused, as are more than 20,000
+  elements, 128 nesting levels, 500 `<use>` elements, **16,384 instances after
+  `<use>` expansion**, 100,000 characters of text, 4,096 distinct text
+  characters, 1,000,000 characters of CSS, 100 filter primitives, and the named
+  filter-region, deviation, kernel and turbulence limits. A small file can
+  exceed the `<use>` limit: 17 chained symbols and 33 declarations expand to
+  131,071 instances, so replace that pattern with drawn geometry or use fewer
+  references.
+- **Fonts:** text uses the fonts installed and offered by the build machine's
+  fontconfig; ANC does not download or bundle one. A host `<rejectfont>` rule is
+  respected, and an accept rule wins over a broader reject. Every `<text>` subtree
+  is checked, including one in an unused `defs` or `symbol`, because proving a
+  symbol is unreferenced is not worth the failure direction. If no offered font
+  covers a character, the build fails and names the code point — install a font
+  with those glyphs (or adjust the host fontconfig selection), or convert the
+  labels to outlines in the editor. This is checked per character, not per
+  requested family. Latin and CJK render on a host that has them; the same pinned
+  engine and font set produce identical bytes across repeat builds, and no
+  cross-machine byte identity is promised.
 
 The failure reasons are part of the build's contract: `svg-invalid`,
 `svg-doctype`, `svg-xinclude`, `svg-script`, `svg-foreign`, `svg-unsafe`,

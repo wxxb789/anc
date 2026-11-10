@@ -257,6 +257,7 @@ async function main(): Promise<number> {
       fontFiles: fonts.files.length,
       fontDirectories: fonts.directories,
       fontConfigIncludes: fonts.includes,
+      fontConfigIncludeDirectories: fonts.includeDirectories,
       fontConfigIncludesSkipped: fonts.skippedIncludes,
     },
     fonts: {
@@ -265,6 +266,7 @@ async function main(): Promise<number> {
       plane16PrivateUseMissing: tofu,
       fontsDiscovered: fonts.files.length,
       configIncludes: fonts.includes,
+      configIncludeDirectories: fonts.includeDirectories,
       configIncludesSkipped: fonts.skippedIncludes,
     },
     renders,
