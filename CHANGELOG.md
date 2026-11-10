@@ -7,6 +7,8 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-11-10
+
 ### Added
 
 - Local images referenced by a published note are published. PNG, JPEG, GIF, WebP, and AVIF
@@ -171,5 +173,6 @@ project makes no backward-compatibility promise.
   not been published to npm.
 
 [Unreleased]: https://github.com/wxxb789/anc/commits/main
+[0.0.3]: https://github.com/wxxb789/anc/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/wxxb789/anc/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/wxxb789/anc/commit/0fa2c75
