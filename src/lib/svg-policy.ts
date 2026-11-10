@@ -47,10 +47,12 @@
 import { SaxesParser, type SaxesAttributeNS, type SaxesTagNS } from 'saxes';
 import {
   analyzeStyleSheet,
-  fragmentReferences,
+  declarationReferences,
   inspectPresentationAttribute,
   inspectReference,
   inspectStyleAttribute,
+  presentationDeclaration,
+  type StaticDeclaration,
   type StaticSelector,
   type StaticStyleRule,
 } from './svg-css.ts';
@@ -432,6 +434,82 @@ const URL_ATTRIBUTES: Readonly<Record<string, true>> = {
   'marker-end': true,
 };
 
+/**
+ * The URL-bearing properties whose declaration is inherited by descendants.
+ *
+ * This is the **property table** the expansion count uses. A declaration in one
+ * of these slots applies to the nearest painted descendant for which no nearer
+ * declaration exists, so one `url(#p)` on a `<g>` is the same render work as one
+ * on each drawn child. `marker` is the shorthand for the three marker slots and
+ * is expanded when declared. `cursor` is inherited too; it cannot paint with a
+ * document fragment in an SVG image, but following it costs only budget and
+ * keeps the table closed against an inheritance route this policy forgot.
+ *
+ * Every other URL-bearing property in this subset is **local**, counted on the
+ * element that declares it and not inherited: `filter`, `clip-path` and `mask`
+ * (the three non-inherited reference properties SVG defines), `href` (a
+ * template edge, always applied to the declaring definition), and any other CSS
+ * property a `style` attribute or sheet names. A property outside this table
+ * cannot multiply a `<use>` through inheritance: the reference properties
+ * librsvg inherits and paints with are exactly `fill`, `stroke`, the marker
+ * slots and `cursor`; an unknown property is still counted where it is declared,
+ * so a reference cannot disappear from the graph.
+ */
+const INHERITED_REFERENCE_SLOTS: Readonly<Record<string, number>> = {
+  fill: 0,
+  stroke: 1,
+  'marker-start': 2,
+  'marker-mid': 3,
+  'marker-end': 4,
+  cursor: 5,
+};
+
+/** Slot order for {@link INHERITED_REFERENCE_SLOTS}. */
+const INHERITED_REFERENCE_PROPERTIES: readonly string[] = [
+  'fill',
+  'stroke',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+  'cursor',
+];
+
+/** The three properties the `marker` shorthand declares. */
+const MARKER_PROPERTIES: readonly string[] = ['marker-start', 'marker-mid', 'marker-end'];
+
+/**
+ * Elements that paint with an inherited paint property.
+ *
+ * A container (`g`, `a`, `svg`, `symbol`, `defs`, `pattern`, `mask`, `clipPath`,
+ * a gradient, `marker`, `filter`) holds no geometry: its `fill` or `stroke`
+ * applies only through descent, so its own declaration is not counted and its
+ * painted descendants are. `use` is excluded for the same reason: its paint
+ * properties apply to the instantiated content, which the expansion walk counts
+ * by propagating the use's effective slots into that subtree. Text content
+ * elements are painters even though one `<text>` run may share a paint server;
+ * counting each inherited text element is an upper bound, never an omission.
+ */
+const PAINTED_ELEMENTS: Readonly<Record<string, true>> = {
+  rect: true,
+  circle: true,
+  ellipse: true,
+  line: true,
+  polyline: true,
+  polygon: true,
+  path: true,
+  text: true,
+  tspan: true,
+  textPath: true,
+};
+
+/** One element's declarations, merged per property across attributes and rules. */
+interface ReferenceDeclarations {
+  /** Every `url(#id)` the property was declared with. */
+  readonly references: string[];
+  /** Whether any declaration of the property defers to the parent's value. */
+  defers: boolean;
+}
+
 /** SVG's number grammar, shared by every budget argument below. */
 const NUMBER_PATTERN = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?`;
 const LENGTH_PATTERN = new RegExp(String.raw`^\s*(${NUMBER_PATTERN})\s*([A-Za-z]*)\s*$`);
@@ -532,26 +610,43 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
  * An unreferenced definition container (`defs`, `symbol`, `mask`, `pattern`,
  * `clipPath`, `filter`, `marker`, a gradient) is not drawn on its own and
  * contributes nothing. It is drawn when a rendered element reaches it, either as
- * a `<use>` target or through a same-document presentation reference
- * (`mask`, `clip-path`, `filter`, `marker-start`/`-mid`/`-end`, `fill` and
- * `stroke`) written as `url(#id)` in an attribute, a `style` attribute or a
- * `<style>` sheet. A container reached that way follows its own references, so a
- * mask inside `<defs>` and a pattern used by another pattern are counted only
- * when something drawn reaches the first link. Nested definition containers are
- * still skipped as ordinary children of an element.
+ * a `<use>` target or through a same-document reference written as `url(#id)` in
+ * an attribute, a `style` attribute or a `<style>` sheet, or as an
+ * `href`/`xlink:href` fragment on anything but `<use>` — a template edge
+ * (`pattern`, `linearGradient`, `radialGradient`, `filter`, `marker`), a
+ * `textPath` path, or the conservative reading of an `<a>` navigation. A
+ * container reached that way follows its own references, so a mask inside
+ * `<defs>` and a pattern inherited from another pattern are counted only when
+ * something drawn reaches the first link. Nested definition containers are still
+ * skipped as ordinary children of an element.
+ *
+ * **Inheritance is the second half of the graph.** `fill`, `stroke`, the marker
+ * slots and `cursor` are inherited properties: one declaration on a `<g>` is the
+ * work of one declaration on every painted descendant, so a `url(#p)` on an
+ * ancestor is multiplied by the painted descendants it reaches while a nearer
+ * declaration of the same property overrides it, exactly as the property system
+ * works. The slots are resolved once per element in a parent-before-child pass
+ * (one array per node, six entries), so attribution is O(elements × properties)
+ * rather than an ancestor walk per element. `filter`, `clip-path`, `mask` and
+ * `href` do not inherit and stay attached to the element that declares them. A
+ * `<use>`'s own effective slots are inherited by the content it instantiates
+ * (SVG's shadow-tree inheritance), so they are added once per painted element
+ * the target expansion produces; that is an upper bound when a target element
+ * overrides the inherited value, never an omission.
  *
  * The count is deliberately a conservative upper bound: every reference is
  * counted once per referencing node, even if two properties point at the same
  * definition, and every use counts, including one under a hidden branch. A
- * `<style>` rule's references are attributed to every element its selector
+ * `<style>` rule's declarations are attributed to every element its selector
  * matches, so the same picture counts the same whether it is written as a
- * presentation attribute or as a stylesheet; a rule that matches nothing
- * contributes nothing, and a selector form this policy cannot decide is refused
- * rather than attributed to the root or silently ignored. Each node's subtree is
- * memoized, so a chain of definitions that reference the next one repeatedly is
- * linear rather than exponential. A cycle in either the `<use>` graph or the
- * reference graph is infinity, because the work is unbounded; the budget exists
- * to bound work, not to prove a picture's exact shape.
+ * presentation attribute, a `style` attribute or a stylesheet; a rule that
+ * matches nothing contributes nothing, and a selector form this policy cannot
+ * decide is refused rather than attributed to the root or silently ignored.
+ * Each node's subtree is memoized, so a chain of definitions that reference the
+ * next one repeatedly is linear rather than exponential. A cycle in either the
+ * `<use>` graph or the reference graph is infinity, because the work is
+ * unbounded; the budget exists to bound work, not to prove a picture's exact
+ * shape.
  *
  * Matching propagates a set left to right instead of backtracking per element:
  * the leftmost compound marks every element it matches, and each compound to
@@ -625,7 +720,8 @@ function expandedUseInstances(
   nodes: readonly string[],
   useTargets: readonly (string | undefined)[],
   children: readonly (readonly number[])[],
-  references: readonly (readonly string[] | undefined)[],
+  declarations: readonly (ReadonlyMap<string, ReferenceDeclarations> | undefined)[],
+  parents: readonly (number | undefined)[],
   idNodes: ReadonlyMap<string, number>,
   root: number,
 ): number {
@@ -644,6 +740,98 @@ function expandedUseInstances(
     desc: true,
     view: true,
   };
+  const slotsCount = INHERITED_REFERENCE_PROPERTIES.length;
+  const emptySlots: readonly (readonly string[] | undefined)[] = [];
+  const slots: (readonly (readonly string[] | undefined)[])[] = [];
+  for (let index = 0; index < nodes.length; index += 1) {
+    const parent = parents[index];
+    const inherited = parent === undefined ? emptySlots : slots[parent]!;
+    const own = declarations[index];
+    let context = inherited;
+    if (own !== undefined) {
+      let copy: (readonly string[] | undefined)[] | undefined;
+      for (const [property, slot] of Object.entries(INHERITED_REFERENCE_SLOTS)) {
+        const declared = own.get(property);
+        if (declared === undefined) continue;
+        copy ??= [...inherited];
+        // A deferring keyword (`inherit`, `unset`, `revert`) may resolve to the
+        // parent's value, so the descendant context keeps both the declared
+        // reference and the inherited one. Over-counting is the safe direction;
+        // treating the keyword as a local override would lose the inherited
+        // reference entirely.
+        copy[slot] = declared.defers
+          ? [...(inherited[slot] ?? []), ...declared.references]
+          : declared.references;
+      }
+      if (copy !== undefined) context = copy;
+    }
+    slots.push(context);
+  }
+
+  const paints = (index: number): boolean => PAINTED_ELEMENTS[nodes[index] ?? ''] === true;
+
+  /** A node's own references, excluding inherited slots on a non-painting container. */
+  const ownReferences = (index: number): readonly string[] => {
+    const own = declarations[index];
+    if (own === undefined) return [];
+    const painted = paints(index);
+    const accumulated: string[] = [];
+    for (const [property, declared] of own) {
+      if (declared.references.length === 0) continue;
+      if (!painted && INHERITED_REFERENCE_SLOTS[property] !== undefined) continue;
+      accumulated.push(...declared.references);
+    }
+    return accumulated;
+  };
+
+  /**
+   * The nearest declaration of each inherited property that still applies.
+   *
+   * A property the node declares itself replaces the ancestor's reference; a
+   * deferring keyword does not, so the ancestor's reference is counted as well.
+   * The ancestor context is the parent's, not this node's merged context, so a
+   * painter that declares a reference and inherits one cannot count its own
+   * reference twice through the slot.
+   */
+  const inheritedReferences = (index: number): readonly string[] => {
+    if (!paints(index)) return [];
+    const own = declarations[index];
+    const parent = parents[index];
+    const inherited = parent === undefined ? emptySlots : slots[parent]!;
+    const accumulated: string[] = [];
+    for (let slot = 0; slot < slotsCount; slot += 1) {
+      const declared = own?.get(INHERITED_REFERENCE_PROPERTIES[slot]!);
+      if (declared !== undefined && !declared.defers) continue;
+      const references = inherited[slot];
+      if (references !== undefined && references.length > 0) accumulated.push(...references);
+    }
+    return accumulated;
+  };
+
+  const paintedCounts = new Map<number, number>();
+  const painting = new Set<number>();
+
+  /** Painted element instances in the fully expanded subtree. */
+  const paintedInstances = (index: number): number => {
+    const memo = paintedCounts.get(index);
+    if (memo !== undefined) return memo;
+    if (painting.has(index)) return Number.POSITIVE_INFINITY;
+    painting.add(index);
+    let total = paints(index) ? 1 : 0;
+    for (const child of children[index] ?? []) {
+      if (nonRendered[nodes[child] ?? ''] === true) continue;
+      total += paintedInstances(child);
+    }
+    const target = useTargets[index];
+    if (target !== undefined) {
+      const targetIndex = idNodes.get(target);
+      if (targetIndex !== undefined) total += paintedInstances(targetIndex);
+    }
+    painting.delete(index);
+    paintedCounts.set(index, total);
+    return total;
+  };
+
   const expansion = new Map<number, number>();
   const counted = new Map<number, number>();
   const visiting = new Set<number>();
@@ -655,12 +843,28 @@ function expandedUseInstances(
     visiting.add(index);
     let total = 0;
     const target = useTargets[index];
-    if (target !== undefined) total = 1 + expand(target);
+    if (target !== undefined) {
+      total = 1 + expand(target);
+      // SVG inherits a `<use>`'s computed slots into the content it clones, so
+      // one declaration on the use is one declaration per painted element the
+      // target produces. Overridden values make this an upper bound.
+      let propagated = 0;
+      for (const references of slots[index]!) {
+        if (references === undefined) continue;
+        for (const reference of references) propagated += expand(reference);
+      }
+      if (propagated > 0) {
+        const targetIndex = idNodes.get(target);
+        const painted = targetIndex === undefined ? 0 : paintedInstances(targetIndex);
+        total += propagated * painted;
+      }
+    }
     for (const child of children[index] ?? []) {
       if (nonRendered[nodes[child] ?? ''] === true) continue;
       total += countRendered(child);
     }
-    for (const reference of references[index] ?? []) total += expand(reference);
+    for (const reference of ownReferences(index)) total += expand(reference);
+    for (const reference of inheritedReferences(index)) total += expand(reference);
     visiting.delete(index);
     counted.set(index, total);
     return total;
@@ -742,11 +946,35 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   const elementParents: (number | undefined)[] = [];
   const elementIds: (string | undefined)[] = [];
   const elementClasses: (readonly string[] | undefined)[] = [];
-  const references: (string[] | undefined)[] = [];
+  const declarations: (Map<string, ReferenceDeclarations> | undefined)[] = [];
   const styleRules: StaticStyleRule[] = [];
   const filterPrimitiveBounding: boolean[] = [];
   const elementStack: number[] = [];
   const idNodes = new Map<string, number>();
+
+  /**
+   * Record one declaration, merging repeated declarations of one property.
+   *
+   * Presence is the fact that matters to inheritance: a declaration with no
+   * `url()` (`fill="red"`) must still be visible as the declaration that
+   * overrides an ancestor's `fill="url(#p)"`. A deferring keyword sets the
+   * property but keeps the ancestor's reference reachable. The `marker`
+   * shorthand declares the three marker slots, as the property system expands
+   * it.
+   */
+  const declare = (index: number, declaration: StaticDeclaration): void => {
+    const names = declaration.property === 'marker' ? MARKER_PROPERTIES : [declaration.property];
+    const map = (declarations[index] ??= new Map());
+    for (const name of names) {
+      const existing = map.get(name);
+      if (existing === undefined) {
+        map.set(name, { references: [...declaration.references], defers: declaration.defers });
+      } else {
+        existing.references.push(...declaration.references);
+        existing.defers ||= declaration.defers;
+      }
+    }
+  };
 
   /** Whether the nearest enclosing `<filter>` resolves primitive regions in bbox units. */
   const filterRegionUnits = (): FilterRegionUnits => {
@@ -919,11 +1147,20 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
         : elementClass.split(/[\t\n\f\r ]+/).filter((name) => name !== ''),
     );
     if (elementId !== undefined && !idNodes.has(elementId)) idNodes.set(elementId, nodeIndex);
+    const href = attributeValue(tag, 'href', ['', SVG_NAMESPACE, XLINK_NAMESPACE]);
     if (local === 'use') {
-      const href = attributeValue(tag, 'href', ['', SVG_NAMESPACE, XLINK_NAMESPACE]);
       if (href !== undefined && href.startsWith('#') && href.length > 1) {
         useTargets[nodeIndex] = href.slice(1);
       }
+    } else if (href !== undefined && href.startsWith('#') && href.length > 1) {
+      // A template edge: `pattern`/gradient/filter/marker inherits the
+      // referenced definition's content, `textPath` names its path, and `<a>`
+      // navigation is followed conservatively. `<use>` is excluded because its
+      // href is already the use edge, counted with the use instance itself;
+      // recording it twice would change every existing count. Any other element
+      // the allowlist admits an href on gets the same edge, so an element this
+      // table forgot cannot become an unfollowed template.
+      declare(nodeIndex, { property: 'href', references: [href.slice(1)], defers: false });
     }
     filterPrimitiveBounding.push(
       local === 'filter' &&
@@ -933,17 +1170,19 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     // A rendered element reaches a definition container through these references,
     // so the expansion count follows them. The value was already accepted by the
     // CSS policy, which admits only same-document fragments; a style attribute or
-    // sheet can name the same containers as the presentation attributes.
-    const elementReferences: string[] = [];
+    // sheet can name the same containers as the presentation attributes. The
+    // property name is kept because `fill`/`stroke`/marker inheritance is
+    // resolved per property, while `filter`/`clip-path`/`mask` stay local.
     for (const attribute of Object.values(tag.attributes)) {
       if (attribute.uri !== '' && attribute.uri !== SVG_NAMESPACE) continue;
       if (URL_ATTRIBUTES[attribute.local] === true) {
-        elementReferences.push(...fragmentReferences(attribute.value, 'value'));
+        declare(nodeIndex, presentationDeclaration(attribute.local, attribute.value));
       } else if (attribute.local === 'style') {
-        elementReferences.push(...fragmentReferences(attribute.value, 'declarationList'));
+        for (const declaration of declarationReferences(attribute.value)) {
+          declare(nodeIndex, declaration);
+        }
       }
     }
-    if (elementReferences.length > 0) references[nodeIndex] = elementReferences;
 
     if (local === 'style') {
       styleDepth += 1;
@@ -1055,23 +1294,42 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   if (!rootSeen) return { ok: false, refusal: { reason: 'svg-invalid', detail: 'the document has no root element' } };
 
   if (uses > 0) {
-    // A stylesheet reference belongs to every element its selector matches, once
-    // per matching rule. Two selectors in one list that both match an element
-    // still apply that rule's declarations once, so the reference is pushed once.
+    // A stylesheet declaration belongs to every element its selector matches,
+    // once per matching rule. Two selectors in one list that both match an
+    // element still apply that rule's declarations once, so each declaration is
+    // pushed once. A declaration with no URL is attributed when it sets an
+    // inherited slot, because it is what overrides an ancestor's reference.
     // Each selector is matched once over the whole tree rather than once per
     // element, which is what keeps attribution at O(selectors × steps × elements).
+    const attributable = (declaration: StaticDeclaration): boolean =>
+      declaration.references.length > 0 ||
+      declaration.defers ||
+      declaration.property === 'marker' ||
+      INHERITED_REFERENCE_SLOTS[declaration.property] !== undefined;
     const matched = new Uint8Array(nodes.length);
     for (const rule of styleRules) {
-      if (rule.references.length === 0) continue;
+      const declarationsToApply = rule.declarations.filter(attributable);
+      if (declarationsToApply.length === 0) continue;
       matched.fill(0);
       for (const selector of rule.selectors) {
         markSelectorMatches(selector, nodes, elementIds, elementClasses, elementParents, matched);
       }
       for (let index = 0; index < nodes.length; index += 1) {
-        if (matched[index] === 1) (references[index] ??= []).push(...rule.references);
+        if (matched[index] !== 1) continue;
+        for (const declaration of declarationsToApply) {
+          declare(index, declaration);
+        }
       }
     }
-    const instances = expandedUseInstances(nodes, useTargets, childNodes, references, idNodes, 0);
+    const instances = expandedUseInstances(
+      nodes,
+      useTargets,
+      childNodes,
+      declarations,
+      elementParents,
+      idNodes,
+      0,
+    );
     if (!Number.isFinite(instances) || instances > limits.maxUseInstances) {
       return {
         ok: false,

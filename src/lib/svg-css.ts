@@ -195,10 +195,30 @@ export interface StaticSelectorCompound {
 /** A selector compiled to compounds, with the rightmost (subject) one last. */
 export type StaticSelector = readonly StaticSelectorCompound[];
 
-/** One static rule: its attributable selectors and every fragment its declarations name. */
+/** One declaration of a `style` attribute or a rule: its property and fragments. */
+export interface StaticDeclaration {
+  /** The CSS property name, lowercased so the policy's table is case-insensitive. */
+  readonly property: string;
+  /** Every same-document fragment the declaration's value names, in source order. */
+  readonly references: readonly string[];
+  /**
+   * Whether the value is a CSS-wide keyword that resolves to the parent's value.
+   *
+   * `inherit`, `unset` (on an inherited property) and `revert`/`revert-layer`
+   * cannot be read as "this element declares its own value": the inherited
+   * reference still applies. The policy counts both the declared reference and
+   * the inherited one for such a declaration, because resolving which wins is
+   * cascade work it does not model and an over-count is the safe direction.
+   * `initial` is deliberately absent: it resolves to the property's initial
+   * value, not to the parent.
+   */
+  readonly defers: boolean;
+}
+
+/** One static rule: its attributable selectors and the declarations it applies. */
 export interface StaticStyleRule {
   readonly selectors: readonly StaticSelector[];
-  readonly references: readonly string[];
+  readonly declarations: readonly StaticDeclaration[];
 }
 
 /** What a `<style>` element contributes, or why it was refused. */
@@ -371,6 +391,104 @@ function collectFragmentReferences(root: CssNode, into: string[]): void {
 }
 
 /**
+ * The declarations in one parsed block, each with the fragments its value names.
+ *
+ * The property name matters, not only the URL: inheritance is decided per
+ * inherited property, so a declaration with no URL (`fill="red"`) still has to
+ * be visible to the policy as the declaration that overrides an ancestor's
+ * `fill="url(#p)"`. A CSS-wide keyword that resolves to the parent's value is
+ * flagged instead of treated as a plain local value.
+ */
+function collectDeclarations(root: CssNode): StaticDeclaration[] {
+  const declarations: StaticDeclaration[] = [];
+  walk(root, (node) => {
+    if (node.type !== 'Declaration') return;
+    const property = node['property'];
+    if (typeof property !== 'string') return;
+    const references: string[] = [];
+    collectFragmentReferences(node, references);
+    const value = node['value'];
+    const parsed = typeof value === 'object' && value !== null ? (value as CssNode) : undefined;
+    declarations.push({
+      property: decodeCssEscapes(property).toLowerCase(),
+      references,
+      defers: defersToParent(parsed),
+    });
+  });
+  return declarations;
+}
+
+/**
+ * Keywords whose computed value comes from the parent for an inherited property.
+ *
+ * `revert` and `revert-layer` roll back to a lower origin; a presentation
+ * attribute is a lower origin, and the inherited value may be the result, so
+ * both are treated as deferring. `initial` is not here.
+ */
+const DEFERRING_KEYWORDS: Readonly<Record<string, true>> = {
+  inherit: true,
+  unset: true,
+  revert: true,
+  'revert-layer': true,
+};
+
+/**
+ * One CSS escape, hex form with its optional single terminator or literal form.
+ *
+ * `css-tree` keeps escapes in `property` and `Identifier.name` (`\69 nherit`
+ * stays spelled that way), while a CSS reader resolves it to `inherit`. The
+ * comparison below must see the decoded name or a host could spell a deferring
+ * keyword so the policy reads a plain local value and drops the inherited
+ * reference.
+ */
+const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})[ \t\r\n\f]?|([\s\S]))/g;
+
+function decodeCssEscapes(value: string): string {
+  return value.replace(CSS_ESCAPE, (_match, hex: string | undefined, literal: string | undefined) => {
+    if (hex !== undefined) {
+      const codePoint = Number.parseInt(hex, 16);
+      if (codePoint === 0 || codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) {
+        return '\uFFFD';
+      }
+      return String.fromCodePoint(codePoint);
+    }
+    if (literal === '\n' || literal === '\r' || literal === '\f') return '';
+    return literal ?? '';
+  });
+}
+
+/** Whether a parsed value is exactly one CSS-wide keyword that defers to the parent. */
+function defersToParent(value: CssNode | undefined): boolean {
+  if (value?.type !== 'Value') return false;
+  const parts = value.children?.toArray() ?? [];
+  if (parts.length !== 1) return false;
+  const [only] = parts;
+  return (
+    only?.type === 'Identifier' &&
+    typeof only.name === 'string' &&
+    DEFERRING_KEYWORDS[decodeCssEscapes(only.name).toLowerCase()] === true
+  );
+}
+
+/**
+ * One presentation attribute as a declaration: its fragments and whether its
+ * value is a deferring keyword. Parsed with the same context as
+ * {@link inspectPresentationAttribute}; the caller has already accepted it, so
+ * an unparseable value contributes no reference rather than a second refusal.
+ */
+export function presentationDeclaration(property: string, source: string): StaticDeclaration {
+  let ast: CssNode;
+  try {
+    ast = parse(source, { context: 'value' });
+  } catch {
+    return { property, references: [], defers: false };
+  }
+  const references: string[] = [];
+  collectFragmentReferences(ast, references);
+  return { property, references, defers: defersToParent(ast) };
+}
+
+/**
  * Inspect a `<style>` element and return what it contributes to attribution.
  *
  * The static grammar check is the same one every other CSS door gets. Selector
@@ -405,9 +523,8 @@ export function analyzeStyleSheet(source: string): StyleSheetAnalysis {
     }
     const selectors = compileSelectorList(node.prelude, 'style element');
     if (!selectors.ok) return selectors;
-    const references: string[] = [];
-    if (node.block !== undefined) collectFragmentReferences(node.block, references);
-    rules.push({ selectors: selectors.selectors, references });
+    const declarations = node.block === undefined ? [] : collectDeclarations(node.block);
+    rules.push({ selectors: selectors.selectors, declarations });
   }
   return { ok: true, rules };
 }
@@ -424,6 +541,23 @@ export function inspectStyleAttribute(source: string): SvgRefusal | undefined {
 }
 
 /**
+ * The declarations in a `style` attribute, each with its fragment references.
+ *
+ * Parsed with the same grammar and context as {@link inspectStyleAttribute}. The
+ * caller has already accepted the attribute, so an unparseable value contributes
+ * no declarations rather than a second refusal.
+ */
+export function declarationReferences(source: string): StaticDeclaration[] {
+  let ast: CssNode;
+  try {
+    ast = parse(source, { context: 'declarationList' });
+  } catch {
+    return [];
+  }
+  return collectDeclarations(ast);
+}
+
+/**
  * Check one URL-bearing presentation attribute.
  *
  * `fill`, `stroke`, `filter`, `mask`, `clip-path` and the marker properties all
@@ -433,31 +567,4 @@ export function inspectStyleAttribute(source: string): SvgRefusal | undefined {
  */
 export function inspectPresentationAttribute(name: string, source: string): SvgRefusal | undefined {
   return inspect(source, 'value', `${name} attribute`);
-}
-
-/**
- * The same-document fragment targets named by `url()` values in one CSS context.
- *
- * The `<use>`-expansion budget needs the graph of rendered references, not only
- * the `href` edges: a mask, clip path, filter, marker, pattern or gradient that a
- * drawn element reaches renders its contents. Those references can be written in
- * a presentation attribute, a `style` attribute or a `<style>` sheet, and this
- * function reads all three through the same parser as
- * {@link inspectPresentationAttribute}. The caller has already accepted the
- * value, so every URL it returns is a fragment; an unparseable value contributes
- * no edges rather than a second refusal.
- */
-export function fragmentReferences(
-  source: string,
-  context: 'stylesheet' | 'declarationList' | 'value',
-): string[] {
-  let ast: CssNode;
-  try {
-    ast = parse(source, { context });
-  } catch {
-    return [];
-  }
-  const references: string[] = [];
-  collectFragmentReferences(ast, references);
-  return references;
 }

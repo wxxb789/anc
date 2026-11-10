@@ -630,6 +630,169 @@ function nestedGroups(body: string, depth: number): string {
   return '<g>'.repeat(depth) + body + '</g>'.repeat(depth);
 }
 
+/**
+ * A pattern holding a `<use>` chain, plus whatever definitions `extra` adds.
+ *
+ * The chain's leaf is a path so a `rect` selector cannot match it. The XLink
+ * namespace is declared even in the SVG 2 spellings: the point of these shapes
+ * is that both spellings of the same template edge take the same path.
+ */
+function patternedChain(body: string, levels: number, extra = ''): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100" height="100">` +
+    `<defs>${symbolChain(levels, 'href', '<path d="M0 0h2v2H0z"/>')}` +
+    `<pattern id="p" width="10" height="10"><use href="#s0"/></pattern>${extra}</defs>` +
+    body +
+    `</svg>`
+  );
+}
+
+test('a pattern template href is an edge, in both spellings and as repeated content', () => {
+  const drawn = '<rect width="100" height="100" fill="url(#alias)"/>';
+  const spellings = {
+    'repeated content': patternedChain(
+      drawn,
+      17,
+      '<pattern id="alias" width="10" height="10"><use href="#s0"/></pattern>',
+    ),
+    'xlink:href': patternedChain(drawn, 17, '<pattern id="alias" xlink:href="#p"/>'),
+    href: patternedChain(drawn, 17, '<pattern id="alias" href="#p"/>'),
+  };
+  const details: string[] = [];
+  const started = Date.now();
+  for (const [name, svg] of Object.entries(spellings)) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`${name}: a 17-level pattern alias bypassed the expansion budget`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /131071/, `${name}: ${inspection.refusal.detail}`);
+    details.push(inspection.refusal.detail);
+  }
+  assert.ok(Date.now() - started < 5_000, 'the template-edge walk was not linear');
+  assert.equal(
+    new Set(details).size,
+    1,
+    'an inherited definition, an XLink alias and an SVG 2 alias counted differently',
+  );
+});
+
+test('an inherited fill on a group counts like an attribute on each child', () => {
+  const children = '<rect width="50" height="100"/><rect x="50" width="50" height="100"/>';
+  const spellings = {
+    'per-child attribute': patternedChain(
+      '<rect width="50" height="100" fill="url(#p)"/><rect x="50" width="50" height="100" fill="url(#p)"/>',
+      14,
+    ),
+    'group attribute': patternedChain(`<g fill="url(#p)">${children}</g>`, 14),
+    'group style attribute': patternedChain(`<g style="fill:url(#p)">${children}</g>`, 14),
+    'group stylesheet rule': patternedChain(`<style>g{fill:url(#p)}</style><g>${children}</g>`, 14),
+  };
+  const details: string[] = [];
+  const started = Date.now();
+  for (const [name, svg] of Object.entries(spellings)) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`${name}: a group's inherited fill bypassed the expansion budget`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
+    details.push(inspection.refusal.detail);
+  }
+  assert.ok(Date.now() - started < 5_000, 'the inherited-reference walk was not linear');
+  assert.equal(new Set(details).size, 1, 'the four spellings of the same picture counted differently');
+});
+
+test('inherited stroke and marker-start references multiply like fill', () => {
+  const shapes = '<path d="M0 10h100" fill="none"/><path d="M0 20h100" fill="none"/>';
+  const cases = {
+    stroke: patternedChain(`<g stroke="url(#p)">${shapes}</g>`, 14),
+    'marker-start': patternedChain(`<g marker-start="url(#p)">${shapes}</g>`, 14),
+  };
+  for (const [name, svg] of Object.entries(cases)) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`${name}: an inherited reference on the group was counted once`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
+  }
+});
+
+test('a nearer declaration suppresses the inherited reference', () => {
+  const children = '<rect width="50" height="100"/><rect x="50" width="50" height="100"/>';
+  for (const [name, svg] of Object.entries({
+    'nearer group': patternedChain(`<g fill="url(#p)"><g fill="none">${children}</g></g>`, 14),
+    'own declaration': patternedChain(
+      '<g fill="url(#p)"><rect width="50" height="100" fill="none"/>' +
+        '<rect x="50" width="50" height="100" fill="none"/></g>',
+      14,
+    ),
+  })) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    assert.ok(
+      inspection.ok,
+      `${name}: an overriding declaration did not suppress the reference: ${
+        inspection.ok ? '' : inspection.refusal.detail
+      }`,
+    );
+  }
+});
+
+test('a CSS-wide keyword does not erase the inherited reference', () => {
+  const children =
+    '<rect width="50" height="100" fill="inherit"/><rect x="50" width="50" height="100" fill="inherit"/>';
+  const cases = {
+    attribute: patternedChain(`<g fill="url(#p)">${children}</g>`, 14),
+    rule: patternedChain(`<style>rect{fill:inherit}</style><g fill="url(#p)">${children}</g>`, 14),
+    'escaped keyword': patternedChain(
+      String.raw`<g fill="url(#p)"><rect width="50" height="100" fill="\69 nherit"/><rect x="50" width="50" height="100" fill="\69 nherit"/></g>`,
+      14,
+    ),
+    'escaped property': patternedChain(
+      String.raw`<g style="f\69 ll:url(#p)"><rect width="50" height="100"/><rect x="50" width="50" height="100"/></g>`,
+      14,
+    ),
+  };
+  for (const [name, svg] of Object.entries(cases)) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`${name}: fill:inherit erased the inherited reference`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
+  }
+
+  // `initial` is not inheritance: it resolves to the property's initial value.
+  const initial = patternedChain(
+    '<g fill="url(#p)"><rect width="50" height="100" fill="initial"/>' +
+      '<rect x="50" width="50" height="100" fill="initial"/></g>',
+    14,
+  );
+  assert.ok(inspectSvg(Buffer.from(initial)).ok, 'fill:initial was treated as inheritance');
+});
+
+test('a use inherits its own paint reference into the content it instantiates', () => {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs>${symbolChain(14, 'href', '<path d="M0 0h2v2H0z"/>')}` +
+    `<pattern id="p" width="10" height="10"><use href="#s0"/></pattern>` +
+    `<symbol id="t"><rect width="50" height="100"/><rect x="50" width="50" height="100"/></symbol></defs>` +
+    `<g fill="url(#p)"><use href="#t"/></g></svg>`;
+  const inspection = inspectSvg(Buffer.from(svg));
+  if (inspection.ok) assert.fail('a reference inherited through <use> was counted once instead of per painted child');
+  assert.equal(inspection.refusal.reason, 'svg-workload', inspection.refusal.detail);
+  assert.match(inspection.refusal.detail, /32767/, inspection.refusal.detail);
+});
+
+test('a shallow inherited reference still renders through librsvg', async () => {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs>` +
+    `<linearGradient id="g"><stop offset="0" stop-color="#8ad884"/><stop offset="1" stop-color="#86c8e6"/></linearGradient>` +
+    `<symbol id="dot"><circle cx="5" cy="5" r="5"/></symbol>` +
+    `</defs>` +
+    `<g fill="url(#g)"><rect width="100" height="100"/><use href="#dot" x="10" y="10"/></g>` +
+    `</svg>`;
+  const inspection = inspectSvg(Buffer.from(svg));
+  if (!inspection.ok) assert.fail(`a shallow inherited fill was refused: ${inspection.refusal.detail}`);
+  const rendered = await prepareSvg(Buffer.from(svg));
+  if (!rendered.ok) assert.fail(`a shallow inherited fill did not render: ${rendered.reason} ${rendered.detail ?? ''}`);
+  assert.deepEqual(rendered.image.dimensions, { width: 200, height: 200 });
+});
+
 test('a stylesheet reference is counted once per matched element, like the attribute spelling', () => {
   const attribute = maskChain(
     '<rect width="100" height="100" mask="url(#m)"/><rect width="100" height="100" mask="url(#m)"/>',
