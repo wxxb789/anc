@@ -72,6 +72,19 @@ project makes no backward-compatibility promise.
   a truncated container is a build failure. The first image loads eagerly, later images
   lazily, and all decode asynchronously; that change added no dependency, browser script,
   configuration key, or image metadata store.
+- A separate, **opt-in** deployment step — `anc build --release --media r2` — publishes those
+  same content-addressed assets to Cloudflare R2 and points the emitted `<img>` elements at an
+  absolute custom domain. The object key is the artifact's own `_assets/<sha256>-<name>`, so a
+  local asset and its remote object are one identity; uploads are conditional
+  (`If-None-Match: *`) with the emitted MIME type, immutable caching and a `Content-MD5` of the
+  exact payload, and a `412` reads and hashes the existing object instead of overwriting it. All
+  objects are made available before every public URL is fetched and hashed; only then is a site
+  that references them promoted, and a failure leaves the previous output in place. Ordinary
+  `build`, `preview` and `build --release` stay offline and never load the signer. Configuration
+  is one narrow `media:` table naming the bucket, an HTTPS endpoint, a public base URL and two
+  environment-variable **names**; non-HTTPS endpoints, `r2.dev`, userinfo and unknown keys are
+  refused at parse time. It adds the pinned `aws4fetch` 1.0.20 (one package, no transitive
+  dependency) and no other dependency. A live bucket and custom domain are not yet exercised.
 
 ### Changed
 
