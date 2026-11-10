@@ -5,7 +5,7 @@ Status: accepted design for Goals 0009–0013, 2026-11-08.
 records ([0009](../goals/archive/0009-zero-config-static-images.md),
 [0010](../goals/archive/0010-readable-image-figures.md) and
 [0011](../goals/archive/0011-webp-first-image-delivery.md)) carry the evidence, and
-[0012](../goals/0012-safe-svg-rasterization.md) reports its own. 0013 has not shipped,
+[0012](../goals/archive/0012-safe-svg-rasterization.md) reports its own. 0013 has not shipped,
 and this document is not evidence that it has: the section below is the target for that
 outcome, and the ones for 0009–0012 describe the implemented contracts.
 
