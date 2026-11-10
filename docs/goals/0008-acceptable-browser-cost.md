@@ -139,7 +139,174 @@ browser emulation; CPU throttling applies to the page target rather than the
 Worker; loopback network is not a physical mobile network; and Worker heap,
 process RSS and total peak memory remain unavailable.
 
+## Qualified measurement campaign (2026-11-11)
+
+Clean tree at `2ce506f`; candidate `@wxxb789/anc@0.0.3` installed from a tarball that
+`pnpm run pack:tarball` reproduces byte-for-byte (504,986 B, sha256
+`d9176a5244998244a58e297631c441dd3c662ffa3e90e00c5fff06ec76fdbe3a`), so the measured
+package is reconstructible from the recorded tree. Instrument:
+`scripts/benchmark-snapshot.ts` and `scripts/benchmark-limits.ts`, source hash recorded
+in every report. Browser: **Chrome 157.0.8103.38**, device profile Pixel 7, CPU
+throttled 4x — Chrome is one of the two accepted emulation targets and this host has no
+Edge build; the goal's acceptance covers "Chrome or Edge mobile device emulation", so
+no physical device was used. Network is loopback.
+
+Sample populations are not uniform, and each number is labelled by what it actually is:
+
+| Measurement | Population |
+|---|---|
+| Build (per workload) | 1 |
+| Preview cold / warm (per workload) | 1 observation each |
+| Local-graph dispatch and SQL (UI, per workload) | 30 samples, exact count asserted |
+| Global graph, unfiltered and tag-filtered (UI) | 1 render each |
+| Tag browse (UI) | 10 / 100 / 1,000 dispatches at 100 / 1,000 / 10,000 notes |
+| Driver queries: local, backlinks, outgoing, byTag, global | 30 samples each (byTag 30 / 150 / 350) |
+| Reading, JS disabled and JS enabled without intent | 1 observation each |
+| Startup heap / Worker WASM memory | 1 observation |
+| Overload controls | 1 controlled run per control, bounds asserted |
+
+| Workload | Build | DB decoded | DB gzip | Cold preview (1) | Warm preview (1) | Local p95 (n=30) | Global render (1) | Tag p95 (n=10/100/1,000) | Failures |
+|---|---|---|---|---|---|---|---|---|---|
+| 100-sparse | 5.2s | 64.0 KiB | 14.2 KiB | 407 ms | 220 ms | **13.4 ms** | 140 ms | 124 ms | 0 |
+| 100-hub | 5.1s | 64.0 KiB | 13.9 KiB | 441 ms | 224 ms | **13.7 ms** | 143 ms | 117 ms | 0 |
+| 1000-sparse | 14.1s | 420.0 KiB | 124.8 KiB | 409 ms | 220 ms | **13.5 ms** | 179 ms | 48 ms | 0 |
+| 1000-hub | 13.2s | 416.0 KiB | 124.8 KiB | 407 ms | 251 ms | **21.7 ms** | 325 ms | 60 ms | 0 |
+| 10000-sparse | 265.4s | 3872.0 KiB | 1078.4 KiB | 409 ms | 231 ms | **13.8 ms** | 395 ms | 292 ms | 0 |
+| 10000-hub | 258.9s | 3880.0 KiB | 1081.5 KiB | 423 ms | 217 ms | **14.9 ms** | 408 ms | 295 ms | 0 |
+
+Local neighbourhood p95 (dispatch to validated Worker result, the 50 ms target) stays
+between 13.4 ms and 21.7 ms across all six workloads; the Worker-side operation alone
+stays under 7 ms. Graph drawing and the unfiltered global graph are reported separately
+and are **not** part of that target: a single unfiltered render costs 395 ms (sparse) and
+408 ms (hub) at 10,000 notes, and tag browsing — p95 over 1,000 dispatches at that size —
+costs 292/295 ms. The global figure is one observation per workload, not a percentile. This is the material UX trade-off the
+maintainer has to accept or reject explicitly.
+
+Cold preview (empty HTTP cache, fresh context) is
+407-441 ms and does not grow with corpus size — it pays the Worker start-up (fetch,
+digest, SQLite WASM init, module import). Warm preview is 217-251 ms.
+
+Two different quantities, kept apart. The **shipped inventory** for the seam is 8 files,
+6,040.5 KiB decoded / 1,838.0 KiB gzip; the **observed first-intent transfer** is 4 of them,
+**1,652.8 KiB over the wire / 5,374.4 KiB decoded** (10,000/hub):
+
+| Component | Shipped | Requested on first intent | Wire bytes | Decoded |
+|---|---|---|---|---|
+| snapshot DB | 1 | 1 | 1,081.5 KiB | 3,880.0 KiB |
+| sqlite3 WASM binary | 1 | 1 | 394.1 KiB | 848.5 KiB |
+| sqlite3 WASM glue | 3 | 1 | 171.3 KiB | 627.7 KiB |
+| snapshot Worker chunk | 1 | 1 | 5.9 KiB | 18.1 KiB |
+| snapshot client scripts | 2 | 0 | — | — |
+
+The other two glue files (`sqlite3-opfs-async-proxy.js`, `sqlite3-worker1.mjs`, 668,447 B
+decoded together) stay `not-requested`, and the two client scripts load during ordinary
+reading (started at 1,242 ms and 1,325 ms on a page load), which is why reading's resource
+count is 7. The baseline figure that is comparable to 1,652.8 KiB is the 596,853 B the
+pre-SQLite preview actually fetched, not that tree's artifact inventory.
+
+Ordinary reading requests none of it before intent: with JavaScript disabled the page
+transferred 14,460 B; with JavaScript enabled but no intent, 25,422 B. That 10,962 B
+difference is the script overhead of reading, **not** the snapshot cost — the snapshot
+and Worker assets are the 6,040.5 KiB above, and `zeroRequests` is true for both the
+reading page and the main page in all six reports.
+
+Peak main-thread JS heap during the cold-intent window was 1,073.9 KiB; the Worker's
+WASM linear memory was 8 MiB. Worker heap, process RSS and total peak memory remain
+unobserved — the instrument says so and this record does not paper over it.
+
+### Overload controls
+
+All eight controls pass against both the checkout and the installed 0.0.3 package: snapshot cap aborts a 72 MiB body at 64.06 MiB with `code=integrity`;
+WASM cap aborts a 10 MiB body at 8.06 MiB; the 20 s startup deadline terminates and
+recovers; the 8 s query deadline drops and the client stays usable; page size 10,000
+clamps to 200; the rendering policy holds local 12/15 and global 60/573; the pending
+bound admits 16 and answers later requests `busy`; and `tests/snapshot-client.test.ts`
+passes 7/7 as a child process with its JSON report parsed.
+
+Running these controls found a real instrument defect: Vitest 5 writes
+`--reporter=json` to `.vitest/json/output.json` instead of stdout, so the client-bound
+control failed closed and its stray directory dirtied the tree, which the run reported
+as benchmark identity drift. Fixed at `10e6cfd` (PR #42): the report is written to a
+temp directory outside the repository, parsed from that file, removed in `finally`, and
+`.vitest/` is ignored. The seven other controls passed before and after the fix, so the
+change affects evidence capture only.
+
+### Pre-SQLite baseline comparison
+
+`7579cc16a4320f7410b71e784587a01fdf14333d` has no SQLite oracle, so the snapshot instrument
+rejects it (`expected one finalized snapshot, found 0`) — but that tree **does** build and it
+**does** have a preview: `src/scripts/link-preview.ts` lazily fetches `/content-index.json` on
+first hover, filters in JS and renders into `#link-preview`. The required comparison was
+therefore measured with a purpose-built Playwright probe (archived with the campaign reports,
+not committed to the tree: sha256 `999d09f746653379…`) on the same seeded corpus with exactly 10,000
+published notes, the same Chrome channel, Pixel 7 profile, CPU 4x throttle and loopback
+server, measuring the same observable as the candidate: hover a same-origin note link, wait
+for the panel to be visible with the target note's title (a title mismatch counts as a
+failure; there were none).
+
+| 10,000 notes | Pre-SQLite `7579cc1` | Candidate 0.0.3 (seam) |
+|---|---|---|
+| Cold intent-to-visible (1 observation) | 513 ms sparse / 512 ms hub | 409 ms sparse / 423 ms hub |
+| Warm intent-to-visible (baseline p50 over 30, candidate 1 observation) | 125.0 / 125.1 ms | 231 / 217 ms |
+| Warm p95 | 125.9 / 134.1 ms | n/a (single observation) |
+| Fetched on first preview (observed) | 3,452,503 B decoded / 603,098 B encoded, one JSON index | 5,503,343 B decoded / 1,692,447 B encoded, 4 requests (inventory 6,040.5 KiB / 1,838.0 KiB) |
+
+Both trees arm the same 120 ms intent delay (`OPEN_DELAY_MS`), and both totals include it
+plus each harness's own hover/`waitFor` overhead, so this record does not decompose the
+remainder into "query" and "render": the candidate instrument additionally records a page-clock
+hover delay (271 ms cold, 123 ms warm; it is not subtracted from the reported totals), while
+the baseline probe records none, so a post-delay subtraction would compare two different
+clocks. What is claimed is the end-to-end difference in the same emulation, same corpus and
+same observable — warm 90-106 ms slower, cold 70-104 ms faster — not a phase attribution.
+
+The trade-off is therefore two-sided and both directions are recorded, not one: **the first
+preview is 70-104 ms faster and fetches 2.8x more bytes over the wire, while every warm
+preview is 90-106 ms slower.** At this size the unfiltered global graph (395-408 ms, single renders) and
+tag browsing (292-295 ms, p95 over 1,000 dispatches) remain the largest costs.
+
+### Gates
+
+`pnpm run lint` clean; `pnpm run check` 0/0; build, snapshot/wasm binding, search index
+(10 pages), inventory (150 files), secret scan (0 findings) and residue scan (0 findings)
+pass; suite 100 files / **1,254 passed** / 35 skipped at `--maxWorkers=1` (the default
+4-worker `pnpm run verify` was OOM-killed twice on this 7.88 GiB host after the
+non-test gates had passed); `pack:tarball` reproduces the measured sha256;
+`smoke:tarball` ok (2 published, 2 withheld, 8 images). CI on `2ce506f` is green.
+
+### Evidence
+
+Raw reports stay out of the tree (the repository keeps measurement output in the private
+workspace, not in commits); these hashes pin what was measured:
+
+| Report | Size | sha256 |
+|---|---|---|
+| `id-pkg-100-sparse.json` | 92,026 B | `254a43e7ad1c2aff…` |
+| `id-pkg-100-hub.json` | 91,999 B | `09a9ddd0813ead92…` |
+| `id-pkg-1000-sparse.json` | 111,171 B | `741a08b3c17ef357…` |
+| `id-pkg-1000-hub.json` | 111,391 B | `2e4e9999cd5cf956…` |
+| `id-pkg-10000-sparse.json` | 204,034 B | `290482f4787a11a9…` |
+| `id-pkg-10000-hub.json` | 204,131 B | `f882853b51225b5e…` |
+| `limits-checkout.json` | 17,828 B | `3128a1dfd48964f1…` |
+| `limits-packaged.json` | 19,439 B | `18a7d529f014ccc2…` |
+| `baseline-probe-100.json` | 8,353 B | `8f6022784cc2f5e1…` |
+| `baseline-build-10000-sparse.json` | 1,667 B | `191bb28dc63765d2…` |
+| `probe.mjs` (baseline preview probe) | 23,429 B | `999d09f746653379…` |
+| `baseline-preview-10000-sparse.json` | 9,704 B | `ae0ff283ac0cf9b0…` |
+| `baseline-preview-10000-hub.json` | 9,681 B | `e62600db06682a0f…` |
+| `baseline-build-10000-hub.json` | 1,661 B | `ff8d657425b39bd0…` |
+
 ## Completion record
 
-Not completed. The implementation is awaiting clean-tree qualified measurements
-and the maintainer acceptance named above.
+Measured and qualified, including the comparable pre-SQLite comparison. **Awaiting the
+maintainer's dated acceptance**, which has to name:
+
+- candidate: `@wxxb789/anc@0.0.3`, tarball sha256 `d9176a52…` reproduced from `2ce506f`;
+- cold first preview 409-441 ms, warm preview 217-251 ms — against a pre-SQLite warm preview
+  of 125 ms, i.e. the seam costs 90-106 ms on every warm preview while downloading 2.8x more
+  bytes for the first one;
+- the material costs at 10,000 notes: global graph 395-408 ms (single renders) and tag
+  browsing 292-295 ms (p95 over 1,000 dispatches);
+- the limits: browser emulation, page-target CPU throttle only, loopback network, no Worker
+  heap / process RSS / total peak memory.
+
+That acceptance is the maintainer's, not self-granted here.
