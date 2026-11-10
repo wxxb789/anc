@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,6 +16,7 @@ import {
   elapsedFromIntent,
   loadSiteHeaders,
   parseLimitsOptions,
+  parseVitestJsonReportFile,
   parseVitestJsonResult,
   readTagMemberCounts,
   recordLimitsFailure,
@@ -259,6 +260,68 @@ describe('benchmark-limits exit status', () => {
       failed: 0,
     });
   });
+
+  it('parses the Vitest 5 report file and fails closed when it is missing or empty', () => {
+    const report = {
+      success: true,
+      numTotalTests: 7,
+      numPassedTests: 7,
+      numFailedTests: 0,
+      numPendingTests: 0,
+      numTodoTests: 0,
+      testResults: [
+        {
+          name: 'tests/snapshot-client.test.ts',
+          status: 'passed',
+          assertionResults: Array.from({ length: 7 }, () => ({ status: 'passed' })),
+        },
+      ],
+    };
+    const directory = mkdtempSync(join(tmpdir(), 'anc-limits-vitest-report-'));
+    try {
+      const validFile = join(directory, 'vitest.json');
+      writeFileSync(validFile, JSON.stringify(report));
+      expect(parseVitestJsonReportFile(validFile, 0)).toMatchObject({
+        status: 'pass',
+        total: 7,
+        passed: 7,
+        failed: 0,
+      });
+
+      const missingResult = parseVitestJsonReportFile(join(directory, 'missing.json'), 0);
+      expect(missingResult).toMatchObject({ status: 'fail', total: null, passed: null, failed: null });
+      expect(missingResult.detail).toMatch(/missing Vitest JSON reporter output file/);
+
+      const emptyFile = join(directory, 'empty.json');
+      writeFileSync(emptyFile, '');
+      const emptyResult = parseVitestJsonReportFile(emptyFile, 0);
+      expect(emptyResult).toMatchObject({ status: 'fail', total: null, passed: null, failed: null });
+      expect(emptyResult.detail).toMatch(/empty Vitest JSON reporter output file/);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== 'win32' && (process.getuid?.() ?? -1) !== 0)(
+    'fails closed when the Vitest report file is unreadable',
+    () => {
+      const directory = mkdtempSync(join(tmpdir(), 'anc-limits-vitest-unreadable-'));
+      try {
+        const unreadableFile = join(directory, 'vitest.json');
+        writeFileSync(unreadableFile, '{"success":true}');
+        chmodSync(unreadableFile, 0o000);
+        try {
+          const unreadableResult = parseVitestJsonReportFile(unreadableFile, 0);
+          expect(unreadableResult).toMatchObject({ status: 'fail', total: null, passed: null, failed: null });
+          expect(unreadableResult.detail).toMatch(/unreadable/);
+        } finally {
+          chmodSync(unreadableFile, 0o600);
+        }
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('rejects zero-test, skipped, pending, todo, and wrong-file Vitest evidence', () => {
     const report = {

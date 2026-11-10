@@ -1028,6 +1028,41 @@ export function parseVitestJsonResult(run: VitestJsonRun): ClientBoundTest {
   };
 }
 
+/**
+ * Read the JSON reporter's `--outputFile` and parse it.
+ *
+ * Vitest 5 writes `--reporter=json` output to a file instead of stdout, so an
+ * absent, unreadable, or empty file is a failed run rather than absent
+ * evidence to parse. Each failure mode keeps its own detail; the text that
+ * does arrive is parsed by `parseVitestJsonResult` unchanged.
+ */
+export function parseVitestJsonReportFile(outputFile: string, status: number | null): ClientBoundTest {
+  let report: string;
+  try {
+    report = readFileSync(outputFile, 'utf8');
+  } catch (error) {
+    const code = error !== null && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    const reason = code === 'ENOENT' ? 'missing' : `unreadable${typeof code === 'string' ? ` (${code})` : ''}`;
+    return {
+      status: 'fail',
+      total: null,
+      passed: null,
+      failed: null,
+      detail: `exit=${status}; ${reason} Vitest JSON reporter output file`,
+    };
+  }
+  if (report.trim() === '') {
+    return {
+      status: 'fail',
+      total: null,
+      passed: null,
+      failed: null,
+      detail: `exit=${status}; empty Vitest JSON reporter output file`,
+    };
+  }
+  return parseVitestJsonResult({ status, stdout: report });
+}
+
 async function runControl(
   id: string,
   name: string,
@@ -1903,12 +1938,22 @@ async function controlPendingBound(harness: Harness): Promise<ControlOutcome> {
  * result is recorded beside the browser's rather than replaced by it.
  */
 function runClientBoundTest(): ClientBoundTest {
-  const run = spawnSync('pnpm', ['exec', 'vitest', 'run', CLIENT_BOUND_TEST_PATH, '--reporter=json'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    timeout: 300_000,
-  });
-  return parseVitestJsonResult({ status: run.status, stdout: typeof run.stdout === 'string' ? run.stdout : '' });
+  const directory = mkdtempSync(join(tmpdir(), 'anc-client-bound-'));
+  try {
+    const outputFile = join(directory, 'vitest.json');
+    const run = spawnSync(
+      'pnpm',
+      ['exec', 'vitest', 'run', CLIENT_BOUND_TEST_PATH, '--reporter=json', `--outputFile=${outputFile}`],
+      {
+        cwd: ROOT,
+        encoding: 'utf8',
+        timeout: 300_000,
+      },
+    );
+    return parseVitestJsonReportFile(outputFile, run.status);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 export function benchmarkExitCode(

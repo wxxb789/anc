@@ -8,6 +8,8 @@ dist/
 *.tgz
 # generated types
 .astro/
+# Vitest's default JSON reporter output directory (Vitest 5; only written without --outputFile)
+.vitest/
 # per-build private metadata consumed before dist is published
 *.publish-state/
 
