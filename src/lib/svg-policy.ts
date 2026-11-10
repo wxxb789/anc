@@ -620,6 +620,195 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
 }
 
 /**
+ * Marker placements one element's geometry can produce.
+ *
+ * `marker-start` and `marker-end` render once per subpath; `marker-mid` renders
+ * once per interior vertex. A marker reference on a shape is therefore work
+ * proportional to its geometry, not one render per element, and the `<use>`
+ * budget has to multiply the referenced definition's expansion by that count.
+ */
+interface MarkerPlacements {
+  readonly start: number;
+  readonly mid: number;
+  readonly end: number;
+}
+
+/** A painted element markers do not apply to. */
+const NO_MARKER_PLACEMENTS: MarkerPlacements = Object.freeze({ start: 0, mid: 0, end: 0 });
+
+/** The geometry attributes a placement bound is derived from, kept until a `<use>` exists. */
+interface MarkerGeometry {
+  readonly points: string | undefined;
+  readonly d: string | undefined;
+}
+
+/** SVG's number grammar as a global matcher; `match` resets `lastIndex`. */
+const NUMBER_TOKEN_PATTERN = new RegExp(NUMBER_PATTERN, 'g');
+
+/** A path-data token: one command letter or one number. */
+const PATH_TOKEN_PATTERN = new RegExp(`[MmZzLlHhVvCcSsQqTtAa]|${NUMBER_PATTERN}`, 'g');
+
+/** Whether one path-data token is a command letter rather than a number. */
+const PATH_COMMAND_PATTERN = /^[MmZzLlHhVvCcSsQqTtAa]$/;
+
+/** The number of numeric tokens in a geometry attribute. */
+function numericTokens(raw: string | undefined): number {
+  if (raw === undefined) return 0;
+  return raw.match(NUMBER_TOKEN_PATTERN)?.length ?? 0;
+}
+
+/**
+ * Split path data into command letters and numbers, or `undefined` when it
+ * contains anything else.
+ *
+ * The split is deliberately lexical: this is a placement bound, not a geometry
+ * model, and the caller only needs to know how many vertices and subpaths the
+ * data can produce. A character the tokenizer cannot classify makes the bound
+ * fall back to the numeric-token estimate rather than silently ignoring it.
+ */
+function tokenizePathData(pathData: string): readonly string[] | undefined {
+  const tokens: string[] = [];
+  let consumed = 0;
+  for (const match of pathData.matchAll(PATH_TOKEN_PATTERN)) {
+    const index = match.index;
+    if (!/^[\s,]*$/.test(pathData.slice(consumed, index))) return undefined;
+    tokens.push(match[0]);
+    consumed = index + match[0].length;
+  }
+  if (!/^[\s,]*$/.test(pathData.slice(consumed))) return undefined;
+  return tokens;
+}
+
+/** The documented fallback when path data cannot be tokenized. */
+function fallbackPathPlacements(pathData: string): MarkerPlacements {
+  // Every numeric token could be a vertex, and every vertex could be interior.
+  // Over-counting is the accepted direction; falling back to one placement is
+  // what would under-count a path whose data this policy cannot parse.
+  const vertices = Math.max(1, numericTokens(pathData));
+  const subpaths = Math.max(1, (pathData.match(/[Mm]/g) ?? []).length);
+  return { start: subpaths, mid: vertices, end: subpaths };
+}
+
+/** Marker placements from a path's `d` data. */
+function pathMarkerPlacements(pathData: string | undefined): MarkerPlacements {
+  if (pathData === undefined) return { start: 1, mid: 0, end: 1 };
+  const tokens = tokenizePathData(pathData);
+  if (tokens === undefined) return fallbackPathPlacements(pathData);
+  if (tokens.length === 0) return { start: 1, mid: 0, end: 1 };
+
+  let subpaths = 0;
+  let interior = 0;
+  let currentVertices = 0;
+  const finishSubpath = (closed: boolean): void => {
+    // A one-vertex subpath has no interior vertex; subtracting a flat
+    // `2 × subpaths` from the total would under-count a path that mixes a
+    // degenerate subpath with a long one.
+    //
+    // A closepath adds the initial point as the subpath's last vertex. When
+    // the subpath has at least two vertices, its previous endpoint moves from
+    // last to interior: measured against the pinned librsvg, `M0 0 L10 10 Z`
+    // renders a mid marker at (10, 10).
+    if (currentVertices > 0) {
+      interior += Math.max(0, currentVertices + (closed ? 1 : 0) - 2);
+    }
+    currentVertices = 0;
+  };
+  const beginSubpath = (): void => {
+    finishSubpath(false);
+    subpaths += 1;
+  };
+  const arity = (letter: string): number => {
+    switch (letter) {
+      case 'H':
+      case 'h':
+      case 'V':
+      case 'v':
+        return 1;
+      case 'C':
+      case 'c':
+        return 6;
+      case 'S':
+      case 's':
+      case 'Q':
+      case 'q':
+        return 4;
+      case 'A':
+      case 'a':
+        return 7;
+      default:
+        return 2;
+    }
+  };
+
+  let at = 0;
+  while (at < tokens.length) {
+    const letter = tokens[at]!;
+    at += 1;
+    if (!PATH_COMMAND_PATTERN.test(letter)) return fallbackPathPlacements(pathData);
+    if (letter === 'Z' || letter === 'z') {
+      finishSubpath(true);
+      continue;
+    }
+    const first = at;
+    while (at < tokens.length && !PATH_COMMAND_PATTERN.test(tokens[at]!)) at += 1;
+    const numbers = at - first;
+    if (letter === 'M' || letter === 'm') {
+      beginSubpath();
+      // The first pair is the moveto; every additional pair is an implicit
+      // lineto and therefore another vertex.
+      currentVertices += Math.max(1, Math.ceil(numbers / 2));
+    } else {
+      if (currentVertices === 0) {
+        beginSubpath();
+        // A drawing command that follows a closepath starts a new subpath at
+        // the closed subpath's initial point, which is a vertex without its
+        // own argument.
+        currentVertices = 1;
+      }
+      currentVertices += Math.max(1, Math.ceil(numbers / arity(letter)));
+    }
+  }
+  finishSubpath(false);
+  if (subpaths === 0) subpaths = 1;
+  return { start: subpaths, mid: interior, end: subpaths };
+}
+
+/** Marker placements for one shape, or `undefined` when markers do not apply. */
+function markerPlacementsFor(
+  element: string,
+  points: string | undefined,
+  pathData: string | undefined,
+): MarkerPlacements | undefined {
+  switch (element) {
+    case 'line':
+      // Two vertices, one subpath: start and end render once, mid never.
+      return { start: 1, mid: 0, end: 1 };
+    case 'polyline': {
+      const numbers = numericTokens(points);
+      if (numbers === 0) return { start: 1, mid: 0, end: 1 };
+      // Each vertex is one coordinate pair; an odd trailing number is counted
+      // as another vertex rather than dropped.
+      const vertices = Math.ceil(numbers / 2);
+      return { start: 1, mid: Math.max(0, vertices - 2), end: 1 };
+    }
+    case 'polygon': {
+      const numbers = numericTokens(points);
+      if (numbers === 0) return { start: 1, mid: 0, end: 1 };
+      const vertices = Math.ceil(numbers / 2);
+      // A polygon closes back to its first point, and the pinned librsvg
+      // places marker-end at that closing point: every listed point after the
+      // first is interior. Measured with `points="20,20 50,20 50,50"`:
+      // marker-mid renders at both listed points, marker-end at the first.
+      return { start: 1, mid: Math.max(0, vertices - 1), end: 1 };
+    }
+    case 'path':
+      return pathMarkerPlacements(pathData);
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Instances produced by expanding `<use>` references, with a DP over the id
  * graph. A literal `<use>` counts once, plus the rendered subtree of its target;
  * the total is the work librsvg would perform even though the XML is small.
@@ -646,17 +835,30 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
  * that only parses is not an override: an invalid paint falls back to the
  * inherited one, so it keeps the ancestor reference and is counted there too.
  *
+ * **Markers are placed by geometry, not by element.** `marker-start` and
+ * `marker-end` render once per subpath and `marker-mid` once per interior
+ * vertex, so a marker reference is multiplied by the placements its shape can
+ * produce. The placement bound comes from `points` (one vertex per coordinate
+ * pair), `d` (a lexical command/argument count) and `line` (two vertices, one
+ * subpath); unparseable data falls back to its numeric-token count, never to a
+ * single placement. A closepath or a polygon closes onto its first point, which
+ * is the last vertex for marker placement, so the point before it becomes
+ * interior; that is measured against the pinned librsvg rather than assumed.
+ * This applies equally to a local declaration, an inherited one, and one a
+ * `<use>` propagates into cloned content.
+ *
  * The slots are resolved once per element in a parent-before-child pass
  * (one array per node, six entries), so attribution is O(elements × properties)
  * rather than an ancestor walk per element. `filter`, `clip-path`, `mask` and
  * `href` do not inherit and stay attached to the element that declares them. A
  * `<use>`'s own effective slots are inherited by the content it instantiates
  * (SVG's shadow-tree inheritance), so they are added once per painted element
- * the target expansion produces; that is an upper bound when a target element
- * overrides the inherited value, never an omission.
+ * the target expansion produces — and once per marker placement for a marker
+ * slot; that is an upper bound when a target element overrides the inherited
+ * value, never an omission.
  *
  * The count is deliberately a conservative upper bound: every reference is
- * counted once per referencing node, even if two properties point at the same
+ * counted once per render it produces, even if two properties point at the same
  * definition, and every use counts, including one under a hidden branch. A
  * `<style>` rule's declarations are attributed to every element its selector
  * matches, so the same picture counts the same whether it is written as a
@@ -742,6 +944,7 @@ function expandedUseInstances(
   useTargets: readonly (string | undefined)[],
   children: readonly (readonly number[])[],
   declarations: readonly (ReadonlyMap<string, ReferenceDeclarations> | undefined)[],
+  placements: readonly (MarkerPlacements | undefined)[],
   parents: readonly (number | undefined)[],
   idNodes: ReadonlyMap<string, number>,
   root: number,
@@ -792,16 +995,40 @@ function expandedUseInstances(
 
   const paints = (index: number): boolean => PAINTED_ELEMENTS[nodes[index] ?? ''] === true;
 
+  /**
+   * How many times one marker slot renders on this element.
+   *
+   * A marker reference is work per placement, not per declaration: start and
+   * end once per subpath, mid once per interior vertex. A painted element
+   * markers do not apply to (`text`) has no placement, so a marker reference
+   * there contributes nothing. Non-marker slots keep the old per-element count.
+   */
+  const markerSlotPlacements = (index: number, slot: number): number => {
+    if (slot !== 2 && slot !== 3 && slot !== 4) return 1;
+    const marker = placements[index];
+    if (marker === undefined) return 0;
+    return slot === 2 ? marker.start : slot === 3 ? marker.mid : marker.end;
+  };
+
+  /** One reference with the number of renders it produces on this element. */
+  interface WeightedReference {
+    readonly reference: string;
+    readonly multiplier: number;
+  }
+
   /** A node's own references, excluding inherited slots on a non-painting container. */
-  const ownReferences = (index: number): readonly string[] => {
+  const ownReferences = (index: number): readonly WeightedReference[] => {
     const own = declarations[index];
     if (own === undefined) return [];
     const painted = paints(index);
-    const accumulated: string[] = [];
+    const accumulated: WeightedReference[] = [];
     for (const [property, declared] of own) {
       if (declared.references.length === 0) continue;
-      if (!painted && INHERITED_REFERENCE_SLOTS[property] !== undefined) continue;
-      accumulated.push(...declared.references);
+      const slot = INHERITED_REFERENCE_SLOTS[property];
+      if (!painted && slot !== undefined) continue;
+      const multiplier = slot === undefined ? 1 : markerSlotPlacements(index, slot);
+      if (multiplier === 0) continue;
+      for (const reference of declared.references) accumulated.push({ reference, multiplier });
     }
     return accumulated;
   };
@@ -814,45 +1041,81 @@ function expandedUseInstances(
    * to the parent or might be invalid and fall back there. The ancestor context
    * is the parent's, not this node's merged context, so a painter that declares
    * a reference and inherits one cannot count its own reference twice through
-   * the slot.
+   * the slot. Marker slots are multiplied by this element's placements, so an
+   * inherited `marker-mid` on a `<g>` costs one expansion per interior vertex
+   * of each painted descendant, not one per descendant.
    */
-  const inheritedReferences = (index: number): readonly string[] => {
+  const inheritedReferences = (index: number): readonly WeightedReference[] => {
     if (!paints(index)) return [];
     const own = declarations[index];
     const parent = parents[index];
     const inherited = parent === undefined ? emptySlots : slots[parent]!;
-    const accumulated: string[] = [];
+    const accumulated: WeightedReference[] = [];
     for (let slot = 0; slot < slotsCount; slot += 1) {
       const declared = own?.get(INHERITED_REFERENCE_PROPERTIES[slot]!);
       if (declared !== undefined && declared.suppresses) continue;
       const references = inherited[slot];
-      if (references !== undefined && references.length > 0) accumulated.push(...references);
+      if (references === undefined || references.length === 0) continue;
+      const multiplier = markerSlotPlacements(index, slot);
+      if (multiplier === 0) continue;
+      for (const reference of references) accumulated.push({ reference, multiplier });
     }
     return accumulated;
   };
 
-  const paintedCounts = new Map<number, number>();
+  /**
+   * Painted instances in a fully expanded subtree, and their marker placements.
+   *
+   * The painted count is the multiplier for an inherited `fill`/`stroke`/
+   * `cursor`; the three placement sums are the multiplier for a marker slot
+   * inherited through a `<use>`. They are accumulated in the same memoized walk
+   * because both answer "how much work does one instantiation of this subtree
+   * do", and a cycle in either is infinity.
+   */
+  interface PaintedSummary {
+    readonly painted: number;
+    readonly start: number;
+    readonly mid: number;
+    readonly end: number;
+  }
+  const paintedSummaries = new Map<number, PaintedSummary>();
   const painting = new Set<number>();
-
-  /** Painted element instances in the fully expanded subtree. */
-  const paintedInstances = (index: number): number => {
-    const memo = paintedCounts.get(index);
+  const paintedSummary = (index: number): PaintedSummary => {
+    const memo = paintedSummaries.get(index);
     if (memo !== undefined) return memo;
-    if (painting.has(index)) return Number.POSITIVE_INFINITY;
+    if (painting.has(index)) {
+      return {
+        painted: Number.POSITIVE_INFINITY,
+        start: Number.POSITIVE_INFINITY,
+        mid: Number.POSITIVE_INFINITY,
+        end: Number.POSITIVE_INFINITY,
+      };
+    }
     painting.add(index);
-    let total = paints(index) ? 1 : 0;
+    const marker = placements[index] ?? NO_MARKER_PLACEMENTS;
+    let painted = paints(index) ? 1 : 0;
+    let start = marker.start;
+    let mid = marker.mid;
+    let end = marker.end;
+    const add = (summary: PaintedSummary): void => {
+      painted += summary.painted;
+      start += summary.start;
+      mid += summary.mid;
+      end += summary.end;
+    };
     for (const child of children[index] ?? []) {
       if (nonRendered[nodes[child] ?? ''] === true) continue;
-      total += paintedInstances(child);
+      add(paintedSummary(child));
     }
     const target = useTargets[index];
     if (target !== undefined) {
       const targetIndex = idNodes.get(target);
-      if (targetIndex !== undefined) total += paintedInstances(targetIndex);
+      if (targetIndex !== undefined) add(paintedSummary(targetIndex));
     }
     painting.delete(index);
-    paintedCounts.set(index, total);
-    return total;
+    const summary = { painted, start, mid, end };
+    paintedSummaries.set(index, summary);
+    return summary;
   };
 
   const expansion = new Map<number, number>();
@@ -870,24 +1133,33 @@ function expandedUseInstances(
       total = 1 + expand(target);
       // SVG inherits a `<use>`'s computed slots into the content it clones, so
       // one declaration on the use is one declaration per painted element the
-      // target produces. Overridden values make this an upper bound.
+      // target produces; a marker slot is one per placement that element
+      // produces. Overridden values make this an upper bound.
+      const targetIndex = idNodes.get(target);
+      const summary = targetIndex === undefined
+        ? { painted: 0, start: 0, mid: 0, end: 0 }
+        : paintedSummary(targetIndex);
       let propagated = 0;
-      for (const references of slots[index]!) {
+      for (let slot = 0; slot < slotsCount; slot += 1) {
+        const references = slots[index]![slot];
         if (references === undefined) continue;
-        for (const reference of references) propagated += expand(reference);
+        const multiplier =
+          slot === 2 ? summary.start : slot === 3 ? summary.mid : slot === 4 ? summary.end : summary.painted;
+        if (multiplier === 0) continue;
+        for (const reference of references) propagated += expand(reference) * multiplier;
       }
-      if (propagated > 0) {
-        const targetIndex = idNodes.get(target);
-        const painted = targetIndex === undefined ? 0 : paintedInstances(targetIndex);
-        total += propagated * painted;
-      }
+      total += propagated;
     }
     for (const child of children[index] ?? []) {
       if (nonRendered[nodes[child] ?? ''] === true) continue;
       total += countRendered(child);
     }
-    for (const reference of ownReferences(index)) total += expand(reference);
-    for (const reference of inheritedReferences(index)) total += expand(reference);
+    for (const { reference, multiplier } of ownReferences(index)) {
+      total += expand(reference) * multiplier;
+    }
+    for (const { reference, multiplier } of inheritedReferences(index)) {
+      total += expand(reference) * multiplier;
+    }
     visiting.delete(index);
     counted.set(index, total);
     return total;
@@ -965,6 +1237,7 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   let rootViewBox: SvgViewBox | undefined;
   const nodes: string[] = [];
   const useTargets: (string | undefined)[] = [];
+  const markerGeometry: (MarkerGeometry | undefined)[] = [];
   const childNodes: number[][] = [];
   const elementParents: (number | undefined)[] = [];
   const elementIds: (string | undefined)[] = [];
@@ -1163,6 +1436,11 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     const nodeIndex = nodes.length;
     nodes.push(local);
     useTargets.push(undefined);
+    markerGeometry.push(
+      local === 'path' || local === 'polyline' || local === 'polygon' || local === 'line'
+        ? { points: attributeValue(tag, 'points', ['']), d: attributeValue(tag, 'd', ['']) }
+        : undefined,
+    );
     childNodes.push([]);
     const parentNode = elementStack.at(-1);
     if (parentNode !== undefined) childNodes[parentNode]!.push(nodeIndex);
@@ -1351,11 +1629,20 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
         }
       }
     }
+    // Placement parsing is deferred to this branch: a document without a
+    // `<use>` never asks the expansion count a question, so it should not pay
+    // for tokenizing every path's `d`.
+    const markerPlacements = markerGeometry.map((geometry, index) =>
+      geometry === undefined
+        ? undefined
+        : markerPlacementsFor(nodes[index]!, geometry.points, geometry.d),
+    );
     const instances = expandedUseInstances(
       nodes,
       useTargets,
       childNodes,
       declarations,
+      markerPlacements,
       elementParents,
       idNodes,
       0,

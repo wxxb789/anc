@@ -432,7 +432,14 @@ follows the parent filter's `primitiveUnits`), convolution kernels at 100
 entries, and turbulence octaves at 16. The `<use>`
 count is a dynamic-programming count over the id graph, not the number of
 `<use>` declarations: 17 chained symbols and 33 declarations are about 1 KB of
-XML but expand to 131,071 instances. The 16,384 cap admits the largest practical
+XML but expand to 131,071 instances. A marker reference is multiplied by the
+placements its shape can produce — once per subpath for `marker-start` and
+`marker-end`, once per interior vertex for `marker-mid` — because a marker
+renders per placement, not per declaration. The placement bound is lexical
+(`points` pairs, `d` command arguments, two vertices for `line`), and a
+closepath or polygon's closing point is the last vertex, so a subpath with at
+least two vertices has its previous endpoint in the interior; that is measured
+against the pinned librsvg. The 16,384 cap admits the largest practical
 chained symbol table (measured at 177 ms for 16,383 instances on the qualification
 host) and refuses that document before the renderer; the same shape measured
 581 ms at 65,535 instances and 1,146 ms at 131,071 instances before the cap

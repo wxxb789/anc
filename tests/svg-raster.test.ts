@@ -647,6 +647,24 @@ function patternedChain(body: string, levels: number, extra = ''): string {
   );
 }
 
+/**
+ * A marker whose every placement expands the chain of `levels` symbols.
+ *
+ * `symbolChain(14)` expands to 16,382 instances inside the marker's `<use>`;
+ * the marker itself is one more, so one placement is 16,383. The budget is
+ * 16,384 and the comparison is `>`, so one placement of the 14-level chain is
+ * the largest accepted value. A 15-level chain is the smallest one-placement
+ * refusal, and two placements of the 14-level chain are 32,766.
+ */
+function markerChain(body: string, levels = 14): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs>${symbolChain(levels)}<marker id="m"><use href="#s0"/></marker></defs>` +
+    body +
+    `</svg>`
+  );
+}
+
 test('a pattern template href is an edge, in both spellings and as repeated content', () => {
   const drawn = '<rect width="100" height="100" fill="url(#alias)"/>';
   const spellings = {
@@ -711,6 +729,148 @@ test('inherited stroke and marker-start references multiply like fill', () => {
     assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
     assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
   }
+});
+
+test('a marker reference is multiplied by the placements its shape produces', () => {
+  const twoInterior: Readonly<Record<string, string>> = {
+    path: '<path d="M0 0L10 10L20 0L30 10" marker-mid="url(#m)"/>',
+    polyline: '<polyline points="0,0 10,10 20,0 30,10" marker-mid="url(#m)"/>',
+  };
+  for (const [name, body] of Object.entries(twoInterior)) {
+    const inspection = inspectSvg(Buffer.from(markerChain(body)));
+    if (inspection.ok) assert.fail(`${name}: two interior vertices did not multiply the marker reference`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    // Four vertices, one subpath: mid = 4 - 2 = 2 placements, so 2 × 16,383.
+    assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
+  }
+
+  // A polygon closes back to its first point, so its last listed point is
+  // interior. Three points have two interior placements; four have three.
+  const threePointPolygon = inspectSvg(
+    Buffer.from(markerChain('<polygon points="0,0 10,10 20,0" marker-mid="url(#m)"/>')),
+  );
+  if (threePointPolygon.ok) assert.fail('a three-point polygon was counted as one interior vertex');
+  assert.equal(threePointPolygon.refusal.reason, 'svg-workload', threePointPolygon.refusal.detail);
+  assert.match(threePointPolygon.refusal.detail, /32766/, threePointPolygon.refusal.detail);
+  const fourPointPolygon = inspectSvg(
+    Buffer.from(markerChain('<polygon points="0,0 10,10 20,0 30,10" marker-mid="url(#m)"/>')),
+  );
+  if (fourPointPolygon.ok) assert.fail('a four-point polygon was counted as two interior vertices');
+  assert.equal(fourPointPolygon.refusal.reason, 'svg-workload', fourPointPolygon.refusal.detail);
+  assert.match(fourPointPolygon.refusal.detail, /49149/, fourPointPolygon.refusal.detail);
+});
+
+test('a closepath contributes the closing vertex to the interior bound', () => {
+  // `M0 0 L10 10 Z` has three vertices: the moveto, the lineto, and the
+  // closepoint back at the start. The lineto is therefore interior.
+  const twoDrawn = inspectSvg(
+    Buffer.from(markerChain('<path d="M0 0L10 10Z" marker-mid="url(#m)"/>', 15)),
+  );
+  if (twoDrawn.ok) assert.fail('a two-vertex closed subpath lost its interior vertex');
+  assert.equal(twoDrawn.refusal.reason, 'svg-workload', twoDrawn.refusal.detail);
+  assert.match(twoDrawn.refusal.detail, /32767/, twoDrawn.refusal.detail);
+
+  const threeDrawn = inspectSvg(
+    Buffer.from(markerChain('<path d="M0 0L10 10L20 20Z" marker-mid="url(#m)"/>')),
+  );
+  if (threeDrawn.ok) assert.fail('a three-vertex closed subpath lost an interior vertex');
+  assert.equal(threeDrawn.refusal.reason, 'svg-workload', threeDrawn.refusal.detail);
+  // Four vertices including the closepoint: interior = 4 - 2 = 2.
+  assert.match(threeDrawn.refusal.detail, /32766/, threeDrawn.refusal.detail);
+});
+
+test('a drawing command after a closepath keeps its implicit start vertex', () => {
+  const inspection = inspectSvg(
+    Buffer.from(markerChain('<path d="M0 0Z L10 10 L20 20 L30 30" marker-mid="url(#m)"/>')),
+  );
+  if (inspection.ok) assert.fail('the subpath after the closepath lost its implicit start vertex');
+  assert.equal(inspection.refusal.reason, 'svg-workload', inspection.refusal.detail);
+  // The closed subpath has one vertex (no interior); the drawn subpath has
+  // the implicit start plus three endpoints, so two interior vertices.
+  assert.match(inspection.refusal.detail, /32766/, inspection.refusal.detail);
+});
+
+test('marker placements count the zero interior-vertex and one-placement cases', () => {
+  const twoVertices = '<path d="M0 0L10 10"';
+  // A 15-level chain is 32,767 instances per placement. Accepting it proves the
+  // multiplier is zero, not one: a one-placement count would refuse it.
+  const mid = inspectSvg(Buffer.from(markerChain(`${twoVertices} marker-mid="url(#m)"/>`, 15)));
+  assert.equal(mid.ok, true, mid.ok ? '' : mid.refusal.detail);
+  const lineMid = inspectSvg(
+    Buffer.from(markerChain('<line x1="0" y1="0" x2="10" y2="10" marker-mid="url(#m)"/>', 15)),
+  );
+  assert.equal(lineMid.ok, true, lineMid.ok ? '' : lineMid.refusal.detail);
+
+  // One placement of the 14-level chain is 16,383, exactly at the inclusive
+  // 16,384 budget. The 15-level chain proves the one placement is counted:
+  // 32,767 is the smallest one-placement refusal.
+  const start = inspectSvg(Buffer.from(markerChain(`${twoVertices} marker-start="url(#m)"/>`)));
+  assert.equal(start.ok, true, start.ok ? '' : start.refusal.detail);
+  const over = inspectSvg(Buffer.from(markerChain(`${twoVertices} marker-start="url(#m)"/>`, 15)));
+  if (over.ok) assert.fail('one placement of a 15-level chain was accepted');
+  assert.equal(over.refusal.reason, 'svg-workload', over.refusal.detail);
+  assert.match(over.refusal.detail, /32767/, over.refusal.detail);
+});
+
+test('marker-start and marker-end count once per subpath', () => {
+  const twoSubpaths = '<path d="M0 0L10 10 M20 20L30 30"';
+  for (const property of ['marker-start', 'marker-end']) {
+    const inspection = inspectSvg(
+      Buffer.from(markerChain(`${twoSubpaths} ${property}="url(#m)"/>`)),
+    );
+    if (inspection.ok) assert.fail(`${property}: two subpaths were counted as one placement`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${property}: ${inspection.refusal.detail}`);
+    // Two subpaths × one placement each = 2 × 16,383.
+    assert.match(inspection.refusal.detail, /32766/, `${property}: ${inspection.refusal.detail}`);
+  }
+
+  // Each subpath has two vertices and therefore no interior vertex; the
+  // 15-level chain would refuse if mid were counted per subpath.
+  const mid = inspectSvg(Buffer.from(markerChain(`${twoSubpaths} marker-mid="url(#m)"/>`, 15)));
+  assert.equal(mid.ok, true, mid.ok ? '' : mid.refusal.detail);
+});
+
+test('an inherited marker-mid on a group is multiplied per path, not per group', () => {
+  const path = '<path d="M0 0L10 10L20 0L30 10"/>';
+  const inspection = inspectSvg(Buffer.from(markerChain(`<g marker-mid="url(#m)">${path}${path}</g>`)));
+  if (inspection.ok) assert.fail('an inherited marker-mid was counted once per group');
+  assert.equal(inspection.refusal.reason, 'svg-workload', inspection.refusal.detail);
+  // Two paths × two interior vertices = four placements, so 4 × 16,383.
+  assert.match(inspection.refusal.detail, /65532/, inspection.refusal.detail);
+});
+
+test('the marker shorthand multiplies all three marker slots', () => {
+  const inspection = inspectSvg(
+    Buffer.from(markerChain('<path d="M0 0L10 10L20 0L30 10" style="marker:url(#m)"/>')),
+  );
+  if (inspection.ok) assert.fail('the marker shorthand was counted once instead of per placement');
+  assert.equal(inspection.refusal.reason, 'svg-workload', inspection.refusal.detail);
+  // start 1 + mid 2 + end 1 = four placements, so 4 × 16,383.
+  assert.match(inspection.refusal.detail, /65532/, inspection.refusal.detail);
+});
+
+test('many vertices with a one-instance marker stay inside the budget', () => {
+  const vertices = 1_000;
+  const commands = Array.from({ length: vertices - 1 }, (_, index) => `L${index + 1} ${index % 2}`).join('');
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs><symbol id="dot"><circle cx="1" cy="1" r="1"/></symbol>` +
+    `<marker id="m"><use href="#dot"/></marker></defs>` +
+    `<path d="M0 0${commands}" marker-mid="url(#m)"/></svg>`;
+  const inspection = inspectSvg(Buffer.from(svg));
+  // 998 interior placements × one use instance is far below 16,384.
+  assert.equal(inspection.ok, true, inspection.ok ? '' : inspection.refusal.detail);
+});
+
+test('an unparseable path falls back to its token-count bound, not one placement', () => {
+  const inspection = inspectSvg(
+    Buffer.from(markerChain('<path d="M0 0L10 10 !!!" marker-mid="url(#m)"/>')),
+  );
+  if (inspection.ok) assert.fail('an unparseable path was counted as one placement');
+  assert.equal(inspection.refusal.reason, 'svg-workload', inspection.refusal.detail);
+  // Four numeric tokens, so the fallback bound is four possible interior
+  // placements: 4 × 16,383.
+  assert.match(inspection.refusal.detail, /65532/, inspection.refusal.detail);
 });
 
 test('a nearer declaration suppresses the inherited reference', () => {
