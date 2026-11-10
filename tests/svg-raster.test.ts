@@ -764,6 +764,131 @@ test('a CSS-wide keyword does not erase the inherited reference', () => {
   assert.ok(inspectSvg(Buffer.from(initial)).ok, 'fill:initial was treated as inheritance');
 });
 
+test('a value that only parses keeps the inherited reference like inherit does', () => {
+  const children = (fill: string): string =>
+    `<rect width="50" height="100" fill="${fill}"/>` +
+    `<rect x="50" width="50" height="100" fill="${fill}"/>`;
+  const cases = {
+    'inherited spelling': patternedChain(`<g fill="url(#p)">${children('inherit')}</g>`, 14),
+    bogus: patternedChain(`<g fill="url(#p)">${children('bogus')}</g>`, 14),
+    transparent: patternedChain(`<g fill="url(#p)">${children('transparent')}</g>`, 14),
+    'system colour': patternedChain(`<g fill="url(#p)">${children('Canvas')}</g>`, 14),
+    'calc in a colour function': patternedChain(
+      `<g fill="url(#p)">${children('rgb(calc(255),0,0)')}</g>`,
+      14,
+    ),
+    'non-whitelisted colour function': patternedChain(
+      `<g fill="url(#p)">${children('hwb(0 0% 0%)')}</g>`,
+      14,
+    ),
+    'escaped keyword': patternedChain(`<g fill="url(#p)">${children(String.raw`\72 ed`)}</g>`, 14),
+    'style attribute': patternedChain(
+      `<g fill="url(#p)">` +
+        '<rect width="50" height="100" style="fill:bogus"/>' +
+        '<rect x="50" width="50" height="100" style="fill:bogus"/></g>',
+      14,
+    ),
+    stylesheet: patternedChain(
+      `<style>rect{fill:bogus}</style><g fill="url(#p)">` +
+        '<rect width="50" height="100"/><rect x="50" width="50" height="100"/></g>',
+      14,
+    ),
+  };
+  const details: string[] = [];
+  for (const [name, svg] of Object.entries(cases)) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`${name}: an unproven paint erased the inherited pattern reference`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
+    details.push(inspection.refusal.detail);
+  }
+  assert.equal(
+    new Set(details).size,
+    1,
+    'an invalid paint and an inherited keyword counted the same picture differently',
+  );
+});
+
+test('a provable non-reference paint suppresses the inherited pattern', () => {
+  const values = [
+    '#f00',
+    'none',
+    'rgb(255,0,0)',
+    'rgba(255,0,0,.5)',
+    'rgb(255 0 0 / 50%)',
+    'hsl(0deg 100% 50%)',
+    'currentColor',
+    'red',
+    'rebeccapurple',
+    'initial',
+  ];
+  for (const value of values) {
+    const svg = patternedChain(
+      `<g fill="url(#p)"><rect width="50" height="100" fill="${value}"/>` +
+        `<rect x="50" width="50" height="100" fill="${value}"/></g>`,
+      14,
+    );
+    const inspection = inspectSvg(Buffer.from(svg));
+    assert.ok(
+      inspection.ok,
+      `${value}: a non-reference paint did not suppress the pattern: ${inspection.ok ? '' : inspection.refusal.detail}`,
+    );
+  }
+
+  // The same whitelist through the two CSS doors, so a rule cannot count
+  // differently from the presentation attribute spelling.
+  const spellings = {
+    'style attribute': patternedChain(
+      `<g fill="url(#p)">` +
+        '<rect width="50" height="100" style="fill:currentColor"/>' +
+        '<rect x="50" width="50" height="100" style="fill:currentColor"/></g>',
+      14,
+    ),
+    stylesheet: patternedChain(
+      `<style>rect{fill:rgb(255,0,0)}</style><g fill="url(#p)">` +
+        '<rect width="50" height="100"/><rect x="50" width="50" height="100"/></g>',
+      14,
+    ),
+  };
+  for (const [name, svg] of Object.entries(spellings)) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    assert.ok(
+      inspection.ok,
+      `${name}: a non-reference paint did not suppress the pattern: ${
+        inspection.ok ? '' : inspection.refusal.detail
+      }`,
+    );
+  }
+});
+
+test('an explicit inherit on a local reference property is refused as svg-css', () => {
+  const properties = ['mask', 'filter', 'clip-path'];
+  const bodies: Readonly<Record<string, (property: string) => string>> = {
+    attribute: (property) => `<rect width="100" height="100" ${property}="inherit"/>`,
+    'style attribute': (property) =>
+      `<rect width="100" height="100" style="${property}:inherit"/>`,
+    stylesheet: (property) =>
+      `<style>rect{${property}:inherit}</style><rect width="100" height="100"/>`,
+  };
+  for (const property of properties) {
+    for (const [spelling, body] of Object.entries(bodies)) {
+      const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` + body(property) + `</svg>`;
+      const inspection = inspectSvg(Buffer.from(svg));
+      if (inspection.ok) assert.fail(`${property} in a ${spelling}: an explicit inherit was accepted`);
+      assert.equal(inspection.refusal.reason, 'svg-css', `${property} in a ${spelling}: ${inspection.refusal.detail}`);
+      assert.ok(
+        inspection.refusal.detail.includes(property),
+        `${property} in a ${spelling}: the refusal does not name the property: ${inspection.refusal.detail}`,
+      );
+      assert.ok(
+        inspection.refusal.detail.includes('inherit'),
+        `${property} in a ${spelling}: the refusal does not name the keyword: ${inspection.refusal.detail}`,
+      );
+    }
+  }
+});
+
 test('a use inherits its own paint reference into the content it instantiates', () => {
   const svg =
     `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +

@@ -348,10 +348,11 @@ names:
   and every `<image>`/`<feImage>` element.
 - `svg-data` — any embedded `data:` payload.
 - `svg-css` — malformed CSS, a nested `<style>` element, an at-rule
-  (`@import`, `@font-face`, `@media`, …), or a selector form the reference
-  attribution cannot decide (attribute selectors, pseudo-classes,
-  pseudo-elements, sibling or column combinators, namespaces, and escaped
-  identifiers).
+  (`@import`, `@font-face`, `@media`, …), an explicit `inherit` on `mask`,
+  `filter` or `clip-path` (the reference properties this subset keeps local),
+  or a selector form the reference attribution cannot decide (attribute
+  selectors, pseudo-classes, pseudo-elements, sibling or column combinators,
+  namespaces, and escaped identifiers).
 - `svg-invalid` — not well-formed UTF-8 XML, no `<svg>` root, no usable size, a
   mixed-unit width/height pair, or a budget argument that does not parse (a
   filter-region value or `numOctaves`).
@@ -389,6 +390,25 @@ same-document fragment. `tests/svg-raster.test.ts` proves the check reads the
 **decoded** value: `url("\6a avascript:alert(1)")` and
 `url(http\3a //example.invalid/x)` contain neither literal the gate must not rely
 on, yet are refused as a script URL and an external URL respectively.
+
+**Inherited references are suppressed only by a provable non-reference paint.**
+`fill` and `stroke` are inherited, so one `url(#p)` on a group is the work of
+every painted descendant that does not override it. A declaration overrides
+only when its value is on a narrow whitelist — `none`, `initial`,
+`currentColor`, a hex colour, a named colour the parser resolves, or an
+`rgb()`/`rgba()`/`hsl()`/`hsla()` call with literal arguments — because only
+those provably paint no document resource. Every other value (`bogus`,
+`url(#…)`, a bare gradient name, an escaped or unknown keyword, a variable,
+anything unparseable) may be invalid at computed-value time and fall back to the
+inherited value, so it keeps the ancestor reference and is counted there too.
+Valid paints outside the whitelist (`transparent`, a system colour, `hwb()`,
+`lab()`, `color()`) keep it as well: this policy does not model which colour
+syntaxes the installed renderer accepts.
+The marker slots admit only `none`/`initial`; `cursor` never suppresses.
+Over-counting is the accepted direction — the expansion count is an upper
+bound, not an exact prediction. `tests/svg-raster.test.ts` pins `fill="bogus"`
+at the same `32766`-instance refusal as `fill="inherit"` and pins the
+whitelisted paints as accepted.
 
 **A `<style>` rule's references belong to the elements its selectors match.**
 The matcher uses only the recorded tree — element local name, `id`, `class`, and

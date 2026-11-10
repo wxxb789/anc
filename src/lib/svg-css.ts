@@ -24,7 +24,7 @@
  * read it the same way.
  */
 
-import { parse, walk, type CssNode } from 'css-tree';
+import { lexer, parse, walk, type CssNode } from 'css-tree';
 import type { SvgRefusal } from './svg-refusal.ts';
 
 /** Node types a static declaration value or selector may contain. */
@@ -155,6 +155,17 @@ function checkNode(node: CssNode, where: string): SvgRefusal | undefined {
   if (node.type === 'Raw') {
     return { reason: 'svg-css', detail: `${where}: CSS this policy cannot parse` };
   }
+  if (node.type === 'Declaration') {
+    const property = node['property'];
+    if (typeof property === 'string') {
+      const decoded = decodeCssEscapes(property).toLowerCase();
+      if (LOCAL_REFERENCE_PROPERTIES[decoded] === true) {
+        const value = node['value'];
+        const parsed = typeof value === 'object' && value !== null ? (value as CssNode) : undefined;
+        if (keywordValue(parsed) === 'inherit') return localInheritanceFault(decoded, where);
+      }
+    }
+  }
   if (node.type === 'Atrule') {
     const name = (node.name ?? '').toLowerCase();
     return { reason: 'svg-css', detail: `${where}: @${name} is not part of the static subset` };
@@ -213,6 +224,16 @@ export interface StaticDeclaration {
    * value, not to the parent.
    */
   readonly defers: boolean;
+  /**
+   * Whether the value provably paints no document resource.
+   *
+   * This is the only flag that may suppress an inherited reference. A value
+   * that parses but is not provably a paint (`bogus`, `url(#…)`, a gradient
+   * name, an escaped or unknown keyword) can be invalid at computed-value time
+   * and fall back to the inherited value, so it keeps the reference. The
+   * whitelist is deliberately narrow; over-counting is the safe direction.
+   */
+  readonly suppresses: boolean;
 }
 
 /** One static rule: its attributable selectors and the declarations it applies. */
@@ -413,6 +434,7 @@ function collectDeclarations(root: CssNode): StaticDeclaration[] {
       property: decodeCssEscapes(property).toLowerCase(),
       references,
       defers: defersToParent(parsed),
+      suppresses: suppressesInheritedReference(property, parsed),
     });
   });
   return declarations;
@@ -457,17 +479,153 @@ function decodeCssEscapes(value: string): string {
   });
 }
 
+/**
+ * Reference properties this subset does not inherit, so an explicit `inherit`
+ * is refused rather than guessed at.
+ *
+ * `mask`, `filter` and `clip-path` take their computed value from the element
+ * that declares them. `inherit` asks for the parent's computed value instead;
+ * the expansion count would have to propagate a local slot to honour it, which
+ * is a second inheritance model this policy does not have. Refusing the
+ * keyword keeps the count honest and tells the author to write the declaration
+ * where it applies.
+ */
+const LOCAL_REFERENCE_PROPERTIES: Readonly<Record<string, true>> = {
+  filter: true,
+  'clip-path': true,
+  mask: true,
+};
+
+/** The colour functions whose arguments can be checked without a grammar. */
+const LITERAL_COLOR_FUNCTIONS: Readonly<Record<string, true>> = {
+  rgb: true,
+  rgba: true,
+  hsl: true,
+  hsla: true,
+};
+
+/** Node types a literal colour function's argument list may contain. */
+const LITERAL_COLOR_ARGUMENTS: Readonly<Record<string, true>> = {
+  Number: true,
+  Percentage: true,
+  Dimension: true,
+  Operator: true,
+  WhiteSpace: true,
+  Comment: true,
+};
+
+/**
+ * The identifier a value consists of, undecoded and lowercased, or `undefined`.
+ *
+ * Undecoded on purpose: an escaped spelling (`\6e one`) is not admitted to the
+ * suppression whitelist. The renderer would resolve it, but keeping the
+ * inherited reference is the safe direction and the whitelist stays exact.
+ */
+function rawKeyword(value: CssNode | undefined): string | undefined {
+  if (value?.type !== 'Value') return undefined;
+  const parts = value.children?.toArray() ?? [];
+  if (parts.length !== 1) return undefined;
+  const [only] = parts;
+  return only?.type === 'Identifier' && typeof only.name === 'string' ? only.name.toLowerCase() : undefined;
+}
+
+/** The CSS keyword a value consists of, decoded and lowercased. */
+function keywordValue(value: CssNode | undefined): string | undefined {
+  const raw = rawKeyword(value);
+  return raw === undefined ? undefined : decodeCssEscapes(raw).toLowerCase();
+}
+
 /** Whether a parsed value is exactly one CSS-wide keyword that defers to the parent. */
 function defersToParent(value: CssNode | undefined): boolean {
-  if (value?.type !== 'Value') return false;
-  const parts = value.children?.toArray() ?? [];
-  if (parts.length !== 1) return false;
-  const [only] = parts;
-  return (
-    only?.type === 'Identifier' &&
-    typeof only.name === 'string' &&
-    DEFERRING_KEYWORDS[decodeCssEscapes(only.name).toLowerCase()] === true
-  );
+  const keyword = keywordValue(value);
+  return keyword !== undefined && DEFERRING_KEYWORDS[keyword] === true;
+}
+
+/**
+ * Whether the parser's own syntax resolves this node as `type`.
+ *
+ * This is css-tree's bundled CSS grammar, not a second colour table. It is used
+ * with `named-color` for the named keywords and with `color` for the shapes the
+ * whitelist has already restricted (a hash or one of four literal colour
+ * functions); it cannot admit a reference-bearing shape from those callers.
+ */
+function parserResolves(node: CssNode, type: 'color' | 'named-color'): boolean {
+  try {
+    return lexer.matchType(type, node).matched !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a colour function's arguments are all literal components. */
+function literalColorArguments(node: CssNode): boolean {
+  for (const part of node.children?.toArray() ?? []) {
+    if (LITERAL_COLOR_ARGUMENTS[part.type] !== true) return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a declaration's value provably paints no document resource.
+ *
+ * **Invariant: a value may suppress an inherited reference only if it
+ * provably paints no resource; every other value keeps the reference.** The
+ * safe direction is over-counting, so the admitted set is only what can be
+ * checked structurally:
+ *
+ * - `fill` / `stroke`: `none`, `initial` (its initial value is none),
+ *   `currentColor`, a hash the parser resolves as a colour, a colour keyword
+ *   from the parser's `named-color` grammar, or an
+ *   `rgb()`/`rgba()`/`hsl()`/`hsla()` call whose arguments are literals and
+ *   whose result the parser resolves as a colour.
+ * - the marker properties (and the `marker` shorthand): `none` or `initial`.
+ *   Their grammar admits only `none` or a marker reference, so no other value
+ *   can be a proven paint.
+ *
+ * Escaped spellings of these keywords are not admitted: `rawKeyword` does not
+ * decode. `url(#…)`, a bare gradient name, an arithmetic function, an unknown
+ * keyword and anything unparseable all keep the inherited reference. A valid
+ * paint outside the whitelist — `transparent`, a system colour, `hwb()`,
+ * `lab()`, `color()` — also keeps it: this policy does not model which colour
+ * syntaxes the renderer installed, and a value it rejects falls back to the
+ * inherited paint. `cursor` is inherited by the policy's table but never
+ * suppresses: it cannot paint with a fragment in an SVG image, and keeping its
+ * reference closes the table against an inheritance route this policy forgot.
+ */
+function suppressesInheritedReference(property: string, value: CssNode | undefined): boolean {
+  const decoded = decodeCssEscapes(property).toLowerCase();
+  if (decoded === 'fill' || decoded === 'stroke') {
+    if (value?.type !== 'Value') return false;
+    const parts = value.children?.toArray() ?? [];
+    if (parts.length !== 1) return false;
+    const [only] = parts;
+    if (only === undefined) return false;
+    if (only.type === 'Identifier') {
+      const keyword = rawKeyword(value);
+      if (keyword === 'none' || keyword === 'initial' || keyword === 'currentcolor') return true;
+      return parserResolves(only, 'named-color');
+    }
+    if (only.type === 'Hash') return parserResolves(only, 'color');
+    if (only.type === 'Function') {
+      if (LITERAL_COLOR_FUNCTIONS[only.name?.toLowerCase() ?? ''] !== true) return false;
+      if (!literalColorArguments(only)) return false;
+      return parserResolves(only, 'color');
+    }
+    return false;
+  }
+  if (decoded === 'marker' || decoded.startsWith('marker-')) {
+    const keyword = rawKeyword(value);
+    return keyword === 'none' || keyword === 'initial';
+  }
+  return false;
+}
+
+/** The refusal for an explicit `inherit` on a local reference property. */
+function localInheritanceFault(property: string, where: string): SvgRefusal {
+  return {
+    reason: 'svg-css',
+    detail: `${where}: ${property}: inherit is refused because ${property} does not inherit; declare ${property} on the element it applies to`,
+  };
 }
 
 /**
@@ -481,11 +639,16 @@ export function presentationDeclaration(property: string, source: string): Stati
   try {
     ast = parse(source, { context: 'value' });
   } catch {
-    return { property, references: [], defers: false };
+    return { property, references: [], defers: false, suppresses: false };
   }
   const references: string[] = [];
   collectFragmentReferences(ast, references);
-  return { property, references, defers: defersToParent(ast) };
+  return {
+    property,
+    references,
+    defers: defersToParent(ast),
+    suppresses: suppressesInheritedReference(property, ast),
+  };
 }
 
 /**
@@ -565,6 +728,21 @@ export function declarationReferences(source: string): StaticDeclaration[] {
  * than scanning it means an escaped scheme is decoded by the same grammar the
  * renderer uses.
  */
-export function inspectPresentationAttribute(name: string, source: string): SvgRefusal | undefined {
-  return inspect(source, 'value', `${name} attribute`);
+export function inspectPresentationAttribute(
+  name: string,
+  source: string,
+  where = `${name} attribute`,
+): SvgRefusal | undefined {
+  const property = decodeCssEscapes(name).toLowerCase();
+  if (LOCAL_REFERENCE_PROPERTIES[property] === true) {
+    let value: CssNode | undefined;
+    try {
+      value = parse(source, { context: 'value' });
+    } catch {
+      // `inspect` below reports the parse error with the same context.
+      value = undefined;
+    }
+    if (keywordValue(value) === 'inherit') return localInheritanceFault(property, where);
+  }
+  return inspect(source, 'value', where);
 }

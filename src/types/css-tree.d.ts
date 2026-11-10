@@ -13,7 +13,9 @@
  * what URL does a `Url` node carry, and what child list, selector or declaration
  * block does a container carry — so those are the only members declared.
  * Anything else is read through the `unknown` index and must be narrowed by the
- * caller.
+ * caller. `lexer.matchType` is declared because the suppression whitelist asks
+ * the parser's bundled syntax whether one value resolves as a colour, rather
+ * than carrying a second colour table.
  */
 declare module 'css-tree' {
   export interface CssNode {
@@ -43,4 +45,19 @@ declare module 'css-tree' {
   export function parse(source: string, options?: ParseOptions): CssNode;
 
   export function walk(root: CssNode, visit: (node: CssNode) => void): void;
+
+  /**
+   * One node matched against a syntax type.
+   *
+   * `matched` is `null` when the value does not fit; only that fact is used,
+   * so the match object itself stays opaque.
+   */
+  export interface MatchResult {
+    readonly matched: unknown;
+  }
+
+  /** The bundled CSS syntax, consulted only to resolve a value as a colour. */
+  export const lexer: {
+    matchType(typeName: string, value: CssNode): MatchResult;
+  };
 }

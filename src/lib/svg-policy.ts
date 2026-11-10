@@ -454,6 +454,15 @@ const URL_ATTRIBUTES: Readonly<Record<string, true>> = {
  * librsvg inherits and paints with are exactly `fill`, `stroke`, the marker
  * slots and `cursor`; an unknown property is still counted where it is declared,
  * so a reference cannot disappear from the graph.
+ *
+ * **Suppression invariant.** A declaration in one of these slots may override
+ * the reference inherited from an ancestor only when its value provably paints
+ * no resource — the whitelist in `svg-css.ts`. Every other value (`bogus`,
+ * `url(#…)`, a bare gradient name, an escaped or unknown keyword, a variable,
+ * anything unparseable) keeps the ancestor reference: an invalid paint falls
+ * back to the inherited value in the renderer, so treating it as an override
+ * would lose work. Over-counting is the accepted direction; the count is an
+ * upper bound by design.
  */
 const INHERITED_REFERENCE_SLOTS: Readonly<Record<string, number>> = {
   fill: 0,
@@ -508,6 +517,14 @@ interface ReferenceDeclarations {
   readonly references: string[];
   /** Whether any declaration of the property defers to the parent's value. */
   defers: boolean;
+  /**
+   * Whether every declaration of the property provably paints no resource.
+   *
+   * Merging is `&&`, not `||`: an element can declare one property in several
+   * places whose cascade order this policy does not model. One declaration that
+   * might paint a resource means the ancestor's reference stays reachable.
+   */
+  suppresses: boolean;
 }
 
 /** SVG's number grammar, shared by every budget argument below. */
@@ -624,8 +641,12 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
  * slots and `cursor` are inherited properties: one declaration on a `<g>` is the
  * work of one declaration on every painted descendant, so a `url(#p)` on an
  * ancestor is multiplied by the painted descendants it reaches while a nearer
- * declaration of the same property overrides it, exactly as the property system
- * works. The slots are resolved once per element in a parent-before-child pass
+ * declaration whose value provably paints no resource overrides it, exactly as
+ * the property system works for a valid non-reference paint. A nearer value
+ * that only parses is not an override: an invalid paint falls back to the
+ * inherited one, so it keeps the ancestor reference and is counted there too.
+ *
+ * The slots are resolved once per element in a parent-before-child pass
  * (one array per node, six entries), so attribution is O(elements × properties)
  * rather than an ancestor walk per element. `filter`, `clip-path`, `mask` and
  * `href` do not inherit and stay attached to the element that declares them. A
@@ -754,14 +775,15 @@ function expandedUseInstances(
         const declared = own.get(property);
         if (declared === undefined) continue;
         copy ??= [...inherited];
-        // A deferring keyword (`inherit`, `unset`, `revert`) may resolve to the
-        // parent's value, so the descendant context keeps both the declared
-        // reference and the inherited one. Over-counting is the safe direction;
-        // treating the keyword as a local override would lose the inherited
-        // reference entirely.
-        copy[slot] = declared.defers
-          ? [...(inherited[slot] ?? []), ...declared.references]
-          : declared.references;
+        // A value that does not provably paint without a resource may resolve
+        // to the parent's value (a CSS-wide keyword) or fall back to it (an
+        // invalid paint), so the descendant context keeps both the declared
+        // references and the inherited ones. Over-counting is the safe
+        // direction; treating every non-deferring declaration as an override
+        // is what let `fill="bogus"` erase an inherited pattern reference.
+        copy[slot] = declared.suppresses
+          ? declared.references
+          : [...(inherited[slot] ?? []), ...declared.references];
       }
       if (copy !== undefined) context = copy;
     }
@@ -787,11 +809,12 @@ function expandedUseInstances(
   /**
    * The nearest declaration of each inherited property that still applies.
    *
-   * A property the node declares itself replaces the ancestor's reference; a
-   * deferring keyword does not, so the ancestor's reference is counted as well.
-   * The ancestor context is the parent's, not this node's merged context, so a
-   * painter that declares a reference and inherits one cannot count its own
-   * reference twice through the slot.
+   * A declaration that provably paints without a resource replaces the
+   * ancestor's reference; every other declaration keeps it, whether it defers
+   * to the parent or might be invalid and fall back there. The ancestor context
+   * is the parent's, not this node's merged context, so a painter that declares
+   * a reference and inherits one cannot count its own reference twice through
+   * the slot.
    */
   const inheritedReferences = (index: number): readonly string[] => {
     if (!paints(index)) return [];
@@ -801,7 +824,7 @@ function expandedUseInstances(
     const accumulated: string[] = [];
     for (let slot = 0; slot < slotsCount; slot += 1) {
       const declared = own?.get(INHERITED_REFERENCE_PROPERTIES[slot]!);
-      if (declared !== undefined && !declared.defers) continue;
+      if (declared !== undefined && declared.suppresses) continue;
       const references = inherited[slot];
       if (references !== undefined && references.length > 0) accumulated.push(...references);
     }
@@ -968,10 +991,17 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     for (const name of names) {
       const existing = map.get(name);
       if (existing === undefined) {
-        map.set(name, { references: [...declaration.references], defers: declaration.defers });
+        map.set(name, {
+          references: [...declaration.references],
+          defers: declaration.defers,
+          suppresses: declaration.suppresses,
+        });
       } else {
         existing.references.push(...declaration.references);
         existing.defers ||= declaration.defers;
+        // One declaration that might paint keeps the inherited reference
+        // reachable; the cascade order between them is not modelled here.
+        existing.suppresses &&= declaration.suppresses;
       }
     }
   };
@@ -1160,7 +1190,7 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
       // recording it twice would change every existing count. Any other element
       // the allowlist admits an href on gets the same edge, so an element this
       // table forgot cannot become an unfollowed template.
-      declare(nodeIndex, { property: 'href', references: [href.slice(1)], defers: false });
+      declare(nodeIndex, { property: 'href', references: [href.slice(1)], defers: false, suppresses: false });
     }
     filterPrimitiveBounding.push(
       local === 'filter' &&
@@ -1484,7 +1514,7 @@ function checkAttribute(
   }
 
   if (URL_ATTRIBUTES[local] === true) {
-    const refusal = inspectPresentationAttribute(where, value);
+    const refusal = inspectPresentationAttribute(local, value, where);
     if (refusal !== undefined) return refusal;
   }
 
