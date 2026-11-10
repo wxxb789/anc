@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="300" viewBox="0 0 600 300">
+  <title>Mask</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#86c8e6"/>
+      <stop offset="1" stop-color="#f4f7fa"/>
+    </linearGradient>
+    <mask id="window" maskUnits="userSpaceOnUse" x="0" y="0" width="600" height="300">
+      <rect width="600" height="300" fill="#000000"/>
+      <circle cx="300" cy="150" r="120" fill="#ffffff"/>
+    </mask>
+  </defs>
+  <rect width="600" height="300" fill="url(#sky)"/>
+  <g mask="url(#window)">
+    <rect width="600" height="300" fill="#8ad884"/>
+    <path d="M120 240 L300 40 L480 240 Z" fill="#1c222a"/>
+  </g>
+</svg>

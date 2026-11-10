@@ -1,0 +1,1909 @@
+/**
+ * The static, self-contained SVG subset: a namespace-aware XML walk plus the CSS
+ * policy, and the measurements a rasterizer needs from it.
+ *
+ * This module is **policy only**. It reads bytes, never a filesystem path, and it
+ * never renders. `svg-render.ts` turns an accepted document into WebP; keeping
+ * the two apart means the security gate is tested without a native binding and
+ * the renderer cannot be reached by a document this file refused.
+ *
+ * ## What is accepted
+ *
+ * A single `<svg>` root in the SVG namespace, drawing elements from the static
+ * subset (shapes, paths, groups, `defs`/`symbol`/`use`, gradients, patterns, clip
+ * paths, masks, markers, static filters, and text), styled by attributes, a
+ * `style` attribute or a `<style>` sheet, and referencing only **fragments of the
+ * same document** (`href="#id"`, `xlink:href="#id"`, `url(#grad)`). No external
+ * resource can be named, so the renderer has nothing to resolve even before the
+ * byte-buffer boundary denies it a base URI.
+ *
+ * ## What is refused, and why by construct rather than by text
+ *
+ * - A `DOCTYPE` event or an entity reference beyond XML's predefined five. The
+ *   saxes parser is configured without a DTD resolver and reports an undefined
+ *   entity as an error; a DTD is refused before it can declare one.
+ * - `XInclude`, `script`, `foreignObject`, animation elements, `on*` handlers,
+ *   `xmlns`-relative foreign namespaces, `xml:base`, and processing instructions.
+ * - Every `href`/`xlink:href` and every CSS `url()` that is not a fragment,
+ *   classified by the **decoded** value (see `svg-css.ts`), so an escaped
+ *   `\6a avascript:` is the script URL it resolves to.
+ * - Every `data:` payload, with its own diagnostic. That is the design's bounded
+ *   choice rather than an unimplemented embedding path.
+ * - Documents and declared surfaces beyond finite budgets, before a pixel is
+ *   allocated: element count, nesting depth, `use` count, text volume, filter
+ *   primitive count, standard deviations, filter regions and convolution
+ *   kernels.
+ *
+ * ## What it returns
+ *
+ * The logical size to rasterize — explicit absolute `width`/`height` when both are
+ * usable, otherwise the `viewBox` — and the visible text runs, which the renderer
+ * probes against the host's fonts. A `viewBox`-only document has no author-chosen
+ * CSS size, so the renderer derives one from the article layout; this module
+ * reports what the author wrote and leaves that product decision where the
+ * measurement is.
+ */
+
+import { SaxesParser, type SaxesAttributeNS, type SaxesTagNS } from 'saxes';
+import {
+  analyzeStyleSheet,
+  declarationReferences,
+  inspectPresentationAttribute,
+  inspectReference,
+  inspectStyleAttribute,
+  presentationDeclaration,
+  type StaticDeclaration,
+  type StaticSelector,
+  type StaticStyleRule,
+} from './svg-css.ts';
+import type { SvgRefusal } from './svg-refusal.ts';
+
+/** The SVG namespace every accepted element must be in. */
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+/** The legacy link namespace, accepted for `href`, `title` and `role`. */
+const XLINK_NAMESPACE = 'http://www.w3.org/1999/xlink';
+
+/** The XInclude namespace, refused with its own diagnostic. */
+const XINCLUDE_NAMESPACE = 'http://www.w3.org/2001/XInclude';
+
+/** XML's own namespace, accepted only for `xml:lang` and `xml:space`. */
+const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
+
+/** Namespace declarations themselves; saxes reports them as attributes. */
+const XMLNS_NAMESPACE = 'http://www.w3.org/2000/xmlns/';
+
+/** The finite work limits one document is inspected against. */
+export interface SvgLimits {
+  /** Elements in the document. */
+  readonly maxElements: number;
+  /** Element nesting depth. */
+  readonly maxDepth: number;
+  /** `<use>` elements, the expansion primitive. */
+  readonly maxUses: number;
+  /** Instances produced by expanding `<use>` references. */
+  readonly maxUseInstances: number;
+  /** Characters of visible text across every `<text>` subtree. */
+  readonly maxTextCharacters: number;
+  /** Characters of CSS across every `<style>` element. */
+  readonly maxStyleCharacters: number;
+  /** Distinct characters the host-font coverage check will attempt. */
+  readonly maxDistinctTextCharacters: number;
+  /** Filter primitives across every `<filter>`. */
+  readonly maxFilterPrimitives: number;
+  /** Absolute user-unit ceiling for one filter region side; a side at it is refused. */
+  readonly maxFilterRegion: number;
+  /** Percentage ceiling for one filter region side. */
+  readonly maxFilterRegionPercent: number;
+  /** Ceiling for a `stdDeviation` component, in user units. */
+  readonly maxStdDeviation: number;
+  /** Ceiling for a convolution kernel's entry count. */
+  readonly maxKernelEntries: number;
+  /** Ceiling for `feTurbulence`'s `numOctaves`. */
+  readonly maxTurbulenceOctaves: number;
+}
+
+/**
+ * Chosen to admit an ordinary diagram export (tens to low hundreds of elements,
+ * a handful of filters) while refusing a synthetic flood long before libvips is
+ * asked for a surface. The render-budget half lives in `svg-render.ts`, because
+ * it is about pixels rather than syntax.
+ */
+export const SVG_POLICY_LIMITS: SvgLimits = Object.freeze({
+  maxElements: 20_000,
+  maxDepth: 128,
+  maxUses: 500,
+  maxUseInstances: 16_384,
+  maxTextCharacters: 100_000,
+  maxStyleCharacters: 1_000_000,
+  maxDistinctTextCharacters: 4_096,
+  maxFilterPrimitives: 100,
+  maxFilterRegion: 20_000,
+  maxFilterRegionPercent: 500,
+  maxStdDeviation: 1_000,
+  maxKernelEntries: 100,
+  maxTurbulenceOctaves: 16,
+});
+
+/** A `viewBox` as four finite numbers. */
+interface SvgViewBox {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The facts an accepted document contributes to the render decision. */
+export interface SvgSource {
+  /** Logical `width` in CSS pixels: declared, or inferred from the viewBox. */
+  readonly width?: number;
+  /** Logical `height` in CSS pixels: declared, or inferred from the viewBox. */
+  readonly height?: number;
+  /**
+   * Whether an absolute width or height was written.
+   *
+   * A percentage, `em` or `ex` size follows the viewport or the font rather than
+   * declaring a logical picture size, so it does not count: such a document is
+   * laid out like a `viewBox`-only one. This flag is what lets the renderer give
+   * an explicit size precedence and derive the article width otherwise. When one
+   * side was declared and the other came from the viewBox, this stays true and
+   * both fields carry the inferred pair.
+   */
+  readonly declaredSize: boolean;
+  /**
+   * How librsvg scales the document with `density`.
+   *
+   * `linear` for unitless/`px`/percentage dimensions, and `physical` for
+   * `pt`/`pc`/`mm`/`cm`/`in`. Measured against the pinned sharp: a `100mm` width
+   * renders 283 px at density 72 and 1134 px at 144 — the physical-unit branch
+   * is evaluated at the requested DPI *and* scaled by it again — while `100px`
+   * renders 100 then 200. The renderer's density formula depends on this
+   * distinction, so the policy reports it instead of letting the renderer guess.
+   */
+  readonly sizeScale: 'linear' | 'physical';
+  /**
+   * Text runs in document order, including text inside an unused `defs` or
+   * `symbol`; excludes `title`, `desc` and `style`. The font gate checks all of
+   * them because proving a symbol is unreferenced is not worth the failure
+   * direction.
+   */
+  readonly text: readonly string[];
+}
+
+/** What inspecting one candidate produced. */
+export type SvgInspection =
+  | { readonly ok: true; readonly source: SvgSource }
+  | { readonly ok: false; readonly refusal: SvgRefusal };
+
+/* ------------------------------------------------------------------------- *
+ * Element and attribute policy
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Elements this subset draws.
+ *
+ * An allowlist, not a denylist, for the reason the design gives: a feature the
+ * policy does not understand must fail rather than render as a misleading
+ * partial diagram. `feImage` is absent because it names a resource; `metadata` is
+ * absent because this build does not render it and will not walk arbitrary
+ * foreign XML to prove that.
+ */
+const ALLOWED_ELEMENTS: Readonly<Record<string, true>> = {
+  svg: true,
+  g: true,
+  defs: true,
+  desc: true,
+  title: true,
+  style: true,
+  symbol: true,
+  use: true,
+  view: true,
+  rect: true,
+  circle: true,
+  ellipse: true,
+  line: true,
+  polyline: true,
+  polygon: true,
+  path: true,
+  text: true,
+  tspan: true,
+  textPath: true,
+  a: true,
+  linearGradient: true,
+  radialGradient: true,
+  stop: true,
+  pattern: true,
+  clipPath: true,
+  mask: true,
+  marker: true,
+  filter: true,
+  feBlend: true,
+  feColorMatrix: true,
+  feComponentTransfer: true,
+  feComposite: true,
+  feConvolveMatrix: true,
+  feDiffuseLighting: true,
+  feDisplacementMap: true,
+  feDropShadow: true,
+  feFlood: true,
+  feFuncA: true,
+  feFuncB: true,
+  feFuncG: true,
+  feFuncR: true,
+  feGaussianBlur: true,
+  feMerge: true,
+  feMergeNode: true,
+  feMorphology: true,
+  feOffset: true,
+  fePointLight: true,
+  feSpecularLighting: true,
+  feSpotLight: true,
+  feTile: true,
+  feTurbulence: true,
+};
+
+/**
+ * Attributes with no resource-loading meaning.
+ *
+ * Grouped by what they do rather than alphabetised, so a new entry lands in a
+ * reviewable place. `href`/`xlink:href` are absent because they get their own
+ * fragment-only check; `style` is absent because it is parsed.
+ */
+const ALLOWED_ATTRIBUTES: Readonly<Record<string, true>> = {
+  // Core, accessibility and styling hooks.
+  id: true,
+  class: true,
+  role: true,
+  tabindex: true,
+  lang: true,
+  // Geometry.
+  x: true,
+  y: true,
+  z: true,
+  x1: true,
+  y1: true,
+  x2: true,
+  y2: true,
+  width: true,
+  height: true,
+  rx: true,
+  ry: true,
+  r: true,
+  cx: true,
+  cy: true,
+  fx: true,
+  fy: true,
+  fr: true,
+  d: true,
+  points: true,
+  pathLength: true,
+  viewBox: true,
+  preserveAspectRatio: true,
+  transform: true,
+  'transform-origin': true,
+  version: true,
+  baseProfile: true,
+  // Paint and compositing.
+  fill: true,
+  'fill-opacity': true,
+  'fill-rule': true,
+  stroke: true,
+  'stroke-width': true,
+  'stroke-opacity': true,
+  'stroke-linecap': true,
+  'stroke-linejoin': true,
+  'stroke-miterlimit': true,
+  'stroke-dasharray': true,
+  'stroke-dashoffset': true,
+  'paint-order': true,
+  color: true,
+  opacity: true,
+  display: true,
+  visibility: true,
+  overflow: true,
+  clip: true,
+  'clip-path': true,
+  'clip-rule': true,
+  mask: true,
+  filter: true,
+  'mix-blend-mode': true,
+  isolation: true,
+  'vector-effect': true,
+  'shape-rendering': true,
+  'text-rendering': true,
+  'image-rendering': true,
+  'color-interpolation': true,
+  'color-interpolation-filters': true,
+  'color-rendering': true,
+  'pointer-events': true,
+  'marker-start': true,
+  'marker-mid': true,
+  'marker-end': true,
+  // Text.
+  'font-family': true,
+  'font-size': true,
+  'font-size-adjust': true,
+  'font-stretch': true,
+  'font-style': true,
+  'font-variant': true,
+  'font-weight': true,
+  'letter-spacing': true,
+  'word-spacing': true,
+  kerning: true,
+  'text-anchor': true,
+  'text-decoration': true,
+  'writing-mode': true,
+  direction: true,
+  'unicode-bidi': true,
+  'dominant-baseline': true,
+  'alignment-baseline': true,
+  'baseline-shift': true,
+  'white-space': true,
+  textLength: true,
+  lengthAdjust: true,
+  startOffset: true,
+  method: true,
+  spacing: true,
+  // Gradients and patterns.
+  offset: true,
+  'stop-color': true,
+  'stop-opacity': true,
+  'flood-color': true,
+  'flood-opacity': true,
+  'lighting-color': true,
+  gradientUnits: true,
+  gradientTransform: true,
+  spreadMethod: true,
+  patternUnits: true,
+  patternContentUnits: true,
+  patternTransform: true,
+  // Clip paths, masks and markers.
+  clipPathUnits: true,
+  maskUnits: true,
+  maskContentUnits: true,
+  markerWidth: true,
+  markerHeight: true,
+  markerUnits: true,
+  refX: true,
+  refY: true,
+  orient: true,
+  // Filters.
+  filterUnits: true,
+  primitiveUnits: true,
+  in: true,
+  in2: true,
+  result: true,
+  mode: true,
+  operator: true,
+  type: true,
+  values: true,
+  tableValues: true,
+  slope: true,
+  intercept: true,
+  amplitude: true,
+  exponent: true,
+  scale: true,
+  baseFrequency: true,
+  numOctaves: true,
+  seed: true,
+  stitchTiles: true,
+  xChannelSelector: true,
+  yChannelSelector: true,
+  radius: true,
+  stdDeviation: true,
+  dx: true,
+  dy: true,
+  rotate: true,
+  order: true,
+  kernelMatrix: true,
+  divisor: true,
+  bias: true,
+  targetX: true,
+  targetY: true,
+  edgeMode: true,
+  preserveAlpha: true,
+  surfaceScale: true,
+  diffuseConstant: true,
+  specularConstant: true,
+  specularExponent: true,
+  limitingConeAngle: true,
+  pointsAtX: true,
+  pointsAtY: true,
+  pointsAtZ: true,
+  k1: true,
+  k2: true,
+  k3: true,
+  k4: true,
+};
+
+/**
+ * Presentation attributes that accept `url(...)`.
+ *
+ * Every one is parsed as a CSS value, not scanned for the text `url(`. `cursor`
+ * is absent with the attribute from the allowlist: it is a pointer-interaction
+ * property, and an SVG served as an image has no pointer to style.
+ */
+const URL_ATTRIBUTES: Readonly<Record<string, true>> = {
+  fill: true,
+  stroke: true,
+  filter: true,
+  'clip-path': true,
+  mask: true,
+  'marker-start': true,
+  'marker-mid': true,
+  'marker-end': true,
+};
+
+/**
+ * The URL-bearing properties whose declaration is inherited by descendants.
+ *
+ * This is the **property table** the expansion count uses. A declaration in one
+ * of these slots applies to the nearest painted descendant for which no nearer
+ * declaration exists, so one `url(#p)` on a `<g>` is the same render work as one
+ * on each drawn child. `marker` is the shorthand for the three marker slots and
+ * is expanded when declared. `cursor` is inherited too; it cannot paint with a
+ * document fragment in an SVG image, but following it costs only budget and
+ * keeps the table closed against an inheritance route this policy forgot.
+ *
+ * Every other URL-bearing property in this subset is **local**, counted on the
+ * element that declares it and not inherited: `filter`, `clip-path` and `mask`
+ * (the three non-inherited reference properties SVG defines), `href` (a
+ * template edge, always applied to the declaring definition), and any other CSS
+ * property a `style` attribute or sheet names. A property outside this table
+ * cannot multiply a `<use>` through inheritance: the reference properties
+ * librsvg inherits and paints with are exactly `fill`, `stroke`, the marker
+ * slots and `cursor`; an unknown property is still counted where it is declared,
+ * so a reference cannot disappear from the graph.
+ *
+ * **Suppression invariant.** A declaration in one of these slots may override
+ * the reference inherited from an ancestor only when its value provably paints
+ * no resource — the whitelist in `svg-css.ts`. Every other value (`bogus`,
+ * `url(#…)`, a bare gradient name, an escaped or unknown keyword, a variable,
+ * anything unparseable) keeps the ancestor reference: an invalid paint falls
+ * back to the inherited value in the renderer, so treating it as an override
+ * would lose work. Over-counting is the accepted direction; the count is an
+ * upper bound by design.
+ */
+const INHERITED_REFERENCE_SLOTS: Readonly<Record<string, number>> = {
+  fill: 0,
+  stroke: 1,
+  'marker-start': 2,
+  'marker-mid': 3,
+  'marker-end': 4,
+  cursor: 5,
+};
+
+/** Slot order for {@link INHERITED_REFERENCE_SLOTS}. */
+const INHERITED_REFERENCE_PROPERTIES: readonly string[] = [
+  'fill',
+  'stroke',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+  'cursor',
+];
+
+/** The three properties the `marker` shorthand declares. */
+const MARKER_PROPERTIES: readonly string[] = ['marker-start', 'marker-mid', 'marker-end'];
+
+/**
+ * Elements that paint with an inherited paint property.
+ *
+ * A container (`g`, `a`, `svg`, `symbol`, `defs`, `pattern`, `mask`, `clipPath`,
+ * a gradient, `marker`, `filter`) holds no geometry: its `fill` or `stroke`
+ * applies only through descent, so its own declaration is not counted and its
+ * painted descendants are. `use` is excluded for the same reason: its paint
+ * properties apply to the instantiated content, which the expansion walk counts
+ * by propagating the use's effective slots into that subtree. Text content
+ * elements are painters even though one `<text>` run may share a paint server;
+ * counting each inherited text element is an upper bound, never an omission.
+ */
+const PAINTED_ELEMENTS: Readonly<Record<string, true>> = {
+  rect: true,
+  circle: true,
+  ellipse: true,
+  line: true,
+  polyline: true,
+  polygon: true,
+  path: true,
+  text: true,
+  tspan: true,
+  textPath: true,
+};
+
+/** One element's declarations, merged per property across attributes and rules. */
+interface ReferenceDeclarations {
+  /** Every `url(#id)` the property was declared with. */
+  readonly references: string[];
+  /** Whether any declaration of the property defers to the parent's value. */
+  defers: boolean;
+  /**
+   * Whether every declaration of the property provably paints no resource.
+   *
+   * Merging is `&&`, not `||`: an element can declare one property in several
+   * places whose cascade order this policy does not model. One declaration that
+   * might paint a resource means the ancestor's reference stays reachable.
+   */
+  suppresses: boolean;
+}
+
+/** SVG's number grammar, shared by every budget argument below. */
+const NUMBER_PATTERN = String.raw`[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?`;
+const LENGTH_PATTERN = new RegExp(String.raw`^\s*(${NUMBER_PATTERN})\s*([A-Za-z]*)\s*$`);
+const PERCENT_PATTERN = new RegExp(String.raw`^\s*(${NUMBER_PATTERN})\s*%\s*$`);
+const NUMBER_PATTERN_ONLY = new RegExp(String.raw`^\s*(${NUMBER_PATTERN})\s*$`);
+
+/**
+ * CSS pixel size of one absolute SVG length unit, and whether librsvg
+ * re-evaluates it at the requested DPI.
+ *
+ * Measured rather than assumed: see {@link SvgSource.sizeScale}. One table, so
+ * adding a unit cannot silently miss its density class.
+ */
+const LENGTH_UNITS: Readonly<Record<string, { readonly px: number; readonly physical: boolean }>> = {
+  px: { px: 1, physical: false },
+  pt: { px: 4 / 3, physical: true },
+  pc: { px: 16, physical: true },
+  mm: { px: 96 / 25.4, physical: true },
+  cm: { px: 96 / 2.54, physical: true },
+  in: { px: 96, physical: true },
+};
+
+/** One parsed length attribute: its CSS-pixel value and how it scales. */
+interface ParsedLength {
+  readonly px: number;
+  readonly physical: boolean;
+}
+
+/**
+ * The coordinate system a filter-region attribute is written in.
+ *
+ * `user` is `userSpaceOnUse`: a unitless number is a user unit. `bounding` is
+ * `objectBoundingBox`: a unitless number is a fraction of the object's bounding
+ * box, where `6` means 600%.
+ */
+type FilterRegionUnits = 'user' | 'bounding';
+
+/** A finite, positive number, or `undefined`. */
+function positive(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+/** Parse a signed SVG length; `undefined` for a unit this subset does not know. */
+function parseSignedLength(raw: string | undefined): ParsedLength | undefined {
+  if (raw === undefined) return undefined;
+  const match = LENGTH_PATTERN.exec(raw);
+  if (match === null) return undefined;
+  const unit = (match[2] ?? '').toLowerCase();
+  const scale = unit === '' ? { px: 1, physical: false } : LENGTH_UNITS[unit];
+  if (scale === undefined) return undefined;
+  const px = Number(match[1]) * scale.px;
+  return Number.isFinite(px) ? { px, physical: scale.physical } : undefined;
+}
+
+/**
+ * Parse an SVG length attribute to CSS pixels and classify its scaling.
+ *
+ * A percentage, `em`, `ex` or `ch` depends on a viewport or a font, so it is
+ * treated as absent rather than guessed. The renderer then falls back to the
+ * document's measured natural size, which is the size librsvg itself chose.
+ */
+function parseLength(raw: string | undefined): ParsedLength | undefined {
+  const parsed = parseSignedLength(raw);
+  return parsed !== undefined && parsed.px > 0 ? parsed : undefined;
+}
+
+/** Parse `viewBox` into four finite numbers with a positive size. */
+function parseViewBox(raw: string | undefined): SvgViewBox | undefined {
+  if (raw === undefined) return undefined;
+  const parts = raw.trim().split(/[\s,]+/);
+  if (parts.length !== 4) return undefined;
+  const [x, y, width, height] = parts.map(Number);
+  if (![x, y, width, height].every((value) => Number.isFinite(value))) return undefined;
+  if (!positive(width) || !positive(height)) return undefined;
+  return { x: x!, y: y!, width: width!, height: height! };
+}
+
+/**
+ * Decode the document's bytes as UTF-8.
+ *
+ * The producer's `looksLikeSvg` signature is byte-based and selects an SVG only
+ * from UTF-8 text, so the policy is UTF-8-only too. A UTF-16 document is
+ * reported as an unsupported file by the producer rather than parsed here.
+ */
+function decodeDocument(bytes: Uint8Array): string | undefined {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Marker placements one element's geometry can produce.
+ *
+ * `marker-start` and `marker-end` render once per subpath; `marker-mid` renders
+ * once per interior vertex. A marker reference on a shape is therefore work
+ * proportional to its geometry, not one render per element, and the `<use>`
+ * budget has to multiply the referenced definition's expansion by that count.
+ */
+interface MarkerPlacements {
+  readonly start: number;
+  readonly mid: number;
+  readonly end: number;
+}
+
+/** A painted element markers do not apply to. */
+const NO_MARKER_PLACEMENTS: MarkerPlacements = Object.freeze({ start: 0, mid: 0, end: 0 });
+
+/** The geometry attributes a placement bound is derived from, kept until a `<use>` exists. */
+interface MarkerGeometry {
+  readonly points: string | undefined;
+  readonly d: string | undefined;
+}
+
+/** SVG's number grammar as a global matcher; `match` resets `lastIndex`. */
+const NUMBER_TOKEN_PATTERN = new RegExp(NUMBER_PATTERN, 'g');
+
+/** A path-data token: one command letter or one number. */
+const PATH_TOKEN_PATTERN = new RegExp(`[MmZzLlHhVvCcSsQqTtAa]|${NUMBER_PATTERN}`, 'g');
+
+/** Whether one path-data token is a command letter rather than a number. */
+const PATH_COMMAND_PATTERN = /^[MmZzLlHhVvCcSsQqTtAa]$/;
+
+/** The number of numeric tokens in a geometry attribute. */
+function numericTokens(raw: string | undefined): number {
+  if (raw === undefined) return 0;
+  return raw.match(NUMBER_TOKEN_PATTERN)?.length ?? 0;
+}
+
+/**
+ * Split path data into command letters and numbers, or `undefined` when it
+ * contains anything else.
+ *
+ * The split is deliberately lexical: this is a placement bound, not a geometry
+ * model, and the caller only needs to know how many vertices and subpaths the
+ * data can produce. A character the tokenizer cannot classify makes the bound
+ * fall back to the numeric-token estimate rather than silently ignoring it.
+ */
+function tokenizePathData(pathData: string): readonly string[] | undefined {
+  const tokens: string[] = [];
+  let consumed = 0;
+  for (const match of pathData.matchAll(PATH_TOKEN_PATTERN)) {
+    const index = match.index;
+    if (!/^[\s,]*$/.test(pathData.slice(consumed, index))) return undefined;
+    tokens.push(match[0]);
+    consumed = index + match[0].length;
+  }
+  if (!/^[\s,]*$/.test(pathData.slice(consumed))) return undefined;
+  return tokens;
+}
+
+/** The documented fallback when path data cannot be tokenized. */
+function fallbackPathPlacements(pathData: string): MarkerPlacements {
+  // Every numeric token could be a vertex, and every vertex could be interior.
+  // Over-counting is the accepted direction; falling back to one placement is
+  // what would under-count a path whose data this policy cannot parse.
+  const vertices = Math.max(1, numericTokens(pathData));
+  const subpaths = Math.max(1, (pathData.match(/[Mm]/g) ?? []).length);
+  return { start: subpaths, mid: vertices, end: subpaths };
+}
+
+/** Marker placements from a path's `d` data. */
+function pathMarkerPlacements(pathData: string | undefined): MarkerPlacements {
+  if (pathData === undefined) return { start: 1, mid: 0, end: 1 };
+  const tokens = tokenizePathData(pathData);
+  if (tokens === undefined) return fallbackPathPlacements(pathData);
+  if (tokens.length === 0) return { start: 1, mid: 0, end: 1 };
+
+  let subpaths = 0;
+  let interior = 0;
+  let currentVertices = 0;
+  const finishSubpath = (closed: boolean): void => {
+    // A one-vertex subpath has no interior vertex; subtracting a flat
+    // `2 × subpaths` from the total would under-count a path that mixes a
+    // degenerate subpath with a long one.
+    //
+    // A closepath adds the initial point as the subpath's last vertex. When
+    // the subpath has at least two vertices, its previous endpoint moves from
+    // last to interior: measured against the pinned librsvg, `M0 0 L10 10 Z`
+    // renders a mid marker at (10, 10).
+    if (currentVertices > 0) {
+      interior += Math.max(0, currentVertices + (closed ? 1 : 0) - 2);
+    }
+    currentVertices = 0;
+  };
+  const beginSubpath = (): void => {
+    finishSubpath(false);
+    subpaths += 1;
+  };
+  /**
+   * The upper bound on the vertices one command group's numbers produce.
+   *
+   * Every command has one lexical number per grammar value, so its arity
+   * divides the group exactly and a partial group rounds up. `A`/`a` is the
+   * exception: arc flags are single characters that need no separator, so
+   * `0110` is the flags `0 1` followed by the x coordinate `10`, and dividing
+   * a compact group by the seven-value arity under-counts its arcs. Every arc
+   * still consumes at least `rx ry rotation`, so `ceil(numbers / 3)` bounds
+   * the arcs in both the compact and the spaced spelling. The flags are not
+   * lexed: this is a placement bound, and over-counting is its safe direction.
+   */
+  const segmentBound = (letter: string, numbers: number): number => {
+    switch (letter) {
+      case 'A':
+      case 'a':
+        return Math.ceil(numbers / 3);
+      case 'H':
+      case 'h':
+      case 'V':
+      case 'v':
+        return numbers;
+      case 'C':
+      case 'c':
+        return Math.ceil(numbers / 6);
+      case 'S':
+      case 's':
+      case 'Q':
+      case 'q':
+        return Math.ceil(numbers / 4);
+      default:
+        return Math.ceil(numbers / 2);
+    }
+  };
+
+  let at = 0;
+  while (at < tokens.length) {
+    const letter = tokens[at]!;
+    at += 1;
+    if (!PATH_COMMAND_PATTERN.test(letter)) return fallbackPathPlacements(pathData);
+    if (letter === 'Z' || letter === 'z') {
+      finishSubpath(true);
+      continue;
+    }
+    const first = at;
+    while (at < tokens.length && !PATH_COMMAND_PATTERN.test(tokens[at]!)) at += 1;
+    const numbers = at - first;
+    if (letter === 'M' || letter === 'm') {
+      beginSubpath();
+      // The first pair is the moveto; every additional pair is an implicit
+      // lineto and therefore another vertex.
+      currentVertices += Math.max(1, Math.ceil(numbers / 2));
+    } else {
+      if (currentVertices === 0) {
+        beginSubpath();
+        // A drawing command that follows a closepath starts a new subpath at
+        // the closed subpath's initial point, which is a vertex without its
+        // own argument.
+        currentVertices = 1;
+      }
+      currentVertices += Math.max(1, segmentBound(letter, numbers));
+    }
+  }
+  finishSubpath(false);
+  if (subpaths === 0) subpaths = 1;
+  return { start: subpaths, mid: interior, end: subpaths };
+}
+
+/** Marker placements for one shape, or `undefined` when markers do not apply. */
+function markerPlacementsFor(
+  element: string,
+  points: string | undefined,
+  pathData: string | undefined,
+): MarkerPlacements | undefined {
+  switch (element) {
+    case 'line':
+      // Two vertices, one subpath: start and end render once, mid never.
+      return { start: 1, mid: 0, end: 1 };
+    case 'polyline': {
+      const numbers = numericTokens(points);
+      if (numbers === 0) return { start: 1, mid: 0, end: 1 };
+      // Each vertex is one coordinate pair; an odd trailing number is counted
+      // as another vertex rather than dropped.
+      const vertices = Math.ceil(numbers / 2);
+      return { start: 1, mid: Math.max(0, vertices - 2), end: 1 };
+    }
+    case 'polygon': {
+      const numbers = numericTokens(points);
+      if (numbers === 0) return { start: 1, mid: 0, end: 1 };
+      const vertices = Math.ceil(numbers / 2);
+      // A polygon closes back to its first point, and the pinned librsvg
+      // places marker-end at that closing point: every listed point after the
+      // first is interior. Measured with `points="20,20 50,20 50,50"`:
+      // marker-mid renders at both listed points, marker-end at the first.
+      return { start: 1, mid: Math.max(0, vertices - 1), end: 1 };
+    }
+    case 'path':
+      return pathMarkerPlacements(pathData);
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Instances produced by expanding `<use>` references, with a DP over the id
+ * graph. A literal `<use>` counts once, plus the rendered subtree of its target;
+ * the total is the work librsvg would perform even though the XML is small.
+ *
+ * An unreferenced definition container (`defs`, `symbol`, `mask`, `pattern`,
+ * `clipPath`, `filter`, `marker`, a gradient) is not drawn on its own and
+ * contributes nothing. It is drawn when a rendered element reaches it, either as
+ * a `<use>` target or through a same-document reference written as `url(#id)` in
+ * an attribute, a `style` attribute or a `<style>` sheet, or as an
+ * `href`/`xlink:href` fragment on anything but `<use>` — a template edge
+ * (`pattern`, `linearGradient`, `radialGradient`, `filter`, `marker`), a
+ * `textPath` path, or the conservative reading of an `<a>` navigation. A
+ * container reached that way follows its own references, so a mask inside
+ * `<defs>` and a pattern inherited from another pattern are counted only when
+ * something drawn reaches the first link. Nested definition containers are still
+ * skipped as ordinary children of an element.
+ *
+ * **Inheritance is the second half of the graph.** `fill`, `stroke`, the marker
+ * slots and `cursor` are inherited properties: one declaration on a `<g>` is the
+ * work of one declaration on every painted descendant, so a `url(#p)` on an
+ * ancestor is multiplied by the painted descendants it reaches while a nearer
+ * declaration whose value provably paints no resource overrides it, exactly as
+ * the property system works for a valid non-reference paint. A nearer value
+ * that only parses is not an override: an invalid paint falls back to the
+ * inherited one, so it keeps the ancestor reference and is counted there too.
+ *
+ * **Markers are placed by geometry, not by element.** `marker-start` and
+ * `marker-end` render once per subpath and `marker-mid` once per interior
+ * vertex, so a marker reference is multiplied by the placements its shape can
+ * produce. The placement bound comes from `points` (one vertex per coordinate
+ * pair), `d` (a lexical command/argument count) and `line` (two vertices, one
+ * subpath); unparseable data falls back to its numeric-token count, never to a
+ * single placement. A closepath or a polygon closes onto its first point, which
+ * is the last vertex for marker placement, so the point before it becomes
+ * interior; that is measured against the pinned librsvg rather than assumed.
+ * This applies equally to a local declaration, an inherited one, and one a
+ * `<use>` propagates into cloned content.
+ *
+ * The slots are resolved once per element in a parent-before-child pass
+ * (one array per node, six entries), so attribution is O(elements × properties)
+ * rather than an ancestor walk per element. `filter`, `clip-path`, `mask` and
+ * `href` do not inherit and stay attached to the element that declares them. A
+ * `<use>`'s own effective slots are inherited by the content it instantiates
+ * (SVG's shadow-tree inheritance), so they are added once per painted element
+ * the target expansion produces — and once per marker placement for a marker
+ * slot; that is an upper bound when a target element overrides the inherited
+ * value, never an omission.
+ *
+ * The count is deliberately a conservative upper bound: every reference is
+ * counted once per render it produces, even if two properties point at the same
+ * definition, and every use counts, including one under a hidden branch. A
+ * `<style>` rule's declarations are attributed to every element its selector
+ * matches, so the same picture counts the same whether it is written as a
+ * presentation attribute, a `style` attribute or a stylesheet; a rule that
+ * matches nothing contributes nothing, and a selector form this policy cannot
+ * decide is refused rather than attributed to the root or silently ignored.
+ * Each node's subtree is memoized, so a chain of definitions that reference the
+ * next one repeatedly is linear rather than exponential. A cycle in either the
+ * `<use>` graph or the reference graph is infinity, because the work is
+ * unbounded; the budget exists to bound work, not to prove a picture's exact
+ * shape.
+ *
+ * Matching propagates a set left to right instead of backtracking per element:
+ * the leftmost compound marks every element it matches, and each compound to
+ * its right keeps the elements whose parent (`>`) or any ancestor (descendant)
+ * is in the previous set. One step is O(elements × compound width), using a
+ * parent-before-child pass to carry "an ancestor matches" down the tree once,
+ * so one selector costs O(length × elements) and one rule
+ * O(selectors × length × elements). The old
+ * recursive form explored every ancestor path for each descendant step, which
+ * is C(depth, steps) for a selector like `missing g g … rect`; that is what
+ * stalled the build.
+ *
+ * The ceiling is the polynomial bound itself, deliberately without a work
+ * counter: `steps` and `selectors` are capped by `maxStyleCharacters` and
+ * `elements` by `maxElements`, while a counter would add a new refusal for a
+ * document the earlier policy accepted, and this change must not alter a
+ * verdict. A future selector form must evaluate the same way — one pass per
+ * compound over the element set — to keep the bound; a form that cannot be
+ * decided by set propagation is refused by the CSS compiler instead.
+ */
+function markSelectorMatches(
+  selector: StaticSelector,
+  names: readonly string[],
+  ids: readonly (string | undefined)[],
+  classes: readonly (readonly string[] | undefined)[],
+  parents: readonly (number | undefined)[],
+  into: Uint8Array,
+): void {
+  const elements = names.length;
+  const matchesCompound = (compound: StaticSelector[number], at: number): boolean => {
+    if (compound.name !== undefined && names[at] !== compound.name) return false;
+    if (compound.id !== undefined && ids[at] !== compound.id) return false;
+    for (const name of compound.classes) {
+      if (classes[at]?.includes(name) !== true) return false;
+    }
+    return true;
+  };
+  const last = selector.length - 1;
+  let matched = new Uint8Array(elements);
+  for (let at = 0; at < elements; at += 1) {
+    if (matchesCompound(selector[0]!, at)) matched[at] = 1;
+  }
+  for (let step = 1; step <= last; step += 1) {
+    const next = new Uint8Array(elements);
+    const compound = selector[step]!;
+    if (compound.combinator === '>') {
+      for (let at = 0; at < elements; at += 1) {
+        const parent = parents[at];
+        if (parent !== undefined && matched[parent] === 1 && matchesCompound(compound, at)) next[at] = 1;
+      }
+    } else {
+      // A parent is recorded before its children, so one ascending pass carries
+      // "some ancestor matches the preceding compound" without walking an
+      // ancestor chain per element. `matched[parent]` is the parent itself.
+      const ancestorMatched = new Uint8Array(elements);
+      for (let at = 0; at < elements; at += 1) {
+        const parent = parents[at];
+        const inherited = parent !== undefined && (matched[parent] === 1 || ancestorMatched[parent] === 1);
+        ancestorMatched[at] = inherited ? 1 : 0;
+        if (inherited && matchesCompound(compound, at)) next[at] = 1;
+      }
+    }
+    matched = next;
+  }
+  for (let at = 0; at < elements; at += 1) {
+    if (matched[at] === 1) into[at] = 1;
+  }
+}
+
+function expandedUseInstances(
+  nodes: readonly string[],
+  useTargets: readonly (string | undefined)[],
+  children: readonly (readonly number[])[],
+  declarations: readonly (ReadonlyMap<string, ReferenceDeclarations> | undefined)[],
+  placements: readonly (MarkerPlacements | undefined)[],
+  parents: readonly (number | undefined)[],
+  idNodes: ReadonlyMap<string, number>,
+  root: number,
+): number {
+  const nonRendered: Readonly<Record<string, true>> = {
+    defs: true,
+    symbol: true,
+    clipPath: true,
+    mask: true,
+    pattern: true,
+    linearGradient: true,
+    radialGradient: true,
+    filter: true,
+    marker: true,
+    style: true,
+    title: true,
+    desc: true,
+    view: true,
+  };
+  const slotsCount = INHERITED_REFERENCE_PROPERTIES.length;
+  const emptySlots: readonly (readonly string[] | undefined)[] = [];
+  const slots: (readonly (readonly string[] | undefined)[])[] = [];
+  for (let index = 0; index < nodes.length; index += 1) {
+    const parent = parents[index];
+    const inherited = parent === undefined ? emptySlots : slots[parent]!;
+    const own = declarations[index];
+    let context = inherited;
+    if (own !== undefined) {
+      let copy: (readonly string[] | undefined)[] | undefined;
+      for (const [property, slot] of Object.entries(INHERITED_REFERENCE_SLOTS)) {
+        const declared = own.get(property);
+        if (declared === undefined) continue;
+        copy ??= [...inherited];
+        // A value that does not provably paint without a resource may resolve
+        // to the parent's value (a CSS-wide keyword) or fall back to it (an
+        // invalid paint), so the descendant context keeps both the declared
+        // references and the inherited ones. Over-counting is the safe
+        // direction; treating every non-deferring declaration as an override
+        // is what let `fill="bogus"` erase an inherited pattern reference.
+        copy[slot] = declared.suppresses
+          ? declared.references
+          : [...(inherited[slot] ?? []), ...declared.references];
+      }
+      if (copy !== undefined) context = copy;
+    }
+    slots.push(context);
+  }
+
+  const paints = (index: number): boolean => PAINTED_ELEMENTS[nodes[index] ?? ''] === true;
+
+  /**
+   * How many times one marker slot renders on this element.
+   *
+   * A marker reference is work per placement, not per declaration: start and
+   * end once per subpath, mid once per interior vertex. A painted element
+   * markers do not apply to (`text`) has no placement, so a marker reference
+   * there contributes nothing. Non-marker slots keep the old per-element count.
+   */
+  const markerSlotPlacements = (index: number, slot: number): number => {
+    if (slot !== 2 && slot !== 3 && slot !== 4) return 1;
+    const marker = placements[index];
+    if (marker === undefined) return 0;
+    return slot === 2 ? marker.start : slot === 3 ? marker.mid : marker.end;
+  };
+
+  /** One reference with the number of renders it produces on this element. */
+  interface WeightedReference {
+    readonly reference: string;
+    readonly multiplier: number;
+  }
+
+  /** A node's own references, excluding inherited slots on a non-painting container. */
+  const ownReferences = (index: number): readonly WeightedReference[] => {
+    const own = declarations[index];
+    if (own === undefined) return [];
+    const painted = paints(index);
+    const accumulated: WeightedReference[] = [];
+    for (const [property, declared] of own) {
+      if (declared.references.length === 0) continue;
+      const slot = INHERITED_REFERENCE_SLOTS[property];
+      if (!painted && slot !== undefined) continue;
+      const multiplier = slot === undefined ? 1 : markerSlotPlacements(index, slot);
+      if (multiplier === 0) continue;
+      for (const reference of declared.references) accumulated.push({ reference, multiplier });
+    }
+    return accumulated;
+  };
+
+  /**
+   * The nearest declaration of each inherited property that still applies.
+   *
+   * A declaration that provably paints without a resource replaces the
+   * ancestor's reference; every other declaration keeps it, whether it defers
+   * to the parent or might be invalid and fall back there. The ancestor context
+   * is the parent's, not this node's merged context, so a painter that declares
+   * a reference and inherits one cannot count its own reference twice through
+   * the slot. Marker slots are multiplied by this element's placements, so an
+   * inherited `marker-mid` on a `<g>` costs one expansion per interior vertex
+   * of each painted descendant, not one per descendant.
+   */
+  const inheritedReferences = (index: number): readonly WeightedReference[] => {
+    if (!paints(index)) return [];
+    const own = declarations[index];
+    const parent = parents[index];
+    const inherited = parent === undefined ? emptySlots : slots[parent]!;
+    const accumulated: WeightedReference[] = [];
+    for (let slot = 0; slot < slotsCount; slot += 1) {
+      const declared = own?.get(INHERITED_REFERENCE_PROPERTIES[slot]!);
+      if (declared !== undefined && declared.suppresses) continue;
+      const references = inherited[slot];
+      if (references === undefined || references.length === 0) continue;
+      const multiplier = markerSlotPlacements(index, slot);
+      if (multiplier === 0) continue;
+      for (const reference of references) accumulated.push({ reference, multiplier });
+    }
+    return accumulated;
+  };
+
+  /**
+   * Painted instances in a fully expanded subtree, and their marker placements.
+   *
+   * The painted count is the multiplier for an inherited `fill`/`stroke`/
+   * `cursor`; the three placement sums are the multiplier for a marker slot
+   * inherited through a `<use>`. They are accumulated in the same memoized walk
+   * because both answer "how much work does one instantiation of this subtree
+   * do", and a cycle in either is infinity.
+   */
+  interface PaintedSummary {
+    readonly painted: number;
+    readonly start: number;
+    readonly mid: number;
+    readonly end: number;
+  }
+  const paintedSummaries = new Map<number, PaintedSummary>();
+  const painting = new Set<number>();
+  const paintedSummary = (index: number): PaintedSummary => {
+    const memo = paintedSummaries.get(index);
+    if (memo !== undefined) return memo;
+    if (painting.has(index)) {
+      return {
+        painted: Number.POSITIVE_INFINITY,
+        start: Number.POSITIVE_INFINITY,
+        mid: Number.POSITIVE_INFINITY,
+        end: Number.POSITIVE_INFINITY,
+      };
+    }
+    painting.add(index);
+    const marker = placements[index] ?? NO_MARKER_PLACEMENTS;
+    let painted = paints(index) ? 1 : 0;
+    let start = marker.start;
+    let mid = marker.mid;
+    let end = marker.end;
+    const add = (summary: PaintedSummary): void => {
+      painted += summary.painted;
+      start += summary.start;
+      mid += summary.mid;
+      end += summary.end;
+    };
+    for (const child of children[index] ?? []) {
+      if (nonRendered[nodes[child] ?? ''] === true) continue;
+      add(paintedSummary(child));
+    }
+    const target = useTargets[index];
+    if (target !== undefined) {
+      const targetIndex = idNodes.get(target);
+      if (targetIndex !== undefined) add(paintedSummary(targetIndex));
+    }
+    painting.delete(index);
+    const summary = { painted, start, mid, end };
+    paintedSummaries.set(index, summary);
+    return summary;
+  };
+
+  const expansion = new Map<number, number>();
+  const counted = new Map<number, number>();
+  const visiting = new Set<number>();
+
+  const countRendered = (index: number): number => {
+    const memo = counted.get(index);
+    if (memo !== undefined) return memo;
+    if (visiting.has(index)) return Number.POSITIVE_INFINITY;
+    visiting.add(index);
+    let total = 0;
+    const target = useTargets[index];
+    if (target !== undefined) {
+      total = 1 + expand(target);
+      // SVG inherits a `<use>`'s computed slots into the content it clones, so
+      // one declaration on the use is one declaration per painted element the
+      // target produces; a marker slot is one per placement that element
+      // produces. Overridden values make this an upper bound.
+      const targetIndex = idNodes.get(target);
+      const summary = targetIndex === undefined
+        ? { painted: 0, start: 0, mid: 0, end: 0 }
+        : paintedSummary(targetIndex);
+      let propagated = 0;
+      for (let slot = 0; slot < slotsCount; slot += 1) {
+        const references = slots[index]![slot];
+        if (references === undefined) continue;
+        const multiplier =
+          slot === 2 ? summary.start : slot === 3 ? summary.mid : slot === 4 ? summary.end : summary.painted;
+        if (multiplier === 0) continue;
+        for (const reference of references) propagated += expand(reference) * multiplier;
+      }
+      total += propagated;
+    }
+    for (const child of children[index] ?? []) {
+      if (nonRendered[nodes[child] ?? ''] === true) continue;
+      total += countRendered(child);
+    }
+    for (const { reference, multiplier } of ownReferences(index)) {
+      total += expand(reference) * multiplier;
+    }
+    for (const { reference, multiplier } of inheritedReferences(index)) {
+      total += expand(reference) * multiplier;
+    }
+    visiting.delete(index);
+    counted.set(index, total);
+    return total;
+  };
+
+  const expand = (id: string): number => {
+    const index = idNodes.get(id);
+    if (index === undefined) return 0;
+    const memo = expansion.get(index);
+    if (memo !== undefined) return memo;
+    const total = countRendered(index);
+    expansion.set(index, total);
+    return total;
+  };
+
+  return countRendered(root);
+}
+
+/** The reason a tag name or attribute has no place in this subset. */
+function namespaceFault(uri: string, name: string): SvgRefusal {
+  if (uri === XINCLUDE_NAMESPACE) {
+    return { reason: 'svg-xinclude', detail: `${name}: XInclude is not part of the static subset` };
+  }
+  return { reason: 'svg-foreign', detail: `${name}: unsupported namespace ${JSON.stringify(uri)}` };
+}
+
+/**
+ * The value of an attribute identified by its namespace URI and local name.
+ *
+ * XML attribute identity is `(URI, local name)`; the prefix is only a spelling
+ * alias and is never consulted for a policy decision. `namespaces` is ordered
+ * only to preserve SVG's `href` precedence (the unprefixed attribute wins over
+ * the legacy XLink one); within one namespace an expanded name is unique.
+ */
+function attributeValue(
+  tag: SaxesTagNS,
+  local: string,
+  namespaces: readonly string[],
+): string | undefined {
+  for (const namespace of namespaces) {
+    for (const attribute of Object.values(tag.attributes)) {
+      if (attribute.local === local && attribute.uri === namespace) return attribute.value;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Inspect one SVG candidate: the single security decision of Goal 0012.
+ *
+ * @param bytes The already-authorized source bytes; never a path.
+ * @param limits Finite work limits. Tests inject smaller ones.
+ */
+export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIMITS): SvgInspection {
+  const text = decodeDocument(bytes);
+  if (text === undefined) {
+    return { ok: false, refusal: { reason: 'svg-invalid', detail: 'not a UTF-8 XML document' } };
+  }
+
+  let refusal: SvgRefusal | undefined;
+  let rootSeen = false;
+  let elements = 0;
+  let depth = 0;
+  let uses = 0;
+  let filterPrimitives = 0;
+  let textDepth = 0;
+  let styleDepth = 0;
+  let titleDescDepth = 0;
+  const textBuffers: string[] = [];
+  let styleBuffer = '';
+  const textRuns: string[] = [];
+  let textCharacters = 0;
+  let rootWidth: ParsedLength | undefined;
+  let rootHeight: ParsedLength | undefined;
+  let rootViewBox: SvgViewBox | undefined;
+  const nodes: string[] = [];
+  const useTargets: (string | undefined)[] = [];
+  const markerGeometry: (MarkerGeometry | undefined)[] = [];
+  const childNodes: number[][] = [];
+  const elementParents: (number | undefined)[] = [];
+  const elementIds: (string | undefined)[] = [];
+  const elementClasses: (readonly string[] | undefined)[] = [];
+  const declarations: (Map<string, ReferenceDeclarations> | undefined)[] = [];
+  const styleRules: StaticStyleRule[] = [];
+  const filterPrimitiveBounding: boolean[] = [];
+  const elementStack: number[] = [];
+  const idNodes = new Map<string, number>();
+
+  /**
+   * Record one declaration, merging repeated declarations of one property.
+   *
+   * Presence is the fact that matters to inheritance: a declaration with no
+   * `url()` (`fill="red"`) must still be visible as the declaration that
+   * overrides an ancestor's `fill="url(#p)"`. A deferring keyword sets the
+   * property but keeps the ancestor's reference reachable. The `marker`
+   * shorthand declares the three marker slots, as the property system expands
+   * it.
+   */
+  const declare = (index: number, declaration: StaticDeclaration): void => {
+    const names = declaration.property === 'marker' ? MARKER_PROPERTIES : [declaration.property];
+    const map = (declarations[index] ??= new Map());
+    for (const name of names) {
+      const existing = map.get(name);
+      if (existing === undefined) {
+        map.set(name, {
+          references: [...declaration.references],
+          defers: declaration.defers,
+          suppresses: declaration.suppresses,
+        });
+      } else {
+        existing.references.push(...declaration.references);
+        existing.defers ||= declaration.defers;
+        // One declaration that might paint keeps the inherited reference
+        // reachable; the cascade order between them is not modelled here.
+        existing.suppresses &&= declaration.suppresses;
+      }
+    }
+  };
+
+  /** Whether the nearest enclosing `<filter>` resolves primitive regions in bbox units. */
+  const filterRegionUnits = (): FilterRegionUnits => {
+    for (let at = elementStack.length - 1; at >= 0; at -= 1) {
+      const ancestor = elementStack[at]!;
+      if (nodes[ancestor] === 'filter') return filterPrimitiveBounding[ancestor] === true ? 'bounding' : 'user';
+    }
+    return 'user';
+  };
+
+  const fail = (fault: SvgRefusal): void => {
+    if (refusal === undefined) refusal = fault;
+  };
+
+  const parser = new SaxesParser({ xmlns: true, position: true });
+
+  parser.on('error', (error) => {
+    const entity = /entit/i.test(error.message);
+    fail({
+      reason: entity ? 'svg-doctype' : 'svg-invalid',
+      detail: error.message.split('\n')[0] ?? 'XML parse error',
+    });
+  });
+
+  parser.on('doctype', () => {
+    fail({ reason: 'svg-doctype', detail: 'a DOCTYPE declaration; DTDs and entity declarations are refused' });
+  });
+
+  parser.on('processinginstruction', (instruction) => {
+    fail(
+      instruction.target.toLowerCase() === 'xml-stylesheet'
+        ? { reason: 'svg-external', detail: 'an xml-stylesheet processing instruction' }
+        : { reason: 'svg-unsafe', detail: `processing instruction <?${instruction.target}?>` },
+    );
+  });
+
+  parser.on('opentag', (tag: SaxesTagNS) => {
+    if (refusal !== undefined) return;
+    elements += 1;
+    depth += 1;
+    if (elements > limits.maxElements) {
+      fail({ reason: 'svg-workload', detail: `more than ${limits.maxElements} elements` });
+      return;
+    }
+    if (depth > limits.maxDepth) {
+      fail({ reason: 'svg-workload', detail: `nesting deeper than ${limits.maxDepth} elements` });
+      return;
+    }
+
+    const local = tag.local;
+    if (!rootSeen) {
+      rootSeen = true;
+      if (local !== 'svg') {
+        fail({ reason: 'svg-invalid', detail: `root element is <${tag.name}>, not <svg>` });
+        return;
+      }
+      if (tag.uri === '') {
+        fail({
+          reason: 'svg-unsafe',
+          detail: 'the root <svg> has no namespace; add xmlns="http://www.w3.org/2000/svg"',
+        });
+        return;
+      }
+      if (tag.uri !== SVG_NAMESPACE) {
+        fail(namespaceFault(tag.uri, `<${tag.name}>`));
+        return;
+      }
+      rootViewBox = parseViewBox(attributeValue(tag, 'viewBox', ['']));
+      rootWidth = parseLength(attributeValue(tag, 'width', ['']));
+      rootHeight = parseLength(attributeValue(tag, 'height', ['']));
+    } else if (tag.uri !== SVG_NAMESPACE) {
+      fail(namespaceFault(tag.uri, `<${tag.name}>`));
+      return;
+    }
+
+    // Active-content elements are refused by name before any attribute is read:
+    // their attributes are not part of the subset either, and "unsupported
+    // attribute `attributeName`" would send an author to edit the wrong thing.
+    if (local === 'script') {
+      fail({ reason: 'svg-script', detail: '<script> is active content' });
+      return;
+    }
+    if (local === 'foreignObject') {
+      fail({ reason: 'svg-foreign', detail: '<foreignObject> is not part of the static subset' });
+      return;
+    }
+    if (local.startsWith('animate') || local === 'set' || local === 'discard') {
+      fail({ reason: 'svg-animation', detail: `<${local}> animates the drawing` });
+      return;
+    }
+    if (local === 'metadata') {
+      fail({ reason: 'svg-unsafe', detail: '<metadata> is not drawn; delete the metadata block' });
+      return;
+    }
+    if (local === 'style' && styleDepth > 0) {
+      fail({
+        reason: 'svg-css',
+        detail: '<style> inside <style> is not part of the static subset; nested stylesheets are refused',
+      });
+      return;
+    }
+
+    // Attributes are checked **before** the element allowlist, so a construct the
+    // design names gets its own reason: `<image href="data:…">` reports an
+    // embedded payload, `<image xlink:href="file:…">` an external reference, and
+    // only an `<image>` with no offending reference falls through to "this element
+    // is not in the subset". A policy that named the element first would report
+    // every embedded asset as a generic unsupported element.
+    //
+    // A filter region is read in the coordinate system its element declares:
+    // `<filter filterUnits>` for the filter's own sides, and the parent filter's
+    // `primitiveUnits` for an `fe*` subregion.
+    const regionUnits: FilterRegionUnits =
+      local === 'filter'
+        ? (attributeValue(tag, 'filterUnits', ['']) ?? '').trim() === 'userSpaceOnUse'
+          ? 'user'
+          : 'bounding'
+        : local.startsWith('fe')
+          ? filterRegionUnits()
+          : 'user';
+    for (const attribute of Object.values(tag.attributes)) {
+      const attributeRefusal = checkAttribute(local, attribute, limits, regionUnits);
+      if (attributeRefusal !== undefined) {
+        fail(attributeRefusal);
+        return;
+      }
+    }
+
+    if (local === 'image' || local === 'feImage') {
+      fail({
+        reason: 'svg-external',
+        detail: `<${local}> loads a resource into the drawing; embed pictures with ordinary Markdown instead`,
+      });
+      return;
+    }
+    if (ALLOWED_ELEMENTS[local] !== true) {
+      fail({ reason: 'svg-unsafe', detail: `<${local}> is not part of the static subset` });
+      return;
+    }
+    if (local === 'use') {
+      uses += 1;
+      if (uses > limits.maxUses) {
+        fail({ reason: 'svg-workload', detail: `more than ${limits.maxUses} <use> references` });
+        return;
+      }
+    }
+    if (local.startsWith('fe')) filterPrimitives += 1;
+    if (filterPrimitives > limits.maxFilterPrimitives) {
+      fail({ reason: 'svg-workload', detail: `more than ${limits.maxFilterPrimitives} filter primitives` });
+      return;
+    }
+
+    // Record the accepted tree for the `<use>` expansion count. The element
+    // stack mirrors XML nesting; ids are first-wins here as in a renderer, and a
+    // same-document fragment is the only reference shape the policy admits.
+    const nodeIndex = nodes.length;
+    nodes.push(local);
+    useTargets.push(undefined);
+    markerGeometry.push(
+      local === 'path' || local === 'polyline' || local === 'polygon' || local === 'line'
+        ? { points: attributeValue(tag, 'points', ['']), d: attributeValue(tag, 'd', ['']) }
+        : undefined,
+    );
+    childNodes.push([]);
+    const parentNode = elementStack.at(-1);
+    if (parentNode !== undefined) childNodes[parentNode]!.push(nodeIndex);
+    elementStack.push(nodeIndex);
+    elementParents.push(parentNode);
+    const elementId = attributeValue(tag, 'id', ['']);
+    elementIds.push(elementId);
+    const elementClass = attributeValue(tag, 'class', ['']);
+    elementClasses.push(
+      elementClass === undefined
+        ? undefined
+        : elementClass.split(/[\t\n\f\r ]+/).filter((name) => name !== ''),
+    );
+    if (elementId !== undefined && !idNodes.has(elementId)) idNodes.set(elementId, nodeIndex);
+    const href = attributeValue(tag, 'href', ['', SVG_NAMESPACE, XLINK_NAMESPACE]);
+    if (local === 'use') {
+      if (href !== undefined && href.startsWith('#') && href.length > 1) {
+        useTargets[nodeIndex] = href.slice(1);
+      }
+    } else if (href !== undefined && href.startsWith('#') && href.length > 1) {
+      // A template edge: `pattern`/gradient/filter/marker inherits the
+      // referenced definition's content, `textPath` names its path, and `<a>`
+      // navigation is followed conservatively. `<use>` is excluded because its
+      // href is already the use edge, counted with the use instance itself;
+      // recording it twice would change every existing count. Any other element
+      // the allowlist admits an href on gets the same edge, so an element this
+      // table forgot cannot become an unfollowed template.
+      declare(nodeIndex, { property: 'href', references: [href.slice(1)], defers: false, suppresses: false });
+    }
+    filterPrimitiveBounding.push(
+      local === 'filter' &&
+        (attributeValue(tag, 'primitiveUnits', ['']) ?? '').trim() === 'objectBoundingBox',
+    );
+
+    // A rendered element reaches a definition container through these references,
+    // so the expansion count follows them. The value was already accepted by the
+    // CSS policy, which admits only same-document fragments; a style attribute or
+    // sheet can name the same containers as the presentation attributes. The
+    // property name is kept because `fill`/`stroke`/marker inheritance is
+    // resolved per property, while `filter`/`clip-path`/`mask` stay local.
+    for (const attribute of Object.values(tag.attributes)) {
+      if (attribute.uri !== '' && attribute.uri !== SVG_NAMESPACE) continue;
+      if (URL_ATTRIBUTES[attribute.local] === true) {
+        declare(nodeIndex, presentationDeclaration(attribute.local, attribute.value));
+      } else if (attribute.local === 'style') {
+        for (const declaration of declarationReferences(attribute.value)) {
+          declare(nodeIndex, declaration);
+        }
+      }
+    }
+
+    if (local === 'style') {
+      styleDepth += 1;
+      styleBuffer = '';
+    }
+    if (local === 'title' || local === 'desc') titleDescDepth += 1;
+    if (local === 'text') {
+      textDepth += 1;
+      textBuffers.push('');
+    }
+  });
+
+  parser.on('text', (value: string) => {
+    if (refusal !== undefined) return;
+    if (styleDepth > 0) {
+      // A `<style>` is parsed as one sheet when it closes. saxes may split its
+      // text at an entity or CDATA boundary, and parsing each fragment would
+      // treat a valid sheet as two malformed ones.
+      styleBuffer += value;
+      if (styleBuffer.length > limits.maxStyleCharacters) {
+        fail({ reason: 'svg-workload', detail: `more than ${limits.maxStyleCharacters} characters of CSS` });
+      }
+      return;
+    }
+    if (textDepth > 0 && titleDescDepth === 0) {
+      const index = textBuffers.length - 1;
+      if (index >= 0) textBuffers[index] = (textBuffers[index] ?? '') + value;
+      textCharacters += value.length;
+      if (textCharacters > limits.maxTextCharacters) {
+        fail({ reason: 'svg-workload', detail: `more than ${limits.maxTextCharacters} characters of text` });
+      }
+    }
+  });
+
+  parser.on('cdata', (value: string) => {
+    if (refusal !== undefined) return;
+    if (styleDepth > 0) {
+      // A `<style>` is parsed as one sheet when it closes. saxes may split its
+      // text at an entity or CDATA boundary, and parsing each fragment would
+      // treat a valid sheet as two malformed ones.
+      styleBuffer += value;
+      if (styleBuffer.length > limits.maxStyleCharacters) {
+        fail({ reason: 'svg-workload', detail: `more than ${limits.maxStyleCharacters} characters of CSS` });
+      }
+      return;
+    }
+    if (textDepth > 0 && titleDescDepth === 0) {
+      const index = textBuffers.length - 1;
+      if (index >= 0) textBuffers[index] = (textBuffers[index] ?? '') + value;
+      textCharacters += value.length;
+      if (textCharacters > limits.maxTextCharacters) {
+        fail({ reason: 'svg-workload', detail: `more than ${limits.maxTextCharacters} characters of text` });
+      }
+    }
+  });
+
+  parser.on('closetag', (tag: SaxesTagNS) => {
+    if (depth > 0) depth -= 1;
+    if (elementStack.length > 0) elementStack.pop();
+    if (refusal !== undefined) {
+      // Keep depth coherent for the remaining events, but stop inspecting.
+      if (tag.local === 'style' && styleDepth > 0) {
+        styleDepth -= 1;
+        styleBuffer = '';
+      }
+      if ((tag.local === 'title' || tag.local === 'desc') && titleDescDepth > 0) titleDescDepth -= 1;
+      if (tag.local === 'text' && textDepth > 0) {
+        textDepth -= 1;
+        textBuffers.pop();
+      }
+      return;
+    }
+    if (tag.local === 'style' && styleDepth > 0) {
+      styleDepth -= 1;
+      const analysis = analyzeStyleSheet(styleBuffer);
+      if (!analysis.ok) {
+        fail(analysis.refusal);
+      } else {
+        // A sheet applies document-wide, but its references are counted per
+        // element its selectors match. Matching waits until the whole document
+        // is recorded, because a rule may name elements that appear after the
+        // sheet.
+        styleRules.push(...analysis.rules);
+      }
+      styleBuffer = '';
+    }
+    if ((tag.local === 'title' || tag.local === 'desc') && titleDescDepth > 0) titleDescDepth -= 1;
+    if (tag.local === 'text' && textDepth > 0) {
+      textDepth -= 1;
+      const run = textBuffers.pop() ?? '';
+      if (run !== '') {
+        const parent = textBuffers.length - 1;
+        if (parent >= 0) textBuffers[parent] = (textBuffers[parent] ?? '') + run;
+        else textRuns.push(run);
+      }
+    }
+  });
+
+  try {
+    parser.write(text).close();
+  } catch (error) {
+    fail({
+      reason: 'svg-invalid',
+      detail: error instanceof Error ? error.message.split('\n')[0]! : String(error),
+    });
+  }
+
+  if (refusal !== undefined) return { ok: false, refusal };
+  if (!rootSeen) return { ok: false, refusal: { reason: 'svg-invalid', detail: 'the document has no root element' } };
+
+  if (uses > 0) {
+    // A stylesheet declaration belongs to every element its selector matches,
+    // once per matching rule. Two selectors in one list that both match an
+    // element still apply that rule's declarations once, so each declaration is
+    // pushed once. A declaration with no URL is attributed when it sets an
+    // inherited slot, because it is what overrides an ancestor's reference.
+    // Each selector is matched once over the whole tree rather than once per
+    // element, which is what keeps attribution at O(selectors × steps × elements).
+    const attributable = (declaration: StaticDeclaration): boolean =>
+      declaration.references.length > 0 ||
+      declaration.defers ||
+      declaration.property === 'marker' ||
+      INHERITED_REFERENCE_SLOTS[declaration.property] !== undefined;
+    const matched = new Uint8Array(nodes.length);
+    for (const rule of styleRules) {
+      const declarationsToApply = rule.declarations.filter(attributable);
+      if (declarationsToApply.length === 0) continue;
+      matched.fill(0);
+      for (const selector of rule.selectors) {
+        markSelectorMatches(selector, nodes, elementIds, elementClasses, elementParents, matched);
+      }
+      for (let index = 0; index < nodes.length; index += 1) {
+        if (matched[index] !== 1) continue;
+        for (const declaration of declarationsToApply) {
+          declare(index, declaration);
+        }
+      }
+    }
+    // Placement parsing is deferred to this branch: a document without a
+    // `<use>` never asks the expansion count a question, so it should not pay
+    // for tokenizing every path's `d`.
+    const markerPlacements = markerGeometry.map((geometry, index) =>
+      geometry === undefined
+        ? undefined
+        : markerPlacementsFor(nodes[index]!, geometry.points, geometry.d),
+    );
+    const instances = expandedUseInstances(
+      nodes,
+      useTargets,
+      childNodes,
+      declarations,
+      markerPlacements,
+      elementParents,
+      idNodes,
+      0,
+    );
+    if (!Number.isFinite(instances) || instances > limits.maxUseInstances) {
+      return {
+        ok: false,
+        refusal: {
+          reason: 'svg-workload',
+          detail: Number.isFinite(instances)
+            ? `expanding <use> creates ${instances} instances, more than ${limits.maxUseInstances}; reduce references or replace them with drawn geometry`
+            : `the <use> graph never terminates or exceeds the instance budget of ${limits.maxUseInstances}; break the cycle`,
+        },
+      };
+    }
+  }
+
+  // A width without a height (or the reverse) is only usable when a viewBox
+  // supplies the other side; otherwise the document declares no shape at all.
+  let width = rootWidth?.px;
+  let height = rootHeight?.px;
+  if (rootViewBox !== undefined) {
+    const ratio = rootViewBox.height / rootViewBox.width;
+    if (width === undefined && height === undefined) {
+      // The viewBox is the whole size. librsvg uses its units as CSS pixels when
+      // no CSS size is written, which is what the renderer measures anyway.
+      width = rootViewBox.width;
+      height = rootViewBox.height;
+    } else if (width !== undefined && height === undefined) {
+      height = width * ratio;
+    } else if (height !== undefined && width === undefined) {
+      width = height / ratio;
+    }
+  }
+  if (width === undefined || height === undefined) {
+    return {
+      ok: false,
+      refusal: {
+        reason: 'svg-invalid',
+        detail: 'no usable size: give both absolute width and height, or a viewBox',
+      },
+    };
+  }
+
+  // A physical width with a unitless height changes the picture's aspect ratio as
+  // the render density rises, because the two branches scale differently. There
+  // is no density at which that document has the aspect ratio its author wrote
+  // down, so refuse it rather than publish a distorted diagram.
+  if (
+    rootWidth !== undefined &&
+    rootHeight !== undefined &&
+    rootWidth.physical !== rootHeight.physical
+  ) {
+    return {
+      ok: false,
+      refusal: {
+        reason: 'svg-invalid',
+        detail: 'width and height mix physical units with px/unitless units; use one unit for both',
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    source: {
+      width,
+      height,
+      declaredSize: rootWidth !== undefined || rootHeight !== undefined,
+      sizeScale: rootWidth?.physical === true || rootHeight?.physical === true ? 'physical' : 'linear',
+      text: textRuns,
+    },
+  };
+}
+
+/**
+ * The distinct characters that need a host glyph, filtered and deduplicated.
+ *
+ * Whitespace, combining marks and Unicode format characters (zero-width
+ * joiners, variation selectors, soft hyphen, BOM and bidi controls) are excluded
+ * because they are not standalone glyphs: a lone mark combines with a preceding
+ * base, and a format character draws nothing by definition. The caller maps
+ * these characters to code points and asks `font-coverage.ts`.
+ */
+export function requiredCharacters(source: SvgSource, limits: SvgLimits = SVG_POLICY_LIMITS): string[] | SvgRefusal {
+  const seen = new Set<string>();
+  const characters: string[] = [];
+  for (const run of source.text) {
+    for (const character of run) {
+      if (/\s/u.test(character) || /\p{M}/u.test(character) || /\p{Cf}/u.test(character)) continue;
+      if (seen.has(character)) continue;
+      seen.add(character);
+      characters.push(character);
+      if (characters.length > limits.maxDistinctTextCharacters) {
+        return {
+          reason: 'svg-workload',
+          detail: `more than ${limits.maxDistinctTextCharacters} distinct text characters`,
+        };
+      }
+    }
+  }
+  return characters;
+}
+
+/** One attribute's policy check. */
+function checkAttribute(
+  element: string,
+  attribute: SaxesAttributeNS,
+  limits: SvgLimits,
+  regionUnits: FilterRegionUnits = 'user',
+): SvgRefusal | undefined {
+  const { local, uri } = attribute;
+  const value = attribute.value;
+  // The prefix is retained only for the human-readable diagnostic. Every
+  // decision below is made from the namespace URI and local name, so an
+  // alternate prefix bound to the same namespace follows the same path.
+  const where = `${element}@${attribute.prefix === '' ? local : `${attribute.prefix}:${local}`}`;
+
+  if (uri === XMLNS_NAMESPACE) return undefined;
+
+  // An event handler is active regardless of the namespace spelling it chose.
+  if (/^on[a-z]+$/i.test(local)) {
+    return { reason: 'svg-script', detail: `${where}: event handler attribute` };
+  }
+
+  if (uri === XLINK_NAMESPACE) {
+    if (local === 'href') return inspectReference(value, where);
+    if (local === 'title' || local === 'role') return undefined;
+    return { reason: 'svg-foreign', detail: `${where}: unsupported attribute namespace ${JSON.stringify(uri)}` };
+  }
+  if (uri === XML_NAMESPACE) {
+    if (local === 'lang' || local === 'space') return undefined;
+    if (local === 'base') {
+      return { reason: 'svg-external', detail: `${where}: xml:base changes how references resolve` };
+    }
+    return { reason: 'svg-unsafe', detail: `${where}: unsupported xml attribute` };
+  }
+  if (uri !== '' && uri !== SVG_NAMESPACE) {
+    return { reason: 'svg-foreign', detail: `${where}: unsupported attribute namespace ${JSON.stringify(uri)}` };
+  }
+
+  if (local === 'href') return inspectReference(value, where);
+  if (local === 'style') {
+    if (value.length > limits.maxStyleCharacters) {
+      return {
+        reason: 'svg-workload',
+        detail: `${where}: more than ${limits.maxStyleCharacters} characters of CSS`,
+      };
+    }
+    return inspectStyleAttribute(value);
+  }
+
+  if (local.startsWith('data-') || local.startsWith('aria-')) return undefined;
+
+  if (ALLOWED_ATTRIBUTES[local] !== true) {
+    return { reason: 'svg-unsafe', detail: `${where}: attribute is not part of the static subset` };
+  }
+
+  if (URL_ATTRIBUTES[local] === true) {
+    const refusal = inspectPresentationAttribute(local, value, where);
+    if (refusal !== undefined) return refusal;
+  }
+
+  if (local === 'type' && element === 'style') {
+    const type = value.trim().toLowerCase();
+    if (type !== '' && type !== 'text/css') return { reason: 'svg-css', detail: `${where}: ${JSON.stringify(value)}` };
+  }
+
+  if (local === 'stdDeviation') {
+    for (const part of value.trim().split(/[\s,]+/)) {
+      const number = Number(part);
+      if (!Number.isFinite(number) || number < 0) {
+        return { reason: 'svg-invalid', detail: `${where}: ${JSON.stringify(value)}` };
+      }
+      if (number > limits.maxStdDeviation) {
+        return { reason: 'svg-workload', detail: `${where}: ${number} exceeds ${limits.maxStdDeviation}` };
+      }
+    }
+  }
+
+  if (local === 'order' && element === 'feConvolveMatrix') {
+    const order = value.trim().split(/[\s,]+/).map(Number);
+    if (order.length < 1 || order.length > 2 || order.some((part) => !Number.isInteger(part) || part < 1)) {
+      return { reason: 'svg-invalid', detail: `${where}: ${JSON.stringify(value)}` };
+    }
+    const entries = order.length === 1 ? order[0]! * order[0]! : order[0]! * order[1]!;
+    if (entries > limits.maxKernelEntries) {
+      return { reason: 'svg-workload', detail: `${where}: ${entries} kernel entries exceeds ${limits.maxKernelEntries}` };
+    }
+  }
+
+  if (local === 'kernelMatrix' && value.trim().split(/[\s,]+/).length > limits.maxKernelEntries) {
+    return { reason: 'svg-workload', detail: `${where}: a kernel larger than ${limits.maxKernelEntries} entries` };
+  }
+
+  if (local === 'numOctaves') {
+    const match = NUMBER_PATTERN_ONLY.exec(value);
+    const octaves = match === null ? Number.NaN : Number(match[1]);
+    if (!Number.isInteger(octaves) || octaves < 0) {
+      return { reason: 'svg-invalid', detail: `${where}: ${JSON.stringify(value)} is not a non-negative integer` };
+    }
+    if (octaves > limits.maxTurbulenceOctaves) {
+      return { reason: 'svg-workload', detail: `${where}: ${octaves} exceeds ${limits.maxTurbulenceOctaves} octaves` };
+    }
+  }
+
+  // A filter region is a surface libvips allocates. A percentage resolves
+  // against the object's bounding box in either coordinate system, so it is
+  // bounded directly. A unitless number is not: `filterUnits` decides whether it
+  // is a user unit or a fraction of the box, where `6` is 600% — the hostile
+  // shape a user-unit bound would miss. Primitive subregions follow the parent
+  // filter's `primitiveUnits`. A unit-bearing length has no canonical meaning
+  // under `objectBoundingBox`, so it is checked under both readings and the
+  // larger surface wins.
+  const regionAttribute = local === 'x' || local === 'y' || local === 'width' || local === 'height';
+  const regionElement =
+    element === 'filter' ||
+    (element.startsWith('fe') && element !== 'fePointLight' && element !== 'feSpotLight');
+  if (regionElement && regionAttribute) {
+    const size = local === 'width' || local === 'height';
+    const percent = PERCENT_PATTERN.exec(value);
+    if (percent !== null) {
+      const number = Number(percent[1]);
+      if (!Number.isFinite(number)) {
+        return { reason: 'svg-workload', detail: `${where}: ${JSON.stringify(value)} exceeds the filter-region budget` };
+      }
+      if (size && number < 0) {
+        return { reason: 'svg-invalid', detail: `${where}: ${JSON.stringify(value)} is negative` };
+      }
+      if (Math.abs(number) > limits.maxFilterRegionPercent) {
+        return { reason: 'svg-workload', detail: `${where}: ${JSON.stringify(value)} exceeds the filter-region budget` };
+      }
+    } else {
+      const absolute = parseSignedLength(value);
+      if (absolute === undefined) {
+        return { reason: 'svg-invalid', detail: `${where}: ${JSON.stringify(value)} is not a filter-region length` };
+      }
+      if (size && absolute.px < 0) {
+        return { reason: 'svg-invalid', detail: `${where}: ${JSON.stringify(value)} is negative` };
+      }
+      if (regionUnits === 'bounding' && Math.abs(absolute.px) * 100 > limits.maxFilterRegionPercent) {
+        return { reason: 'svg-workload', detail: `${where}: ${JSON.stringify(value)} exceeds the filter-region budget` };
+      }
+      // The user-unit ceiling is refused on the ceiling itself, so the largest
+      // admitted side is strictly below `maxFilterRegion`.
+      if (Math.abs(absolute.px) >= limits.maxFilterRegion) {
+        return { reason: 'svg-workload', detail: `${where}: ${JSON.stringify(value)} exceeds the filter-region budget` };
+      }
+    }
+  }
+
+  return undefined;
+}

@@ -13,7 +13,7 @@ accessible fallback remain available without JavaScript.
 | Document | Contract |
 | --- | --- |
 | [Architecture](architecture.md) | Product scope, ownership, source/IR/output boundaries |
-| [Media processing and delivery](media-pipeline.md) | Same-origin referenced images with captions, layout and WebP-first delivery (0009–0011 shipped); accepted target for 0012–0013: build-only SVG security and font policy |
+| [Media processing and delivery](media-pipeline.md) | Same-origin referenced images with captions, layout and WebP-first delivery (0009–0011 shipped); build-only static SVG rasterization and host-font coverage (0012 shipped); accepted target for 0013: opt-in R2 publishing |
 | [Content semantics](content-semantics.md) | Publication, links, identity, aliases, tags |
 | [SQLite contract](sqlite-contract.md) | Exact schema, invariants, query semantics |
 | [Build and browser runtime](build-and-runtime.md) | Artifact binding, Worker protocol, loading, failure, caching |
@@ -59,9 +59,11 @@ for historical formats. Any future compatibility commitment needs its own decisi
   model. A query at build time does not make a page depend on a query at runtime.
 - Static image files are allowed as referenced, authorized and content-addressed outputs.
   Goal 0009 shipped that path; Goal 0011 added the one pinned sharp-based encoder for JPEG
-  and PNG WebP candidates, after authorization and with final-byte identity. SVG remains a
-  build-only policy problem for 0012. The [media design](media-pipeline.md) does not
-  authorize an image index, extra browser runtime, resize matrix, or image CDN requirement.
+  and PNG WebP candidates, after authorization and with final-byte identity. Goal 0012
+  shipped a self-contained static SVG as **build-only input**: policy-checked XML/CSS,
+  rasterized from bytes to lossless WebP, with the source never published. The
+  [media design](media-pipeline.md) does not authorize an image index, extra browser runtime,
+  resize matrix, or image CDN requirement.
 - Every added structure must name its consumer and survive an ablation check.
   Fewer tables or fewer lines alone are not evidence of a better design.
 

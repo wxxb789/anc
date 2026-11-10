@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120">
+  <defs>
+    <filter id="f" x="-10%" y="-10%" width="1e3%" height="100%">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+  <rect width="200" height="120" filter="url(#f)" fill="#8ad884"/>
+</svg>

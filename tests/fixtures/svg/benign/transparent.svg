@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320">
+  <title>Transparent artwork</title>
+  <defs>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#86c8e6" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#86c8e6" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="160" cy="160" r="150" fill="url(#glow)"/>
+  <rect x="60" y="60" width="120" height="120" fill="#8ad884" fill-opacity="0.6"/>
+  <path d="M60 260 L160 100 L260 260 Z" fill="none" stroke="#f08c8c" stroke-width="3"/>
+</svg>

@@ -437,13 +437,30 @@ async function checkImages(browser: Browser, server: ServedSite, expectedFiles: 
         caption: image.closest('figure')?.querySelector('figcaption')?.textContent ?? null,
       })),
     );
-    assert(images.length >= 7, 'the foreign note rendered fewer images than it embeds: ' + JSON.stringify(images));
+    assert(images.length >= 8, 'the foreign note rendered fewer images than it embeds: ' + JSON.stringify(images));
     for (const image of images) {
       assert(image.src.startsWith('/_assets/'), 'an image points outside the published assets: ' + image.src);
       assert(image.complete, 'an image never finished loading: ' + image.src);
       assert(image.width > 0, 'the browser decoded nothing for ' + image.src);
       assert(image.decoding === 'async', 'an image carries no async decoding hint: ' + image.src);
     }
+    // The SVG is the one image whose decoded pixels are twice its layout size:
+    // that is the 2× raster contract, and the attribute pair a browser reserves
+    // space from must be the logical size, not the emitted size.
+    const diagram = images.find((image) => image.src.endsWith('-diagram.webp'));
+    assert(diagram, 'the packaged page lost its rasterized SVG: ' + JSON.stringify(images.map((image) => image.src)));
+    assert(
+      diagram.attributeWidth === '360' && diagram.attributeHeight === '160',
+      'the SVG was laid out at its raster size instead of its logical size: ' + JSON.stringify(diagram),
+    );
+    assert(
+      diagram.width === 720 && diagram.height === 320,
+      'the SVG did not decode at twice its logical size: ' + JSON.stringify(diagram),
+    );
+    assert(
+      !images.some((image) => image.src.endsWith('.svg')),
+      'an SVG source reached a served image URL: ' + JSON.stringify(images.map((image) => image.src)),
+    );
     assert(images[0]!.loading === 'eager', 'the lead image does not load eagerly: ' + JSON.stringify(images[0]));
     for (const image of images.slice(1)) {
       assert(image.loading === 'lazy', 'a below-the-fold image is not lazy: ' + image.src);
@@ -522,6 +539,17 @@ async function main(): Promise<number> {
     writeFileSync(join(scratch, 'media', 'transparent.png'), PNG_TRANSPARENT);
     writeFileSync(join(scratch, 'media', 'photo-large.jpg'), await representativePhotograph(800, 600));
     writeFileSync(
+      join(scratch, 'media', 'diagram.svg'),
+      [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="360" height="160" viewBox="0 0 360 160">',
+        '<rect width="360" height="160" fill="#ffffff"/>',
+        '<rect x="16" y="16" width="328" height="128" rx="12" fill="#f4f7fa" stroke="#3c4652" stroke-width="2"/>',
+        '<text x="40" y="94" font-family="DejaVu Sans, sans-serif" font-size="24" fill="#161b21">Packaged SVG</text>',
+        '</svg>',
+      ].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
       join(scratch, 'welcome.md'),
       [
         '---',
@@ -551,6 +579,10 @@ async function main(): Promise<number> {
         'A representative photograph is not a tiny fixture:',
         '',
         '![a larger photograph](media/photo-large.jpg)',
+        '',
+        'A static SVG is rasterized to WebP at twice its logical size:',
+        '',
+        '![a static SVG diagram](media/diagram.svg "A packaged SVG caption")',
         '',
         'Decorative artwork keeps an empty alternative and no caption:',
         '',
@@ -644,10 +676,10 @@ async function main(): Promise<number> {
     assert(welcome.includes('language-mermaid'), 'client diagram fallback did not ship');
     assert(!welcome.includes('PRIVATE-BODY-MUST-NOT-SHIP'), 'withheld body reached its linking page');
 
-    // --- Image assets: seven files, one filename with a space and CJK, a
-    // photograph shared with the second note, and the figure/layout cases ---
+    // --- Image assets: eight files, one filename with a space and CJK, a static
+    // SVG, a photograph shared with the second note, and the figure/layout cases ---
     const assetFiles = readdirSync(join(dist, '_assets')).sort();
-    assert(assetFiles.length === 7, 'the foreign output carries ' + assetFiles.length + ' image assets: ' + assetFiles.join(', '));
+    assert(assetFiles.length === 8, 'the foreign output carries ' + assetFiles.length + ' image assets: ' + assetFiles.join(', '));
     for (const file of assetFiles) {
       const bytes = readFileSync(join(dist, '_assets', file));
       const digest = createHash('sha256').update(bytes).digest('hex');
@@ -658,14 +690,14 @@ async function main(): Promise<number> {
     // a build that silently stopped encoding fails here rather than looking
     // green because every source still published.
     const webpAssets = assetFiles.filter((file) => file.endsWith('.webp'));
-    assert(webpAssets.length === 6, 'the packaged build published ' + webpAssets.length + ' WebP assets, not six: ' + assetFiles.join(', '));
+    assert(webpAssets.length === 7, 'the packaged build published ' + webpAssets.length + ' WebP assets, not seven: ' + assetFiles.join(', '));
     assert(assetFiles.some((file) => file.endsWith('-anim.gif')), 'the animated GIF was re-encoded or lost: ' + assetFiles.join(', '));
     assert(
       assetFiles.some((file) => file.includes('图 表 one.webp')),
       'the Unicode-named image did not publish under its own WebP name: ' + assetFiles.join(', '),
     );
     const welcomeImages = [...welcome.matchAll(/<img src="(\/_assets\/[^"]+)"/g)].map((match) => match[1]!);
-    assert(welcomeImages.length === 9, 'the foreign page points at ' + welcomeImages.length + ' asset URLs');
+    assert(welcomeImages.length === 10, 'the foreign page points at ' + welcomeImages.length + ' asset URLs');
     // The packaged renderer, not a test fixture, produced these: one figure with
     // the author's caption, distinct alt text, header dimensions, and a lazy
     // rule for everything after the lead.
@@ -834,7 +866,7 @@ async function main(): Promise<number> {
       'a failed build replaced the last good output',
     );
 
-    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes, 7 images');
+    console.log('tarball adoption smoke ok: 2 published notes, 2 withheld notes, 8 images');
     console.log('tarball: ' + basename(TARBALL));
     return 0;
   } finally {

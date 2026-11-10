@@ -660,10 +660,13 @@ function checkCorpus(entries: readonly ContentEntry[], issues: string[], edges: 
  * bytes. A URL that is not canonical is a producer defect rather than an
  * author's mistake, and it fails here rather than in a filename lookup.
  *
- * `width`/`height` are the header's pixel size for the emitted bytes. They are
- * a pair or absent: one without the other describes no aspect ratio a browser
- * can reserve, and the producer never writes a guess. Their only consumer is
- * the renderer's layout attributes; they do not participate in identity.
+ * `width`/`height` are the **CSS layout size** of the published picture: the
+ * emitted header's pixel size for a raster, and the logical size for an SVG
+ * rasterized at 2× (a 600-pixel diagram publishes a 1,200-pixel WebP and lays out
+ * at 600). They are a pair or absent: one without the other describes no aspect
+ * ratio a browser can reserve, and the producer never writes a guess. Their only
+ * consumer is the renderer's layout attributes; they do not participate in
+ * identity.
  */
 function checkAssets(rawAssets: unknown, issues: string[]): void {
   if (rawAssets === undefined) return;

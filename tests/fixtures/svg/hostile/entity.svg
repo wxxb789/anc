@@ -1,0 +1,6 @@
+<!DOCTYPE svg [
+  <!ENTITY label "expanded label">
+]>
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">
+  <text x="10" y="40" font-size="20">&label;</text>
+</svg>

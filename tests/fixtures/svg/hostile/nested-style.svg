@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="80">
+  <style>
+    @import url("https://example.invalid/theme.css");
+    rect { fill: url("https://example.invalid/pattern.svg#p"); }
+    circle { fill: url("data:image/png;base64,AAAA"); }
+    <style>
+      rect { fill: #8ad884; }
+    </style>
+  </style>
+  <rect width="240" height="80" fill="#8ad884"/>
+  <path d="M20 60 L60 20 L100 60 Z" fill="#86c8e6"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="240" viewBox="0 0 480 240">
+  <title>Line art</title>
+  <defs>
+    <marker id="head" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0 0 L10 4 L0 8 Z" fill="#1c222a"/>
+    </marker>
+  </defs>
+  <rect width="480" height="240" fill="#ffffff"/>
+  <path d="M40 200 L140 60 L240 200 Z" fill="none" stroke="#1c222a" stroke-width="2"/>
+  <path d="M280 40 V200" stroke="#3c4652" stroke-width="1"/>
+  <path d="M280 120 H440" stroke="#3c4652" stroke-width="1.5" marker-end="url(#head)"/>
+  <circle cx="280" cy="120" r="4" fill="#3c4652"/>
+</svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">
+  <style>
+    @import url("https://example.invalid/theme.css");
+    rect { fill: #8ad884; }
+  </style>
+  <rect width="200" height="80"/>
+</svg>

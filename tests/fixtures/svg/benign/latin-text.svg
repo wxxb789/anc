@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="200" viewBox="0 0 520 200">
+  <title>Latin text</title>
+  <rect width="520" height="200" fill="#ffffff"/>
+  <text x="30" y="70" font-family="DejaVu Sans, sans-serif" font-size="30" fill="#161b21">The quick brown fox</text>
+  <text x="30" y="120" font-family="DejaVu Sans, sans-serif" font-size="24" fill="#3c4652">jumps over the lazy dog.</text>
+  <text x="30" y="165" font-family="DejaVu Sans Mono, monospace" font-size="20" fill="#161b21">const value = 42;</text>
+</svg>

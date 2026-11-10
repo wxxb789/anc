@@ -15,9 +15,11 @@
  *   remove metadata only on a transcode, where orientation is applied first.
  *   Passthrough originals keep their EXIF and GPS tags. Do not describe
  *   passthrough as scrubbing metadata; it is not.
- * - **No SVG.** An SVG can carry a script, and rasterization is Goal 0012's.
- *   `looksLikeSvg` exists only to give that refusal a diagnostic an author can
- *   act on, never to publish one.
+ * - **SVG is a source, never an output.** Goal 0012 accepts a static,
+ *   self-contained SVG as build-only input: `svg-policy.ts` decides whether it is
+ *   in the subset and `svg-render.ts` turns it into lossless WebP. The XML never
+ *   reaches a public file. `looksLikeSvg` is the cheap signature that selects
+ *   that path; it is not the policy.
  * - **One encoder decision.** `media-codec.ts` owns the WebP policy; this module
  *   owns format identity, structural completeness, dimensions, resolution and
  *   URL naming.
@@ -49,6 +51,8 @@
  * resolver must be able to say "nothing named that" rather than resolve to the
  * nearest plausible file.
  */
+
+import type { SvgRefusalReason } from './svg-refusal.ts';
 
 /** A raster format this build can publish. */
 export type ImageFormat = 'png' | 'jpeg' | 'gif' | 'webp' | 'avif';
@@ -352,19 +356,20 @@ export function sniffImageFormat(bytes: Uint8Array): ImageFormat | undefined {
 }
 
 /**
- * Whether the bytes begin an SVG document.
+ * Whether the first 1024 bytes contain an SVG root element.
  *
- * Only ever consulted *after* {@link sniffImageFormat} declined, to turn "not a
- * supported raster" into the diagnostic an author needs: SVG is a real image
- * format that this phase refuses on purpose, and "unsupported type" alone would
- * read like a bug. It is not a parser and must not become one — Goal 0012's
- * static-subset analysis is the parser, and it ships with the rasterizer.
+ * Consulted *after* {@link sniffImageFormat} declined, to select Goal 0012's SVG
+ * path rather than "unsupported type". Like the raster sniffers this is a
+ * signature test, not a validator: it looks for `<svg>` (optionally namespaced) at
+ * any position in the bounded head, so an XML declaration, comments, a DOCTYPE, or
+ * processing instructions in the prologue still reach the policy and are refused
+ * there with their own diagnostics instead of being misreported as a plain text
+ * file. A UTF-16 document does not match this byte signature and is reported as an
+ * unsupported file. It must not grow into a parser — the policy module owns that.
  */
 export function looksLikeSvg(bytes: Uint8Array): boolean {
-  const head = Array.from(bytes.subarray(0, 1024), (byte) => String.fromCharCode(byte)).join('');
-  return /^(?:\uFEFF)?\s*(?:<\?xml[\s\S]*?\?>\s*)?(?:<!--[\s\S]*?-->\s*)*(?:<!DOCTYPE[^>]*>\s*)*<svg[\s>]/i.test(
-    head,
-  );
+  const head = new TextDecoder('utf-8').decode(bytes.subarray(0, 1024));
+  return /<(?:[A-Za-z_][\w.-]*:)?svg(?=[\s/>])/i.test(head);
 }
 
 /* ------------------------------------------------------------------------- *
@@ -1487,8 +1492,7 @@ export function resolveImageTarget(
  * - `outside` — the reference (or the symlink it names) leaves the authorized
  *   tree, so its bytes were never read.
  * - `excluded` — a real file the author's own exclusion rules withhold.
- * - `svg` — an SVG, which this phase refuses rather than shipping active content.
- * - `unsupported` — a file whose bytes are not PNG/JPEG/GIF/WebP/AVIF.
+ * - `unsupported` — a file whose bytes are not PNG/JPEG/GIF/WebP/AVIF or an SVG.
  * - `html-form` — an `<img>` written as raw HTML, which the accepted resolver
  *   does not cover.
  * - `corrupt` — bytes of a supported format that the decoder could not read.
@@ -1497,14 +1501,20 @@ export function resolveImageTarget(
  * - `timeout` — a decode or encode exceeded its deadline.
  * - `encode-failed` — the encoder returned bytes this build cannot publish and
  *   cannot explain by the input alone. Never a silent fallback to the source.
+ * - the `svg-*` members — Goal 0012's static-subset refusals, defined in
+ *   `svg-refusal.ts`. Each names a distinct construct an author can fix.
  */
-export type MediaProcessingFailureReason = 'corrupt' | 'too-large' | 'timeout' | 'encode-failed';
+export type MediaProcessingFailureReason =
+  | 'corrupt'
+  | 'too-large'
+  | 'timeout'
+  | 'encode-failed'
+  | SvgRefusalReason;
 
 export type MediaFailureReason =
   | 'missing'
   | 'outside'
   | 'excluded'
-  | 'svg'
   | 'unsupported'
   | 'html-form'
   | MediaProcessingFailureReason;
@@ -1513,7 +1523,18 @@ export type MediaFailureReason =
 export type ImageOutcome =
   | { readonly kind: 'external' }
   | { readonly kind: 'published'; readonly url: string }
-  | { readonly kind: 'failed'; readonly reason: MediaFailureReason };
+  | {
+      readonly kind: 'failed';
+      readonly reason: MediaFailureReason;
+      /**
+       * The private, actionable half of the reason.
+       *
+       * It is read from the source file (an element name, an attribute, a code
+       * point), so it belongs in the private report for the same reason a
+       * withheld path does. The public stream carries only the counted label.
+       */
+      readonly detail?: string;
+    };
 
 /**
  * The traversal's view of the asset pipeline, injected.

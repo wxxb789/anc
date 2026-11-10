@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="420" height="120" viewBox="0 0 420 120">
+  <title>Symbols and use</title>
+  <defs>
+    <symbol id="dot" viewBox="0 0 10 10">
+      <circle cx="5" cy="5" r="5" fill="#3c4652"/>
+    </symbol>
+    <symbol id="ring" viewBox="0 0 10 10">
+      <circle cx="5" cy="5" r="4" fill="none" stroke="#f08c8c" stroke-width="1.6"/>
+    </symbol>
+  </defs>
+  <rect width="420" height="120" fill="#ffffff"/>
+  <use xlink:href="#dot" x="20" y="40" width="40" height="40"/>
+  <use href="#ring" x="90" y="40" width="40" height="40"/>
+  <use href="#dot" x="160" y="40" width="40" height="40"/>
+  <text x="240" y="70" font-family="DejaVu Sans, sans-serif" font-size="20" fill="#161b21">shared symbols</text>
+</svg>

@@ -44,7 +44,6 @@ import {
   PNG_SECOND,
   PNG_SCREENSHOT,
   PNG_UNICODE,
-  SVG,
   WEBP_ANIMATED,
   WEBP_LOSSLESS,
   WEBP_LOSSY,
@@ -765,7 +764,16 @@ test('every unauthorized local image is a build failure with its own reason', as
       label: 'excluded',
       reason: 'excluded',
     },
-    { name: 'svg', body: '![x](../assets/vector.svg)', files: { 'assets/vector.svg': SVG }, label: 'unsupported local SVG', reason: 'svg' },
+    {
+      // A file named `.svg` whose bytes are not SVG is still unsupported: the
+      // signature decides, not the extension. Goal 0012's refusal cases live in
+      // `tests/svg-raster.test.ts`.
+      name: 'svg-named-text',
+      body: '![x](../assets/vector.svg)',
+      files: { 'assets/vector.svg': NOT_AN_IMAGE },
+      label: 'unsupported file type',
+      reason: 'unsupported',
+    },
     { name: 'unsupported', body: '![x](../assets/notes.txt)', files: { 'assets/notes.txt': NOT_AN_IMAGE }, label: 'unsupported file type', reason: 'unsupported' },
     {
       // A supported signature with a truncated body. 0011 owns decode

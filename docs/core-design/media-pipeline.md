@@ -1,13 +1,13 @@
 # Media processing and delivery
 
 Status: accepted design for Goals 0009–0013, 2026-11-08.
-**Goals 0009, 0010 and 0011 are implemented and verified**; their completion records
-([0009](../goals/archive/0009-zero-config-static-images.md),
+**Goals 0009, 0010, 0011 and 0012 are implemented and verified**; their completion
+records ([0009](../goals/archive/0009-zero-config-static-images.md),
 [0010](../goals/archive/0010-readable-image-figures.md) and
-[0011](../goals/archive/0011-webp-first-image-delivery.md)) carry the evidence.
-0012–0013 have not shipped, and this document is not evidence that they have: the
-sections below are the target for those outcomes, and the ones for 0009–0011 describe
-the implemented contracts.
+[0011](../goals/archive/0011-webp-first-image-delivery.md)) carry the evidence, and
+[0012](../goals/0012-safe-svg-rasterization.md) reports its own. 0013 has not shipped,
+and this document is not evidence that it has: the section below is the target for that
+outcome, and the ones for 0009–0012 describe the implemented contracts.
 
 ## Product contract and ownership
 
@@ -71,8 +71,9 @@ Order of outcomes:
    codec or dependency and no browser script or SQLite metadata.
 3. **0011 — shipped:** automatic WebP-preferred delivery, without changing how an
    author embeds an image or where it is hosted.
-4. **0012:** self-contained *static* SVG is accepted as **build-only input** and
-   becomes WebP; the original SVG is never served.
+4. **0012 — shipped:** self-contained *static* SVG is accepted as **build-only
+   input** and becomes lossless WebP; the original SVG is never served. The
+   subset, refusals, budgets and font gate are in the 0012 section below.
 5. **0013:** later, an explicitly authorized external storage/publication flow
    may replace the delivery location. Local same-origin output remains default.
 
@@ -266,120 +267,313 @@ is no extra SQLite, WASM, JavaScript or CDN cost in the reader.
 
 ### Renderer, boundary and output
 
-Use **the same pinned sharp 0.35.5**, through its bundled librsvg decoder, to
-render a validated SVG **byte buffer**, never a path to the author's SVG. A
-file-based base URI must not be supplied to the renderer: librsvg can resolve
-local references relative to a base file, while loading from bytes without a
-base URL denies such external file resolution. This property is an explicit
-security assumption to **test**, not a substitute for checking the SVG.
+**Implemented.** The renderer is the same pinned **sharp 0.35.5** through its
+bundled librsvg decoder, and it receives a **byte buffer**, never a path to the
+author's SVG. No base URI is supplied: librsvg has nothing against which to
+resolve a relative reference. That is an assumption tested on its own, not a
+substitute for the policy — `tests/svg-security.test.ts` renders a document that
+**bypasses** the policy and proves a host-canary file is not read and a listening
+socket receives no request.
 
 The producer's publication checks authorize the source file *before* its bytes
-are parsed. The security policy then accepts only a **static, self-contained SVG
-subset**, renders it, encodes **lossless WebP**, and gives the existing asset
-pipeline only WebP bytes and dimensions. Never emit the source XML or an SVG
-`data:` URL; the original SVG does not enter `dist/`, Pagefind, SQLite or
-a browser. The existing `img-src 'self'` CSP is sufficient.
+are parsed. `src/lib/svg-policy.ts` then applies the static-subset policy,
+`src/lib/svg-render.ts` rasterizes the accepted bytes and encodes **lossless
+WebP**, and the existing asset pipeline receives only those WebP bytes plus the
+layout size. The source XML never enters `dist/`, Pagefind, SQLite, the asset
+inventory, or a browser; the existing `img-src 'self'` CSP is sufficient.
+
+The published picture is rasterized at **2× its logical size**. The logical size
+is the author's absolute `width`/`height` when written (physical units converted
+at CSS's 96 dpi), otherwise a stable **720 CSS px** at the wide end of the
+article reading column — the stylesheet's `max-width: 100%` caps it on a narrower
+column, so the rendering never overflows. When only one side is declared and a
+`viewBox` is present, the viewBox supplies the other side; that inferred pair is
+then treated as declared so the raster keeps the author's aspect ratio instead of
+falling back to the article measure. The render target is clamped
+proportionally by a **6,000,000-pixel output budget** and an 8,000-pixel side
+limit; nothing is cropped and the `viewBox` is never rewritten. The artifact's
+`width`/`height` are **half the emitted raster**. Without clamping that is the
+logical layout size, so a 600-pixel diagram publishes a 1,200-pixel WebP and still
+lays out at 600 CSS pixels. When the budget clamps, the layout shrinks with the
+raster: a 4000×4000 SVG publishes 2449×2449 and lays out at 1225×1225. The
+emitted header is the 2× pair; both are read from the emitted bytes by 0010's
+reader.
+
+The emitted bytes are verified before publication: WebP MIME, exactly the target
+dimensions, one frame, no rotation, the logical target's aspect ratio, and at
+least one visible pixel. A fully transparent render is refused (`svg-empty`); an
+intentionally empty SVG is therefore a build failure rather than a published
+blank, and the refusal is the documented outcome rather than a bypass.
+
+**Measured density semantics that the renderer relies on.** Reading the
+document's natural size at 72 dpi and scaling by density is not linear for every
+unit: with this pinned binary, `100px` renders 100 then 200 pixels at 72/144,
+while `100mm` renders 283 then 1,134. The policy therefore reports the unit class
+(`linear` or `physical`) and the renderer computes the density for each;
+`src/lib/svg-policy.ts` records the measurement. Mixed physical and px/unitless
+`width`/`height` is refused, because no density gives that document its written
+aspect ratio.
 
 Default SVG quality is **lossless WebP with transparent background**, not a
-lossy photo preset that blurs diagram text and thin lines. Respect source
-`viewBox` aspect ratio and explicit logical width/height when valid. For a
-`viewBox`-only diagram, derive a stable logical image size within the article
-layout, rather than accepting an arbitrary library default. Rasterize at an
-effective high-density resolution sufficient for 2× displays, bounded by an
-explicit output-pixel budget; downscale proportionally instead of allocating
-unbounded surfaces. Do not invent cropping or change the author's viewBox.
-Normalize orientation and alpha, verify nonempty visible rendered content and
-WebP MIME/dimensions before publication. A valid intentionally empty SVG is a
-special case that needs evidence, not a bypass of blank-output detection.
+lossy photo preset that blurs diagram text and thin lines. Orientation is not
+applicable to SVG; `ensureAlpha` then lossless encoding preserves transparency,
+and libwebp omits the alpha channel entirely for a fully opaque picture, which
+the visibility check accounts for. The verification and budget rules above are
+the shipped implementation.
 
 ### Static subset and fail-closed resource policy
 
 The SVG input is untrusted XML, even when authored by the repository owner.
-The **XML parser** is namespace-aware and must reject declarations and resource
-mechanisms that introduce ambiguity or active/external behavior: any DTD,
-entities beyond XML's predefined entities, XInclude, processing instructions,
-scripts, `foreignObject`, event handlers, animation elements, external
-stylesheets/fonts and any unsupported foreign namespace. Allow same-document
-fragment references (e.g. `href="#id"`, `url(#gradient)`) needed by
-ordinary gradients, clip paths, masks, symbols and filters.
+`src/lib/svg-policy.ts` parses it with namespace-aware **saxes 6.0.0**. The
+producer's byte signature looks for an optional-prefix `<svg>` root anywhere in
+the first 1024 bytes, so an XML declaration, a comment, a DOCTYPE, or a bounded
+sequence of processing instructions in the prologue reaches this policy and is
+refused for its actual reason rather than being misreported as a plain text file;
+a UTF-16 document does not match the byte signature and is unsupported. Every
+refusal is a stable reason the public summary counts and the private report
+names:
 
-The **CSS parser** must examine both SVG `<style>` contents and `style`
-attributes (and URL-bearing presentation attributes) with an AST, accepting
-only static styling. Reject CSS `@import`, external `url(...)`, malformed
-or unhandled CSS nodes, and unsafe/unknown URL-bearing constructs. Recognize
-CSS-escaped URLs as the CSS parser interprets them; searching text for
-`javascript:`, `url(`, or `<script>` is not sufficient. XML `href` and
-legacy `xlink:href` must have identical checks.
+- `svg-doctype` — any DOCTYPE, entity declaration, or reference to an entity
+  beyond XML's predefined five.
+- `svg-xinclude` — an element in the XInclude namespace.
+- `svg-script` — a `script` element, any `on*` event-handler attribute, or a
+  `javascript:`/`vbscript:` URL.
+- `svg-foreign` — `foreignObject`, or an element/attribute in a namespace this
+  subset does not support.
+- `svg-unsafe` — an element or attribute outside the allowlist, `<metadata>`,
+  or a processing instruction other than an external stylesheet.
+- `svg-animation` — `animate*`, `set`, `discard`.
+- `svg-external` — any reference that is not a same-document fragment, including
+  `file:`, `http(s):`, a relative path, an external stylesheet, `xml:base`,
+  and every `<image>`/`<feImage>` element.
+- `svg-data` — any embedded `data:` payload.
+- `svg-css` — malformed CSS, a nested `<style>` element, an at-rule
+  (`@import`, `@font-face`, `@media`, …), an explicit `inherit` on `mask`,
+  `filter` or `clip-path` (the reference properties this subset keeps local),
+  or a selector form the reference attribution cannot decide (attribute
+  selectors, pseudo-classes, pseudo-elements, sibling or column combinators,
+  namespaces, and escaped identifiers).
+- `svg-invalid` — not well-formed UTF-8 XML, no `<svg>` root, no usable size, a
+  mixed-unit width/height pair, or a budget argument that does not parse (a
+  filter-region value or `numOctaves`).
+- `svg-workload` — beyond the finite work budgets below.
+- `svg-font` — text no installed font covers, including text in an unused
+  `defs`/`symbol` subtree.
+- `svg-render` — the rasterizer failed on a policy-accepted document.
+- `svg-empty` — a render with no visible pixel.
 
-Permitted inline `data:` image payloads, if any, are restricted to validated,
-bounded raster types (PNG/JPEG/WebP) with byte and decoded-pixel checks; never
-permit recursive embedded SVG, HTML, fonts or unbounded compression. The
-simplest acceptable implementation may reject **all** embedded data assets
-with a clear diagnostic if their benefit does not justify the security and
-memory cost. That bounded scope choice does not affect gradient or mask
-fragment references. Reject unsupported SVG features rather than rendering
-a misleading partial diagram; no network fetch, local file read, or silently
-ignored external reference is permitted.
+**Elements and attributes are allowlists**, not denylists: shapes, groups,
+`defs`/`symbol`/`use`/`view`, gradients, patterns, clip paths, masks, markers,
+static filter primitives, `text`/`tspan`/`textPath`/`a`, `title`/`desc`,
+`style`, and the presentation attributes those need. Lighting is limited to
+`fePointLight` and `feSpotLight`; `feDistantLight` is not part of the subset. A foreign namespace — an
+Inkscape `sodipodi`:element, an RDF metadata block, an XHTML `<link>` — is
+refused rather than partially rendered. `<metadata>` is refused because it is not
+drawn and walking arbitrary foreign XML to prove that is unnecessary surface.
+Same-document fragments (`href="#id"`, `xlink:href="#id"`, `url(#grad)`) are the
+only references accepted, and **one function** checks `href` and legacy
+`xlink:href`, so they cannot drift. Inert accessibility and data attributes
+(`role`, `aria-*`, `data-*`, `lang`, `tabindex`) and the legacy `xlink:title` /
+`xlink:role` are allowed; none names a resource.
 
-Keep SVG analysis/rasterization within bounded work and memory, honoring
-sharp's finite input-pixel limits and an additional *post-scale SVG output*
-pixel budget. A sharp-native decode has a process-crash risk that pure JS
-cannot eliminate. Consequently the release qualification must cover the
-patched decoder, malicious XML/resource negative controls, encoder failure,
-and bounded build behavior; do not describe syntax checking alone as a
-complete native-code sandbox. If a reliable resource/hostile-input boundary
-cannot be demonstrated, 0012 remains incomplete rather than publishing SVG.
+**Every embedded `data:` payload is refused** with its own diagnostic. The
+design's optional bounded raster-embedding path was not built: the subset's
+benefit did not justify the decode and recursion surface. Gradient, mask, clip,
+symbol and filter fragment references are unaffected.
+
+**The CSS parser is an AST** (`css-tree 3.2.1`), over `<style>` contents, `style`
+attribute declarations, and every URL-bearing presentation attribute (`fill`,
+`stroke`, `filter`, `clip-path`, `mask`, `marker-*`). It rejects every at-rule,
+every `Raw` node css-tree could not parse, unknown functions (including `var()`,
+whose fallback argument is a `Raw` node), and every `url()` that is not a
+same-document fragment. `tests/svg-raster.test.ts` proves the check reads the
+**decoded** value: `url("\6a avascript:alert(1)")` and
+`url(http\3a //example.invalid/x)` contain neither literal the gate must not rely
+on, yet are refused as a script URL and an external URL respectively.
+
+**Inherited references are suppressed only by a provable non-reference paint.**
+`fill` and `stroke` are inherited, so one `url(#p)` on a group is the work of
+every painted descendant that does not override it. A declaration overrides
+only when its value is on a narrow whitelist — `none`, `initial`,
+`currentColor`, a hex colour, a named colour the parser resolves, or an
+`rgb()`/`rgba()`/`hsl()`/`hsla()` call with literal arguments — because only
+those provably paint no document resource. Every other value (`bogus`,
+`url(#…)`, a bare gradient name, an escaped or unknown keyword, a variable,
+anything unparseable) may be invalid at computed-value time and fall back to the
+inherited value, so it keeps the ancestor reference and is counted there too.
+Valid paints outside the whitelist (`transparent`, a system colour, `hwb()`,
+`lab()`, `color()`) keep it as well: this policy does not model which colour
+syntaxes the installed renderer accepts.
+The marker slots admit only `none`/`initial`; `cursor` never suppresses.
+Over-counting is the accepted direction — the expansion count is an upper
+bound, not an exact prediction. `tests/svg-raster.test.ts` pins `fill="bogus"`
+at the same `32766`-instance refusal as `fill="inherit"` and pins the
+whitelisted paints as accepted.
+
+**A `<style>` rule's references belong to the elements its selectors match.**
+The matcher uses only the recorded tree — element local name, `id`, `class`, and
+the descendant and child combinators over selector lists — so a rule written as a
+stylesheet counts each rendered consumer exactly as the equivalent presentation
+attributes would, a rule that matches nothing contributes nothing, and two
+declarations naming the same definition still count twice. Attribute selectors,
+pseudo-classes, pseudo-elements, sibling and column combinators, namespaced
+selectors, and escaped identifiers cannot be decided from that tree and are
+refused as `svg-css` rather than attributed to the document root or ignored.
+
+**Work is bounded before a surface is allocated.** The policy caps 20,000
+elements, 128 nesting levels, 500 `<use>` elements, **16,384 instances after
+`<use>` expansion**, 100,000 UTF-16 code units of text in any `<text>` subtree
+(referenced or not), 4,096 distinct text characters, 1,000,000 characters of CSS
+across `<style>` elements and `style` attributes, 100 filter primitives,
+`stdDeviation` 1,000 user units, filter regions beyond 500% of the object's box
+or at 20,000 user units (a unitless side is a fraction under the default
+`objectBoundingBox`, a user unit under `userSpaceOnUse`, and an `fe*` subregion
+follows the parent filter's `primitiveUnits`), convolution kernels at 100
+entries, and turbulence octaves at 16. The `<use>`
+count is a dynamic-programming count over the id graph, not the number of
+`<use>` declarations: 17 chained symbols and 33 declarations are about 1 KB of
+XML but expand to 131,071 instances. A marker reference is multiplied by the
+placements its shape can produce — once per subpath for `marker-start` and
+`marker-end`, once per interior vertex for `marker-mid` — because a marker
+renders per placement, not per declaration. The placement bound is lexical
+(`points` pairs, `d` command arguments, two vertices for `line`). Arc flags are
+single characters that may be packed without a separator (`0110` is the flags
+`0 1` and the x coordinate `10`), so an `A`/`a` group's segments are bounded by
+`ceil(numbers / 3)` — every arc still consumes at least `rx ry rotation` —
+rather than divided by the seven-value arity; every other command has one
+lexical number per grammar value. A closepath or polygon's closing point is
+the last vertex, so a subpath with at least two vertices has its previous
+endpoint in the interior; that is measured against the pinned librsvg. The
+16,384 cap admits the largest practical chained symbol table (measured at
+177 ms for 16,383 instances on the qualification host) and refuses that
+document before the renderer; the same shape measured
+581 ms at 65,535 instances and 1,146 ms at 131,071 instances before the cap
+(reviewer measurement 2.4 s at 2^17). A cyclic `<use>` graph is refused as
+non-terminating. A source SVG larger than 8 MiB is refused before the policy
+parses it. The renderer then measures the document's natural size at 72 dpi with
+sharp's `limitInputPixels` at 24,000,000, so a declared million-pixel square is
+refused by libvips before allocation, and the post-scale output budget is
+6,000,000 pixels. `unlimited` is never set.
+
+The policy is not a native sandbox. A sharp-native decode has a process-crash
+risk pure JS cannot eliminate; the release qualification covers the patched
+decoder, hostile XML/resource controls, encoder failure and bounded behavior,
+and this document does not claim otherwise.
 
 ### Fonts, portability, determinism
 
-Do **not** bundle a large CJK font family or require authors to install Rust,
-ImageMagick or an SVG executable. Sharp/librsvg uses host font discovery for
-SVG text. The supported baseline is therefore:
+**Host fonts only; no font is bundled.** Sharp/librsvg discovers fonts through
+the host, and there is no download, forced installation, or package weight added
+for CJK.
 
-- Use the existing host's fonts; there is no silent download or forced font
-  installation on the user's behalf.
-- Test Latin, CJK, symbols and absent-font cases on the actual packaged GitHub
-  Actions Linux environment and representative Windows/macOS installations.
-  No blank/tofu labels may be counted as a successful render. Missing glyph
-  coverage must fail with a useful private diagnostic (or be solved by a
-  separately justified, measured minimal font fallback), not silently ship
-  a broken technical diagram.
-- Exact output identity is required across **repeat builds with the same
-  pinned binary/font environment**, not across different operating systems
-  with different fonts. Public hash paths bind the actual emitted bytes.
-  Never promise byte-for-byte cross-platform equality without pinned fonts
-  and demonstrated cross-platform tests.
-- SVG paths whose text has been converted to outlines render without font
-  discovery. This is not a requirement that every user manually convert text.
+The gate cannot be an ink test. Measured on the Linux qualification host, Pango
+draws a **hex box containing the code point** when no font covers a character:
+U+10FFF0 renders a box reading `10FFF0`, U+E000 a box reading `E000`, and `口`
+renders its own glyph — all three have ink, and the boxes differ from each other,
+so neither a blank check nor a single control bitmap detects tofu.
 
-The explicit trade-off is that a zero-extra-install renderer cannot guarantee
-all possible Unicode glyphs on an arbitrary host without shipping fonts.
-If the required packaged Linux CJK test fails, the goal is **not complete**;
-the implementer must evaluate the smallest warranted bundled fallback against
-measured package size, not declare missing glyphs acceptable. No unresolved
-renderer or font-system *choice* is delegated to a coding agent: sharp and
-host-font-first with a measured fallback gate are the baseline.
+`src/lib/font-coverage.ts` therefore answers the question Pango asks fontconfig:
+**is the code point in the `cmap` of any font fontconfig would offer?** It
+discovers font containers from `/etc/fonts/fonts.conf` and `conf.d/*.conf` on
+Linux and from the standard system/user directories on macOS and Windows.
+`FONTCONFIG_FILE` replaces that master; a non-absolute name is searched through
+each `FONTCONFIG_PATH` component in order and then `/etc/fonts`, and a master
+that exists nowhere contributes no fonts rather than borrowing the default tree.
+The fontconfig files are parsed as XML; `<dir>` entries and their `prefix` attribute
+are honoured (an XDG `<dir>` resolves against `XDG_DATA_HOME`, while an XDG
+`<include>` resolves against `XDG_CONFIG_HOME`), and `<include>` is followed
+relative to the including file or by its `prefix`. An include that names a
+directory is followed as fontconfig does, through its `[0-9]*.conf` entries. The
+hard include depth cap is 8; missing, unresolvable, repeated, too-deep and
+malformed includes are counted as skipped, and followed files and directories are
+counted separately by the measurement instrument. System and user font
+directories come from the config; the module does not add `~/.fonts` or
+`~/.local/share/fonts` unconditionally, because that would credit a directory
+fontconfig does not use when `XDG_DATA_HOME` points elsewhere.
+
+`<selectfont>` selection is applied, not merely its `<dir>` list. Filename
+selectors run first, as fontconfig does: `<glob>` rules match the **complete
+path** (home and relative spellings are expanded), an accept glob protects a
+directory or file from a reject glob, and a rejected directory is not searched.
+Family-pattern selectors run after filename acceptance; their accept set is
+checked before their reject set, so a family accept protects a font from a family
+reject. `<pattern>` rules are matched against family names read from the font's
+`name` table (IDs 1 and 16). The gate maps the `family` predicate; other pattern
+predicates are outside this bounded matcher, and the module only reads scalable
+containers (`.ttf`, `.otf`, `.ttc`, `.otc`), so a bitmap-format reject predicate
+cannot select one of its files. `tests/font-config.test.ts` compares the result on
+a temporary HOME/XDG tree against fontconfig's own matching behavior, including
+include directories, reject/accept precedence, an absolute file glob and a family
+reject. Measured with fontconfig 2.15, `fc-list` does not apply a `<selectfont>`
+filename reject (it lists the configured directory), while `fc-match` does; the
+gate follows the latter.
+
+It reads only each file's `cmap` table (formats 0, 4, 6 and 12, including `.ttc`
+collections) and accepts only Unicode records (platform 0, and platform 3
+encodings 1 and 10; symbol and other encodings are ignored). The scan is one pass
+over the files per process and stops when every code point is resolved; results
+are cached for the build. A reject rule that removes a file also removes its
+cmap from this scan. Whitespace, combining marks and Unicode format characters are excluded because they are not standalone
+glyphs. A missing code point fails with `svg-font` and a diagnostic naming it and
+the number of font files searched. If no font files are found at all, every code
+point is missing and the build fails rather than publishing an unverified
+picture.
+
+The check is per code point, not per requested family: Pango falls back through
+the host's font set per character — measured, CJK text under
+`font-family="DejaVu Sans"` renders identically to the default stack — so
+"can *any* host font draw this?" is the question that decides a reader's outcome.
+The consequence is that a host without a CJK font refuses a CJK diagram with an
+actionable message; it does not silently publish tofu.
+
+Exact output identity is required across **repeat builds with the same pinned
+binary/font environment**, not across different operating systems with different
+fonts. Public hash paths bind the actual emitted bytes. Cross-platform byte
+equality is not promised and has not been tested. SVG paths whose text has been
+converted to outlines render without font discovery; that remains the escape
+hatch for an author whose host cannot supply a glyph.
 
 ### Boundaries proven by executable evidence
 
-Positive fixtures: common author-exported SVG from diagram tools, paths,
-gradients, masks, clip paths, filters, transparency, explicit sizes and
-viewBox-only SVG, fine lines, CJK/Latin labels, repeated and shared embeds,
-served WebP in the actual packaged site.
+The committed corpus is `tests/fixtures/svg/benign/` and
+`tests/fixtures/svg/hostile/`. Each hostile file is a real document on disk, and
+each benign file is rendered and measured.
 
-Negative fixtures: DTD/entity/XInclude, scripts/events, `foreignObject`,
-CSS `@import` and escaped URLs, absolute/relative/`file:`/network
-references, recursive embedded SVG, symlink/path escape, broken XML, giant
-viewBox, huge output pixels, malicious filter workloads, unsupported dynamic
-features and missing glyphs. Prove that neither the contents of a build-host
-canary file nor a network probe can enter the output. The previous qualified
-site must survive failures. Run these through actual build/packaged paths, not
-only through an isolated XML parser.
+Positive fixtures: line art and markers, arrow labels, linear/radial gradients
+and a pattern, masks, clip paths, static filters, transparency, explicit sizes,
+a `viewBox`-only document, physical `mm` units, Latin text, CJK text, 9–11 px
+text, a `<style>` sheet with class selectors, `symbol`/`use`, and one document
+referenced from more than one note. `tests/svg-raster.test.ts` checks the emitted
+bytes, format, 2× pixel size, logical layout size, aspect ratio and
+duplicate/rebind behavior; it also renders a one-sided `width` plus `viewBox` at
+the inferred aspect and proves the `<use>` expansion budget refuses a 33-declaration
+chain before rendering. `tests/svg-display.test.ts` decodes the corpus in Chromium
+at 1×/2× and measures a real screenshot for strong edge transitions.
 
-Measured cost includes installation and dependency payload (on Linux,
-Windows, macOS), per-SVG processing, aggregate cold build, peak memory,
-source/output bytes, browser transfer, and quality comparisons. Do not add
-a second renderer or silently use system executables to make a benchmark pass.
+Negative fixtures, each failing the build with the reason named above:
+DTD and an entity declaration, XInclude, `script`, `foreignObject`, `onload`,
+`animate`/`set`, an external `xml-stylesheet`, `@import`, `@font-face`, a nested
+`<style>` element, an external `url()` in a `<style>` sheet, a `style` attribute
+and a presentation attribute, a CSS-escaped script URL, a `file:` reference, an
+`http(s)` reference through both `href` and `xlink:href`, an embedded `data:`
+asset in XML and in CSS, malformed XML, Inkscape/XHTML foreign namespaces, a
+million-pixel square, a filter-primitive flood, an oversized filter region, a huge
+`stdDeviation`, a fully transparent render and a structurally empty root, missing
+glyph coverage, `<metadata>`, a namespace-less root, and `xml:base`.
+
+`tests/svg-security.test.ts` adds the two controls the XML policy cannot supply
+for itself: a canary PNG outside the content root is not read — by the build and
+by a direct rasterizer call that **bypasses** the policy — and a local listening
+socket receives no request from either path. It also hashes a previously built
+`dist/`, rebuilds with a hostile document, and requires the failed build to leave
+every file byte-identical. `tests/svg-security.test.ts` and
+`tests/svg-raster.test.ts` assert that the source `.svg` name appears in no
+`dist/` path, asset inventory entry, Pagefind index or SQLite file.
+
+Measured cost — per-SVG latency, aggregate cold build time, peak RSS, source and
+published bytes, dependency and tarball delta, and browser transfer — is reported
+with this goal's implementation evidence rather than claimed here. No second
+renderer and no system executable participates.
 
 ## 0013 — Opt-in Cloudflare R2 image publishing
 

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="320" viewBox="0 0 640 320">
+  <title>Explicit size</title>
+  <rect width="640" height="320" fill="#fbfcfd"/>
+  <rect x="24" y="24" width="592" height="272" rx="16" fill="none" stroke="#3c4652" stroke-width="2"/>
+  <path d="M80 240 L320 80 L560 240" fill="none" stroke="#86c8e6" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="320" cy="80" r="10" fill="#8ad884"/>
+</svg>

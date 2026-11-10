@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="80">
+  <rect width="200" height="80" fill="#ffffff">
+    <animate attributeName="fill" values="#ffffff;#8ad884" dur="2s" repeatCount="indefinite"/>
+  </rect>
+  <circle cx="100" cy="40" r="20" fill="#86c8e6">
+    <set attributeName="r" to="40" begin="1s"/>
+  </circle>
+</svg>

@@ -75,6 +75,8 @@ export interface MediaFailureRow {
   /** The reference exactly as authored, so it can be searched for. */
   readonly link: string;
   readonly reason: MediaFailureReason;
+  /** The private half of the reason: a construct, attribute or code point. */
+  readonly detail?: string;
 }
 
 /** What one note's traversal produced. */
@@ -738,7 +740,13 @@ export async function resolveLinksIn(
         if (definition !== undefined) publishedDefinitions.set(definition, outcome.url);
         continue;
       }
-      mediaFailures.push({ source: sourcePath, line: span.line, link: written, reason: outcome.reason });
+      mediaFailures.push({
+        source: sourcePath,
+        line: span.line,
+        link: written,
+        reason: outcome.reason,
+        ...(outcome.detail === undefined ? {} : { detail: outcome.detail }),
+      });
       // Degraded to its own alt text so the returned body is self-consistent.
       // The caller stops the build; this value is never written.
       edits.push({ start: span.start, end: span.end, text: serializeText(label) });
