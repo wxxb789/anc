@@ -312,20 +312,35 @@ function fontDirectories(): {
     skippedIncludes: 0,
   };
   if (process.platform === 'linux') {
-    parseFontConfig('/etc/fonts/fonts.conf', 0, state);
-    // The base config normally includes /etc/fonts/conf.d as a directory; when
-    // it does, following it again would only count every file as a repeated
-    // skip. The legacy loop remains for a config that does not include it.
-    const confDirectory = resolve('/etc/fonts/conf.d');
-    if (!state.followedDirectories.has(confDirectory)) {
-      try {
-        for (const name of readdirSync(confDirectory).sort()) {
-          if (/^[0-9].*\.conf$/i.test(name)) {
-            if (!parseFontConfig(join(confDirectory, name), 0, state)) state.skippedIncludes += 1;
+    // Read exactly the master configuration fontconfig reads. FONTCONFIG_FILE
+    // names it directly; otherwise FONTCONFIG_PATH (default /etc/fonts) locates
+    // `fonts.conf`. A custom master is followed as written, including its
+    // `<include>` and `<dir>` chain; a missing file or directory contributes no
+    // fonts rather than borrowing the default tree.
+    const configuredFile = process.env['FONTCONFIG_FILE'];
+    const configuredPath = process.env['FONTCONFIG_PATH'];
+    const customMaster = configuredFile !== undefined && configuredFile !== '';
+    const defaultConfig = !customMaster && (configuredPath === undefined || configuredPath === '');
+    const master = customMaster
+      ? resolve(configuredFile)
+      : join(configuredPath !== undefined && configuredPath !== '' ? configuredPath : '/etc/fonts', 'fonts.conf');
+    parseFontConfig(master, 0, state);
+    // /etc/fonts/conf.d is part of the *default* configuration, not of every
+    // configuration: the stock fonts.conf includes it as a directory, and the
+    // legacy loop keeps a host whose default fonts.conf omits that include
+    // working. A custom master did not ask for it, so it is never added here.
+    if (defaultConfig) {
+      const confDirectory = resolve('/etc/fonts/conf.d');
+      if (!state.followedDirectories.has(confDirectory)) {
+        try {
+          for (const name of readdirSync(confDirectory).sort()) {
+            if (/^[0-9].*\.conf$/i.test(name)) {
+              if (!parseFontConfig(join(confDirectory, name), 0, state)) state.skippedIncludes += 1;
+            }
           }
+        } catch {
+          // No conf.d is ordinary; the base file and the per-user directories remain.
         }
-      } catch {
-        // No conf.d is ordinary; the base file and the per-user directories remain.
       }
     }
   } else if (process.platform === 'darwin') {

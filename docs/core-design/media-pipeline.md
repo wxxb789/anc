@@ -392,8 +392,11 @@ elements, 128 nesting levels, 500 `<use>` elements, **16,384 instances after
 `<use>` expansion**, 100,000 UTF-16 code units of text in any `<text>` subtree
 (referenced or not), 4,096 distinct text characters, 1,000,000 characters of CSS
 across `<style>` elements and `style` attributes, 100 filter primitives,
-`stdDeviation` 1,000 user units, filter regions at 500% / 20,000 user units,
-convolution kernels at 100 entries, and turbulence octaves at 16. The `<use>`
+`stdDeviation` 1,000 user units, filter regions beyond 500% of the object's box
+or at 20,000 user units (a unitless side is a fraction under the default
+`objectBoundingBox`, a user unit under `userSpaceOnUse`, and an `fe*` subregion
+follows the parent filter's `primitiveUnits`), convolution kernels at 100
+entries, and turbulence octaves at 16. The `<use>`
 count is a dynamic-programming count over the id graph, not the number of
 `<use>` declarations: 17 chained symbols and 33 declarations are about 1 KB of
 XML but expand to 131,071 instances. The 16,384 cap admits the largest practical

@@ -160,3 +160,132 @@ test('a malformed included config is a skipped include, not a followed one', () 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+const FIXTURE_CODE_POINT = 0xe000;
+
+/**
+ * A minimal sfnt carrying one format-12 `cmap` for a private-use code point.
+ *
+ * The new tests must not depend on which fonts this host has, so the font that
+ * stands in for a "system-only" font is built here. Only the `cmap` table is
+ * needed: discovery reads extensions and the coverage scan reads that table.
+ */
+function syntheticFont(codePoint: number): Buffer {
+  const subtable = Buffer.alloc(28);
+  subtable.writeUInt16BE(12, 0); // format 12
+  subtable.writeUInt32BE(28, 4); // subtable length
+  subtable.writeUInt32BE(1, 12); // one group
+  subtable.writeUInt32BE(codePoint, 16); // startCharCode
+  subtable.writeUInt32BE(codePoint, 20); // endCharCode
+  subtable.writeUInt32BE(1, 24); // startGlyphID
+
+  const cmap = Buffer.alloc(12 + subtable.length);
+  cmap.writeUInt16BE(1, 2); // one encoding record
+  cmap.writeUInt32BE(12, 8); // subtable offset
+  subtable.copy(cmap, 12);
+
+  const offset = 28;
+  const file = Buffer.alloc(offset + cmap.length);
+  file.writeUInt32BE(0x00010000, 0); // sfnt version
+  file.writeUInt16BE(1, 4); // one table
+  file.write('cmap', 12, 'latin1');
+  file.writeUInt32BE(offset, 20);
+  file.writeUInt32BE(cmap.length, 24);
+  cmap.copy(file, offset);
+  return file;
+}
+
+/** Run discovery in a child process, so each test starts with an empty cache. */
+function discoveryWith(environment: NodeJS.ProcessEnv): {
+  readonly files: readonly string[];
+  readonly missing: readonly number[];
+} {
+  const script =
+    `import { discoverFonts, missingCodePoints } from ${JSON.stringify(join(ROOT, 'src/lib/font-coverage.ts'))};\n` +
+    `const discovery = discoverFonts();\n` +
+    `process.stdout.write(JSON.stringify({ files: discovery.files, missing: missingCodePoints([${FIXTURE_CODE_POINT}]).missing }));\n`;
+  const module = spawnSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', script], {
+    cwd: ROOT,
+    env: environment,
+    encoding: 'utf8',
+  });
+  assert.equal(module.status, 0, `the module child failed: ${module.stderr}`);
+  return JSON.parse(module.stdout) as { files: readonly string[]; missing: readonly number[] };
+}
+
+/** A HOME/XDG tree of its own, with both fontconfig path variables unset. */
+function isolatedEnvironment(root: string): NodeJS.ProcessEnv {
+  const environment: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: join(root, 'home'),
+    XDG_CONFIG_HOME: join(root, 'xdg-config'),
+    XDG_DATA_HOME: join(root, 'xdg-data'),
+    XDG_CACHE_HOME: join(root, 'xdg-cache'),
+  };
+  delete environment['FONTCONFIG_FILE'];
+  delete environment['FONTCONFIG_PATH'];
+  return environment;
+}
+
+test('FONTCONFIG_FILE replaces the master configuration instead of adding to it', () => {
+  const root = mkdtempSync(join(tmpdir(), 'font-config-file-'));
+  try {
+    const fonts = join(root, 'fonts');
+    const other = join(root, 'other-fonts');
+    mkdirSync(fonts);
+    mkdirSync(other);
+    // The fixture is reachable through a directory the custom master does not
+    // name, standing in for a font inside /usr/share/fonts: it must stay
+    // uncredited when the master excludes that directory.
+    writeFileSync(join(fonts, 'Fixture.ttf'), syntheticFont(FIXTURE_CODE_POINT));
+    const master = join(root, 'fonts.conf');
+    writeFileSync(master, `<?xml version="1.0"?><fontconfig><dir>${other}</dir></fontconfig>`, 'utf8');
+
+    const environment = isolatedEnvironment(root);
+    environment['FONTCONFIG_FILE'] = master;
+    const discovery = discoveryWith(environment);
+    assert.deepEqual(discovery.files, [], 'a custom master inherited the default font directories');
+    assert.ok(
+      discovery.missing.includes(FIXTURE_CODE_POINT),
+      'a font outside the master configuration was credited',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('FONTCONFIG_FILE can add a directory the default configuration does not scan', () => {
+  const root = mkdtempSync(join(tmpdir(), 'font-config-add-'));
+  try {
+    const fonts = join(root, 'fonts');
+    mkdirSync(fonts);
+    const font = join(fonts, 'Fixture.ttf');
+    writeFileSync(font, syntheticFont(FIXTURE_CODE_POINT));
+    const master = join(root, 'fonts.conf');
+    writeFileSync(master, `<?xml version="1.0"?><fontconfig><dir>${fonts}</dir></fontconfig>`, 'utf8');
+
+    const environment = isolatedEnvironment(root);
+    environment['FONTCONFIG_FILE'] = master;
+    const discovery = discoveryWith(environment);
+    assert.deepEqual(discovery.files, [font], 'the master directory was not the only one scanned');
+    assert.ok(
+      !discovery.missing.includes(FIXTURE_CODE_POINT),
+      'a font named by the master configuration was not read',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a missing FONTCONFIG_FILE contributes no coverage', () => {
+  const root = mkdtempSync(join(tmpdir(), 'font-config-missing-'));
+  try {
+    const environment = isolatedEnvironment(root);
+    environment['FONTCONFIG_FILE'] = join(root, 'does-not-exist.conf');
+    const discovery = discoveryWith(environment);
+    assert.deepEqual(discovery.files, [], 'a missing master fell back to the default directories');
+    assert.ok(discovery.missing.includes(FIXTURE_CODE_POINT), 'a missing master still credited a font');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -203,3 +203,34 @@ export function inspectStyleAttribute(source: string): SvgRefusal | undefined {
 export function inspectPresentationAttribute(name: string, source: string): SvgRefusal | undefined {
   return inspect(source, 'value', `${name} attribute`);
 }
+
+/**
+ * The same-document fragment targets named by `url()` values in one CSS context.
+ *
+ * The `<use>`-expansion budget needs the graph of rendered references, not only
+ * the `href` edges: a mask, clip path, filter, marker, pattern or gradient that a
+ * drawn element reaches renders its contents. Those references can be written in
+ * a presentation attribute, a `style` attribute or a `<style>` sheet, and this
+ * function reads all three through the same parser as
+ * {@link inspectPresentationAttribute}. The caller has already accepted the
+ * value, so every URL it returns is a fragment; an unparseable value contributes
+ * no edges rather than a second refusal.
+ */
+export function fragmentReferences(
+  source: string,
+  context: 'stylesheet' | 'declarationList' | 'value',
+): string[] {
+  let ast: CssNode;
+  try {
+    ast = parse(source, { context });
+  } catch {
+    return [];
+  }
+  const references: string[] = [];
+  walk(ast, (node) => {
+    if (node.type === 'Url' && typeof node.value === 'string' && node.value.startsWith('#') && node.value.length > 1) {
+      references.push(node.value.slice(1));
+    }
+  });
+  return references;
+}

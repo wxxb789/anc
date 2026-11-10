@@ -385,7 +385,11 @@ test('every finite policy budget refuses at its boundary', async () => {
     { name: 'style element', svg: wrap('<style>rect{fill:red}</style>'), limits: { maxStyleCharacters: 1 } },
     { name: 'style attribute', svg: wrap('<rect style="fill:red"/>'), limits: { maxStyleCharacters: 1 } },
     { name: 'filter primitives', svg: wrap('<feGaussianBlur/><feOffset/>'), limits: { maxFilterPrimitives: 1 } },
-    { name: 'filter region', svg: wrap('<filter x="11"/>'), limits: { maxFilterRegion: 10 } },
+    {
+      name: 'filter region',
+      svg: wrap('<filter filterUnits="userSpaceOnUse" x="11"/>'),
+      limits: { maxFilterRegion: 10 },
+    },
     { name: 'filter region percent', svg: wrap('<filter width="11%"/>'), limits: { maxFilterRegionPercent: 10 } },
     { name: 'std deviation', svg: wrap('<feGaussianBlur stdDeviation="2"/>'), limits: { maxStdDeviation: 1 } },
     { name: 'kernel entries', svg: wrap('<feConvolveMatrix order="2"/>'), limits: { maxKernelEntries: 1 } },
@@ -413,17 +417,70 @@ test('every finite policy budget refuses at its boundary', async () => {
   assert.equal(oversized.reason, 'too-large');
 });
 
-/** A legal chain of symbols, each referencing the next twice. */
-function useChain(levels: number): string {
+test('a filter region is judged in the coordinate system its element declares', async () => {
+  const wrap = (body: string): Buffer =>
+    Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">${body}</svg>`);
+  const filtered = (filter: string): Buffer =>
+    wrap(`<defs>${filter}</defs><rect width="120" height="120" fill="#8ad884" filter="url(#f)"/>`);
+
+  // The default is objectBoundingBox: `6` is a fraction of the box, 600%, not
+  // six user units. The percentage spelling of the same surface already refuses.
+  const fraction = inspectSvg(filtered('<filter id="f" width="6" height="6"><feGaussianBlur stdDeviation="1"/></filter>'));
+  if (fraction.ok) assert.fail('a 600% bounding-box filter region was accepted');
+  assert.equal(fraction.refusal.reason, 'svg-workload');
+  const percent = inspectSvg(filtered('<filter id="f" width="600%" height="600%"><feGaussianBlur stdDeviation="1"/></filter>'));
+  if (percent.ok) assert.fail('a 600% filter region was accepted');
+  assert.equal(percent.refusal.reason, 'svg-workload');
+
+  // A 100% region is the object's own box and stays renderable.
+  const accepted = filtered('<filter id="f" width="1" height="1"><feGaussianBlur stdDeviation="1"/></filter>');
+  const inspection = inspectSvg(accepted);
+  if (!inspection.ok) assert.fail(`a 100% bounding-box filter region was refused: ${inspection.refusal.detail}`);
+  const rendered = await prepareSvg(accepted);
+  if (!rendered.ok) assert.fail(`a 100% bounding-box filter region did not render: ${rendered.reason}`);
+  assert.deepEqual(rendered.image.dimensions, { width: 240, height: 240 });
+
+  // userSpaceOnUse switches unitless numbers back to user units; a side at the
+  // 20,000-unit ceiling is refused just as its percentage spelling is.
+  const userUnits = inspectSvg(
+    filtered('<filter id="f" filterUnits="userSpaceOnUse" width="20000" height="20000"><feGaussianBlur stdDeviation="1"/></filter>'),
+  );
+  if (userUnits.ok) assert.fail('a 20,000-user-unit filter region was accepted');
+  assert.equal(userUnits.refusal.reason, 'svg-workload');
+
+  // A primitive subregion is governed by the parent filter's primitiveUnits.
+  const primitive = inspectSvg(
+    filtered('<filter id="f" primitiveUnits="objectBoundingBox"><feGaussianBlur stdDeviation="1" width="6" height="6"/></filter>'),
+  );
+  if (primitive.ok) assert.fail('a 600% bounding-box primitive region was accepted');
+  assert.equal(primitive.refusal.reason, 'svg-workload');
+  const primitiveAccepted = filtered(
+    '<filter id="f" primitiveUnits="objectBoundingBox"><feGaussianBlur stdDeviation="1" width="1" height="1"/></filter>',
+  );
+  const primitiveInspection = inspectSvg(primitiveAccepted);
+  if (!primitiveInspection.ok) {
+    assert.fail(`a 100% bounding-box primitive region was refused: ${primitiveInspection.refusal.detail}`);
+  }
+  const primitiveRendered = await prepareSvg(primitiveAccepted);
+  if (!primitiveRendered.ok) assert.fail(`a 100% bounding-box primitive region did not render: ${primitiveRendered.reason}`);
+});
+
+/** The symbols of a legal chain, each referencing the next twice. */
+function symbolChain(levels: number, href = 'href'): string {
   const symbols = [`<symbol id="s${levels - 1}"><rect width="2" height="2"/></symbol>`];
   for (let index = levels - 2; index >= 0; index -= 1) {
     symbols.push(
-      `<symbol id="s${index}"><use href="#s${index + 1}"/><use href="#s${index + 1}"/></symbol>`,
+      `<symbol id="s${index}"><use ${href}="#s${index + 1}"/><use ${href}="#s${index + 1}"/></symbol>`,
     );
   }
+  return symbols.join('');
+}
+
+/** A legal chain of symbols, each referencing the next twice. */
+function useChain(levels: number, href = 'href', rootAttributes = ''): string {
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
-    `<defs>${symbols.join('')}</defs><use href="#s0"/></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" ${rootAttributes} width="100" height="100">` +
+    `<defs>${symbolChain(levels, href)}</defs><use ${href}="#s0"/></svg>`
   );
 }
 
@@ -452,6 +509,102 @@ test('the use expansion budget refuses a small document that would render 2^17 i
   if (!rendered.ok) assert.fail(`the one-sided document did not render: ${rendered.reason}`);
   assert.deepEqual(rendered.image.dimensions, { width: 400, height: 200 });
   assert.deepEqual(rendered.image.displayDimensions, { width: 200, height: 100 });
+});
+
+test('the use expansion budget resolves href by namespace, not by prefix', async () => {
+  const alternateNamespace = 'xmlns:l="http://www.w3.org/1999/xlink"';
+  const defaultRefused = inspectSvg(Buffer.from(useChain(17)));
+  const alternateRefused = inspectSvg(Buffer.from(useChain(17, 'l:href', alternateNamespace)));
+  if (defaultRefused.ok) assert.fail('the default-prefix chain was accepted');
+  if (alternateRefused.ok) assert.fail('the alternate-prefix chain bypassed the expansion budget');
+  assert.equal(defaultRefused.refusal.reason, 'svg-workload');
+  assert.equal(alternateRefused.refusal.reason, 'svg-workload');
+  assert.match(defaultRefused.refusal.detail, /131071/);
+  assert.match(alternateRefused.refusal.detail, /131071/);
+  assert.equal(
+    alternateRefused.refusal.detail,
+    defaultRefused.refusal.detail,
+    'the alternate prefix reached a different count than the default spelling',
+  );
+
+  // The same namespace binding must not reject a legitimate use chain. This
+  // renders through librsvg, so it proves resolution reached the renderer as
+  // well as the counter.
+  const positive = await prepareSvg(Buffer.from(useChain(2, 'l:href', alternateNamespace)));
+  if (!positive.ok) assert.fail(`the alternate-prefix control was refused: ${positive.reason} ${positive.detail ?? ''}`);
+  assert.deepEqual(positive.image.dimensions, { width: 200, height: 200 });
+});
+
+/**
+ * The 17-level chain inside one definition container, reached from drawn content.
+ *
+ * The container itself is not drawn; the `<rect>` or `<path>` beside it is, and
+ * its reference makes the container's `<use>` chain render.
+ */
+function referencedChain(container: string, drawn: string): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs>${symbolChain(17)}${container}</defs>${drawn}</svg>`
+  );
+}
+
+/** One definition family and the drawn element that reaches it. */
+const REFERENCE_FAMILIES: Readonly<Record<string, { readonly container: string; readonly drawn: string }>> = {
+  mask: {
+    container: '<mask id="d"><use href="#s0"/></mask>',
+    drawn: '<rect width="100" height="100" mask="url(#d)"/>',
+  },
+  pattern: {
+    container: '<pattern id="d" width="10" height="10"><use href="#s0"/></pattern>',
+    drawn: '<rect width="100" height="100" fill="url(#d)"/>',
+  },
+  clipPath: {
+    container: '<clipPath id="d"><use href="#s0"/></clipPath>',
+    drawn: '<rect width="100" height="100" clip-path="url(#d)"/>',
+  },
+  marker: {
+    container: '<marker id="d"><use href="#s0"/></marker>',
+    drawn: '<path d="M0 0L10 10" stroke="#161b21" marker-start="url(#d)"/>',
+  },
+  filter: {
+    container: '<filter id="d"><use href="#s0"/></filter>',
+    drawn: '<rect width="100" height="100" filter="url(#d)"/>',
+  },
+};
+
+for (const [family, { container, drawn }] of Object.entries(REFERENCE_FAMILIES)) {
+  test(`a drawn reference into ${family} counts the <use> instances it renders`, () => {
+    const refused = inspectSvg(Buffer.from(referencedChain(container, drawn)));
+    if (refused.ok) assert.fail(`the ${family}-referenced chain bypassed the expansion budget`);
+    assert.equal(refused.refusal.reason, 'svg-workload', `${family}: ${refused.refusal.detail}`);
+    assert.match(
+      refused.refusal.detail,
+      /131071/,
+      `${family}: the referenced chain reported a different count than the direct spelling: ${refused.refusal.detail}`,
+    );
+  });
+}
+
+test('an unreferenced definition container contributes no use instances', () => {
+  const accepted = inspectSvg(
+    Buffer.from(referencedChain('<mask id="d"><use href="#s0"/></mask>', '<rect width="100" height="100"/>')),
+  );
+  assert.equal(accepted.ok, true, accepted.ok ? '' : accepted.refusal.detail);
+});
+
+test('a shallow use chain reached through a mask still renders', async () => {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    `<defs>${symbolChain(2)}` +
+    `<mask id="m"><rect width="100" height="100" fill="#ffffff"/><use href="#s0"/></mask>` +
+    `</defs>` +
+    `<rect width="100" height="100" fill="#8ad884" mask="url(#m)"/>` +
+    `</svg>`;
+  const inspection = inspectSvg(Buffer.from(svg));
+  if (!inspection.ok) assert.fail(`the shallow mask-referenced chain was refused: ${inspection.refusal.detail}`);
+  const rendered = await prepareSvg(Buffer.from(svg));
+  if (!rendered.ok) assert.fail(`the shallow mask-referenced chain did not render: ${rendered.reason}`);
+  assert.deepEqual(rendered.image.dimensions, { width: 200, height: 200 });
 });
 
 test('a namespaced root and nested text keep their actual identity and content', () => {

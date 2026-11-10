@@ -45,7 +45,13 @@
  */
 
 import { SaxesParser, type SaxesAttributeNS, type SaxesTagNS } from 'saxes';
-import { inspectPresentationAttribute, inspectReference, inspectStyleAttribute, inspectStyleSheet } from './svg-css.ts';
+import {
+  fragmentReferences,
+  inspectPresentationAttribute,
+  inspectReference,
+  inspectStyleAttribute,
+  inspectStyleSheet,
+} from './svg-css.ts';
 import type { SvgRefusal } from './svg-refusal.ts';
 
 /** The SVG namespace every accepted element must be in. */
@@ -81,7 +87,7 @@ export interface SvgLimits {
   readonly maxDistinctTextCharacters: number;
   /** Filter primitives across every `<filter>`. */
   readonly maxFilterPrimitives: number;
-  /** Absolute user-unit ceiling for one filter region side. */
+  /** Absolute user-unit ceiling for one filter region side; a side at it is refused. */
   readonly maxFilterRegion: number;
   /** Percentage ceiling for one filter region side. */
   readonly maxFilterRegionPercent: number;
@@ -452,6 +458,15 @@ interface ParsedLength {
   readonly physical: boolean;
 }
 
+/**
+ * The coordinate system a filter-region attribute is written in.
+ *
+ * `user` is `userSpaceOnUse`: a unitless number is a user unit. `bounding` is
+ * `objectBoundingBox`: a unitless number is a fraction of the object's bounding
+ * box, where `6` means 600%.
+ */
+type FilterRegionUnits = 'user' | 'bounding';
+
 /** A finite, positive number, or `undefined`. */
 function positive(value: number | undefined): number | undefined {
   return value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
@@ -512,17 +527,33 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
  * graph. A literal `<use>` counts once, plus the rendered subtree of its target;
  * the total is the work librsvg would perform even though the XML is small.
  *
- * Elements in a definition container are not rendered on their own: a `<use>`
- * inside `<defs>` or an unreferenced `<symbol>` contributes nothing until a
- * resolving `<use>` expands it. A target's own subtree is rendered, but nested
- * definition containers inside it are still skipped. The count is deliberately a
- * conservative upper bound (every use counts, including a use under a hidden
- * branch); the budget exists to bound work, not to prove a picture's exact shape.
+ * An unreferenced definition container (`defs`, `symbol`, `mask`, `pattern`,
+ * `clipPath`, `filter`, `marker`, a gradient) is not drawn on its own and
+ * contributes nothing. It is drawn when a rendered element reaches it, either as
+ * a `<use>` target or through a same-document presentation reference
+ * (`mask`, `clip-path`, `filter`, `marker-start`/`-mid`/`-end`, `fill` and
+ * `stroke`) written as `url(#id)` in an attribute, a `style` attribute or a
+ * `<style>` sheet. A container reached that way follows its own references, so a
+ * mask inside `<defs>` and a pattern used by another pattern are counted only
+ * when something drawn reaches the first link. Nested definition containers are
+ * still skipped as ordinary children of an element.
+ *
+ * The count is deliberately a conservative upper bound: every reference is
+ * counted once per referencing node, even if two properties point at the same
+ * definition, and every use counts, including one under a hidden branch. A
+ * stylesheet's references are attributed to the document root because a sheet
+ * applies document-wide; a rule that matches nothing therefore over-counts
+ * rather than under-counts. Each node's subtree is memoized, so a chain of
+ * definitions that reference the next one repeatedly is linear rather than
+ * exponential. A cycle in either the `<use>` graph or the reference graph is
+ * infinity, because the work is unbounded; the budget exists to bound work, not
+ * to prove a picture's exact shape.
  */
 function expandedUseInstances(
   nodes: readonly string[],
   useTargets: readonly (string | undefined)[],
   children: readonly (readonly number[])[],
+  references: readonly (readonly string[] | undefined)[],
   idNodes: ReadonlyMap<string, number>,
   root: number,
 ): number {
@@ -542,16 +573,24 @@ function expandedUseInstances(
     view: true,
   };
   const expansion = new Map<number, number>();
+  const counted = new Map<number, number>();
   const visiting = new Set<number>();
 
-  const countSubtree = (index: number): number => {
+  const countRendered = (index: number): number => {
+    const memo = counted.get(index);
+    if (memo !== undefined) return memo;
+    if (visiting.has(index)) return Number.POSITIVE_INFINITY;
+    visiting.add(index);
     let total = 0;
     const target = useTargets[index];
     if (target !== undefined) total = 1 + expand(target);
     for (const child of children[index] ?? []) {
       if (nonRendered[nodes[child] ?? ''] === true) continue;
-      total += countSubtree(child);
+      total += countRendered(child);
     }
+    for (const reference of references[index] ?? []) total += expand(reference);
+    visiting.delete(index);
+    counted.set(index, total);
     return total;
   };
 
@@ -560,15 +599,12 @@ function expandedUseInstances(
     if (index === undefined) return 0;
     const memo = expansion.get(index);
     if (memo !== undefined) return memo;
-    if (visiting.has(index)) return Number.POSITIVE_INFINITY;
-    visiting.add(index);
-    const total = countSubtree(index);
-    visiting.delete(index);
+    const total = countRendered(index);
     expansion.set(index, total);
     return total;
   };
 
-  return countSubtree(root);
+  return countRendered(root);
 }
 
 /** The reason a tag name or attribute has no place in this subset. */
@@ -577,6 +613,27 @@ function namespaceFault(uri: string, name: string): SvgRefusal {
     return { reason: 'svg-xinclude', detail: `${name}: XInclude is not part of the static subset` };
   }
   return { reason: 'svg-foreign', detail: `${name}: unsupported namespace ${JSON.stringify(uri)}` };
+}
+
+/**
+ * The value of an attribute identified by its namespace URI and local name.
+ *
+ * XML attribute identity is `(URI, local name)`; the prefix is only a spelling
+ * alias and is never consulted for a policy decision. `namespaces` is ordered
+ * only to preserve SVG's `href` precedence (the unprefixed attribute wins over
+ * the legacy XLink one); within one namespace an expanded name is unique.
+ */
+function attributeValue(
+  tag: SaxesTagNS,
+  local: string,
+  namespaces: readonly string[],
+): string | undefined {
+  for (const namespace of namespaces) {
+    for (const attribute of Object.values(tag.attributes)) {
+      if (attribute.local === local && attribute.uri === namespace) return attribute.value;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -610,8 +667,19 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   const nodes: string[] = [];
   const useTargets: (string | undefined)[] = [];
   const childNodes: number[][] = [];
+  const references: (string[] | undefined)[] = [];
+  const filterPrimitiveBounding: boolean[] = [];
   const elementStack: number[] = [];
   const idNodes = new Map<string, number>();
+
+  /** Whether the nearest enclosing `<filter>` resolves primitive regions in bbox units. */
+  const filterRegionUnits = (): FilterRegionUnits => {
+    for (let at = elementStack.length - 1; at >= 0; at -= 1) {
+      const ancestor = elementStack[at]!;
+      if (nodes[ancestor] === 'filter') return filterPrimitiveBounding[ancestor] === true ? 'bounding' : 'user';
+    }
+    return 'user';
+  };
 
   const fail = (fault: SvgRefusal): void => {
     if (refusal === undefined) refusal = fault;
@@ -670,9 +738,9 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
         fail(namespaceFault(tag.uri, `<${tag.name}>`));
         return;
       }
-      rootViewBox = parseViewBox(tag.attributes['viewBox']?.value);
-      rootWidth = parseLength(tag.attributes['width']?.value);
-      rootHeight = parseLength(tag.attributes['height']?.value);
+      rootViewBox = parseViewBox(attributeValue(tag, 'viewBox', ['']));
+      rootWidth = parseLength(attributeValue(tag, 'width', ['']));
+      rootHeight = parseLength(attributeValue(tag, 'height', ['']));
     } else if (tag.uri !== SVG_NAMESPACE) {
       fail(namespaceFault(tag.uri, `<${tag.name}>`));
       return;
@@ -711,8 +779,20 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     // only an `<image>` with no offending reference falls through to "this element
     // is not in the subset". A policy that named the element first would report
     // every embedded asset as a generic unsupported element.
+    //
+    // A filter region is read in the coordinate system its element declares:
+    // `<filter filterUnits>` for the filter's own sides, and the parent filter's
+    // `primitiveUnits` for an `fe*` subregion.
+    const regionUnits: FilterRegionUnits =
+      local === 'filter'
+        ? (attributeValue(tag, 'filterUnits', ['']) ?? '').trim() === 'userSpaceOnUse'
+          ? 'user'
+          : 'bounding'
+        : local.startsWith('fe')
+          ? filterRegionUnits()
+          : 'user';
     for (const attribute of Object.values(tag.attributes)) {
-      const attributeRefusal = checkAttribute(local, attribute, limits);
+      const attributeRefusal = checkAttribute(local, attribute, limits, regionUnits);
       if (attributeRefusal !== undefined) {
         fail(attributeRefusal);
         return;
@@ -753,14 +833,33 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     const parentNode = elementStack.at(-1);
     if (parentNode !== undefined) childNodes[parentNode]!.push(nodeIndex);
     elementStack.push(nodeIndex);
-    const elementId = tag.attributes['id']?.value;
+    const elementId = attributeValue(tag, 'id', ['']);
     if (elementId !== undefined && !idNodes.has(elementId)) idNodes.set(elementId, nodeIndex);
     if (local === 'use') {
-      const href = tag.attributes['href']?.value ?? tag.attributes['xlink:href']?.value;
+      const href = attributeValue(tag, 'href', ['', SVG_NAMESPACE, XLINK_NAMESPACE]);
       if (href !== undefined && href.startsWith('#') && href.length > 1) {
         useTargets[nodeIndex] = href.slice(1);
       }
     }
+    filterPrimitiveBounding.push(
+      local === 'filter' &&
+        (attributeValue(tag, 'primitiveUnits', ['']) ?? '').trim() === 'objectBoundingBox',
+    );
+
+    // A rendered element reaches a definition container through these references,
+    // so the expansion count follows them. The value was already accepted by the
+    // CSS policy, which admits only same-document fragments; a style attribute or
+    // sheet can name the same containers as the presentation attributes.
+    const elementReferences: string[] = [];
+    for (const attribute of Object.values(tag.attributes)) {
+      if (attribute.uri !== '' && attribute.uri !== SVG_NAMESPACE) continue;
+      if (URL_ATTRIBUTES[attribute.local] === true) {
+        elementReferences.push(...fragmentReferences(attribute.value, 'value'));
+      } else if (attribute.local === 'style') {
+        elementReferences.push(...fragmentReferences(attribute.value, 'declarationList'));
+      }
+    }
+    if (elementReferences.length > 0) references[nodeIndex] = elementReferences;
 
     if (local === 'style') {
       styleDepth += 1;
@@ -837,6 +936,10 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
       styleDepth -= 1;
       const styleRefusal = inspectStyleSheet(styleBuffer);
       if (styleRefusal !== undefined) fail(styleRefusal);
+      // A stylesheet applies document-wide wherever it sits, so its references
+      // are reached from the root rather than from the style element's position.
+      const styleReferences = fragmentReferences(styleBuffer, 'stylesheet');
+      if (styleReferences.length > 0) (references[0] ??= []).push(...styleReferences);
       styleBuffer = '';
     }
     if ((tag.local === 'title' || tag.local === 'desc') && titleDescDepth > 0) titleDescDepth -= 1;
@@ -864,7 +967,7 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   if (!rootSeen) return { ok: false, refusal: { reason: 'svg-invalid', detail: 'the document has no root element' } };
 
   if (uses > 0) {
-    const instances = expandedUseInstances(nodes, useTargets, childNodes, idNodes, 0);
+    const instances = expandedUseInstances(nodes, useTargets, childNodes, references, idNodes, 0);
     if (!Number.isFinite(instances) || instances > limits.maxUseInstances) {
       return {
         ok: false,
@@ -965,9 +1068,17 @@ export function requiredCharacters(source: SvgSource, limits: SvgLimits = SVG_PO
 }
 
 /** One attribute's policy check. */
-function checkAttribute(element: string, attribute: SaxesAttributeNS, limits: SvgLimits): SvgRefusal | undefined {
+function checkAttribute(
+  element: string,
+  attribute: SaxesAttributeNS,
+  limits: SvgLimits,
+  regionUnits: FilterRegionUnits = 'user',
+): SvgRefusal | undefined {
   const { local, uri } = attribute;
   const value = attribute.value;
+  // The prefix is retained only for the human-readable diagnostic. Every
+  // decision below is made from the namespace URI and local name, so an
+  // alternate prefix bound to the same namespace follows the same path.
   const where = `${element}@${attribute.prefix === '' ? local : `${attribute.prefix}:${local}`}`;
 
   if (uri === XMLNS_NAMESPACE) return undefined;
@@ -1058,10 +1169,14 @@ function checkAttribute(element: string, attribute: SaxesAttributeNS, limits: Sv
     }
   }
 
-  // A filter region is a surface libvips allocates. Percentages resolve against
-  // the object's bounding box, so a four-digit percentage is the hostile shape a
-  // plain user-unit bound would miss. Primitive subregions are the same kind of
-  // surface and get the same bound.
+  // A filter region is a surface libvips allocates. A percentage resolves
+  // against the object's bounding box in either coordinate system, so it is
+  // bounded directly. A unitless number is not: `filterUnits` decides whether it
+  // is a user unit or a fraction of the box, where `6` is 600% — the hostile
+  // shape a user-unit bound would miss. Primitive subregions follow the parent
+  // filter's `primitiveUnits`. A unit-bearing length has no canonical meaning
+  // under `objectBoundingBox`, so it is checked under both readings and the
+  // larger surface wins.
   const regionAttribute = local === 'x' || local === 'y' || local === 'width' || local === 'height';
   const regionElement =
     element === 'filter' ||
@@ -1088,7 +1203,12 @@ function checkAttribute(element: string, attribute: SaxesAttributeNS, limits: Sv
       if (size && absolute.px < 0) {
         return { reason: 'svg-invalid', detail: `${where}: ${JSON.stringify(value)} is negative` };
       }
-      if (Math.abs(absolute.px) > limits.maxFilterRegion) {
+      if (regionUnits === 'bounding' && Math.abs(absolute.px) * 100 > limits.maxFilterRegionPercent) {
+        return { reason: 'svg-workload', detail: `${where}: ${JSON.stringify(value)} exceeds the filter-region budget` };
+      }
+      // The user-unit ceiling is refused on the ceiling itself, so the largest
+      // admitted side is strictly below `maxFilterRegion`.
+      if (Math.abs(absolute.px) >= limits.maxFilterRegion) {
         return { reason: 'svg-workload', detail: `${where}: ${JSON.stringify(value)} exceeds the filter-region budget` };
       }
     }
