@@ -294,6 +294,30 @@ function readTextFile(path: string): string {
   }
 }
 
+/**
+ * The master file a non-absolute `FONTCONFIG_FILE` names.
+ *
+ * Fontconfig searches a relative master name through its configuration path:
+ * each `FONTCONFIG_PATH` component in order, then `/etc/fonts`. The first
+ * existing candidate is the master. When none exists the last candidate is
+ * returned, so an explicitly configured master contributes nothing rather than
+ * quietly falling back to the default configuration.
+ */
+function relativeMaster(name: string, configuredPath: string | undefined): string {
+  const roots = (configuredPath ?? '').split(':').filter((component) => component !== '');
+  roots.push('/etc/fonts');
+  let candidate = join(roots[0]!, name);
+  for (const root of roots) {
+    candidate = join(root, name);
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Not in this component; try the next one.
+    }
+  }
+  return candidate;
+}
+
 /** The host's font directories and the config includes followed to find them. */
 function fontDirectories(): {
   readonly directories: string[];
@@ -322,7 +346,9 @@ function fontDirectories(): {
     const customMaster = configuredFile !== undefined && configuredFile !== '';
     const defaultConfig = !customMaster && (configuredPath === undefined || configuredPath === '');
     const master = customMaster
-      ? resolve(configuredFile)
+      ? isAbsolute(configuredFile)
+        ? resolve(configuredFile)
+        : relativeMaster(configuredFile, configuredPath)
       : join(configuredPath !== undefined && configuredPath !== '' ? configuredPath : '/etc/fonts', 'fonts.conf');
     parseFontConfig(master, 0, state);
     // /etc/fonts/conf.d is part of the *default* configuration, not of every

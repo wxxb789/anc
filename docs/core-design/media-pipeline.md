@@ -347,8 +347,11 @@ names:
   `file:`, `http(s):`, a relative path, an external stylesheet, `xml:base`,
   and every `<image>`/`<feImage>` element.
 - `svg-data` — any embedded `data:` payload.
-- `svg-css` — malformed CSS, a nested `<style>` element, or an at-rule
-  (`@import`, `@font-face`, `@media`, …).
+- `svg-css` — malformed CSS, a nested `<style>` element, an at-rule
+  (`@import`, `@font-face`, `@media`, …), or a selector form the reference
+  attribution cannot decide (attribute selectors, pseudo-classes,
+  pseudo-elements, sibling or column combinators, namespaces, and escaped
+  identifiers).
 - `svg-invalid` — not well-formed UTF-8 XML, no `<svg>` root, no usable size, a
   mixed-unit width/height pair, or a budget argument that does not parse (a
   filter-region value or `numOctaves`).
@@ -386,6 +389,16 @@ same-document fragment. `tests/svg-raster.test.ts` proves the check reads the
 **decoded** value: `url("\6a avascript:alert(1)")` and
 `url(http\3a //example.invalid/x)` contain neither literal the gate must not rely
 on, yet are refused as a script URL and an external URL respectively.
+
+**A `<style>` rule's references belong to the elements its selectors match.**
+The matcher uses only the recorded tree — element local name, `id`, `class`, and
+the descendant and child combinators over selector lists — so a rule written as a
+stylesheet counts each rendered consumer exactly as the equivalent presentation
+attributes would, a rule that matches nothing contributes nothing, and two
+declarations naming the same definition still count twice. Attribute selectors,
+pseudo-classes, pseudo-elements, sibling and column combinators, namespaced
+selectors, and escaped identifiers cannot be decided from that tree and are
+refused as `svg-css` rather than attributed to the document root or ignored.
 
 **Work is bounded before a surface is allocated.** The policy caps 20,000
 elements, 128 nesting levels, 500 `<use>` elements, **16,384 instances after
@@ -430,8 +443,11 @@ so neither a blank check nor a single control bitmap detects tofu.
 `src/lib/font-coverage.ts` therefore answers the question Pango asks fontconfig:
 **is the code point in the `cmap` of any font fontconfig would offer?** It
 discovers font containers from `/etc/fonts/fonts.conf` and `conf.d/*.conf` on
-Linux and from the standard system/user directories on macOS and Windows. The
-fontconfig files are parsed as XML; `<dir>` entries and their `prefix` attribute
+Linux and from the standard system/user directories on macOS and Windows.
+`FONTCONFIG_FILE` replaces that master; a non-absolute name is searched through
+each `FONTCONFIG_PATH` component in order and then `/etc/fonts`, and a master
+that exists nowhere contributes no fonts rather than borrowing the default tree.
+The fontconfig files are parsed as XML; `<dir>` entries and their `prefix` attribute
 are honoured (an XDG `<dir>` resolves against `XDG_DATA_HOME`, while an XDG
 `<include>` resolves against `XDG_CONFIG_HOME`), and `<include>` is followed
 relative to the including file or by its `prefix`. An include that names a

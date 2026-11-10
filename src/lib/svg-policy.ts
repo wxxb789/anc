@@ -46,11 +46,13 @@
 
 import { SaxesParser, type SaxesAttributeNS, type SaxesTagNS } from 'saxes';
 import {
+  analyzeStyleSheet,
   fragmentReferences,
   inspectPresentationAttribute,
   inspectReference,
   inspectStyleAttribute,
-  inspectStyleSheet,
+  type StaticSelector,
+  type StaticStyleRule,
 } from './svg-css.ts';
 import type { SvgRefusal } from './svg-refusal.ts';
 
@@ -541,14 +543,48 @@ function decodeDocument(bytes: Uint8Array): string | undefined {
  * The count is deliberately a conservative upper bound: every reference is
  * counted once per referencing node, even if two properties point at the same
  * definition, and every use counts, including one under a hidden branch. A
- * stylesheet's references are attributed to the document root because a sheet
- * applies document-wide; a rule that matches nothing therefore over-counts
- * rather than under-counts. Each node's subtree is memoized, so a chain of
- * definitions that reference the next one repeatedly is linear rather than
- * exponential. A cycle in either the `<use>` graph or the reference graph is
- * infinity, because the work is unbounded; the budget exists to bound work, not
- * to prove a picture's exact shape.
+ * `<style>` rule's references are attributed to every element its selector
+ * matches, so the same picture counts the same whether it is written as a
+ * presentation attribute or as a stylesheet; a rule that matches nothing
+ * contributes nothing, and a selector form this policy cannot decide is refused
+ * rather than attributed to the root or silently ignored. Each node's subtree is
+ * memoized, so a chain of definitions that reference the next one repeatedly is
+ * linear rather than exponential. A cycle in either the `<use>` graph or the
+ * reference graph is infinity, because the work is unbounded; the budget exists
+ * to bound work, not to prove a picture's exact shape.
  */
+function selectorMatches(
+  selector: StaticSelector,
+  index: number,
+  names: readonly string[],
+  ids: readonly (string | undefined)[],
+  classes: readonly (readonly string[] | undefined)[],
+  parents: readonly (number | undefined)[],
+): boolean {
+  const matchesCompound = (compound: StaticSelector[number], at: number): boolean => {
+    if (compound.name !== undefined && names[at] !== compound.name) return false;
+    if (compound.id !== undefined && ids[at] !== compound.id) return false;
+    for (const name of compound.classes) {
+      if (classes[at]?.includes(name) !== true) return false;
+    }
+    return true;
+  };
+  const matchesFrom = (step: number, at: number): boolean => {
+    if (!matchesCompound(selector[step]!, at)) return false;
+    if (step === 0) return true;
+    if (selector[step]!.combinator === '>') {
+      const parent = parents[at];
+      return parent !== undefined && matchesFrom(step - 1, parent);
+    }
+    // Descendant: any ancestor may satisfy the rest of the selector.
+    for (let ancestor = parents[at]; ancestor !== undefined; ancestor = parents[ancestor]) {
+      if (matchesFrom(step - 1, ancestor)) return true;
+    }
+    return false;
+  };
+  return matchesFrom(selector.length - 1, index);
+}
+
 function expandedUseInstances(
   nodes: readonly string[],
   useTargets: readonly (string | undefined)[],
@@ -667,7 +703,11 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   const nodes: string[] = [];
   const useTargets: (string | undefined)[] = [];
   const childNodes: number[][] = [];
+  const elementParents: (number | undefined)[] = [];
+  const elementIds: (string | undefined)[] = [];
+  const elementClasses: (readonly string[] | undefined)[] = [];
   const references: (string[] | undefined)[] = [];
+  const styleRules: StaticStyleRule[] = [];
   const filterPrimitiveBounding: boolean[] = [];
   const elementStack: number[] = [];
   const idNodes = new Map<string, number>();
@@ -833,7 +873,15 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     const parentNode = elementStack.at(-1);
     if (parentNode !== undefined) childNodes[parentNode]!.push(nodeIndex);
     elementStack.push(nodeIndex);
+    elementParents.push(parentNode);
     const elementId = attributeValue(tag, 'id', ['']);
+    elementIds.push(elementId);
+    const elementClass = attributeValue(tag, 'class', ['']);
+    elementClasses.push(
+      elementClass === undefined
+        ? undefined
+        : elementClass.split(/[\t\n\f\r ]+/).filter((name) => name !== ''),
+    );
     if (elementId !== undefined && !idNodes.has(elementId)) idNodes.set(elementId, nodeIndex);
     if (local === 'use') {
       const href = attributeValue(tag, 'href', ['', SVG_NAMESPACE, XLINK_NAMESPACE]);
@@ -934,12 +982,16 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
     }
     if (tag.local === 'style' && styleDepth > 0) {
       styleDepth -= 1;
-      const styleRefusal = inspectStyleSheet(styleBuffer);
-      if (styleRefusal !== undefined) fail(styleRefusal);
-      // A stylesheet applies document-wide wherever it sits, so its references
-      // are reached from the root rather than from the style element's position.
-      const styleReferences = fragmentReferences(styleBuffer, 'stylesheet');
-      if (styleReferences.length > 0) (references[0] ??= []).push(...styleReferences);
+      const analysis = analyzeStyleSheet(styleBuffer);
+      if (!analysis.ok) {
+        fail(analysis.refusal);
+      } else {
+        // A sheet applies document-wide, but its references are counted per
+        // element its selectors match. Matching waits until the whole document
+        // is recorded, because a rule may name elements that appear after the
+        // sheet.
+        styleRules.push(...analysis.rules);
+      }
       styleBuffer = '';
     }
     if ((tag.local === 'title' || tag.local === 'desc') && titleDescDepth > 0) titleDescDepth -= 1;
@@ -967,6 +1019,18 @@ export function inspectSvg(bytes: Uint8Array, limits: SvgLimits = SVG_POLICY_LIM
   if (!rootSeen) return { ok: false, refusal: { reason: 'svg-invalid', detail: 'the document has no root element' } };
 
   if (uses > 0) {
+    // A stylesheet reference belongs to every element its selector matches, once
+    // per matching rule. Two selectors in one list that both match an element
+    // still apply that rule's declarations once, so the reference is pushed once.
+    for (const rule of styleRules) {
+      if (rule.references.length === 0) continue;
+      for (let index = 0; index < nodes.length; index += 1) {
+        const matched = rule.selectors.some((selector) =>
+          selectorMatches(selector, index, nodes, elementIds, elementClasses, elementParents),
+        );
+        if (matched) (references[index] ??= []).push(...rule.references);
+      }
+    }
     const instances = expandedUseInstances(nodes, useTargets, childNodes, references, idNodes, 0);
     if (!Number.isFinite(instances) || instances > limits.maxUseInstances) {
       return {

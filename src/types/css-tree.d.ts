@@ -9,8 +9,9 @@
  * before it fails at run time.
  *
  * `CssNode` is deliberately structural rather than exhaustive. The policy walks
- * the AST and asks each node three questions — what type is it, what is its name,
- * and what URL does a `Url` node carry — so those are the only members declared.
+ * the AST and asks each node four questions — what type is it, what is its name,
+ * what URL does a `Url` node carry, and what child list, selector or declaration
+ * block does a container carry — so those are the only members declared.
  * Anything else is read through the `unknown` index and must be narrowed by the
  * caller.
  */
@@ -21,6 +22,12 @@ declare module 'css-tree' {
     readonly name?: string;
     /** A `Url` node's decoded value, or a scalar node's textual value. */
     readonly value?: string;
+    /** A list node's children; `css-tree` returns a `List` with `toArray()`. */
+    readonly children?: { toArray(): CssNode[] };
+    /** A `Rule`'s selector list. */
+    readonly prelude?: CssNode;
+    /** A `Rule`'s declaration block. */
+    readonly block?: CssNode;
     readonly [member: string]: unknown;
   }
 

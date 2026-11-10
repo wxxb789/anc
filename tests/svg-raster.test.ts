@@ -466,8 +466,8 @@ test('a filter region is judged in the coordinate system its element declares', 
 });
 
 /** The symbols of a legal chain, each referencing the next twice. */
-function symbolChain(levels: number, href = 'href'): string {
-  const symbols = [`<symbol id="s${levels - 1}"><rect width="2" height="2"/></symbol>`];
+function symbolChain(levels: number, href = 'href', leaf = '<rect width="2" height="2"/>'): string {
+  const symbols = [`<symbol id="s${levels - 1}">${leaf}</symbol>`];
   for (let index = levels - 2; index >= 0; index -= 1) {
     symbols.push(
       `<symbol id="s${index}"><use ${href}="#s${index + 1}"/><use ${href}="#s${index + 1}"/></symbol>`,
@@ -605,6 +605,141 @@ test('a shallow use chain reached through a mask still renders', async () => {
   const rendered = await prepareSvg(Buffer.from(svg));
   if (!rendered.ok) assert.fail(`the shallow mask-referenced chain did not render: ${rendered.reason}`);
   assert.deepEqual(rendered.image.dimensions, { width: 200, height: 200 });
+});
+
+/**
+ * A 14-level chain inside a mask: 16,383 instances per rendered consumer.
+ *
+ * 14 levels is the largest chain inside the 16,384-instance budget, so one
+ * consumer is legal and two are exactly twice the budget.
+ */
+function maskChain(body: string): string {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">` +
+    // The chain's leaf is a path so a `rect` selector cannot match it: a shape
+    // inside the mask that referenced the mask would be a cycle, not this test.
+    `<defs>${symbolChain(14, 'href', '<path d="M0 0h2v2H0z"/>')}` +
+    `<mask id="m"><path d="M0 0h100v100H0z" fill="#ffffff"/><use href="#s0"/></mask></defs>` +
+    body +
+    `</svg>`
+  );
+}
+
+test('a stylesheet reference is counted once per matched element, like the attribute spelling', () => {
+  const attribute = maskChain(
+    '<rect width="100" height="100" mask="url(#m)"/><rect width="100" height="100" mask="url(#m)"/>',
+  );
+  const stylesheet = maskChain(
+    '<style>rect{mask:url(#m)}</style><rect width="100" height="100"/><rect width="100" height="100"/>',
+  );
+
+  const fromAttribute = inspectSvg(Buffer.from(attribute));
+  if (fromAttribute.ok) assert.fail('the attribute spelling accepted 32,766 instances');
+  assert.equal(fromAttribute.refusal.reason, 'svg-workload');
+  assert.match(fromAttribute.refusal.detail, /32766/, fromAttribute.refusal.detail);
+
+  const fromStylesheet = inspectSvg(Buffer.from(stylesheet));
+  if (fromStylesheet.ok) {
+    assert.fail('the stylesheet spelling counted its reference once instead of once per matched element');
+  }
+  assert.equal(fromStylesheet.refusal.reason, 'svg-workload');
+  assert.match(fromStylesheet.refusal.detail, /32766/, fromStylesheet.refusal.detail);
+  assert.equal(
+    fromStylesheet.refusal.detail,
+    fromAttribute.refusal.detail,
+    'the two spellings of the same picture produced different counts',
+  );
+});
+
+test('a one-consumer stylesheet reference stays inside the budget and renders', async () => {
+  const svg = maskChain(
+    '<style>rect{mask:url(#m)}</style><rect width="100" height="100" fill="#8ad884"/>',
+  );
+  const inspection = inspectSvg(Buffer.from(svg));
+  if (!inspection.ok) assert.fail(`the one-consumer stylesheet was refused: ${inspection.refusal.detail}`);
+  const rendered = await prepareSvg(Buffer.from(svg));
+  if (!rendered.ok) assert.fail(`the one-consumer stylesheet did not render: ${rendered.reason}`);
+  assert.deepEqual(rendered.image.dimensions, { width: 200, height: 200 });
+});
+
+test('a stylesheet rule that matches no element contributes no reference', () => {
+  const svg = maskChain(
+    '<style>.absent{mask:url(#m)}</style><rect width="100" height="100" mask="url(#m)"/>',
+  );
+  const inspection = inspectSvg(Buffer.from(svg));
+  assert.equal(inspection.ok, true, inspection.ok ? '' : inspection.refusal.detail);
+});
+
+test('class- and id-selected rules count like the type-selected one', () => {
+  const byClass = maskChain(
+    '<style>.shape{mask:url(#m)}</style>' +
+      '<rect width="100" height="100" class="shape"/><rect width="100" height="100" class="shape"/>',
+  );
+  const byId = maskChain(
+    '<style>#same{mask:url(#m)}</style>' +
+      '<rect width="100" height="100" id="same"/><rect width="100" height="100" id="same"/>',
+  );
+  for (const [name, svg] of [['class', byClass], ['id', byId]] as const) {
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`the ${name}-selected rule counted one reference instead of two`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /32766/, `${name}: ${inspection.refusal.detail}`);
+  }
+});
+
+test('two declarations naming the same definition count twice on one matched element', () => {
+  const svg = maskChain(
+    '<style>rect{mask:url(#m);filter:url(#m)}</style><rect width="100" height="100"/>',
+  );
+  const inspection = inspectSvg(Buffer.from(svg));
+  if (inspection.ok) assert.fail('two declarations naming the mask were counted once');
+  assert.equal(inspection.refusal.reason, 'svg-workload', inspection.refusal.detail);
+  assert.match(inspection.refusal.detail, /32766/, inspection.refusal.detail);
+});
+
+test('a selector list applies one rule once to an element that matches twice', () => {
+  const svg = maskChain(
+    '<style>.shape, rect{mask:url(#m)}</style>' +
+      '<rect width="100" height="100" class="shape"/><rect width="100" height="100" class="shape"/>',
+  );
+  const inspection = inspectSvg(Buffer.from(svg));
+  if (inspection.ok) assert.fail('the selector list was accepted');
+  assert.equal(inspection.refusal.reason, 'svg-workload');
+  assert.match(inspection.refusal.detail, /32766/, inspection.refusal.detail);
+});
+
+test('descendant and child selectors attribute a reference to their subject', () => {
+  for (const selector of ['g rect', 'g > rect']) {
+    const svg = maskChain(
+      `<style>${selector}{mask:url(#m)}</style>` +
+        '<g><rect width="100" height="100"/></g><g><rect width="100" height="100"/></g>',
+    );
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`the ${JSON.stringify(selector)} selector was not attributed`);
+    assert.equal(inspection.refusal.reason, 'svg-workload', `${selector}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, /32766/, `${selector}: ${inspection.refusal.detail}`);
+  }
+});
+
+test('a selector form the policy cannot attribute is refused, never dropped', () => {
+  const cases: readonly { readonly name: string; readonly selector: string; readonly construct: RegExp }[] = [
+    { name: 'attribute selector', selector: 'rect[fill]', construct: /an attribute selector/ },
+    { name: 'pseudo-class', selector: 'rect:hover', construct: /the pseudo-class ':hover'/ },
+    { name: 'pseudo-element', selector: 'rect::before', construct: /the pseudo-element '::before'/ },
+    { name: 'adjacent sibling', selector: 'g + g', construct: /adjacent-sibling/ },
+    { name: 'general sibling', selector: 'g ~ g', construct: /general-sibling/ },
+    { name: 'namespace', selector: 'svg|rect', construct: /namespace-qualified/ },
+    { name: 'escaped identifier', selector: '.a\\:b', construct: /escaped identifier/ },
+  ];
+  for (const entry of cases) {
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">` +
+      `<style>${entry.selector}{mask:url(#m)}</style><rect width="10" height="10"/></svg>`;
+    const inspection = inspectSvg(Buffer.from(svg));
+    if (inspection.ok) assert.fail(`${entry.name}: the selector was silently ignored`);
+    assert.equal(inspection.refusal.reason, 'svg-css', `${entry.name}: ${inspection.refusal.detail}`);
+    assert.match(inspection.refusal.detail, entry.construct, `${entry.name}: ${inspection.refusal.detail}`);
+  }
 });
 
 test('a namespaced root and nested text keep their actual identity and content', () => {

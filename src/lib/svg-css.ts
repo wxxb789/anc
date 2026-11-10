@@ -182,9 +182,240 @@ function inspect(source: string, context: 'stylesheet' | 'declarationList' | 'va
   return refusal;
 }
 
-/** Check a `<style>` element's contents. */
+/** One compound of a selector this policy can decide against the recorded tree. */
+export interface StaticSelectorCompound {
+  /** How this compound joins the previous one; `undefined` on the leftmost. */
+  readonly combinator: ' ' | '>' | undefined;
+  /** The element's local name; `undefined` is the universal selector. */
+  readonly name: string | undefined;
+  readonly id: string | undefined;
+  readonly classes: readonly string[];
+}
+
+/** A selector compiled to compounds, with the rightmost (subject) one last. */
+export type StaticSelector = readonly StaticSelectorCompound[];
+
+/** One static rule: its attributable selectors and every fragment its declarations name. */
+export interface StaticStyleRule {
+  readonly selectors: readonly StaticSelector[];
+  readonly references: readonly string[];
+}
+
+/** What a `<style>` element contributes, or why it was refused. */
+export type StyleSheetAnalysis =
+  | { readonly ok: true; readonly rules: readonly StaticStyleRule[] }
+  | { readonly ok: false; readonly refusal: SvgRefusal };
+
+/**
+ * The selector forms attribution understands.
+ *
+ * A stylesheet reference is counted per element its rule matches, so the policy
+ * must be able to decide that match from the element tree it records: local
+ * name, `id`, `class`, and the descendant and child combinators. Everything
+ * else — attribute selectors, pseudo-classes, pseudo-elements, sibling and
+ * column combinators, namespaces and escaped identifiers — has no recorded
+ * fact to decide it here and is refused rather than guessed at.
+ */
+const SELECTOR_FORMS =
+  'type, class, id and universal selectors joined by the descendant or child combinator';
+
+function selectorFault(where: string, construct: string): SvgRefusal {
+  return {
+    reason: 'svg-css',
+    detail: `${where}: ${construct} is not attributable to drawn elements; only ${SELECTOR_FORMS} can be matched`,
+  };
+}
+
+/** Compile one selector, or name the construct that cannot be attributed. */
+function compileSelector(
+  node: CssNode,
+  where: string,
+): { readonly ok: true; readonly selector: StaticSelector } | { readonly ok: false; readonly refusal: SvgRefusal } {
+  if (node.type !== 'Selector') {
+    return { ok: false, refusal: selectorFault(where, `the selector form ${node.type}`) };
+  }
+  interface Compound {
+    combinator: ' ' | '>' | undefined;
+    name: string | undefined;
+    universal: boolean;
+    id: string | undefined;
+    classes: string[];
+  }
+  const compounds: Compound[] = [];
+  let current: Compound | undefined;
+  let combinator: ' ' | '>' | undefined;
+  const open = (): Compound => {
+    const compound: Compound = { combinator, name: undefined, universal: false, id: undefined, classes: [] };
+    compounds.push(compound);
+    current = compound;
+    combinator = undefined;
+    return compound;
+  };
+  const plain = (name: string | undefined, construct: string): string | SvgRefusal => {
+    const value = name ?? '';
+    if (value.includes('\\')) return selectorFault(where, `an escaped identifier in ${construct}`);
+    return value;
+  };
+  for (const part of node.children?.toArray() ?? []) {
+    if (part.type === 'WhiteSpace' || part.type === 'Comment') continue;
+    if (part.type === 'Combinator') {
+      if (current === undefined) {
+        return { ok: false, refusal: selectorFault(where, `the combinator ${JSON.stringify(part.name ?? '')} at the start of a selector`) };
+      }
+      const name = part.name ?? '';
+      if (name === '>' || name === ' ') {
+        combinator = name;
+      } else if (name === '+') {
+        return { ok: false, refusal: selectorFault(where, "the adjacent-sibling combinator '+'") };
+      } else if (name === '~') {
+        return { ok: false, refusal: selectorFault(where, "the general-sibling combinator '~'") };
+      } else if (name === '||') {
+        return { ok: false, refusal: selectorFault(where, "the column combinator '||'") };
+      } else {
+        return { ok: false, refusal: selectorFault(where, `the combinator ${JSON.stringify(name)}`) };
+      }
+      current = undefined;
+      continue;
+    }
+    if (part.type === 'TypeSelector' || part.type === 'UniversalSelector') {
+      const universal = part.type === 'UniversalSelector' || part.name === '*';
+      let typeName: string | undefined;
+      if (!universal) {
+        const value = plain(part.name, 'a type selector');
+        if (typeof value !== 'string') return { ok: false, refusal: value };
+        if (value === '') return { ok: false, refusal: selectorFault(where, 'an empty type selector') };
+        if (value.includes('|')) {
+          return { ok: false, refusal: selectorFault(where, 'a namespace-qualified type selector') };
+        }
+        typeName = value;
+      }
+      const compound = current ?? open();
+      if (compound.name !== undefined || compound.universal) {
+        return { ok: false, refusal: selectorFault(where, 'more than one type selector in one compound') };
+      }
+      if (universal) compound.universal = true;
+      else compound.name = typeName;
+      continue;
+    }
+    if (part.type === 'ClassSelector') {
+      const value = plain(part.name, 'a class selector');
+      if (typeof value !== 'string') return { ok: false, refusal: value };
+      if (value === '') return { ok: false, refusal: selectorFault(where, 'an empty class selector') };
+      (current ?? open()).classes.push(value);
+      continue;
+    }
+    if (part.type === 'IdSelector') {
+      const value = plain(part.name, 'an id selector');
+      if (typeof value !== 'string') return { ok: false, refusal: value };
+      if (value === '') return { ok: false, refusal: selectorFault(where, 'an empty id selector') };
+      const compound = current ?? open();
+      if (compound.id !== undefined) {
+        return { ok: false, refusal: selectorFault(where, 'more than one id selector in one compound') };
+      }
+      compound.id = value;
+      continue;
+    }
+    if (part.type === 'AttributeSelector') {
+      return { ok: false, refusal: selectorFault(where, 'an attribute selector') };
+    }
+    if (part.type === 'PseudoClassSelector') {
+      return { ok: false, refusal: selectorFault(where, `the pseudo-class ':${part.name ?? ''}'`) };
+    }
+    if (part.type === 'PseudoElementSelector') {
+      return { ok: false, refusal: selectorFault(where, `the pseudo-element '::${part.name ?? ''}'`) };
+    }
+    return { ok: false, refusal: selectorFault(where, `the selector construct ${part.type}`) };
+  }
+  if (compounds.length === 0) {
+    return { ok: false, refusal: selectorFault(where, 'an empty selector') };
+  }
+  return {
+    ok: true,
+    selector: compounds.map((compound) => ({
+      combinator: compound.combinator,
+      name: compound.universal ? undefined : compound.name,
+      id: compound.id,
+      classes: compound.classes,
+    })),
+  };
+}
+
+/** Compile one selector list, preserving its alternatives in source order. */
+function compileSelectorList(
+  node: CssNode | undefined,
+  where: string,
+): { readonly ok: true; readonly selectors: StaticSelector[] } | { readonly ok: false; readonly refusal: SvgRefusal } {
+  if (node === undefined || node.type !== 'SelectorList') {
+    return { ok: false, refusal: selectorFault(where, `the selector form ${node?.type ?? 'missing'}`) };
+  }
+  const selectors: StaticSelector[] = [];
+  for (const part of node.children?.toArray() ?? []) {
+    if (part.type === 'WhiteSpace' || part.type === 'Comment') continue;
+    const compiled = compileSelector(part, where);
+    if (!compiled.ok) return compiled;
+    selectors.push(compiled.selector);
+  }
+  if (selectors.length === 0) {
+    return { ok: false, refusal: selectorFault(where, 'an empty selector list') };
+  }
+  return { ok: true, selectors };
+}
+
+/** Collect the same-document fragments named by `url()` anywhere under one node. */
+function collectFragmentReferences(root: CssNode, into: string[]): void {
+  walk(root, (node) => {
+    if (node.type === 'Url' && typeof node.value === 'string' && node.value.startsWith('#') && node.value.length > 1) {
+      into.push(node.value.slice(1));
+    }
+  });
+}
+
+/**
+ * Inspect a `<style>` element and return what it contributes to attribution.
+ *
+ * The static grammar check is the same one every other CSS door gets. Selector
+ * lists are compiled to the subset matching can decide, because a sheet's
+ * references are counted once per element the rule matches, not once per sheet.
+ * A selector form outside that subset is refused here rather than attributed to
+ * the root or silently dropped.
+ */
+export function analyzeStyleSheet(source: string): StyleSheetAnalysis {
+  let ast: CssNode;
+  try {
+    ast = parse(source, { context: 'stylesheet' });
+  } catch (error) {
+    return {
+      ok: false,
+      refusal: {
+        reason: 'svg-css',
+        detail: `style element: ${error instanceof Error ? error.message.split('\n')[0]! : String(error)}`,
+      },
+    };
+  }
+  let refusal: SvgRefusal | undefined;
+  walk(ast, (node) => {
+    if (refusal === undefined) refusal = checkNode(node, 'style element');
+  });
+  if (refusal !== undefined) return { ok: false, refusal };
+  const rules: StaticStyleRule[] = [];
+  for (const node of ast.children?.toArray() ?? []) {
+    if (node.type === 'WhiteSpace' || node.type === 'Comment') continue;
+    if (node.type !== 'Rule') {
+      return { ok: false, refusal: selectorFault('style element', `the top-level ${node.type}`) };
+    }
+    const selectors = compileSelectorList(node.prelude, 'style element');
+    if (!selectors.ok) return selectors;
+    const references: string[] = [];
+    if (node.block !== undefined) collectFragmentReferences(node.block, references);
+    rules.push({ selectors: selectors.selectors, references });
+  }
+  return { ok: true, rules };
+}
+
+/** Check a `<style>` element's contents, including its selectors. */
 export function inspectStyleSheet(source: string): SvgRefusal | undefined {
-  return inspect(source, 'stylesheet', 'style element');
+  const analysis = analyzeStyleSheet(source);
+  return analysis.ok ? undefined : analysis.refusal;
 }
 
 /** Check a `style` attribute's declaration list. */
@@ -227,10 +458,6 @@ export function fragmentReferences(
     return [];
   }
   const references: string[] = [];
-  walk(ast, (node) => {
-    if (node.type === 'Url' && typeof node.value === 'string' && node.value.startsWith('#') && node.value.length > 1) {
-      references.push(node.value.slice(1));
-    }
-  });
+  collectFragmentReferences(ast, references);
   return references;
 }
