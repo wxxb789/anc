@@ -267,7 +267,7 @@ notes, both exclusion mechanisms, links and backlinks, rich Markdown, math, and 
 
 The GitHub Action at the repository root runs a release build on a supported Linux
 runner, installs the checksum-pinned secret scanner, and writes a static `dist/`. Pin it
-to `@v0.0.2` for one exact release, `@v0` to follow the latest 0.x, or a full commit SHA
+to `@v0.0.3` for one exact release, `@v0` to follow the latest 0.x, or a full commit SHA
 for the strongest pin. Any static host serves that directory, at the root of a domain:
 a site under a path such as `https://<user>.github.io/<repo>/` is not supported.
 `dist/_headers` carries a Content-Security-Policy and three other security headers in

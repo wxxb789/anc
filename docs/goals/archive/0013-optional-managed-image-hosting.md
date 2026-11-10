@@ -1,8 +1,18 @@
 # 0013 — Optional Cloudflare R2 media publishing
 
-Status: in progress — implementation and local failure suite complete; live R2
-and custom-domain round trip outstanding. Created: 2026-11-08. Source:
-[media RFC #31](https://github.com/wxxb789/anc/issues/31).
+Status: **completed** 2026-11-10. Created: 2026-11-08. Shipped in `0.0.3`.
+Source: [media RFC #31](https://github.com/wxxb789/anc/issues/31).
+
+Implementation PR [#39](https://github.com/wxxb789/anc/pull/39), merged as
+`d103d6d`; release PR [#40](https://github.com/wxxb789/anc/pull/40) moved the
+changelog entry, and the `release` workflow cut tag `v0.0.3` and published
+`@wxxb789/anc@0.0.3` with SLSA provenance.
+
+One part of the goal was **not** possible on the implementing host: no
+authorized Cloudflare account existed, so a live R2 bucket plus public
+custom-domain round trip was not performed. That is the disclosed
+integration-evidence gap the goal text allows, recorded under "Limitations"
+below — not a passed production check.
 
 ## Desired outcome
 
@@ -18,11 +28,11 @@ already work without it.
 
 ## Prerequisite and accepted design
 
-Requires [0009 — Zero-config static images](archive/0009-zero-config-static-images.md)
-to be accepted. [0011 — WebP-first delivery](archive/0011-webp-first-image-delivery.md)
+Requires [0009 — Zero-config static images](0009-zero-config-static-images.md)
+to be accepted. [0011 — WebP-first delivery](0011-webp-first-image-delivery.md)
 may reduce upload/storage cost but does not block R2 publishing correctness.
 
-The [accepted media design](../core-design/media-pipeline.md#0013--opt-in-cloudflare-r2-image-publishing)
+The [accepted media design](../../core-design/media-pipeline.md#0013--opt-in-cloudflare-r2-image-publishing)
 already selects **Cloudflare R2**, **pinned `aws4fetch` 1.0.20**, S3
 signed operations, production custom-domain delivery, content-addressed
 immutable object keys, environment-only credentials, atomic conditional
@@ -85,55 +95,19 @@ report the independent implementation evidence. Stop for irreversible
 or out-of-scope choices. Report each completion item with measured
 evidence, limitations and failures.
 
-## Implementation progress
+## What shipped
 
-Branch `feat/0013-r2-media-publishing`, based on `origin/main` `7d27414`
-(Goals 0009/0010/0011 present). The implementation and its failure suite are
-complete on this tree. The goal is **not archived**: a live R2 bucket plus a
-public custom-domain round trip was **not** performed, because this host has no
-authorized Cloudflare account or bucket credentials. That is a disclosed
-integration-evidence gap, not a passed production check and not a fabricated
-result.
-
-### What exists
-
-- `anc build --release --media r2` is the only action that may write remotely.
-  `--media` is refused without `--release`, and an ordinary build clears the
-  delivery seam. `bin/anc.mjs` imports `scripts/publish-media.ts` only on that
-  branch; that module imports `aws4fetch` only inside its publish function.
-- `publish.config.yaml` has one optional `media:` table: `provider: r2`,
-  `bucket`, `endpoint`, `public_base_url`, `access_key_id_env`, and
-  `secret_access_key_env`. Unknown keys, wrong types, missing required keys,
-  non-HTTPS or path-bearing URLs, userinfo, `r2.dev` hostnames, malformed bucket
-  names, malformed environment names, and a repeated environment name are
-  refused by `scripts/load-config.ts`. Credentials are read only from the two
-  named environment variables.
-- `scripts/publish-media.ts` plans objects only from the artifact's declared
-  assets and their staged emitted bytes; the key is the canonical published
-  `_assets/<sha256>-<name>` path, and the MIME type is the emitted extension's
-  format (already checked against the bytes by the copy gate). It issues
-  `PutObject` with `If-None-Match: *`, `Content-Type`, immutable `Cache-Control`
-  and `Content-MD5`; a `412` reads and hashes the winner instead of overwriting;
-  every retry is another conditional write. Existing objects are proven by
-  reading and hashing their bytes, not by size, MIME, or ETag. All objects are
-  made available before any public URL is fetched, and every public URL is then
-  fetched over the custom domain and hashed before the candidate is promoted.
-  Redirects are refused with `redirect: 'manual'` on both paths. Object size is
-  bounded by the validated 32 MiB image budget; concurrency, attempts and
-  request time are finite (4 workers, 3 attempts, 30 s per request).
-- `src/lib/media-delivery.ts` and `src/lib/markdown.ts` rewrite an authorized
-  asset's `src` to the configured bare HTTPS origin only when the opted-in build
-  set the internal environment seam. The artifact, staged filename, object key,
-  output inventory and local `dist/_assets/` copy all keep the same-origin path.
-  No client JavaScript, manifest, Worker, SQLite field, image proxy or
-  multi-provider abstraction was added; the existing `img-src 'self' data: https:`
-  CSP is unchanged.
-- `aws4fetch` is pinned to exactly `1.0.20` without a range, and
-  `pnpm-workspace.yaml` records it as reviewed with build scripts denied.
-- The binary sets `ASTRO_TELEMETRY_DISABLED=1` before any command imports Astro.
-  Without that, an ordinary `preview` still posted to
-  `https://telemetry.astro.build/api/v1/record`, so the shipped command was not
-  actually offline even though this repository's CI set the variable.
+`anc build --release --media r2` is the only action that may write remotely;
+`--media` is refused without `--release`, and ordinary `build`, `preview` and
+`build --release` stay offline and never resolve `aws4fetch`. Objects are keyed
+by the artifact's own content address, written conditionally, verified by
+reading the stored bytes, and every public custom-domain URL is fetched and
+hashed before a site that references it is promoted. `src/lib/media-delivery.ts`
+rewrites only the emitted `img` URLs, so the artifact, staged filename, object
+key, output inventory and local `dist/_assets/` copy keep the same-origin path.
+No client JavaScript, manifest, Worker, SQLite field, image proxy or
+multi-provider abstraction was added, and the existing
+`img-src 'self' data: https:` CSP is unchanged.
 
 ### "Done when" → evidence
 
@@ -238,6 +212,36 @@ Two findings from the first review round are closed with locked tests:
   budget: measured by counting what the application itself pulled from the
   stream, a 40 MiB body stops at 33,568,949 bytes (public) and 33,605,319
   (existing object), i.e. one chunk past the budget rather than the whole body.
+
+## Release
+
+- Tag `v0.0.3` on the release commit the workflow created on `main`; the tag's
+  tree is what npm received.
+- `@wxxb789/anc@0.0.3`, published 2026-11-10T18:07Z, `latest` tag, public
+  access, shasum `1d62bc63f8af4ed1bd894076ae607e0e46cf1d1e`, integrity
+  `sha512-4PJYQ9u7fwITZvrBgkjlS43Udhfa9zeGX5w7vKL/Br3IQh4FKbcR+ZQDmO7tgn67npD5m6eyKH2xtfg5G8dHwQ==`.
+- Provenance: registry attestation with `https://slsa.dev/provenance/v1`,
+  transparency log entry `https://search.sigstore.dev/?logIndex=3790827891`.
+- The publish job re-ran `verify`, `build:fixture` and `smoke:tarball` on the
+  tag before the registry saw a byte.
+
+## Limitations
+
+- **No live R2 or custom-domain round trip.** No authorized bucket, API token
+  or public domain existed on the implementing host, so DNS, token scope,
+  bucket policy, `r2.dev`-proxied domains and custom-domain TLS are untested.
+  Everything the goal requires of the *client* is exercised against a local
+  protocol fake and the packaged smoke; the provider side is not.
+- **Orphan policy.** A failure after some objects were written leaves those
+  objects in place. They are immutable and content-addressed, so a later run
+  reuses them; nothing deletes them, and withdrawing an image from a note does
+  not remove its object.
+- **Action surface.** The composite Action still invokes `build --release`
+  only. Publishing from CI is the documented installed-CLI step; adding an
+  Action input would be a second opt-in surface and was not required.
+- The publisher's own throughput, concurrency (4 workers) and request time
+  (30 s) were chosen for a small static site and are not tuned for a large
+  library.
 
 ### Gates
 

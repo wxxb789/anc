@@ -191,7 +191,7 @@ pnpm run smoke:tarball   # 在外部仓库中安装该 tarball 并读取结果
 
 ## 接入与托管
 
-仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。可以固定到 `@v0.0.2`（某个确切版本）、`@v0`（跟随最新 0.x）或完整 commit SHA（最强的固定方式）。任何静态主机都能托管该目录，但必须部署在域名根路径下：不支持 `https://<user>.github.io/<repo>/` 这类带路径的站点。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；忽略该文件的主机仍会通过每个页面的 `<meta>` 标签获得该策略（`frame-ancestors` 除外），其余响应头则需要自行配置。
+仓库根目录的 GitHub Action 会在受支持的 Linux runner 上执行 release 构建，安装校验和固定的密钥扫描器，并写出静态 `dist/`。可以固定到 `@v0.0.3`（某个确切版本）、`@v0`（跟随最新 0.x）或完整 commit SHA（最强的固定方式）。任何静态主机都能托管该目录，但必须部署在域名根路径下：不支持 `https://<user>.github.io/<repo>/` 这类带路径的站点。`dist/_headers` 以 Cloudflare Pages 的格式提供 Content-Security-Policy 与另外三个安全响应头；忽略该文件的主机仍会通过每个页面的 `<meta>` 标签获得该策略（`frame-ancestors` 除外），其余响应头则需要自行配置。
 
 发布是显式的外部副作用。构建不会部署，本仓库也无法部署。[`docs/adoption.md`](docs/adoption.md) 同时给出了 Action 用法与手工搭建的 GitHub Pages 示例，二者都不需要任何密钥。
 
