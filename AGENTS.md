@@ -345,7 +345,7 @@ WebP for 8-bit PNG only when the candidate is smaller, 16-bit PNG and existing W
 unchanged, structural completeness checked before any decode, one pinned sharp encoder, and no
 resize, crop, responsive matrix, browser script, external image host,
 image index, CDN requirement, or author-facing quality setting, and the SVG turn of
-[goal 0012](docs/goals/0012-safe-svg-rasterization.md): a self-contained static SVG is
+[goal 0012](docs/goals/archive/0012-safe-svg-rasterization.md): a self-contained static SVG is
 build-only input, validated by a namespace-aware XML/CSS policy (`saxes` + `css-tree`),
 rasterized from its bytes by the same pinned sharp/librsvg into **lossless WebP** at 2× its
 logical size, with every external reference, `data:` asset, script, animation, foreign
