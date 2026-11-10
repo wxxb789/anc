@@ -224,15 +224,35 @@ temp directory outside the repository, parsed from that file, removed in `finall
 `.vitest/` is ignored. The seven other controls passed before and after the fix, so the
 change affects evidence capture only.
 
-### Pre-SQLite baseline
+### Pre-SQLite baseline comparison
 
-`7579cc16a4320f7410b71e784587a01fdf14333d` **cannot supply the required comparison**: it
-has no SQLite snapshot to verify against, so the finalized instrument rejects the
-workload (`expected one finalized snapshot, found 0`, see the evidence table)
-and no comparative latency exists or is claimed. Recorded instead as build shape on the
-same seeded 10,000-note corpus: that tree emits 20,184 files / 217 MB (sparse) and
-20,178 files / 218 MB (hub), with a 3.45 MB `content-index.json` and 3.8 MB listing
-pages, against the candidate's 3880.0 KiB DB and pages that do not embed the corpus.
+`7579cc16a4320f7410b71e784587a01fdf14333d` has no SQLite oracle, so the snapshot instrument
+rejects it (`expected one finalized snapshot, found 0`) — but that tree **does** build and it
+**does** have a preview: `src/scripts/link-preview.ts` lazily fetches `/content-index.json` on
+first hover, filters in JS and renders into `#link-preview`. The required comparison was
+therefore measured with a purpose-built Playwright probe (archived with the campaign reports,
+not committed to the tree: sha256 `999d09f746653379…`) on the same seeded corpus with exactly 10,000
+published notes, the same Chrome channel, Pixel 7 profile, CPU 4x throttle and loopback
+server, measuring the same observable as the candidate: hover a same-origin note link, wait
+for the panel to be visible with the target note's title (a title mismatch counts as a
+failure; there were none).
+
+| 10,000 notes | Pre-SQLite `7579cc1` | Candidate 0.0.3 (seam) |
+|---|---|---|
+| Cold intent-to-visible (1 observation) | 513 ms sparse / 512 ms hub | 409 ms sparse / 423 ms hub |
+| Warm intent-to-visible (baseline p50 over 30, candidate 1 observation) | 125.0 / 125.1 ms | 231 / 217 ms |
+| Warm p95 | 125.9 / 134.1 ms | n/a (single observation) |
+| Fetched on first preview | 3,452,503 B decoded / 603,098 B gzip, one JSON index | 6,185,421 B decoded / 1,882,095 B gzip, 8 assets |
+
+Both trees arm the same 120 ms intent delay (`OPEN_DELAY_MS`), so the remainder is where the
+time goes: warm, the baseline spends ~5 ms on an in-memory map lookup and the candidate ~108 ms
+on Worker dispatch, DB query and mount; cold, the baseline needs ~393 ms to fetch and parse
+the 3.45 MB index and the candidate ~138 ms to start the Worker and query the DB.
+
+The trade-off is therefore two-sided and both directions are recorded, not one: **the first
+preview is 70-104 ms faster and downloads 3.1x more bytes, while every warm preview is
+90-106 ms slower.** At this size the unfiltered global graph (395-408 ms, single renders) and
+tag browsing (292-295 ms, p95 over 1,000 dispatches) remain the largest costs.
 
 ### Gates
 
@@ -260,13 +280,23 @@ workspace, not in commits); these hashes pin what was measured:
 | `limits-packaged.json` | 19,439 B | `18a7d529f014ccc2…` |
 | `baseline-probe-100.json` | 8,353 B | `8f6022784cc2f5e1…` |
 | `baseline-build-10000-sparse.json` | 1,667 B | `191bb28dc63765d2…` |
+| `probe.mjs` (baseline preview probe) | 23,429 B | `999d09f746653379…` |
+| `baseline-preview-10000-sparse.json` | 9,704 B | `ae0ff283ac0cf9b0…` |
+| `baseline-preview-10000-hub.json` | 9,681 B | `e62600db06682a0f…` |
 | `baseline-build-10000-hub.json` | 1,661 B | `ff8d657425b39bd0…` |
 
 ## Completion record
 
-Measured and qualified; **awaiting the maintainer's dated acceptance** of this exact
-candidate, the finite policies above and the material UX trade-off (global graph
-395-408 ms as single renders and tag browsing
-292-295 ms as p95 over 1,000 dispatches at 10,000 notes, cold preview
-407-441 ms as one observation per workload). The goal's own terms make that acceptance the last
-open item; it is not self-granted.
+Measured and qualified, including the comparable pre-SQLite comparison. **Awaiting the
+maintainer's dated acceptance**, which has to name:
+
+- candidate: `@wxxb789/anc@0.0.3`, tarball sha256 `d9176a52…` reproduced from `2ce506f`;
+- cold first preview 409-441 ms, warm preview 217-251 ms — against a pre-SQLite warm preview
+  of 125 ms, i.e. the seam costs 90-106 ms on every warm preview while downloading 3.1x more
+  bytes for the first one;
+- the material costs at 10,000 notes: global graph 395-408 ms (single renders) and tag
+  browsing 292-295 ms (p95 over 1,000 dispatches);
+- the limits: browser emulation, page-target CPU throttle only, loopback network, no Worker
+  heap / process RSS / total peak memory.
+
+That acceptance is the maintainer's, not self-granted here.
