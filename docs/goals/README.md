@@ -129,6 +129,22 @@ is applied before metadata removal, and finite pixel/byte/deadline limits fail
 hostile input boundedly while preserving the previous output. Nine goals are
 archived and 0008 remains active; 0012–0013 are still `Ready` and untouched.
 
+On 2026-11-10, [0012](archive/0012-safe-svg-rasterization.md) was completed on
+branch `feat/0012-safe-svg-rasterization`, created off `origin/main` at
+`7d27414`, merged as PR #36 (`8b49d38`). Implementation commit `e32c75b`, then
+seven review-fix commits closing fourteen findings across eight review rounds;
+the final review reported no findings. A self-contained static SVG is validated
+by a namespace-aware XML walk and a CSS AST, rasterized in memory by the same
+pinned `sharp` 0.35.5, and published as lossless WebP with a transparent
+background, so no SVG source byte reaches the site, the search index or the
+snapshot. The completion record carries the measured evidence: 39 hostile
+fixtures that fail the packaged build with distinct reasons and leave the
+previous output byte-identical, 17 benign fixtures rendered in real Chromium at
+1× and 2×, a `file://` canary and a listening socket proving no file disclosure
+or network request, the `<use>`-expansion and filter-region budgets, host-font
+discovery through fontconfig's own search semantics, and the cost figures.
+Ten goals are archived; 0008 remains active and 0013 is `Ready`.
+
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
 unrelated product requirements are complete. SQLite/WASM remains required for
@@ -161,13 +177,13 @@ its browser cost acceptance is not a prerequisite for 0009.
 
 | Goal | Status | Single completion judgment | Material prerequisites |
 | --- | --- | --- | --- |
-| [0012 — Safe SVG rasterization](0012-safe-svg-rasterization.md) | Ready | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009 and 0011 (completed) |
+| [0012 — Safe SVG rasterization](archive/0012-safe-svg-rasterization.md) | Completed 2026-11-10 | Self-contained static local SVG becomes safe WebP via the selected sharp renderer and XML/CSS policy, with measured font, quality and resource evidence | 0009 and 0011 (completed) |
 | [0013 — Optional R2 media publishing](0013-optional-managed-image-hosting.md) | Ready | A deliberate R2 release mode uploads approved images and verifies CDN availability without changing same-origin defaults | 0009 (completed); 0011 nonblocking and completed |
 
 `Ready` here means a downstream agent can pursue the stated outcome once its
 prerequisite is accepted; it does **not** mean implemented, deployed or approved
 as a release. `Provisional` goals preserve accepted direction but require
-refinement before activation. 0009–0011 are completed; 0012–0013 have not started.
+refinement before activation. 0009–0012 are completed; 0013 has not started.
 
 **Scope boundary.** Current ANC deployment supports root-of-origin sites, not a
 GitHub Pages project site's `/<repo>/` prefix. Extending site-wide base-path
@@ -193,8 +209,9 @@ adoption docs now describe the 0009–0011 implemented contracts rather than a t
 | [0009 — Zero-config static images](archive/0009-zero-config-static-images.md) | 2026-11-09 | Branch `feat/0009-zero-config-static-images`, production commit `be6b6cf`, implementation uncommitted for landing; the packaged producer publishes only referenced, authorized raster bytes under `/_assets/<sha256>-<name>`, the exact inventory owns the namespace, and each "Done when" row carries its executed evidence in the file — including a JavaScript-disabled Chromium display gate and a packaged foreign-repository smoke with images. |
 | [0010 — Readable image figures](archive/0010-readable-image-figures.md) | 2026-11-09 | Branch `feat/0010-readable-image-figures`, created off `origin/main` at `69f0f85`; implementation uncommitted for landing. The completion record maps each “Done when” row to its executed evidence, including packaged-build Chromium measurements for figures, dimensions, lazy/eager loading, no-script decoding, narrow-width overflow and reserved layout space. |
 | [0011 — WebP-first image delivery](archive/0011-webp-first-image-delivery.md) | 2026-11-09 | Branch `feat/0011-webp-first-image-delivery`, base `f167750`, implementation commit `7d2540d` with the review round uncommitted for landing; the file records the packaged foreign-repository smoke, the emitter's final-byte identity and dedupe, the pre-decode completeness gate for every supported container, bounded hostile-input preservation, and a twice-run baseline-vs-optimized corpus measurement on Linux x64 — including the rows where WebP wins and where bytes are retained. |
+| [0012 — Safe SVG rasterization](archive/0012-safe-svg-rasterization.md) | 2026-11-10 | Branch `feat/0012-safe-svg-rasterization`, base `7d27414`, implementation commit `e32c75b` plus seven review-fix commits (`36d3b34`…`587c7a0`), PR #36 merged as `8b49d38`; the file records 39 hostile fixtures with distinct refusal reasons and byte-identical previous output, 17 benign fixtures rendered in real Chromium at 1×/2×, the `file://` canary and listening-socket probes, the `<use>`-expansion and filter-region budgets, fontconfig-faithful font discovery, and the measured cost — with Linux x64 as the only claimed platform. |
 
-One SQLite goal remains `in progress`, and two media goals remain `Ready`.
+One SQLite goal remains `in progress`, and one media goal remains `Ready`.
 Schema creation, query-module code,
 Worker setup and individual test files are means within these outcomes, not
 separate goals. Functional completion and measured mobile acceptance remain
