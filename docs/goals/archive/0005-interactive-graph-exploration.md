@@ -194,7 +194,7 @@ carries no mutation and no `src/` file is modified by a test-only experiment.
 - No performance acceptance is claimed. The recorded numbers are CPU-throttled
   simulation (×4) on this Linux host in headless Chromium, not a physical
   mobile device, and bounded node count alone is not offered as a cost
-  argument; [0008](../0008-acceptable-browser-cost.md) owns the device and policy
+  argument; [0008](0008-acceptable-browser-cost.md) owns the device and policy
   judgment.
 - The browser corpus gates 65 notes built per test, not the packaged 10,000-note
   workloads; corpus and row scale are covered independently by the native
@@ -209,5 +209,5 @@ carries no mutation and no `src/` file is modified by a test-only experiment.
   introduce if its report needs one.
 - [0006](0006-safe-release-output.md),
   [0007](0007-independent-publisher-adoption.md) and
-  [0008](../0008-acceptable-browser-cost.md) remain active. Deployment and
+  [0008](0008-acceptable-browser-cost.md) remain active. Deployment and
   post-deploy smoke tests remain external, separately approved actions.

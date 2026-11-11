@@ -1,6 +1,6 @@
 # 0008 — Acceptable browser cost
 
-Status: in progress. Created: 2026-09-14. Replaces part of [0001](0001-unified-public-query-model.md).
+Status: completed 2026-11-11. Created: 2026-09-14. Replaces part of [0001](../0001-unified-public-query-model.md).
 
 ## Desired outcome
 
@@ -17,9 +17,9 @@ evidence and leaves the goal open.
 ## Material bounds and prerequisite
 
 Requires the actual packaged feature outcome of
-[0007](archive/0007-independent-publisher-adoption.md), including 0002–0006. Follow
-[runtime limits](../core-design/build-and-runtime.md) and
-[ablation/change rules](../core-design/verification-and-evolution.md).
+[0007](0007-independent-publisher-adoption.md), including 0002–0006. Follow
+[runtime limits](../../core-design/build-and-runtime.md) and
+[ablation/change rules](../../core-design/verification-and-evolution.md).
 
 Measure 100, 1,000 and 10,000 published notes. For each size include sparse and
 hub-heavy topology with real edges, tags, aliases and varied text, including CJK.
@@ -244,25 +244,40 @@ server, measuring the same observable as the candidate: hover a same-origin note
 for the panel to be visible with the target note's title (a title mismatch counts as a
 failure; there were none).
 
-| 10,000 notes | Pre-SQLite `7579cc1` | Candidate 0.0.3 (seam) |
+The two instruments do not share a clock origin, and the first version of this
+section compared them as if they did. Correction, 2026-11-11: the candidate's
+`intentToVisibleMs` is taken in Node — `Date.now()` around `page.locator(...).hover()` and
+`page.locator('#link-preview').waitFor()` in `scripts/benchmark-workload-ui.ts` — which pays
+Playwright's actionability checks, scroll-into-view and polling detection. The baseline
+probe sets `probe.intentAt = performance.now()` in the page immediately before
+`page.mouse.move()` (`baseline-preview/probe.mjs`). The candidate instrument records the
+matching page-clock observation in the same sample as `hoverDelayMs`; the baseline probe
+records no Node-side clock at all. Comparing the two Node-side totals therefore produced a
+90-106 ms "regression" that is instrument residue, not product cost.
+
+| 10,000 notes, page clock (pointerover -> panel visible with the target title) | Pre-SQLite `7579cc1` | Candidate 0.0.3 |
 |---|---|---|
-| Cold intent-to-visible (1 observation) | 513 ms sparse / 512 ms hub | 409 ms sparse / 423 ms hub |
-| Warm intent-to-visible (baseline p50 over 30, candidate 1 observation) | 125.0 / 125.1 ms | 231 / 217 ms |
-| Warm p95 | 125.9 / 134.1 ms | n/a (single observation) |
+| Cold intent-to-visible, including the 120 ms delay | 513 ms sparse / 512 ms hub (1 observation) | 285.8 / 269.0 ms (1 observation) |
+| Warm, including the 120 ms delay | 125.0 / 125.1 ms (p50, n=30) | 124.4 / 124.5 ms (1 observation) |
+| Warm p95 | 125.9 / 134.1 ms (n=30) | not applicable (1 observation) |
 | Fetched on first preview (observed) | 3,452,503 B decoded / 603,098 B encoded, one JSON index | 5,503,343 B decoded / 1,692,447 B encoded, 4 requests (inventory 6,040.5 KiB / 1,838.0 KiB) |
 
-Both trees arm the same 120 ms intent delay (`OPEN_DELAY_MS`), and both totals include it
-plus each harness's own hover/`waitFor` overhead, so this record does not decompose the
-remainder into "query" and "render": the candidate instrument additionally records a page-clock
-hover delay (271 ms cold, 123 ms warm; it is not subtracted from the reported totals), while
-the baseline probe records none, so a post-delay subtraction would compare two different
-clocks. What is claimed is the end-to-end difference in the same emulation, same corpus and
-same observable — warm 90-106 ms slower, cold 70-104 ms faster — not a phase attribution.
+The candidate's Node-side totals (409/441 ms cold, 217/251 ms warm) stay in the reports as
+the harness figure: they sit 142-195 ms cold and 92-126 ms warm above the page clock, and no
+claim here uses them.
 
-The trade-off is therefore two-sided and both directions are recorded, not one: **the first
-preview is 70-104 ms faster and fetches 2.8x more bytes over the wire, while every warm
-preview is 90-106 ms slower.** At this size the unfiltered global graph (395-408 ms, single renders) and
-tag browsing (292-295 ms, p95 over 1,000 dispatches) remain the largest costs.
+Read on one clock: **warm preview is at parity** (124.4-124.5 ms against 125.0-125.1 ms,
+inside one observation's resolution) and **cold preview is 226-244 ms faster** at 10,000
+notes. The trade that remains is transfer: 2.8x the bytes on the first preview, 603 KB ->
+1,692 KB encoded. At 1,000 notes the pre-SQLite path still wins cold (176.1 ms against
+240.5-244.4 ms) because the candidate pays a fixed ~150 ms Worker start that does not scale
+with the corpus; the crossover sits between 1,000 and 10,000 notes.
+
+At this size the largest remaining costs are the unfiltered global graph first open
+(356.5 / 381.7 ms end-to-end: 128.8 / 137.0 ms of Worker start plus a 209.9 / 224.5 ms
+query, with the figure and its accessible table rendering in 21.6 / 34.5 ms) and tag
+browsing (292-295 ms p95 over 1,000 dispatches, which is page-side list growth — the query
+stays under 1 ms).
 
 ### Gates
 
@@ -297,16 +312,27 @@ workspace, not in commits); these hashes pin what was measured:
 
 ## Completion record
 
-Measured and qualified, including the comparable pre-SQLite comparison. **Awaiting the
-maintainer's dated acceptance**, which has to name:
+Accepted 2026-11-11 by the maintainer (`wxxb789`), who recorded that the new design
+direction is the better one and accepted `@wxxb789/anc@0.0.3` on it. The acceptance covers:
 
-- candidate: `@wxxb789/anc@0.0.3`, tarball sha256 `d9176a52…` reproduced from `2ce506f`;
-- cold first preview 409-441 ms, warm preview 217-251 ms — against a pre-SQLite warm preview
-  of 125 ms, i.e. the seam costs 90-106 ms on every warm preview while downloading 2.8x more
-  bytes for the first one;
-- the material costs at 10,000 notes: global graph 395-408 ms (single renders) and tag
-  browsing 292-295 ms (p95 over 1,000 dispatches);
-- the limits: browser emulation, page-target CPU throttle only, loopback network, no Worker
-  heap / process RSS / total peak memory.
+- candidate: `@wxxb789/anc@0.0.3`, tarball sha256 `d9176a52…` reproduced from `2ce506f`,
+  instrument at `405ff6f`;
+- the inherited warm local-neighbourhood target (dispatch -> validated Worker result, p95
+  below 50 ms) holds in every workload; the worst case is 21.7 ms (10,000/hub);
+- first preview at 10,000 notes: 269-286 ms cold on the page clock against 512-513 ms before
+  SQLite — 226-244 ms faster — and warm at parity with the previous preview (124.4-124.5 ms
+  against 125.0-125.1 ms);
+- the transfer cost accepted with it: 1,692 KB encoded / 5,503 KB decoded on the first
+  preview (2.8x the previous 603 KB), while ordinary reading requests no `/data/`, `/wasm/`
+  or Worker asset before intent and pays none of it;
+- the stated limits: Chrome-family mobile emulation rather than hardware, CPU throttle on
+  the page target only (the Worker target is not independently throttled), loopback network
+  rather than a mobile-network claim, and no Worker-heap, process-RSS or total-peak memory
+  figure;
+- the material costs recorded above: global graph first open 356.5-381.7 ms end-to-end, tag
+  browsing 292-295 ms p95 at 10,000 notes.
 
-That acceptance is the maintainer's, not self-granted here.
+Not opened: a goal for the warm-preview difference. The 2026-11-11 review of this comparison
+found it to be two instruments' clocks rather than a product regression, with warm preview at
+parity on the page clock; the remaining work on those two numbers is the global-graph query
+and the tag-list DOM, tracked on the performance board rather than as a preview regression.

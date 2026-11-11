@@ -250,4 +250,4 @@ workspace and whose new "Prove the artifact check can fail" step ran.
   `1.5.2`.
 - Completion is not release authorization. Registry publication, deployment,
   and post-deploy smoke tests remain external and separately approved, and
-  [0008](../0008-acceptable-browser-cost.md) remains active for mobile cost.
+  [0008](0008-acceptable-browser-cost.md) remains active for mobile cost.

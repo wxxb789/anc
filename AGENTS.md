@@ -331,12 +331,12 @@ The public SQLite/WASM read model has landed: the five-table
 `data/site.<sha256>.sqlite` snapshot replaced the public content index, static
 relationships render from it, and a lazy read-only Worker/WASM powers previews, tag
 browsing, and graph exploration. [`docs/goals/archive/`](docs/goals/archive/) holds the
-completed outcomes; [goal 0008](docs/goals/0008-acceptable-browser-cost.md) is still in
-progress, and the older note here that the design was "not yet implemented" predates
-that landing. Neither 0.1.0 nor 1.0.0 is ready. Deployment and post-deploy smoke tests
+completed outcomes; [goal 0008](docs/goals/archive/0008-acceptable-browser-cost.md) completed on 2026-11-11
+with the maintainer's dated acceptance, and the older note here that the design was "not
+yet implemented" predates that landing. Neither 0.1.0 nor 1.0.0 is ready. Deployment and post-deploy smoke tests
 are separate external actions, and so is publication — it runs in
 `.github/workflows/release-npm.yml` and is started by hand from the `release` workflow.
-Version 0.1 adds the local-image pipeline of [goal 0009](docs/goals/archive/0009-zero-config-static-images.md)
+Version 0.0.3 added the local-image pipeline of [goal 0009](docs/goals/archive/0009-zero-config-static-images.md)
 — authorized, referenced PNG/JPEG/GIF/WebP/AVIF published under `/_assets/<sha256>-<name>` —
 the reading rules of
 [goal 0010](docs/goals/archive/0010-readable-image-figures.md), the WebP-preferred policy of
@@ -360,7 +360,7 @@ output budget clamped it, in which case the layout shrinks proportionally), and 
 surviving image is eager while later ones defer. GitHub Pages *project* sites at `/<repo>/` remain unsupported; the hosting
 contract is a site at the domain root.
 `0.0.1` was published by hand to reserve the `@wxxb789/anc` name and create the page a
-trusted publisher needs; `0.0.2` is the first release cut from a tag.
+trusted publisher needs; `0.0.2` was the first release cut from a tag, and `0.0.3` shipped the image pipeline above.
 
 ## Documentation
 

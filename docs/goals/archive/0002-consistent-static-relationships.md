@@ -272,7 +272,7 @@ asserted in their own files and are not evidence this goal relies on.
 
 ### Query plans (fixture snapshot: 32 notes, 49,152 bytes, digest `dbabe256…`)
 
-```
+```text
 outgoingFirst   SEARCH e USING PRIMARY KEY (source_id=?)          -- edges PK
                 SEARCH n USING INTEGER PRIMARY KEY (rowid=?)
 backlinksFirst  SEARCH e USING COVERING INDEX edges_by_target (target_id=?)
