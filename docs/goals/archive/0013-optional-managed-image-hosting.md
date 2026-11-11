@@ -277,7 +277,6 @@ components were run serially instead — lint, `astro check`, the build with the
 pinned secret scan, and the test suite with one worker — and the observed counts
 are recorded here.
 
-
 ### Limitations
 
 - **No live R2/custom-domain exercise.** The publisher has been exercised

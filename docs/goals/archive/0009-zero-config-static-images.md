@@ -10,7 +10,7 @@ This is the first media outcome. Correct publication precedes compression, WebP 
 
 ## Prerequisite and material bounds
 
-Prerequisite: the packaged, independently usable publisher established by [0007](0007-independent-publisher-adoption.md), which is completed. This goal is independent of unfinished [0008](../0008-acceptable-browser-cost.md).
+Prerequisite: the packaged, independently usable publisher established by [0007](0007-independent-publisher-adoption.md), which is completed. This goal is independent of unfinished [0008](0008-acceptable-browser-cost.md).
 
 - Local PNG, JPEG, GIF, WebP, and AVIF used by published Markdown notes are publishable without transcoding. Preserve animated-image behavior and original bytes in this phase. SVG is **not** a publishable file type yet; a local SVG embed must fail clearly rather than silently disappear or ship active content. Existing HTTPS image URLs continue to work without being fetched or mirrored.
 - Image references resolve in the context of the writing note, including ordinary Markdown images, reference-style images, and image wikilinks actually used in the corpus. An unambiguous, explicitly relative path does not silently resolve to an unrelated basename elsewhere. If a local HTML image form is not supported, it fails visibly during publication rather than leaving a broken public link or bypassing asset authorization.

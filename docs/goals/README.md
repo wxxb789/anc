@@ -143,7 +143,12 @@ previous output byte-identical, 17 benign fixtures rendered in real Chromium at
 1× and 2×, a `file://` canary and a listening socket proving no file disclosure
 or network request, the `<use>`-expansion and filter-region budgets, host-font
 discovery through fontconfig's own search semantics, and the cost figures.
-Ten goals are archived; 0008 remains active and 0013 is `Ready`.
+On 2026-11-10, [0012](archive/0012-safe-svg-rasterization.md) and
+[0013](archive/0013-optional-managed-image-hosting.md) completed and shipped in `0.0.3`. On
+2026-11-11, [0008](archive/0008-acceptable-browser-cost.md) completed on the maintainer's
+dated acceptance, after this record's pre-SQLite comparison was corrected: the recorded
+warm-preview difference was two instruments' clocks, not a product regression. Eleven goals
+are archived and none is active.
 
 This goal set covers the accepted query-model initiative and its first-release
 acceptance. It is not a rewrite of every historical requirement or a promise that
@@ -156,9 +161,9 @@ unrelated product requirements are complete. SQLite/WASM remains required for
 already delivered. The prerequisite column states material outcome dependencies,
 not a mandatory execution schedule. Numbers are stable identifiers.
 
-| Goal | Single completion judgment | Material prerequisites |
-| --- | --- | --- |
-| [0008 — Acceptable browser cost](0008-acceptable-browser-cost.md) | Measured packaged behavior meets the mobile target and accepted cold-preview/resource policies | 0007, including its functional prerequisites |
+No goal is active as of 2026-11-11. 0008 completed on that date and is recorded under
+[Completed goals](#completed-goals); no successor has been opened, and 0.1.0 has no scope
+document yet.
 
 ## Image publishing goals — Issue #31 (2026-11-08)
 
@@ -171,9 +176,9 @@ The user's agreed priority is **correct local-image display through the existing
 GitHub Pages and Cloudflare Pages static hosting paths first**, with no new CDN
 account or image-specific setup. ANC builds and ships static bytes; it does not
 need a provider SDK merely to use a static host's CDN. Image presentation shipped
-in 0010; WebP optimization, SVG rasterization and optional managed hosting remain
-subsequent, separately assessable outcomes. Goal 0008 continues independently;
-its browser cost acceptance is not a prerequisite for 0009.
+in 0010; WebP optimization, SVG rasterization and optional managed hosting remained
+subsequent, separately assessable outcomes. Goal 0008 continued independently; its browser
+cost acceptance was not a prerequisite for 0009 and completed on 2026-11-11.
 
 | Goal | Status | Single completion judgment | Material prerequisites |
 | --- | --- | --- | --- |
@@ -208,9 +213,12 @@ adoption docs now describe the 0009–0011 implemented contracts rather than a t
 | [0005 — Interactive graph exploration](archive/0005-interactive-graph-exploration.md) | 2026-09-17 | Implementation commits `1d22934`, `610bb5f`, `38c9467`, PR #6; the live graph and its accessible representation agree on the bounded induced subgraph over a 65-note browser corpus, complete relations stay reachable beyond the drawing, the required mutation and failure controls were re-run, and SQL/Worker and render timings are recorded separately for 0008 — all in the file. |
 | [0006 — Safe release output](archive/0006-safe-release-output.md) | 2026-09-17 | Implementation commit `3e65a12`, PR #8, CI run `35231482566`; the reviewed-set failures, exact-output refusals, reconstructed-row scanner controls, withdrawal-after-rebuild, whole-tree failed-build preservation, and concurrent-build binding isolation are recorded in the file. |
 | [0007 — Independent publisher adoption](archive/0007-independent-publisher-adoption.md) | 2026-09-18 | Implementation commits `2c9772e`, `33aa0ae`, `12ff781`, `ebd02f9`, `c159802`, `65f89d4`, PR #10; local `pnpm run verify` and CI run `35253591403` (80 files / 952 passed / 34 skipped) green on `65f89d4`, Action-parity CI run `35253591383` green with the shallow-clone refusal, and the recorded `pack:tarball` digest plus `smoke:tarball` result — all six evaluation rows in the file. |
+| [0008 — Acceptable browser cost](archive/0008-acceptable-browser-cost.md) | 2026-11-11 | The packaged `0.0.3` meets the inherited warm-target (worst case 21.7 ms p95) and the qualified 10,000-note campaign; the pre-SQLite comparison is recorded on one clock (warm at parity, cold 226-244 ms faster, 2.8x first-preview bytes), the maintainer's dated acceptance names the candidate, the trade and the evidence limits, and no preview-regression goal was opened — all in the file. |
 | [0009 — Zero-config static images](archive/0009-zero-config-static-images.md) | 2026-11-09 | Branch `feat/0009-zero-config-static-images`, production commit `be6b6cf`, implementation uncommitted for landing; the packaged producer publishes only referenced, authorized raster bytes under `/_assets/<sha256>-<name>`, the exact inventory owns the namespace, and each "Done when" row carries its executed evidence in the file — including a JavaScript-disabled Chromium display gate and a packaged foreign-repository smoke with images. |
 | [0010 — Readable image figures](archive/0010-readable-image-figures.md) | 2026-11-09 | Branch `feat/0010-readable-image-figures`, created off `origin/main` at `69f0f85`; implementation uncommitted for landing. The completion record maps each “Done when” row to its executed evidence, including packaged-build Chromium measurements for figures, dimensions, lazy/eager loading, no-script decoding, narrow-width overflow and reserved layout space. |
 | [0011 — WebP-first image delivery](archive/0011-webp-first-image-delivery.md) | 2026-11-09 | Branch `feat/0011-webp-first-image-delivery`, base `f167750`, implementation commit `7d2540d` with the review round uncommitted for landing; the file records the packaged foreign-repository smoke, the emitter's final-byte identity and dedupe, the pre-decode completeness gate for every supported container, bounded hostile-input preservation, and a twice-run baseline-vs-optimized corpus measurement on Linux x64 — including the rows where WebP wins and where bytes are retained. |
+| [0012 — Safe SVG rasterization](archive/0012-safe-svg-rasterization.md) | 2026-11-10 | A self-contained static local SVG becomes safe WebP through the pinned sharp renderer behind a fail-closed XML/CSS/resource boundary, with the hostile-fixture refusals, font-coverage refusal, quality limits and cost figures recorded in the file; merged as PR #36. |
+| [0013 — Optional managed image hosting](archive/0013-optional-managed-image-hosting.md) | 2026-11-10 | A deliberate R2 release mode uploads only approved image bytes and verifies CDN availability without changing same-origin defaults; the live R2/custom-domain round trip stays a disclosed, unverified gap in the file. Shipped in `0.0.3`. |
 | [0012 — Safe SVG rasterization](archive/0012-safe-svg-rasterization.md) | 2026-11-10 | Branch `feat/0012-safe-svg-rasterization`, base `7d27414`, implementation commit `e32c75b` plus seven review-fix commits (`36d3b34`…`587c7a0`), PR #36 merged as `8b49d38`; the file records 39 hostile fixtures with distinct refusal reasons and byte-identical previous output, 17 benign fixtures rendered in real Chromium at 1×/2×, the `file://` canary and listening-socket probes, the `<use>`-expansion and filter-region budgets, fontconfig-faithful font discovery, and the measured cost — with Linux x64 as the only claimed platform. |
 
 One SQLite goal remains `in progress`, and one media goal remains `Ready`.
@@ -306,5 +314,8 @@ on 2026-09-14 into 0002–0008 without declaring completion. Its number is retai
 [0007](archive/0007-independent-publisher-adoption.md) on 2026-09-18,
 [0009](archive/0009-zero-config-static-images.md) and
 [0010](archive/0010-readable-image-figures.md) on 2026-11-09, and
-[0011](archive/0011-webp-first-image-delivery.md) on 2026-11-09; 0008 remains
-active and no other number has been completed.
+[0011](archive/0011-webp-first-image-delivery.md) on 2026-11-09,
+[0012](archive/0012-safe-svg-rasterization.md) and
+[0013](archive/0013-optional-managed-image-hosting.md) on 2026-11-10, and
+[0008](archive/0008-acceptable-browser-cost.md) on 2026-11-11. No goal is active and no
+number has been reused.
