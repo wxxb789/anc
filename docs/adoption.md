@@ -614,6 +614,21 @@ Cloudflare Pages' format. A host that ignores that file still applies the Conten
 from the `<meta>` tag in every page, except `frame-ancestors`, which a meta tag cannot carry;
 the other three headers are served only if you configure them on that host.
 
+**What each documented host actually provides.** Measured on this project's own site
+(`https://wxxb789.github.io`, GitHub Pages, 2026-11-11), not inferred from either vendor's
+documentation:
+
+| | Cloudflare Pages | GitHub Pages |
+| --- | --- | --- |
+| `dist/_headers` | applied | **ignored**; only the page's CSP `<meta>` survives |
+| `Cache-Control: public, max-age=31536000, immutable` for `/_astro/*` | applied | not applied; observed `max-age=600` |
+| Compression | negotiated, `br` included | gzip for text types; the snapshot arrives as `application/octet-stream` with no `Content-Encoding` |
+| `/data/site.<sha256>.sqlite` | gzip or br | **uncompressed**: 40,960 B on a two-note site, where the 0008 campaign's 10,000-note corpus is 3,872 KiB decoded |
+
+Nothing breaks on either host — the runtime `fetch`es the snapshot from the same origin and reads
+the same bytes — but transfer cost and the free security headers differ. If either matters, put
+Cloudflare Pages in front or set the headers on the host yourself.
+
 A rough GitHub Pages workflow, given the four caveats above:
 
 ```yaml
@@ -636,6 +651,28 @@ jobs:
         with: { path: dist }
       - uses: actions/deploy-pages@v4
 ```
+
+Add one job after `deploy`, or the failure you will not see is a site that stays on an older
+build while every job is green. The snapshot's filename is its content hash, so comparing the
+deployed name against the one this build emitted is an exact check:
+
+```yaml
+  smoke:
+    needs: [build, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          set -euo pipefail
+          origin='${{ needs.deploy.outputs.page_url }}'
+          built='${{ needs.build.outputs.snapshot }}'      # set from dist/_astro/snapshot-worker-*.js
+          chunk=$(curl -sS "$origin/" | grep -o '/_astro/Layout[^"]*\.js' | head -1)
+          worker=$(curl -sS "$origin$chunk" | grep -o 'snapshot-worker-[A-Za-z0-9_-]*\.js' | head -1)
+          served=$(curl -sS "$origin/_astro/$worker" | grep -o 'site\.[a-f0-9]\{64\}\.sqlite' | head -1)
+          test "$served" = "$built" || { echo "stale deploy: $served != $built" >&2; exit 1; }
+          test "$(curl -sS -o /dev/null -w '%{http_code}' "$origin/data/$served")" = 200
+```
+
+This project's own site runs that check after every deploy.
 
 No secrets: the notes repository is the deploy target, so the automatic `GITHUB_TOKEN` and
 OIDC are enough, and nothing at build time reaches a network service.
