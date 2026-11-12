@@ -37,6 +37,16 @@ import type { NoteSummary } from '../lib/snapshot-queries.ts';
 import { partLanguage, TAG_BROWSE_DATASET } from '../lib/translations.ts';
 import { requestByTag } from './snapshot-client.ts';
 
+/** A row's one-line height, used only until a rendered row measures itself. */
+const DEFAULT_ROW_HEIGHT = 24;
+
+/**
+ * `KeyboardEvent.key` values that scroll the list. These are input vocabulary —
+ * the names of keys on a keyboard — not chrome labels, so they are not
+ * translated and must not be resolved from the translation contract.
+ */
+const SCROLL_GESTURE_KEYS: readonly string[] = ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '];
+
 const root = document.querySelector<HTMLElement>('#tag-browser');
 if (root) install(root);
 
@@ -62,8 +72,19 @@ function install(root: HTMLElement): void {
   const entries: NoteSummary[] = [];
   let windowStart = 0;
   let windowEnd = 0;
-  /** Last measured row height, used only to size the released-range spacers. */
-  let rowHeight = 24;
+  /**
+   * The real height of every row this list has rendered, keyed by logical
+   * index. The list's titles wrap, so no single sample stands for the list:
+   * the released-range spacers and the estimate used when the viewport sits
+   * inside one are built from these measurements.
+   */
+  const rowHeights = new Map<number, number>();
+  let measuredHeightSum = 0;
+  let measuredHeightCount = 0;
+  /** Mean of the measured rows, for an index that has never been rendered. */
+  let meanRowHeight = DEFAULT_ROW_HEIGHT;
+  /** The viewport width the cache belongs to; a resize invalidates it. */
+  let measuredWidth = 0;
   let lastObservedScrollY = window.scrollY;
   /** Largest scroll delta since the last reposition, for the layout-scroll guard. */
   let pendingScrollDelta = 0;
@@ -104,6 +125,136 @@ function install(root: HTMLElement): void {
     ...results.querySelectorAll<HTMLElement>('li[aria-posinset]'),
   ];
 
+  /** A rendered row's height, or the mean of the measured rows until it has one. */
+  function heightOf(index: number): number {
+    return rowHeights.get(index) ?? meanRowHeight;
+  }
+
+  /** Estimated document height of a released logical range. */
+  function estimatedHeight(from: number, to: number): number {
+    let height = 0;
+    for (let index = from; index < to; index += 1) height += heightOf(index);
+    return height;
+  }
+
+  function clearMeasurements(): void {
+    rowHeights.clear();
+    measuredHeightSum = 0;
+    measuredHeightCount = 0;
+    meanRowHeight = DEFAULT_ROW_HEIGHT;
+  }
+
+  /** A width change rewraps titles, so every cached height is stale. */
+  function syncMeasurementWidth(): void {
+    if (measuredWidth === window.innerWidth) return;
+    measuredWidth = window.innerWidth;
+    clearMeasurements();
+  }
+
+  /**
+   * Record the real height of every row currently in the DOM.
+   *
+   * One batched rect read: the first read flushes layout and the rest observe
+   * the same pass. Called immediately after rows enter the DOM and before the
+   * spacers are resized; row heights do not depend on the spacers, so a first
+   * render already sizes them from measurements rather than a sample.
+   */
+  function rememberRenderedRows(): void {
+    const rows = numberedRows();
+    const rects = rows.map((row) => row.getBoundingClientRect());
+    for (let offset = 0; offset < rows.length; offset += 1) {
+      const height = rects[offset]!.height;
+      if (!(height > 0)) continue;
+      const index = Number(rows[offset]!.getAttribute('aria-posinset')) - 1;
+      const previous = rowHeights.get(index);
+      if (previous === undefined) {
+        rowHeights.set(index, height);
+        measuredHeightSum += height;
+        measuredHeightCount += 1;
+      } else {
+        measuredHeightSum += height - previous;
+        rowHeights.set(index, height);
+      }
+    }
+    if (measuredHeightCount > 0) meanRowHeight = measuredHeightSum / measuredHeightCount;
+  }
+
+  interface RenderedLayout {
+    rows: HTMLElement[];
+    rects: DOMRect[];
+    listTop: number;
+    listBottom: number;
+  }
+
+  /** One batched read of the rendered rows and the list's client box. */
+  function measureLayout(): RenderedLayout {
+    const rows = numberedRows();
+    const rects = rows.map((row) => row.getBoundingClientRect());
+    const list = results.getBoundingClientRect();
+    return { rows, rects, listTop: list.top, listBottom: list.bottom };
+  }
+
+  /**
+   * The logical index whose row covers a client-space point.
+   *
+   * Rendered rows are contiguous in logical order, so binary-searching their
+   * real rects identifies the row. A point inside a released range has no
+   * rect; it falls back to the same per-index heights that sized the spacer.
+   */
+  function indexAtClientY(clientY: number, layout: RenderedLayout, total: number): number {
+    if (layout.rows.length === 0) return 0;
+    if (clientY <= layout.listTop) return 0;
+    if (clientY >= layout.listBottom) return total - 1;
+    const firstRect = layout.rects[0]!;
+    const lastRect = layout.rects[layout.rects.length - 1]!;
+    if (clientY < firstRect.top) {
+      // Inside the before spacer: walk forward from the list's own top.
+      let top = layout.listTop;
+      for (let index = 0; index < windowStart; index += 1) {
+        const height = heightOf(index);
+        if (clientY < top + height) return index;
+        top += height;
+      }
+      return Math.max(0, windowStart - 1);
+    }
+    if (clientY >= lastRect.bottom) {
+      // Inside the after spacer: walk back from the list's own bottom.
+      let bottom = layout.listBottom;
+      for (let index = total - 1; index >= windowEnd; index -= 1) {
+        const height = heightOf(index);
+        if (clientY >= bottom - height) return index;
+        bottom -= height;
+      }
+      return Math.min(total - 1, windowEnd);
+    }
+    let low = 0;
+    let high = layout.rects.length - 1;
+    while (low < high) {
+      const middle = (low + high + 1) >> 1;
+      if (layout.rects[middle]!.top <= clientY) low = middle;
+      else high = middle - 1;
+    }
+    return Number(layout.rows[low]!.getAttribute('aria-posinset')) - 1;
+  }
+
+  /** A row's client top, measured when rendered and reconstructed in a spacer. */
+  function clientTopOf(index: number, layout: RenderedLayout, total: number): number {
+    const position = index + 1;
+    for (let offset = 0; offset < layout.rows.length; offset += 1) {
+      if (Number(layout.rows[offset]!.getAttribute('aria-posinset')) === position) {
+        return layout.rects[offset]!.top;
+      }
+    }
+    if (index < windowStart) {
+      let top = layout.listTop;
+      for (let before = 0; before < index; before += 1) top += heightOf(before);
+      return top;
+    }
+    let bottom = layout.listBottom;
+    for (let after = total - 1; after > index; after -= 1) bottom -= heightOf(after);
+    return bottom - heightOf(index);
+  }
+
   function rowFor(note: NoteSummary, position: number, total: number): HTMLLIElement {
     const item = document.createElement('li');
     // The DOM holds a window; these two attributes describe the complete
@@ -142,7 +293,7 @@ function install(root: HTMLElement): void {
           ? first
           : spacerFor('before', 0);
       if (!spacer.isConnected) results.prepend(spacer);
-      spacer.style.height = `${Math.max(0, Math.round(start * rowHeight))}px`;
+      spacer.style.height = `${Math.max(0, Math.round(estimatedHeight(0, start)))}px`;
     } else if (first instanceof HTMLElement && first.dataset['windowSpacer'] === 'before') {
       first.remove();
     }
@@ -154,7 +305,7 @@ function install(root: HTMLElement): void {
           ? last
           : spacerFor('after', 0);
       if (!spacer.isConnected) results.append(spacer);
-      spacer.style.height = `${Math.max(0, Math.round((total - end) * rowHeight))}px`;
+      spacer.style.height = `${Math.max(0, Math.round(estimatedHeight(end, total)))}px`;
     } else if (last instanceof HTMLElement && last.dataset['windowSpacer'] === 'after') {
       last.remove();
     }
@@ -176,11 +327,7 @@ function install(root: HTMLElement): void {
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const activePosition = active?.closest<HTMLElement>('[aria-posinset]')?.getAttribute('aria-posinset') ?? null;
 
-    const sample = results.querySelector<HTMLElement>('li[aria-posinset]');
-    if (sample !== null) {
-      const measured = sample.getBoundingClientRect().height;
-      if (measured > 0) rowHeight = measured;
-    }
+    syncMeasurementWidth();
 
     const fragment = document.createDocumentFragment();
     for (let index = range.start; index < range.end; index += 1) {
@@ -189,6 +336,7 @@ function install(root: HTMLElement): void {
     results.replaceChildren(fragment);
     windowStart = range.start;
     windowEnd = range.end;
+    rememberRenderedRows();
     updateSpacers(range.start, range.end, total);
     markWindowMutation();
 
@@ -220,6 +368,8 @@ function install(root: HTMLElement): void {
     }
     windowEnd = total;
     setSetsize(total);
+    syncMeasurementWidth();
+    rememberRenderedRows();
     updateSpacers(windowStart, total, total);
     markWindowMutation();
   }
@@ -254,17 +404,17 @@ function install(root: HTMLElement): void {
    * the viewport inside the rows it represents; at `scrollY 0` there is no
    * further upward event, so the window must be derived from the position.
    *
-   * The window covers the viewport plus at least one viewport of rendered rows
-   * on each side, so a spacer is replaced before it can enter the viewport.
-   * After a rebuild the row under the viewport top is put back at the same
-   * client coordinate, so the visible content does not jump.
+   * Rows wrap, so the position comes from the rendered rows' own rects and the
+   * window grows by a viewport of *measured* heights on each side; dividing
+   * one offset by one sampled height would let a tall row hide rows that are
+   * still visible. After a rebuild the row under the viewport top is put back
+   * at the same client coordinate, so the visible content does not jump.
    */
   function syncWindowToScroll(): void {
     const total = entries.length;
     const delta = pendingScrollDelta;
     pendingScrollDelta = 0;
     if (total <= TAG_WINDOW_SIZE) return;
-    const y = window.scrollY;
     // A small scroll produced by this list's own layout or by restoring focus
     // is not a reader request. A wheel/touch/key/scrollbar gesture bypasses
     // this, and so does a deliberate jump larger than the viewport (scrollTo).
@@ -272,32 +422,44 @@ function install(root: HTMLElement): void {
       return;
     }
 
-    const listTop = results.getBoundingClientRect().top + y;
-    const margin = Math.max(1, Math.ceil(window.innerHeight / rowHeight));
+    syncMeasurementWidth();
+    const layout = measureLayout();
+    if (layout.rows.length === 0) return;
+    const indexAt = (clientY: number): number => indexAtClientY(clientY, layout, total);
+    const anchor = indexAt(0);
+    const bottom = indexAt(window.innerHeight);
+
+    // One viewport of measured rows above the anchor and below the viewport
+    // bottom, so neither spacer can enter the viewport.
+    let wantedStart = anchor;
+    let covered = 0;
+    while (wantedStart > 0 && covered < window.innerHeight) {
+      wantedStart -= 1;
+      covered += heightOf(wantedStart);
+    }
+    let wantedEnd = bottom + 1;
+    covered = 0;
+    while (wantedEnd < total && covered < window.innerHeight) {
+      covered += heightOf(wantedEnd);
+      wantedEnd += 1;
+    }
+
     const maxStart = Math.max(0, total - TAG_WINDOW_SIZE);
-    const indexAt = (point: number): number => {
-      if (point <= listTop) return 0;
-      return Math.min(total - 1, Math.max(0, Math.floor((point - listTop) / rowHeight)));
-    };
-    const viewBottom = y + window.innerHeight;
-    const wantedStart = Math.max(0, indexAt(y) - margin);
-    const wantedEnd = Math.min(total, indexAt(viewBottom) + margin);
     // Cover both prefetch margins when 120 rows can; otherwise prefer the top.
     const start = Math.min(maxStart, Math.max(0, Math.min(wantedStart, wantedEnd - TAG_WINDOW_SIZE)));
     if (start >= windowStart && wantedEnd <= windowEnd) return;
 
-    const anchor = indexAt(y);
-    const anchorRow = results.querySelector<HTMLElement>(`[aria-posinset="${anchor + 1}"]`);
-    const anchorClientY =
-      anchorRow !== null ? anchorRow.getBoundingClientRect().top : listTop + anchor * rowHeight - y;
+    const anchorClientY = clientTopOf(anchor, layout, total);
     render(start);
     const moved = results.querySelector<HTMLElement>(`[aria-posinset="${anchor + 1}"]`);
     if (moved !== null) {
-      const drift = moved.getBoundingClientRect().top - anchorClientY;
-      // Replacement rows are sized from the same measurement as the spacers,
-      // so the anchor usually does not move. Correct real measurement drift,
-      // but do not cancel a smooth scroll for a sub-row rounding difference.
-      if (Math.abs(drift) >= rowHeight / 2) {
+      const rect = moved.getBoundingClientRect();
+      const drift = rect.top - anchorClientY;
+      // A replacement row is placed from its own measurement, so the anchor
+      // usually does not move. Correct real drift, but do not cancel a smooth
+      // scroll for a sub-row difference; half the row's own height is smaller
+      // than the jump a reader would notice.
+      if (Math.abs(drift) >= rect.height / 2) {
         window.scrollBy(0, drift);
         lastObservedScrollY = window.scrollY;
         pendingScrollDelta = 0;
@@ -330,7 +492,7 @@ function install(root: HTMLElement): void {
     { passive: true },
   );
   window.addEventListener('keydown', (event) => {
-    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+    if (SCROLL_GESTURE_KEYS.includes(event.key)) {
       markUserScroll();
       scheduleSync();
     }
@@ -358,6 +520,7 @@ function install(root: HTMLElement): void {
     entries.length = 0;
     windowStart = 0;
     windowEnd = 0;
+    clearMeasurements();
     lastUserScroll = Number.NEGATIVE_INFINITY;
     results.replaceChildren();
     markWindowMutation();

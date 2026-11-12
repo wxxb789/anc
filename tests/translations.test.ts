@@ -539,7 +539,14 @@ test('no module outside the contract holds a chrome string of its own', () => {
     const code = source
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^\s*\/\/.*$/gm, '')
-      .replace(/export const DEFAULT_SITE_TITLE = '[^']*';/, '');
+      .replace(/export const DEFAULT_SITE_TITLE = '[^']*';/, '')
+      // `SCROLL_GESTURE_KEYS` is the second value collision that is not a chrome
+      // string: these are `KeyboardEvent.key` values — keyboard key names are
+      // input vocabulary, not chrome labels — so `Home` is a key here, not the
+      // notes nav item's label. Excluded as one declaration rather than by
+      // exempting `tag-browser.ts`, so every other literal in that module is
+      // still scanned.
+      .replace(/const SCROLL_GESTURE_KEYS: readonly string\[\] = \[[^\]]*\];/, '');
     for (const [key, value] of literals) {
       for (const form of [`'${value}'`, `"${value}"`, `\`${value}\``, `>${value}<`]) {
         assert.ok(
