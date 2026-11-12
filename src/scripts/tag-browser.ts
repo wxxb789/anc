@@ -79,6 +79,26 @@ function install(root: HTMLElement): void {
    * inside one are built from these measurements.
    */
   const rowHeights = new Map<number, number>();
+  /**
+   * Fenwick prefix index over `rowHeights`.
+   *
+   * `heightTree` stores each measured row's height as measured and
+   * `countTree` stores 1 for that row, so the estimated height of the logical
+   * range `[from, to)` is `measuredHeight(from, to) + (to - from -
+   * measuredCount(from, to)) * meanRowHeight`. The range queries and the
+   * inverse "offset → index" descent are O(log n), which is what keeps a
+   * reposition independent of how far the window has moved: the linear walks
+   * that used to size the spacers grew with `windowStart`.
+   *
+   * Storing the raw height, not a delta from the mean, is deliberate. Rows that
+   * were rendered are exact at every mean; a mean change only moves the rows
+   * that have never been measured, so the structure never needs rewriting when
+   * a measurement lands. `heightCapacity` is the tree size, a power of two;
+   * index 0 is unused.
+   */
+  let heightTree = new Float64Array(1);
+  let countTree = new Int32Array(1);
+  let heightCapacity = 0;
   let measuredHeightSum = 0;
   let measuredHeightCount = 0;
   /** Mean of the measured rows, for an index that has never been rendered. */
@@ -130,11 +150,64 @@ function install(root: HTMLElement): void {
     return rowHeights.get(index) ?? meanRowHeight;
   }
 
-  /** Estimated document height of a released logical range. */
-  function estimatedHeight(from: number, to: number): number {
-    let height = 0;
-    for (let index = from; index < to; index += 1) height += heightOf(index);
-    return height;
+  /**
+   * Make room for `size` logical rows, rebuilding the trees from the retained
+   * measurements when the logical list outgrows the current capacity. Capacity
+   * doubles, so the rebuild is amortised O(1) per appended row.
+   */
+  function rebuildHeightIndex(size: number): void {
+    if (size <= heightCapacity) return;
+    let capacity = Math.max(1, heightCapacity);
+    while (capacity < size) capacity *= 2;
+    heightTree = new Float64Array(capacity + 1);
+    countTree = new Int32Array(capacity + 1);
+    heightCapacity = capacity;
+    for (const [index, height] of rowHeights) addMeasurement(index, height);
+  }
+
+  /** Fold one measured row into the trees. */
+  function addMeasurement(index: number, height: number): void {
+    for (let node = index + 1; node <= heightCapacity; node += node & -node) {
+      heightTree[node] += height;
+      countTree[node] += 1;
+    }
+  }
+
+  /** Estimated height of the logical rows `[0, end)`. */
+  function prefixHeight(end: number): number {
+    let measured = 0;
+    let measuredCount = 0;
+    for (let node = end; node > 0; node -= node & -node) {
+      measured += heightTree[node];
+      measuredCount += countTree[node];
+    }
+    return measured + (end - measuredCount) * meanRowHeight;
+  }
+
+  /**
+   * The logical index whose row covers `offset` pixels of estimated height
+   * from the list's top: the largest index whose row starts at or before the
+   * offset, clamped to the last row. Fenwick descent over both trees, O(log n).
+   */
+  function indexAtOffset(offset: number, size: number): number {
+    if (size <= 0 || offset <= 0) return 0;
+    let step = 1;
+    while (step * 2 <= heightCapacity) step *= 2;
+    let position = 0;
+    let measured = 0;
+    let measuredCount = 0;
+    for (; step > 0; step >>= 1) {
+      const next = position + step;
+      if (next > size) continue;
+      const nextMeasured = measured + heightTree[next];
+      const nextCount = measuredCount + countTree[next];
+      if (nextMeasured + (next - nextCount) * meanRowHeight <= offset) {
+        position = next;
+        measured = nextMeasured;
+        measuredCount = nextCount;
+      }
+    }
+    return Math.min(size - 1, position);
   }
 
   function clearMeasurements(): void {
@@ -142,6 +215,9 @@ function install(root: HTMLElement): void {
     measuredHeightSum = 0;
     measuredHeightCount = 0;
     meanRowHeight = DEFAULT_ROW_HEIGHT;
+    heightTree = new Float64Array(1);
+    countTree = new Int32Array(1);
+    heightCapacity = 0;
   }
 
   /** A width change rewraps titles, so every cached height is stale. */
@@ -152,29 +228,32 @@ function install(root: HTMLElement): void {
   }
 
   /**
-   * Record the real height of every row currently in the DOM.
+   * Record the real height of every rendered row that has none yet.
    *
-   * One batched rect read: the first read flushes layout and the rest observe
-   * the same pass. Called immediately after rows enter the DOM and before the
-   * spacers are resized; row heights do not depend on the spacers, so a first
-   * render already sizes them from measurements rather than a sample.
+   * A row is rendered from the same title at the same width every time, so a
+   * height already in `rowHeights` is still its height; a continuation at the
+   * tail therefore reads the ten rows it added, not the 120 the window holds.
+   * One batched read: the first read flushes layout and the rest observe the
+   * same pass. `render()` measures before the spacers resize, so a first
+   * render sizes them from measurements; the tail path sizes them first,
+   * because the rows that just entered are inside the window and cannot move
+   * a spacer — and a resize after the read would dirty the layout it flushed.
    */
   function rememberRenderedRows(): void {
-    const rows = numberedRows();
-    const rects = rows.map((row) => row.getBoundingClientRect());
-    for (let offset = 0; offset < rows.length; offset += 1) {
-      const height = rects[offset]!.height;
+    // Rows are appended at the tail, so the logical list outgrows the tree
+    // only by growing; `rebuildHeightIndex` doubles it. A list still inside
+    // one window allocates nothing, and the measurements it records in
+    // `rowHeights` are folded in by the first rebuild a spacer triggers.
+    if (heightCapacity > 0) rebuildHeightIndex(entries.length);
+    for (const row of numberedRows()) {
+      const index = Number(row.getAttribute('aria-posinset')) - 1;
+      if (rowHeights.has(index)) continue;
+      const height = row.getBoundingClientRect().height;
       if (!(height > 0)) continue;
-      const index = Number(rows[offset]!.getAttribute('aria-posinset')) - 1;
-      const previous = rowHeights.get(index);
-      if (previous === undefined) {
-        rowHeights.set(index, height);
-        measuredHeightSum += height;
-        measuredHeightCount += 1;
-      } else {
-        measuredHeightSum += height - previous;
-        rowHeights.set(index, height);
-      }
+      rowHeights.set(index, height);
+      measuredHeightSum += height;
+      measuredHeightCount += 1;
+      addMeasurement(index, height);
     }
     if (measuredHeightCount > 0) meanRowHeight = measuredHeightSum / measuredHeightCount;
   }
@@ -207,25 +286,11 @@ function install(root: HTMLElement): void {
     if (clientY >= layout.listBottom) return total - 1;
     const firstRect = layout.rects[0]!;
     const lastRect = layout.rects[layout.rects.length - 1]!;
-    if (clientY < firstRect.top) {
-      // Inside the before spacer: walk forward from the list's own top.
-      let top = layout.listTop;
-      for (let index = 0; index < windowStart; index += 1) {
-        const height = heightOf(index);
-        if (clientY < top + height) return index;
-        top += height;
-      }
-      return Math.max(0, windowStart - 1);
-    }
-    if (clientY >= lastRect.bottom) {
-      // Inside the after spacer: walk back from the list's own bottom.
-      let bottom = layout.listBottom;
-      for (let index = total - 1; index >= windowEnd; index -= 1) {
-        const height = heightOf(index);
-        if (clientY >= bottom - height) return index;
-        bottom -= height;
-      }
-      return Math.min(total - 1, windowEnd);
+    // A point in either spacer has no rect; the spacer's height is the prefix
+    // index for exactly those released rows, so the descent that built it
+    // answers the position without walking to the window.
+    if (clientY < firstRect.top || clientY >= lastRect.bottom) {
+      return indexAtOffset(clientY - layout.listTop, total);
     }
     let low = 0;
     let high = layout.rects.length - 1;
@@ -238,21 +303,16 @@ function install(root: HTMLElement): void {
   }
 
   /** A row's client top, measured when rendered and reconstructed in a spacer. */
-  function clientTopOf(index: number, layout: RenderedLayout, total: number): number {
+  function clientTopOf(index: number, layout: RenderedLayout): number {
     const position = index + 1;
     for (let offset = 0; offset < layout.rows.length; offset += 1) {
       if (Number(layout.rows[offset]!.getAttribute('aria-posinset')) === position) {
         return layout.rects[offset]!.top;
       }
     }
-    if (index < windowStart) {
-      let top = layout.listTop;
-      for (let before = 0; before < index; before += 1) top += heightOf(before);
-      return top;
-    }
-    let bottom = layout.listBottom;
-    for (let after = total - 1; after > index; after -= 1) bottom -= heightOf(after);
-    return bottom - heightOf(index);
+    // Both spacers are prefix heights, so a released row's top is the prefix
+    // up to it — independent of which side of the window it is on.
+    return layout.listTop + prefixHeight(index);
   }
 
   function rowFor(note: NoteSummary, position: number, total: number): HTMLLIElement {
@@ -286,6 +346,9 @@ function install(root: HTMLElement): void {
     // marker equals the row's logical position (`aria-posinset`), not a
     // window-local 1..n that would renumber on every shift.
     results.style.setProperty('--tag-window-start', String(start));
+    // Only a released range needs heights; a list that fits one window never
+    // builds the index.
+    if (start > 0 || end < total) rebuildHeightIndex(total);
     const first = results.firstElementChild;
     if (start > 0) {
       const spacer =
@@ -293,7 +356,7 @@ function install(root: HTMLElement): void {
           ? first
           : spacerFor('before', 0);
       if (!spacer.isConnected) results.prepend(spacer);
-      spacer.style.height = `${Math.max(0, Math.round(estimatedHeight(0, start)))}px`;
+      spacer.style.height = `${Math.max(0, Math.round(prefixHeight(start)))}px`;
     } else if (first instanceof HTMLElement && first.dataset['windowSpacer'] === 'before') {
       first.remove();
     }
@@ -305,7 +368,7 @@ function install(root: HTMLElement): void {
           ? last
           : spacerFor('after', 0);
       if (!spacer.isConnected) results.append(spacer);
-      spacer.style.height = `${Math.max(0, Math.round(estimatedHeight(end, total)))}px`;
+      spacer.style.height = `${Math.max(0, Math.round(prefixHeight(total) - prefixHeight(end)))}px`;
     } else if (last instanceof HTMLElement && last.dataset['windowSpacer'] === 'after') {
       last.remove();
     }
@@ -354,6 +417,10 @@ function install(root: HTMLElement): void {
    * window bound.
    */
   function appendAtTail(firstNew: number): void {
+    // A width check reads the layout viewport, so it runs while the list is
+    // still the previous frame's tree; after the row edits it would flush a
+    // layout that the measurement below has to flush again.
+    syncMeasurementWidth();
     const total = entries.length;
     const last = results.lastElementChild;
     if (last instanceof HTMLElement && last.dataset['windowSpacer'] === 'after') last.remove();
@@ -368,9 +435,16 @@ function install(root: HTMLElement): void {
     }
     windowEnd = total;
     setSetsize(total);
-    syncMeasurementWidth();
-    rememberRenderedRows();
+    // The rows just appended are inside the window, so they cannot move a
+    // spacer. Size the released ranges first and measure afterwards: the
+    // measurement's rect read then flushes the one layout the frame needs,
+    // instead of a layout the spacer resize immediately dirties again.
     updateSpacers(windowStart, total, total);
+    const releasedHeight = prefixHeight(windowStart);
+    rememberRenderedRows();
+    // Only a row that had never been measured — or a changed mean, which moves
+    // the unmeasured rows above the window — can alter that height.
+    if (prefixHeight(windowStart) !== releasedHeight) updateSpacers(windowStart, total, total);
     markWindowMutation();
   }
 
@@ -449,7 +523,7 @@ function install(root: HTMLElement): void {
     const start = Math.min(maxStart, Math.max(0, Math.min(wantedStart, wantedEnd - TAG_WINDOW_SIZE)));
     if (start >= windowStart && wantedEnd <= windowEnd) return;
 
-    const anchorClientY = clientTopOf(anchor, layout, total);
+    const anchorClientY = clientTopOf(anchor, layout);
     render(start);
     const moved = results.querySelector<HTMLElement>(`[aria-posinset="${anchor + 1}"]`);
     if (moved !== null) {
