@@ -409,28 +409,25 @@ test('the first and next pages are operable from the keyboard alone', async () =
   await page.close();
 }, 120_000);
 
-test('the enhanced list and the static list agree on the same membership', async () => {
+test('the enhanced list carries the complete membership and releases the static route', async () => {
   const page = await browser.newPage();
   await page.goto(`${site.origin}/tags/${TAG_KEY}/`, { waitUntil: 'load' });
   await page.click('#tag-browse-start');
   await page.waitForSelector('#tag-browser-results a');
-  // Selection must hide the static list, not merely sit beside it: the failure
-  // test's "the static list returns" wording only means something if the
-  // successful path takes it away.
+  // The static list is the no-JS route and the failure fallback; once page one
+  // has rendered, keeping its rows in the document costs page-side work on
+  // every continuation (measured with 10,000 hidden cards), so the enhanced
+  // path detaches it. The scripting-disabled test above still reads it whole.
   assert.equal(
-    await page.locator('#tag-static-list').isVisible(),
-    false,
-    'the static route stayed visible under the enhanced list',
+    await page.locator('#tag-static-list').count(),
+    0,
+    'the static route remained in the document under the enhanced list',
   );
   let collected = await seenSlugs(page);
   while (await page.locator('#tag-browse-more').isVisible()) {
     collected = await loadMore(page);
   }
-  // The static list stays in the DOM behind the enhanced region; reading it
-  // here compares the two renderings of one snapshot in one document.
-  const staticSlugs = await slugsInStaticList(page);
   assert.deepEqual([...collected].sort(), [...EXPECTED].sort());
-  assert.deepEqual(staticSlugs.sort(), [...collected].sort(), 'static and enhanced lists disagree');
   await page.close();
 }, 120_000);
 

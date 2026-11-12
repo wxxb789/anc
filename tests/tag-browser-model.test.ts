@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import { classifyTagPage, TAG_PAGE_SIZE } from '../src/lib/tag-browser-model.ts';
+import { classifyTagPage, TAG_PAGE_SIZE, TAG_WINDOW_SIZE, tagWindow } from '../src/lib/tag-browser-model.ts';
 
 const TAG = { key: 'gardening', label: 'Gardening' } as const;
 const NOTE = { slug: 'seedling', title: 'Seedling', language: 'en' } as const;
@@ -47,4 +47,16 @@ test('a known tag with rows keeps its continuation, and exhaustion is a null cur
 
 test('the browser page size is a reader-chosen constant', () => {
   assert.equal(TAG_PAGE_SIZE, 10);
+});
+
+test('a window covers the whole collection when it is smaller than the bound', () => {
+  assert.deepEqual(tagWindow(0, 0), { start: 0, end: 0 });
+  assert.deepEqual(tagWindow(21, 0), { start: 0, end: 21 });
+  assert.deepEqual(tagWindow(21, 100), { start: 0, end: 21 });
+});
+
+test('a window at or beyond the tail is clamped to the last full page', () => {
+  assert.deepEqual(tagWindow(1_000, 1_000), { start: 1_000 - TAG_WINDOW_SIZE, end: 1_000 });
+  assert.deepEqual(tagWindow(1_000, 400), { start: 400, end: 400 + TAG_WINDOW_SIZE });
+  assert.deepEqual(tagWindow(1_000, -5), { start: 0, end: TAG_WINDOW_SIZE });
 });
