@@ -658,7 +658,10 @@ Run the check against any origin. It is read-only (GET only, no credentials), di
 snapshot and WASM names by following the served page → layout chunk → worker chunk chain rather
 than hardcoding a content hash, prints PASS/FAIL per assertion with the observed status,
 `Content-Type`, `Content-Encoding`, `Cache-Control`, byte length, and parsed file magic, and exits
-non-zero on any failure:
+non-zero on any failure. A JavaScript asset is accepted as either `application/javascript` or
+`text/javascript`, including the worker the client instantiates; a worker served as anything else
+fails the chain. A tag index with no tags passes only when it serves the supported empty state —
+the check does not invent a tag route to follow:
 
 ```bash
 node scripts/check-deployed-site.ts --origin https://notes.example.org/

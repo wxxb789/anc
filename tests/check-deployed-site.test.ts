@@ -9,6 +9,10 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { fileURLToPath } from 'node:url';
 import { test } from 'vitest';
 import {
   DeployedCheckError,
@@ -60,6 +64,110 @@ const TAG_INDEX_HTML = `<html><head><title>Tags</title></head><body>
 const TAG_HTML = `<html><head><title>Tag: agent</title></head><body>
 <div class="note-grid"><article class="note-card"><h2>First note</h2></article></div>
 </body></html>`;
+
+const EMPTY_TAG_INDEX_HTML = `<html><head><title>Tags</title></head><body>
+<div class="section-heading"><h1 id="tags-title">Tags</h1><span>0 tags</span></div>
+<p class="empty-state">This site has no tags yet.</p>
+</body></html>`;
+
+const EMPTY_TAG_STATE = /PASS tag-index — .*tag-routes=0, empty-state present/;
+
+const SCRIPT = fileURLToPath(new URL('../scripts/check-deployed-site.ts', import.meta.url));
+
+interface ServedFixture {
+  contentType: string;
+  body: string | Uint8Array;
+}
+
+interface SiteOptions {
+  scriptContentType?: string;
+  workerContentType?: string;
+  tagIndexHtml?: string;
+}
+
+const SQLITE_HEADER = new TextEncoder().encode('SQLite format 3\u0000');
+
+function siteRoutes(options: SiteOptions = {}): Record<string, ServedFixture> {
+  const scriptContentType = options.scriptContentType ?? 'application/javascript; charset=utf-8';
+  return {
+    '/': { contentType: 'text/html; charset=utf-8', body: ROOT_HTML },
+    '/_astro/theme-init.CZu62CeA.js': { contentType: scriptContentType, body: '/* theme */' },
+    '/_astro/Layout.astro_astro_type_script_index_0_lang.CSj7qfff.js': {
+      contentType: scriptContentType,
+      body: LAYOUT_JS,
+    },
+    '/_astro/snapshot-worker-BVa-dMgA.js': {
+      contentType: options.workerContentType ?? scriptContentType,
+      body: WORKER_JS,
+    },
+    [`/data/site.${SNAPSHOT}.sqlite`]: { contentType: 'application/octet-stream', body: SQLITE_HEADER },
+    [`/wasm/sqlite3.${WASM}.wasm`]: {
+      contentType: 'application/wasm',
+      body: new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]),
+    },
+    '/tags/': { contentType: 'text/html; charset=utf-8', body: options.tagIndexHtml ?? TAG_INDEX_HTML },
+    '/tags/agent/': { contentType: 'text/html; charset=utf-8', body: TAG_HTML },
+    '/notes/first-note/': {
+      contentType: 'text/html; charset=utf-8',
+      body: '<html><head><title>First note</title></head><body></body></html>',
+    },
+  };
+}
+
+async function serve(
+  routes: Record<string, ServedFixture>,
+): Promise<{ origin: string; close: () => Promise<void> }> {
+  const server = createServer((request, response) => {
+    const path = (request.url ?? '/').split('?')[0];
+    const fixture = routes[path];
+    if (fixture === undefined) {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('not found');
+      return;
+    }
+    response.writeHead(200, { 'content-type': fixture.contentType });
+    response.end(fixture.body);
+  });
+  const listening = Promise.withResolvers<void>();
+  server.listen(0, '127.0.0.1', listening.resolve);
+  await listening.promise;
+  const { port } = server.address() as AddressInfo;
+  return {
+    origin: `http://127.0.0.1:${port}`,
+    close: async () => {
+      const closing = Promise.withResolvers<void>();
+      server.close((error) => (error ? closing.reject(error) : closing.resolve()));
+      await closing.promise;
+    },
+  };
+}
+
+/** Run the real CLI against the fixture; stdout and stderr are the assertion message. */
+async function runCheck(origin: string): Promise<{ status: number | null; output: string }> {
+  const child = spawn(process.execPath, [SCRIPT, '--origin', origin], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', (chunk: Buffer) => {
+    output += chunk;
+  });
+  child.stderr.on('data', (chunk: Buffer) => {
+    output += chunk;
+  });
+  const completion = Promise.withResolvers<number | null>();
+  child.on('error', completion.reject);
+  child.on('close', completion.resolve);
+  return { status: await completion.promise, output };
+}
+
+async function checkSite(options: SiteOptions): Promise<{ status: number | null; output: string }> {
+  const site = await serve(siteRoutes(options));
+  try {
+    return await runCheck(site.origin);
+  } finally {
+    await site.close();
+  }
+}
 
 test('parseArguments accepts a bare origin and optional timeout', () => {
   assert.deepEqual(parseArguments(['--origin', 'https://example.org/']), {
@@ -188,4 +296,29 @@ test('hasNonEmptyNoteList requires both the grid and a card inside it', () => {
 
 test('findNoteRoutes returns unique note routes and ignores other links', () => {
   assert.deepEqual(findNoteRoutes(ROOT_HTML), ['/notes/first-note/', '/notes/second-note/']);
+});
+
+test('a site serving JavaScript as text/javascript passes every asset check', async () => {
+  const result = await checkSite({ scriptContentType: 'text/javascript; charset=utf-8' });
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, /PASS hashed-asset — .*content-type=text\/javascript/);
+  assert.match(result.output, /PASS asset-chain — .*snapshot-worker-BVa-dMgA\.js/);
+  assert.match(result.output, /9 passed, 0 failed/);
+});
+
+test('a worker served as text/plain fails the asset chain', async () => {
+  const result = await checkSite({ workerContentType: 'text/plain; charset=utf-8' });
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(
+    result.output,
+    /FAIL asset-chain — snapshot worker \/_astro\/snapshot-worker-BVa-dMgA\.js is not a JavaScript module: .*content-type=text\/plain/,
+  );
+});
+
+test('a tag index with the supported empty state passes without a tag route', async () => {
+  const result = await checkSite({ tagIndexHtml: EMPTY_TAG_INDEX_HTML });
+  assert.equal(result.status, 0, result.output);
+  assert.match(result.output, EMPTY_TAG_STATE);
+  assert.doesNotMatch(result.output, /FAIL tag-route —/);
+  assert.match(result.output, /8 passed, 0 failed/);
 });

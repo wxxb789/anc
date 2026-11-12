@@ -115,6 +115,11 @@ export function findTagRoutes(tagIndexHtml: string): string[] {
   return [...routes];
 }
 
+/** The tag index renders the supported empty state instead of a facet list. */
+export function hasEmptyFacetState(tagIndexHtml: string): boolean {
+  return /<p\b[^>]*class="[^"]*\bempty-state\b[^"]*"/i.test(tagIndexHtml);
+}
+
 /** The static tag page renders at least one note card inside its grid. */
 export function hasNonEmptyNoteList(html: string): boolean {
   return (
@@ -161,6 +166,22 @@ export function isPlausibleWasmContentType(value: string | undefined): boolean {
   if (value === undefined) return false;
   const type = value.split(';')[0].trim().toLowerCase();
   return type === 'application/wasm' || type === 'application/octet-stream';
+}
+
+const JAVASCRIPT_CONTENT_TYPES: Readonly<Record<string, true>> = {
+  'application/javascript': true,
+  'text/javascript': true,
+};
+
+/**
+ * A media type a static host may honestly use for a JavaScript asset.
+ *
+ * Both types are registered and both are accepted by browsers for classic and
+ * module scripts; this repository's own fixtures serve `text/javascript`.
+ */
+export function isPlausibleJavaScriptContentType(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  return JAVASCRIPT_CONTENT_TYPES[value.split(';')[0].trim().toLowerCase()] === true;
 }
 
 /**
@@ -322,17 +343,18 @@ async function discover(
     return undefined;
   };
 
-  const snapshot = findWithSource(findSnapshotUrl);
-  const wasm = findWithSource(findWasmUrl);
-
-  if (snapshot === undefined || wasm === undefined) {
-    const worker = findWithSource(findWorkerChunk);
-    if (worker !== undefined) {
-      const workerUrl = new URL(worker.value, worker.sourceUrl).href;
-      const asset = await probe(workerUrl, timeoutMs);
-      chain.push(new URL(workerUrl).pathname);
-      sources.push({ sourceUrl: workerUrl, text: asset.text });
+  const worker = findWithSource(findWorkerChunk);
+  if (worker !== undefined) {
+    const workerUrl = new URL(worker.value, worker.sourceUrl).href;
+    const asset = await probe(workerUrl, timeoutMs);
+    chain.push(new URL(workerUrl).pathname);
+    if (asset.status !== 200 || !isPlausibleJavaScriptContentType(contentType(asset))) {
+      throw new DeployedCheckError(
+        `snapshot worker ${new URL(workerUrl).pathname} is not a JavaScript module: ` +
+          `${describe(asset)} (followed ${chain.join(' -> ')})`,
+      );
     }
+    sources.push({ sourceUrl: workerUrl, text: asset.text });
   }
 
   const texts = sources.map((source) => source.text);
@@ -431,18 +453,22 @@ async function main(argv: readonly string[]): Promise<number> {
       const cache = hashed.probe.headers.get('cache-control') ?? '(none)';
       record(
         'hashed-asset',
-        hashed.probe.status === 200 && /^application\/javascript\b/i.test(contentType(hashed.probe) ?? ''),
+        hashed.probe.status === 200 && isPlausibleJavaScriptContentType(contentType(hashed.probe)),
         `${describe(hashed.probe)} immutable=${/\bimmutable\b/i.test(cache) ? 'yes' : 'no'}`,
       );
     }
   }
 
   const tagIndex = await probe(`${origin}/tags/`, timeoutMs);
-  const tagRoutes = tagIndex.status === 200 && isHtml(tagIndex) ? findTagRoutes(tagIndex.text) : [];
+  const tagIndexOk = tagIndex.status === 200 && isHtml(tagIndex);
+  const tagRoutes = tagIndexOk ? findTagRoutes(tagIndex.text) : [];
+  const tagEmpty = tagRoutes.length === 0 && hasEmptyFacetState(tagIndex.text);
   record(
     'tag-index',
-    tagIndex.status === 200 && isHtml(tagIndex) && tagRoutes.length > 0,
-    `${describe(tagIndex)} tag-routes=${tagRoutes.length}`,
+    tagIndexOk && (tagRoutes.length > 0 || tagEmpty),
+    `${describe(tagIndex)} tag-routes=${tagRoutes.length}${
+      tagRoutes.length === 0 ? `, empty-state ${tagEmpty ? 'present' : 'absent'}` : ''
+    }`,
   );
 
   if (tagRoutes.length > 0) {
@@ -455,8 +481,6 @@ async function main(argv: readonly string[]): Promise<number> {
         hasNonEmptyNoteList(tag.text) ? 'non-empty' : 'empty-or-absent'
       }`,
     );
-  } else {
-    record('tag-route', false, 'skipped: /tags/ listed no tag route to follow');
   }
 
   const noteRoutes = findNoteRoutes(root.text);
