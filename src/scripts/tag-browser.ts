@@ -177,7 +177,10 @@ function install(root: HTMLElement): void {
   function prefixHeight(end: number): number {
     let measured = 0;
     let measuredCount = 0;
-    for (let node = end; node > 0; node -= node & -node) {
+    // A tree smaller than `end` cannot hold a measurement for the rows past
+    // its capacity; those rows are unmeasured, which is exactly what the mean
+    // term below adds. A cleared index is therefore still total.
+    for (let node = Math.min(end, heightCapacity); node > 0; node -= node & -node) {
       measured += heightTree[node];
       measuredCount += countTree[node];
     }
@@ -191,6 +194,11 @@ function install(root: HTMLElement): void {
    */
   function indexAtOffset(offset: number, size: number): number {
     if (size <= 0 || offset <= 0) return 0;
+    // An absent tree holds no measurement at all, so every row is unmeasured
+    // and the mean describes the whole range. Without this the descent below
+    // starts past the arrays, compares `undefined`, and answers row 0 at every
+    // offset — which renders the head of the list under a reader scrolled deep.
+    if (heightCapacity === 0) return Math.min(size - 1, Math.floor(offset / meanRowHeight));
     let step = 1;
     while (step * 2 <= heightCapacity) step *= 2;
     let position = 0;
@@ -497,6 +505,16 @@ function install(root: HTMLElement): void {
     }
 
     syncMeasurementWidth();
+    // A width change cleared every height *and* the index itself, and both
+    // queries below are descents over that index. Rebuild it around the rows
+    // that are still rendered — they have already relaid out at the new width,
+    // so their heights are the current ones and their mean replaces the
+    // default — before either query runs. Invalidation stays in
+    // `syncMeasurementWidth`; re-establishing capacity is the query's job.
+    if (heightCapacity === 0) {
+      rebuildHeightIndex(total);
+      rememberRenderedRows();
+    }
     const layout = measureLayout();
     if (layout.rows.length === 0) return;
     const indexAt = (clientY: number): number => indexAtClientY(clientY, layout, total);
