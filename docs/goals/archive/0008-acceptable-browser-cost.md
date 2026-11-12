@@ -336,3 +336,69 @@ Not opened: a goal for the warm-preview difference. The 2026-11-11 review of thi
 found it to be two instruments' clocks rather than a product regression, with warm preview at
 parity on the page clock; the remaining work on those two numbers is the global-graph query
 and the tag-list DOM, tracked on the performance board rather than as a preview regression.
+
+## Addendum 2026-11-12 — the two costs this goal left open
+
+The completion record above named two costs it did not fix: tag browsing at 292-295 ms p95
+over 1,000 continuations at 10,000 notes, and the global graph's first open at 356.5-381.7 ms
+end-to-end. Both were tracked on the performance board as work items rather than as preview
+regressions. They landed together in PR #46 (squash `d48dc19`, base `97d6565`).
+
+### What changed
+
+- **Tag list** — the enhanced list renders a window of `TAG_WINDOW_SIZE = 120` logical rows and
+  positions it from scroll geometry, with at least one viewport of measured heights above and
+  below the viewport so no spacer can enter it. Every rendered row carries
+  `aria-setsize`/`aria-posinset` and the list's counter starts at `--tag-window-start`, so the
+  visible marker, the ARIA position and the logical position agree. The static no-JS route is
+  detached after the first successful page and restored on any failure path, which also stops
+  10,000 hidden nodes from costing a layout on every continuation.
+- **Row geometry** — titles wrap, so row heights differ. Positioning reads the rendered rows'
+  rects and keeps a per-index height index (two Fenwick trees: heights and a count of measured
+  rows) so the released-range spacers and the "which row covers this offset" query are O(log n)
+  in the logical position instead of O(n). A width change invalidates every height and rebuilds
+  the index around the rows still in the DOM before the same pass queries it.
+- **Global graph** — `globalGraph()` asks SQLite for candidates at or above the 60th-highest
+  degree instead of materialising every node row plus a corpus-wide degree aggregate.
+  `rankGlobal` remains the single ordering authority, including the title/slug tie-break;
+  corpora no larger than the limit, and degree sets too small to fill it, fall back to the full
+  candidate list so isolated notes are never dropped from the title-ordered remainder.
+
+### Measured
+
+Same host as the 0008 campaign (4 vCPU / 7.7 GiB), Chrome 157, Pixel 7 emulation, CPU throttle
+4x on the page target, loopback network, seeded corpus (seed 7), sparse topology. The
+before-column is this goal's own recorded campaign; the after-column is the packaged tarball of
+the merged tree, measured by the same probe, twice each for 1,000 and once for 10,000.
+
+| measurement | before (0.0.3) | after (PR #46) |
+| --- | --- | --- |
+| Tag continuation p95, 1,000 notes | 10.1 ms at 100 rendered rows growing to 57.2 ms at 1,000 | **22.7 ms**, growth 0.94x |
+| Tag continuation p95, 10,000 notes | 292-295 ms p95 over 1,000 continuations | **24.3 ms**, growth 0.64x |
+| Rendered rows at 10,000 notes | grows with the list (2,510 at position 2,510) | **121** (120 rows + 1 spacer) |
+| Global graph warm Worker operation, 10,000 | 224.5 ms | **40.3 p50 / 50.4 p95 ms** (card bound 60) |
+| Global graph first unfiltered end-to-end, 10,000 | 356.5-381.7 ms | 263.0 ms |
+
+The drawn global set is identical to the pre-change algorithm on every corpus and tag
+(`eq-graph.mjs`: unfiltered and five tags over the 10,000-note atlas, plus a dense-degree-tie
+corpus and a mixed corpus; every row `equal: true`). `tests/graph-global-bounded.test.ts`
+compares the bounded result against the pre-change algorithm shape, including a degree tie that
+straddles the cutoff and a title pair (astral U+20000 versus PUA U+E000) that sorts differently
+under SQLite's BINARY collation than under JavaScript's UTF-16 comparison.
+
+### Limits
+
+- Chrome-family mobile emulation and CPU throttle on the page target only, as in this goal's own
+  campaign; no hardware device, no mobile-network claim, no Worker-heap or total-peak memory
+  figure.
+- The probe harness stops at 250 continuations, so the 10,000-note run covers logical position
+  2,510. The bound that matters there is the growth ratio, and it is flat.
+- One A/B round in a six-round comparison measured p95 57.0 ms while host load rose from 1.46 to
+  2.53; the same tarball measured 23.5-36.6 ms in the other rounds and the pre-change build
+  itself reached 63.9 ms in an earlier round. It is recorded here rather than averaged away.
+- In-page find (Ctrl+F) reaches only the rendered window, which is the documented cost of a
+  window; the complete list remains reachable by scrolling and exists in the static route.
+- Chrome's accessibility tree did not expose `posinset` for the rendered `li` elements in the
+  probe's AX snapshot although the DOM attributes are present and contiguous 1..n. What a
+  screen reader actually receives from a windowed `ol` is a separate, open question with its own
+  card; this record claims only the DOM contract.

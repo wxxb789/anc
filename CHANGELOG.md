@@ -7,6 +7,21 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+### Changed
+
+- The tag list renders a window of 120 logical rows positioned from scroll geometry instead of
+  appending each page to the DOM. At 10,000 notes a continuation is **24.3 ms p95** against
+  292-295 ms in `0.0.3`, with a flat growth ratio (0.64x) and 121 rendered rows regardless of
+  position; `aria-posinset`/`aria-setsize` and the visible numbering still describe the whole
+  list, and the static no-JS route stays complete. Row heights are measured per row (titles
+  wrap) through a Fenwick index, so positioning costs O(log n) rather than O(n) in the logical
+  position.
+- `globalGraph()` asks SQLite for candidates at or above the 60th-highest degree rather than
+  materialising every node row and a corpus-wide degree aggregate: the warm Worker operation at
+  10,000 notes falls from 224.5 ms to 40.3 p50 / 50.4 p95 ms, and the drawn set is identical to
+  the previous algorithm for every corpus and tag. Evidence and limits in the
+  [0008 addendum](docs/goals/archive/0008-acceptable-browser-cost.md).
+
 ## [0.0.3] - 2026-11-10
 
 ### Added
