@@ -614,20 +614,65 @@ Cloudflare Pages' format. A host that ignores that file still applies the Conten
 from the `<meta>` tag in every page, except `frame-ancestors`, which a meta tag cannot carry;
 the other three headers are served only if you configure them on that host.
 
-**What each documented host actually provides.** Measured on this project's own site
-(`https://wxxb789.github.io`, GitHub Pages, 2026-11-11), not inferred from either vendor's
-documentation:
+**What each documented host actually provides.** The GitHub Pages column was measured from the
+live origin on **2026-11-12** with `node scripts/check-deployed-site.ts --origin
+https://wxxb789.github.io/`; the header values below are the ones the origin returned, not what
+either vendor says it does. The Cloudflare Pages column is **not measured**: this project has no
+Cloudflare-hosted copy of its site to read, and documentation is not a measurement.
 
-| | Cloudflare Pages | GitHub Pages |
+| Behaviour | GitHub Pages (`https://wxxb789.github.io`, 2026-11-12) | Cloudflare Pages |
 | --- | --- | --- |
-| `dist/_headers` | applied | **ignored**; only the page's CSP `<meta>` survives |
-| `Cache-Control: public, max-age=31536000, immutable` for `/_astro/*` | applied | not applied; observed `max-age=600` |
-| Compression | negotiated, `br` included | gzip for text types; the snapshot arrives as `application/octet-stream` with no `Content-Encoding` |
-| `/data/site.<sha256>.sqlite` | gzip or br | **uncompressed**: 40,960 B on a two-note site, where the 0008 campaign's 10,000-note corpus is 3,872 KiB decoded |
+| `dist/_headers` applied | **no** — served as an ordinary file; no `Content-Security-Policy` response header | not measured |
+| CSP reachable by a reader | page `<meta>` only; `frame-ancestors` cannot be carried there | not measured |
+| `Cache-Control` on `/` | `max-age=600` | not measured |
+| `Cache-Control` on hashed `/_astro/*` | `max-age=600`; `immutable` is **not** applied | not measured |
+| `Cache-Control` on `/data/*.sqlite` | `max-age=600` | not measured |
+| `Cache-Control` on `/wasm/*.wasm` | `max-age=600` | not measured |
+| Compression, `Accept-Encoding: gzip, deflate, br` | `gzip` for HTML, JS, CSS, the snapshot, and the WASM module | not measured |
+| Compression, `Accept-Encoding: br` alone | `identity` — brotli is not offered | not measured |
+| `Content-Type` of `/data/site.<sha256>.sqlite` | `application/octet-stream` | not measured |
+| `Content-Type` of `/wasm/sqlite3.<sha256>.wasm` | `application/wasm` | not measured |
+| Snapshot transfer on this site | `gzip`: 2,725 B on the wire, 40,960 B decoded, magic `SQLite format 3\0` | not measured |
+| WASM transfer on this site | `gzip`: 406,761 B on the wire, 868,907 B decoded, magic `\0asm` | not measured |
+
+`_headers` is written in Cloudflare Pages' format, so on that host the immutable
+`Cache-Control` and the response-header CSP are the behaviours it is written to produce — but the
+column stays "not measured" until a Cloudflare-hosted copy is read with the same command.
+
+**The Action's documented target is GitHub Pages.** `action.yml` builds the artifact and stops;
+the workflow below hands that artifact to `actions/upload-pages-artifact` and
+`actions/deploy-pages`. Cloudflare Pages is a supported alternative static host for the same
+`dist/`, not a second deployment path in these docs.
+
+The 2026-11-11 hand check reported the snapshot as uncompressed, and that reading is reproducible:
+a request that sends no `Accept-Encoding` (curl's default) receives the 40,960 B body with
+`Content-Encoding` absent. A browser — and this check — sends `Accept-Encoding: gzip, deflate, br`
+and receives the same bytes `gzip`-encoded. Both facts are measured; only the second is what a
+reader's browser receives.
 
 Nothing breaks on either host — the runtime `fetch`es the snapshot from the same origin and reads
 the same bytes — but transfer cost and the free security headers differ. If either matters, put
 Cloudflare Pages in front or set the headers on the host yourself.
+
+Run the check against any origin. It is read-only (GET only, no credentials), discovers the
+snapshot and WASM names by following the served page → layout chunk → worker chunk chain rather
+than hardcoding a content hash, prints PASS/FAIL per assertion with the observed status,
+`Content-Type`, `Content-Encoding`, `Cache-Control`, byte length, and parsed file magic, and exits
+non-zero on any failure:
+
+```bash
+node scripts/check-deployed-site.ts --origin https://notes.example.org/
+```
+
+`_headers` support and brotli negotiation are reported as `INFO`, not asserted: a host that
+ignores `_headers` is not failing, it is answering the question the matrix asks.
+
+Baseline against this project's GitHub Pages site (2026-11-12): 9 assertions passed, 0 failed.
+`/` was 200 `text/html; charset=utf-8`, gzip, `max-age=600`; the snapshot was 200
+`application/octet-stream`, gzip, `max-age=600`, with `SQLite format 3\0`; the WASM module was
+200 `application/wasm`, gzip, `\0asm`; `/tags/` listed 6 routes and the first tag page rendered a
+non-empty note grid; a note route returned 200 with a title. `_headers` produced no CSP response
+header, and brotli was not negotiated.
 
 A rough GitHub Pages workflow, given the four caveats above:
 
