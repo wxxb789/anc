@@ -109,7 +109,7 @@
     "aws4fetch": "1.0.20",
     "css-tree": "3.2.1",
     "github-slugger": "^2.0.0",
-    "happy-dom": "20.14.5",
+    "happy-dom": "21.0.4",
     "mermaid": "12.2.0",
     "pagefind": "^1.6.0",
     "prismjs": "^1.30.0",
