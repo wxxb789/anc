@@ -510,6 +510,17 @@ main:focus:not(:focus-visible) {
   border-bottom: 1px solid var(--color-line);
 }
 
+/*
+ * The static no-JS route is detached once page one renders so its rows stop
+ * costing page-side work on every continuation; while the first page loads it
+ * is only hidden, and 10,000 hidden nodes still added 12.3 → 24.2 ms p50 to a
+ * dispatch in a ballast probe. `content-visibility: hidden` skips that subtree
+ * for the one render where the element is still in the document.
+ */
+#tag-static-list[hidden] {
+  content-visibility: hidden;
+}
+
 /* Text, not a badge. Same treatment as the facet count, which is the same
    information in the same relationship to a heading — one rule rather than two
    that would drift. */
@@ -517,6 +528,30 @@ main:focus:not(:focus-visible) {
 .relations-count {
   color: var(--color-muted);
   font-size: var(--text-sm);
+}
+
+/*
+ * The enhanced tag list renders a *window* of the logical collection, so the
+ * browser's own 1..n numbering would restart at every window shift. The counter
+ * starts where the window does, which makes the visible number equal to the
+ * row's logical position — the same number `aria-posinset` carries to assistive
+ * technology. A spacer stands in for the rows that are not in the DOM; it takes
+ * no number and draws no marker.
+ */
+#tag-browser-results {
+  counter-reset: tag-row var(--tag-window-start, 0);
+}
+
+#tag-browser-results > li[aria-posinset] {
+  counter-increment: tag-row;
+}
+
+#tag-browser-results > li[aria-posinset]::marker {
+  content: counter(tag-row) '. ';
+}
+
+#tag-browser-results > li[data-window-spacer] {
+  list-style: none;
 }
 
 /* ---------------------------------------------------------------- prose -- */

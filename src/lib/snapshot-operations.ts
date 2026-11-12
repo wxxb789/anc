@@ -21,6 +21,15 @@ import {
 } from './snapshot-queries.ts';
 import { rankGlobal, inducedEdges, selectLocal, GLOBAL_NODE_LIMIT, type SelectionEdge } from './graph-selection.ts';
 
+/** A candidate row plus the degree the global ranking reads. */
+interface RankedNode {
+  id: number;
+  slug: string;
+  title: string;
+  language: string;
+  degree: number;
+}
+
 /** Runs one fixed statement with bound parameters and returns its rows. */
 export interface SnapshotDb {
   select(sql: string, params?: readonly unknown[]): Record<string, unknown>[];
@@ -162,27 +171,54 @@ export function localGraph(db: SnapshotDb, slug: string): LocalGraphSelection | 
  * The ranked global graph, optionally restricted to one tag's members.
  *
  * Ranking has one authority: `rankGlobal` orders by degree in the candidate
- * graph, descending, then title/slug. The unfiltered case takes degrees from
- * one aggregate over the edge set; the filtered case takes the tag's member
- * rows and their in-tag degrees from tag-scoped statements, so filtering never
- * pulls the corpus' edge rows into JS. Only after the drawn set is chosen are
- * the directed edges among it read.
+ * graph, descending, then title/slug. The SQL prefilter returns rows only for
+ * nodes whose degree can still reach the drawn set: the materialised degree
+ * rows are small integers, the cutoff is the 60th-highest degree, and every
+ * excluded node has a strictly lower degree than all 60 selected. `rankGlobal`
+ * still chooses membership and order among the returned rows, including the
+ * title/slug tie-break, so SQLite's BINARY text order cannot change the result.
+ * Only after the drawn set is chosen are the directed edges among it read.
+ *
+ * Two cases fall back to the full candidate list rather than the prefilter:
+ * a corpus no larger than the limit (every node is drawn) and a degree set too
+ * small to fill the limit (isolated nodes are absent from the aggregate, so
+ * they would otherwise be missing from the title-ordered remainder).
  */
 export function globalGraph(db: SnapshotDb, tagKey?: string | null): GraphSelection {
   const filtered = tagKey !== undefined && tagKey !== null;
-  const candidates = db
-    .select(filtered ? SNAPSHOT_QUERIES.tagNodes : SNAPSHOT_QUERIES.allNodes, filtered ? [tagKey] : [])
-    .map(selectionNode);
-  const degrees = degreeMap(
-    db.select(filtered ? SNAPSHOT_QUERIES.tagNodeDegrees : SNAPSHOT_QUERIES.nodeDegrees, filtered ? [tagKey] : []),
-  );
+  const params = filtered ? [tagKey] : [];
+  const countRow = db.select(
+    filtered ? SNAPSHOT_QUERIES.tagMemberCount : SNAPSHOT_QUERIES.nodeCount,
+    params,
+  )[0];
+  const candidateCount = Number(countRow?.['count'] ?? 0);
 
-  const ranked = rankGlobal(candidates, (node) => degrees.get(node.id) ?? 0);
+  let candidates: RankedNode[] | undefined;
+  if (candidateCount > GLOBAL_NODE_LIMIT) {
+    const rows = db.select(
+      filtered ? SNAPSHOT_QUERIES.globalRankedTagNodes : SNAPSHOT_QUERIES.globalRankedNodes,
+      filtered ? [tagKey, GLOBAL_NODE_LIMIT] : [GLOBAL_NODE_LIMIT],
+    );
+    if (rows.length >= GLOBAL_NODE_LIMIT) {
+      candidates = rows.map((row) => ({ ...selectionNode(row), degree: Number(row['degree']) }));
+    }
+  }
+  if (candidates === undefined) {
+    const degrees = degreeMap(
+      db.select(filtered ? SNAPSHOT_QUERIES.tagNodeDegrees : SNAPSHOT_QUERIES.nodeDegrees, params),
+    );
+    candidates = db
+      .select(filtered ? SNAPSHOT_QUERIES.tagNodes : SNAPSHOT_QUERIES.allNodes, params)
+      .map(selectionNode)
+      .map((node) => ({ ...node, degree: degrees.get(node.id) ?? 0 }));
+  }
+
+  const ranked = rankGlobal(candidates, (node) => node.degree);
   const selected = ranked.slice(0, GLOBAL_NODE_LIMIT);
   const selectedSlugs = new Set(selected.map((node) => node.slug));
   return {
     nodes: selected.map(selectionSummary),
     edges: inducedEdges(selectedSlugs, edgesAmongIds(db, selected.map((node) => node.id))),
-    omitted: ranked.length - selected.length,
+    omitted: candidateCount - selected.length,
   };
 }

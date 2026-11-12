@@ -183,6 +183,25 @@ JOIN nodes AS n ON n.id = x.id
 ORDER BY n.slug;
 ```
 
+### Global ranking
+
+Aggregate distinct-neighbour degree over the candidate graph — the whole edge
+set, or the requesting tag's induced subgraph — and rank with the one shared
+`rankGlobal` authority: degree descending, then the JS title/slug comparator.
+Do not store a degree column and do not move the text tie-break into SQLite's
+`BINARY` collation; it is code-point order and disagrees with the JS comparator
+for astral characters.
+
+The presentation bound is applied after ranking. Because every node below the
+60th-highest degree is strictly worse than all 60 drawn nodes, the Worker may
+materialise only candidate rows at or above that cutoff and still hand them to
+`rankGlobal` for the final order. The cutoff is an integer `ORDER BY degree DESC
+LIMIT :limit`; the title/slug decision among the tied rows stays in JS. Candidate
+counts smaller than the limit, and degree sets that contain fewer than `limit`
+rows because isolated nodes have no aggregate row, fall back to enumerating every
+candidate. `omitted` comes from an explicit candidate count, not from the number
+of prefetched rows.
+
 After choosing the displayed nodes using the graph's ranking and limit, query all
 directed edges whose two endpoints belong to that set. Use bound placeholders for
 IDs, never interpolated data. The renderer may collapse reciprocal pairs visually.

@@ -6,7 +6,7 @@
  */
 
 import type { BrowserContext, CDPSession, Page } from 'playwright';
-import { TAG_PAGE_SIZE } from '../src/lib/tag-browser-model.ts';
+import { TAG_PAGE_SIZE, TAG_WINDOW_SIZE } from '../src/lib/tag-browser-model.ts';
 import type { DatabaseSync } from '../src/lib/sqlite.ts';
 import { previewFragment, previewTitle } from '../src/lib/preview-model.ts';
 import { sqliteAssetRequests } from '../tests/support/browser-site.ts';
@@ -30,7 +30,6 @@ import {
   openMeasuredPage,
   readRecorder,
   readRenderedGraph,
-  readRenderedNotes,
   readRenderedPreview,
   readSnapshotEvents,
   startHeapPolling,
@@ -459,6 +458,50 @@ class TagTelemetry {
   }
 }
 
+/**
+ * A reader-visible window of the enhanced tag list.
+ *
+ * The DOM is bounded, so the gate reads the ARIA positions that describe the
+ * complete logical collection rather than counting every accumulated row.
+ */
+interface TagWindowReport {
+  /** `aria-setsize`: the logical list length after the last continuation. */
+  logical: number;
+  /** Numbered rows actually in the DOM. */
+  rendered: number;
+  rows: {
+    position: number;
+    setsize: number;
+    slug: string;
+    title: string;
+    language: string;
+  }[];
+}
+
+async function readTagWindow(page: Page): Promise<TagWindowReport> {
+  return page.evaluate(() => {
+    const documentLanguage = document.documentElement.lang || 'en';
+    const items = [...document.querySelectorAll<HTMLElement>('#tag-browser-results li[aria-posinset]')];
+    const rows = items.map((item) => {
+      const link = item.querySelector<HTMLAnchorElement>('a[href]');
+      const match = link === null ? null : /^\/notes\/([^/]+)\/$/.exec(link.pathname);
+      if (link === null || match === null) throw new Error('a numbered tag row is not a note link');
+      return {
+        position: Number(item.getAttribute('aria-posinset')),
+        setsize: Number(item.getAttribute('aria-setsize')),
+        slug: match[1]!,
+        title: link.textContent ?? '',
+        language: link.getAttribute('lang') ?? documentLanguage,
+      };
+    });
+    return {
+      logical: rows[0]?.setsize ?? 0,
+      rendered: rows.length,
+      rows,
+    };
+  });
+}
+
 /** The rendered tag identity and the first `pageCount` pages of DB members. */
 async function assertRenderedTagPage(
   page: Page,
@@ -481,13 +524,38 @@ async function assertRenderedTagPage(
   if (identityMismatch !== null) throw new Error(identityMismatch);
   const expected = tagNodes.slice(0, Math.min(pageCount * TAG_PAGE_SIZE, tagNodes.length));
   await page.waitForFunction(
-    (count) => document.querySelectorAll('#tag-browser-results li > a[href]').length >= count,
+    (count) =>
+      [...document.querySelectorAll('#tag-browser-results li[aria-posinset]')].some(
+        (item) => Number(item.getAttribute('aria-posinset')) >= count,
+      ),
     expected.length,
     { timeout: 15_000 },
   );
+  const window = await readTagWindow(page);
+  if (window.rendered === 0) throw new Error(`tag browser page ${pageCount} rendered no numbered rows`);
+  if (window.rendered > TAG_WINDOW_SIZE) {
+    throw new Error(`tag browser page ${pageCount} rendered ${window.rendered} rows; the window bound is ${TAG_WINDOW_SIZE}`);
+  }
+  if (window.rows.some((row) => row.setsize !== expected.length)) {
+    throw new Error(
+      `tag browser page ${pageCount} reports setsize ${[...new Set(window.rows.map((row) => row.setsize))].join(',')}; expected ${expected.length}`,
+    );
+  }
+  const positions = window.rows.map((row) => row.position);
+  if (positions.some((position, index) => position !== positions[0]! + index)) {
+    throw new Error(`tag browser page ${pageCount} rendered non-contiguous positions ${positions.join(',')}`);
+  }
+  if (positions.at(-1) !== expected.length) {
+    throw new Error(
+      `tag browser page ${pageCount} ends at position ${positions.at(-1)}; expected ${expected.length}`,
+    );
+  }
   const mismatch = compareRenderedSelection(
-    { nodes: await readRenderedNotes(page, '#tag-browser-results li > a[href]'), edges: [] },
-    { nodes: [...expected], edges: [] },
+    {
+      nodes: window.rows.map(({ slug, title, language }) => ({ slug, title, language })),
+      edges: [],
+    },
+    { nodes: expected.slice(positions[0]! - 1), edges: [] },
     `tag browser ${plan.tagKey} page ${pageCount}`,
   );
   if (mismatch !== null) throw new Error(mismatch);
@@ -524,13 +592,22 @@ async function browseTag(page: Page, plan: WorkloadPlan, tagNodes: readonly TagN
     pages += 1;
     await assertRenderedTagPage(page, plan, tagNodes, pages);
   }
-  const notesShown = await page.locator('#tag-browser-results li').count();
+  const finalWindow = await readTagWindow(page);
+  const notesShown = finalWindow.logical;
   assertExactEventCount('tag browser page replies', telemetry.byTagTotal, pages);
   if (pages > tagPageBound) {
     throw new Error(`tag browser walked ${pages} pages beyond derived bound ${tagPageBound}`);
   }
   if (notesShown !== plan.tagMembers) {
-    throw new Error(`tag browser showed ${notesShown} notes; DB plan requires ${plan.tagMembers}`);
+    throw new Error(`tag browser logical list has ${notesShown} notes; DB plan requires ${plan.tagMembers}`);
+  }
+  if (finalWindow.rows.at(-1)?.position !== plan.tagMembers) {
+    throw new Error(
+      `tag browser ends at logical position ${finalWindow.rows.at(-1)?.position}; expected ${plan.tagMembers}`,
+    );
+  }
+  if (finalWindow.rendered > TAG_WINDOW_SIZE) {
+    throw new Error(`tag browser kept ${finalWindow.rendered} rows; the window bound is ${TAG_WINDOW_SIZE}`);
   }
   if (await more.isVisible()) throw new Error('tag browser More control remained visible after enumeration');
   assertExactSampleCount('tag browser dispatch samples', telemetry.dispatchMs.length, telemetry.byTagTotal);
@@ -540,6 +617,7 @@ async function browseTag(page: Page, plan: WorkloadPlan, tagNodes: readonly TagN
     tagKey: plan.tagKey!,
     pages,
     notesShown,
+    renderedRows: finalWindow.rendered,
     dispatchMs: telemetry.dispatchMs,
     operationMs: telemetry.operationMs,
     sqlMs: telemetry.sqlMs,

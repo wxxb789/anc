@@ -83,7 +83,10 @@ interface UiLocalGraphReport {
 export interface TagBrowseReport {
   tagKey: string;
   pages: number;
+  /** Logical rows the enhanced list has loaded (its `aria-setsize`). */
   notesShown: number;
+  /** Rows actually in the DOM at exhaustion; bounded by `TAG_WINDOW_SIZE`. */
+  renderedRows: number;
   dispatchMs: number[];
   operationMs: number[];
   sqlMs: number[];
