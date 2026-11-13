@@ -105,7 +105,7 @@
   "dependencies": {
     "@astrojs/prism": "^4.1.2",
     "@sqlite.org/sqlite-wasm": "3.53.4-build2",
-    "astro": "^7.4.5",
+    "astro": "^7.4.8",
     "aws4fetch": "1.0.20",
     "css-tree": "3.2.1",
     "github-slugger": "^2.0.0",
@@ -114,7 +114,7 @@
     "pagefind": "^1.6.0",
     "prismjs": "^1.30.0",
     "sanitize-html": "^2.18.1",
-    "satteri": "^0.11.6",
+    "satteri": "^0.11.7",
     "saxes": "6.0.0",
     "sharp": "0.35.5",
     "temml": "0.14.0",
@@ -124,8 +124,8 @@
     "@astrojs/check": "^0.9.12",
     "@types/node": "^26.6.6",
     "@types/sanitize-html": "^2.16.2",
-    "oxlint": "^1.90.0",
-    "playwright": "^1.64.1",
+    "oxlint": "^1.93.0",
+    "playwright": "^1.65.0",
     "typescript": "^6.0.3",
     "vitest": "^5.1.0"
   }
