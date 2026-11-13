@@ -177,7 +177,7 @@ WHERE t.key = :tag_key;
 `total` is the collection size, not the page size, because the enhanced tag list
 renders a window of the collection and announces it through `aria-setsize`; see
 the a11y addendum in
-[`docs/goals/archive/0008-acceptable-browser-cost.md`](../../goals/archive/0008-acceptable-browser-cost.md).
+[`docs/goals/archive/0008-acceptable-browser-cost.md`](../goals/archive/0008-acceptable-browser-cost.md).
 The count is one aggregate over the membership primary key and is part of the
 identity lookup every tag request already performs, not a second statement.
 
