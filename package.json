@@ -104,7 +104,7 @@
   },
   "dependencies": {
     "@astrojs/prism": "^4.1.2",
-    "@sqlite.org/sqlite-wasm": "3.53.4-build1",
+    "@sqlite.org/sqlite-wasm": "3.53.4-build2",
     "astro": "^7.4.5",
     "aws4fetch": "1.0.20",
     "css-tree": "3.2.1",
