@@ -465,7 +465,7 @@ class TagTelemetry {
  * complete logical collection rather than counting every accumulated row.
  */
 interface TagWindowReport {
-  /** `aria-setsize`: the logical list length after the last continuation. */
+  /** `aria-setsize`: the tag's complete membership, not the rows loaded. */
   logical: number;
   /** Numbered rows actually in the DOM. */
   rendered: number;
@@ -536,9 +536,11 @@ async function assertRenderedTagPage(
   if (window.rendered > TAG_WINDOW_SIZE) {
     throw new Error(`tag browser page ${pageCount} rendered ${window.rendered} rows; the window bound is ${TAG_WINDOW_SIZE}`);
   }
-  if (window.rows.some((row) => row.setsize !== expected.length)) {
+  // The announced collection size is the tag's DB membership, from the first
+  // page on; it must not be the number of rows this walk has loaded.
+  if (window.rows.some((row) => row.setsize !== tagNodes.length)) {
     throw new Error(
-      `tag browser page ${pageCount} reports setsize ${[...new Set(window.rows.map((row) => row.setsize))].join(',')}; expected ${expected.length}`,
+      `tag browser page ${pageCount} reports setsize ${[...new Set(window.rows.map((row) => row.setsize))].join(',')}; expected ${tagNodes.length}`,
     );
   }
   const positions = window.rows.map((row) => row.position);

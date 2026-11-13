@@ -40,24 +40,34 @@ let site: RunningSite;
 let browser: Browser;
 let context: BrowserContext;
 
-async function logicalSize(page: Page): Promise<number> {
+/**
+ * Logical positions loaded so far, read from the rendered window.
+ *
+ * `aria-setsize` is the tag's complete membership and no longer grows with a
+ * continuation, so the tail window's newest `aria-posinset` is the loaded count.
+ */
+async function loadedSize(page: Page): Promise<number> {
   return page.evaluate(() =>
-    Number(document.querySelector('#tag-browser-results [aria-setsize]')?.getAttribute('aria-setsize') ?? 0),
+    [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].reduce(
+      (max, item) => Math.max(max, Number(item.getAttribute('aria-posinset') ?? 0)),
+      0,
+    ),
   );
 }
 
 async function loadUntil(page: Page, target: number): Promise<void> {
-  let total = await logicalSize(page);
+  let total = await loadedSize(page);
   while (total < target) {
     await page.evaluate(() => document.getElementById('tag-browse-more')?.click());
     await page.waitForFunction(
       (before) =>
-        Number(document.querySelector('#tag-browser-results [aria-setsize]')?.getAttribute('aria-setsize') ?? 0) >
-        before,
+        [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].some(
+          (item) => Number(item.getAttribute('aria-posinset') ?? 0) > before,
+        ),
       total,
       { timeout: 15_000 },
     );
-    total = await logicalSize(page);
+    total = await loadedSize(page);
   }
 }
 
@@ -226,7 +236,7 @@ for (const target of JUMPS) {
     const page = await context.newPage();
     await openTag(page);
     const state = await jumpToTop(page, target);
-    assert.equal(state.setsize, target);
+    assert.equal(state.setsize, MEMBERS, 'the announced set size is not the tag\'s membership');
     assert.equal(state.positions[0], 1, 'the window did not reach row 1');
     assert.equal(state.positions.length, TAG_WINDOW_SIZE, `the window rendered ${state.positions.length} rows`);
     assertContiguous(state, `top ${target}`);
@@ -264,7 +274,7 @@ test('a continuous wheel-up run reaches row 1 without a gap or a visible spacer'
         `wheel step ${step}: the before spacer entered the viewport (first row bottom ${state.firstBottom})`,
       );
     }
-    if (state.positions.at(-1)! < state.setsize) {
+    if (state.positions.at(-1)! < target) {
       assert.ok(
         state.lastTop >= state.innerHeight,
         `wheel step ${step}: the after spacer entered the viewport (last row top ${state.lastTop})`,

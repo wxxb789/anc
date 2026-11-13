@@ -400,5 +400,121 @@ under SQLite's BINARY collation than under JavaScript's UTF-16 comparison.
   window; the complete list remains reachable by scrolling and exists in the static route.
 - Chrome's accessibility tree did not expose `posinset` for the rendered `li` elements in the
   probe's AX snapshot although the DOM attributes are present and contiguous 1..n. What a
-  screen reader actually receives from a windowed `ol` is a separate, open question with its own
-  card; this record claims only the DOM contract.
+  screen reader actually receives from a windowed `ol` was then an open question; the
+  2026-11-14 addendum below answers it (the CDP snapshot is not the AT-facing tree, and the
+  announced list size was wrong until the membership count reached `aria-setsize`).
+
+## Addendum 2026-11-14 — what a screen reader receives from the windowed tag list
+
+The 2026-11-12 addendum closed with an unanswered question: its AX snapshot did not show
+`posinset` for the rendered rows even though the DOM carried it, so the record claimed only the DOM
+contract. This measures the accessibility tree and a real screen reader, and records the one
+change the measurement produced.
+
+### Method
+
+| | |
+|---|---|
+| Corpus | `scripts/generate-corpus.ts`, seed 7, `sparse`, `metadata: true`: 1,092 generated files / **1,000 published**; every metadata note carries `笔记`, so the tag has **1,000 members** — eight windows |
+| Build | this worktree's `node bin/anc.mjs build --content <corpus> --out <dist>`; residue scan 2,041 files, 0 findings |
+| Browser | **Google Chrome 157.0.8103.38**, Playwright 1.64.1, headful under Xvfb, 1200×800 viewport, no CPU throttling |
+| AT API | **AT-SPI2 2.52.0** (`at-spi2-core`), read with `python3-pyatspi` |
+| Screen reader | **Orca 46.1** (GNOME 46), Speech Dispatcher 0.12.0-rc2 + espeak-ng. Utterances are the `SPEECH OUTPUT:` lines from Orca's own `--debug-file` log. There is no audio device on this host and no human listener; this is what Orca sent to its speech server, not a recording |
+| Host | Ubuntu noble, 4 vCPU / 7.7 GiB, kernel 7.0.0-1017-azure, loopback static server |
+| Probe | private workspace, not committed; each state below is one recorded run on the built site |
+
+Places in the lists were produced by scrolling: `scrollTo(0)` (top; released range *after* the
+window) and a jump to the list's top + 2500 px (deep; released ranges on **both** sides). Pages
+were loaded until the logical list held 310-320 entries, so the window was always a strict subset
+of the collection.
+
+### What each surface exposes
+
+Paged enhanced list, 310 loaded, window at top (`1..120`):
+
+| Observation | CDP `Accessibility.getFullAXTree` | Playwright `ariaSnapshot` | AT-SPI2 (what Orca reads) | Static no-JS route |
+|---|---|---|---|---|
+| Container role | `list` (childCount 120) | `list` | `list` (childCount 120) | **none** — `div.note-grid` |
+| Rendered items | 120 `listitem` (+5 nav) | 120 bare `listitem` | 120 `list item` | 1,000 `article` |
+| `posinset` on items | **0 of 125** | absent | **`1..120` on every item** | absent |
+| `setsize` on items | **absent** | absent | **`310` on every item** | absent |
+| `setsize` on the list | absent | absent | **`310`** | — |
+| Other item properties | `level: 1` only | — | `level`, `display`, `tag`, `text-align` | — |
+| Programmatic count | 120 (childCount) | 120 | 310 (list `setsize`), childCount 120 | **none** (visible text `1000 notes`) |
+
+The CDP tree and Playwright's snapshot are the same DevTools serialization, and both omit
+`aria-posinset`/`aria-setsize` for `listitem` in Chrome 157 — implicit `<li>`, explicit
+`role="listitem"`, `div[role=listitem]`, and `role="option"` all expose only `level`. **The
+AT-facing AT-SPI tree exposes both attributes**, so the 2026-11-12 reading was an instrument
+limit, not a missing contract. Do not use a CDP AX dump alone to judge what an AT receives.
+
+At the deep position (window `39..158`, spacers on both sides) the same fields held: CDP 0 of 125
+with `posinset`, AT-SPI `posinset 39..158`, `setsize 310`, list `setsize 310`.
+
+### What Orca 46.1 actually said
+
+| State | Utterance |
+|---|---|
+| First card link on the **static** route (JS disabled) | `Brief cloud quiet shadow field link.` |
+| Focused enhanced row link (posinset 191, 310 loaded) | `潮汐名录：观测与记录 link.` — **no position** |
+| List object, probe-only focus, 310 loaded, pre-fix | **`List with 310 items.`** |
+| List object after one continuation (320 loaded), pre-fix | `List with 320 items.` (same-build control, attribute rewritten to the loaded count) |
+| List object, 1,000-member tag, post-fix, 320 loaded | **`List with 1000 items.`** |
+| Where Am I on a focused row link | `link Ridge copper shadow lantern.` — no position |
+
+The static route has no list at all, so Orca announces no list and no count there; it announces
+each card as heading/link. The enhanced route told a reader the tag held **310** notes when it held
+**1,000**, and that number grew by ten on every "Load more".
+
+The reading comes from Orca's own code, not a guess:
+`scripts/web/speech_generator.py:482` takes the list's announced size from
+`getSetSize(AXObject.get_child(obj, 0))` — the **first item's** `setsize` — and only falls back to
+the rendered child count when it is absent (`:488`); `scripts/web/script_utilities.py:432` reads
+the attribute, and `:2671` maps `setsize: -1` to "List of unknown size"
+(`messages.py:2740`). So the one attribute that decides the announcement is `aria-setsize` on a
+rendered row, and it was the loaded count.
+
+The list-object utterances were elicited by giving the `<ol>` a temporary `tabindex="-1"` and
+focusing it: the region is not focusable in the product, and this is a probe-only mutation to hear
+the announcement Orca makes for that object. The long title run that precedes "List with …" is
+Orca's name-from-contents for the focused container — an artifact of focusing a non-interactive
+list, not something a reader hears while moving between links.
+
+### The change
+
+`byTag` now reports the tag's complete membership, and the enhanced list announces it.
+
+- `SNAPSHOT_QUERIES.tagByKey` returns the membership count as `total` in the identity lookup it
+  already performed: `(SELECT COUNT(*) FROM node_tags AS nt WHERE nt.tag_id = t.id)`.
+- `TagPage`'s known shape gains `total`; `tagPage()` returns it.
+- `src/scripts/tag-browser.ts` keeps `logicalTotal` from the first page and uses it for every
+  row's `aria-setsize`. `entries.length` (what has loaded) no longer reaches the attribute.
+- The benchmark instrument's tag assertion now compares `setsize` with the tag's DB membership
+  (`scripts/benchmark-workload-ui.ts`), and `docs/core-design/sqlite-contract.md` records the
+  count in the query-by-tag section.
+- Gates: `tests/tag-query.test.ts` asserts the total on a non-exhausted page and at the tail;
+  `tests/tag-browser-window.test.ts` asserts the announcement on page 1 and its stability across a
+  continuation. With `src/scripts/tag-browser.ts` reverted, that file fails 3/4 with
+  `the first page announced setsize 10, not 145`.
+
+Result: **`List with 1000 items.`** from the first page on, unchanged by any continuation. The
+per-item position ("191 of 1000") is still not spoken by Orca on link focus or Where Am I; Orca
+keeps `posinset` for its positional path but the focused object is the link inside the item, so
+nothing announces it. Fixing that would mean putting the position in every link's accessible
+name, which this change does not do.
+
+### Limits
+
+- One screen reader, on Linux: **NVDA, JAWS, VoiceOver, TalkBack and Narrator were not exercised**.
+  No speech audio was heard; the utterances are Orca's debug log.
+- CDP and Playwright's `ariaSnapshot` do not expose the attributes that AT-SPI does; a claim about
+  AT exposure must be made from AT-SPI (or a real AT), not from the DevTools tree.
+- The list-size announcement was elicited with a probe-only `tabindex` on the list; a reader hears
+  it on entering the list in browse mode, not by tabbing to it.
+- The AT-SPI walker caps traversal at 4,000 nodes / depth 60, so the static route reads 980 of its
+  1,000 articles (the DOM and CDP counts are exact).
+- One corpus, one tag, one page size; no mobile or CPU-throttled profile, unlike this goal's own
+  campaign. The count's query cost was not measured separately — it is one aggregate over the
+  `node_tags` primary key inside the existing identity lookup.
+- `total` is a public query-shape change. ANC is pre-0.1.0 and carries no compatibility shim;
+  every consumer (client, tests, benchmark) moved in the same change.

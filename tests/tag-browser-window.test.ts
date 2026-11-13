@@ -8,9 +8,10 @@
  * over a corpus larger than one window:
  *
  * - the DOM stays bounded while the logical collection keeps growing;
- * - every rendered row carries `aria-setsize` (the whole loaded collection) and
- *   `aria-posinset` (its 1-based position), and those positions are contiguous
- *   and end at the newest row — the APG lazy-load contract;
+ * - every rendered row carries `aria-setsize` (the tag's complete membership,
+ *   which does not change as pages load) and `aria-posinset` (its 1-based
+ *   position in that collection), and those positions are contiguous and end at
+ *   the newest loaded row — the APG lazy-load contract;
  * - the visible number equals the logical position, not the window-local one,
  *   because a windowed `<ol>` would otherwise renumber itself at every shift;
  * - the released rows are represented by one spacer and nothing else, and the
@@ -61,44 +62,53 @@ async function openTag(page: Page): Promise<void> {
   await page.waitForSelector('#tag-browser-results [aria-posinset]');
 }
 
+/** The newest loaded logical position, which is the only thing a page changes. */
+async function loadedPosition(page: Page): Promise<number> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].reduce(
+      (max, item) => Math.max(max, Number(item.getAttribute('aria-posinset') ?? 0)),
+      0,
+    ),
+  );
+}
+
 /** One continuation, waiting for the logical collection to grow. */
 async function loadMore(page: Page): Promise<void> {
-  const before = await page.evaluate(
-    () => Number(document.querySelector('#tag-browser-results [aria-setsize]')?.getAttribute('aria-setsize') ?? 0),
-  );
+  const before = await loadedPosition(page);
   await page.locator('#tag-browse-more').click();
   await page.waitForFunction(
-    (count) => {
-      const first = document.querySelector('#tag-browser-results [aria-setsize]');
-      return Number(first?.getAttribute('aria-setsize') ?? 0) > count;
-    },
+    (count) =>
+      [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].some(
+        (item) => Number(item.getAttribute('aria-posinset') ?? 0) > count,
+      ),
     before,
   );
 }
 
 /**
- * Assert the window's shape for a logical total and return its positions: a
- * bounded DOM, one `setsize`, contiguous absolute positions, and one hidden
- * spacer per released range. A tail window must also end at the newest row; a
- * window shifted back by the reader ends earlier and carries a bottom spacer.
+ * Assert the window's shape for a loaded total and return its positions: a
+ * bounded DOM, one `setsize` (the tag's membership, always), contiguous absolute
+ * positions, and one hidden spacer per released range. A tail window must also
+ * end at the newest loaded row; a window shifted back by the reader ends earlier
+ * and carries a bottom spacer.
  */
-async function assertWindow(page: Page, expectedTotal: number, endAtNewest = true): Promise<number[]> {
+async function assertWindow(page: Page, loaded: number, endAtNewest = true): Promise<number[]> {
   const list = await rows(page);
   const numbered = list.filter((row) => row.posinset !== null);
   const positions = numbered.map((row) => Number(row.posinset));
   assert.ok(numbered.length > 0, 'no numbered rows rendered');
   assert.ok(numbered.length <= WINDOW, `the DOM kept ${numbered.length} rows, above the ${WINDOW}-row window`);
   for (const row of numbered) {
-    assert.equal(row.setsize, String(expectedTotal), `a row reported setsize ${row.setsize}, not ${expectedTotal}`);
+    assert.equal(row.setsize, String(MEMBERS), `a row reported setsize ${row.setsize}, not the tag's ${MEMBERS} members`);
   }
   positions.forEach((position, index) => {
     assert.equal(position, (positions[0] ?? 0) + index, `positions jumped: ${positions.join(',')}`);
   });
-  if (endAtNewest) assert.equal(positions.at(-1), expectedTotal, 'the window does not end at the newest logical row');
+  if (endAtNewest) assert.equal(positions.at(-1), loaded, 'the window does not end at the newest loaded logical row');
 
   const spacers = list.filter((row) => row.spacer !== null);
   const releasedAbove = (positions[0] ?? 1) > 1;
-  const releasedBelow = (positions.at(-1) ?? 0) < expectedTotal;
+  const releasedBelow = (positions.at(-1) ?? 0) < loaded;
   if (releasedAbove) {
     assert.equal(list[0]?.spacer, 'before', 'the released range above the window has no spacer');
   } else {
@@ -180,6 +190,27 @@ test('the rendered window stays bounded while the logical list grows', async () 
   assert.equal(positions[0], MEMBERS - WINDOW + 1, 'the window did not slide to the newest rows');
   await assertNumbering(page, positions[0]!);
   assert.equal(await page.locator('#tag-browse-more').isHidden(), true, 'Load more survived the last page');
+  await page.close();
+});
+
+test('the announced set size is the tag, not the rows loaded so far', async () => {
+  // A screen reader reads the first row's `setsize` for the list announcement
+  // (Orca 46: scripts/web/speech_generator.py `_generateNumberOfChildren`). A
+  // loaded count would announce a 145-note tag as a 10-note list, then change
+  // that number on every continuation.
+  const page = await browser.newPage();
+  await openTag(page);
+  const first = (await rows(page)).filter((row) => row.posinset !== null);
+  assert.equal(first.length, PAGE_SIZE, `the first page rendered ${first.length} rows`);
+  for (const row of first) {
+    assert.equal(row.setsize, String(MEMBERS), `the first page announced setsize ${row.setsize}, not ${MEMBERS}`);
+  }
+  await loadMore(page);
+  const second = (await rows(page)).filter((row) => row.posinset !== null);
+  assert.equal(second.length, PAGE_SIZE * 2, `the second page rendered ${second.length} rows`);
+  for (const row of second) {
+    assert.equal(row.setsize, String(MEMBERS), `a continuation changed the announced size to ${row.setsize}`);
+  }
   await page.close();
 });
 

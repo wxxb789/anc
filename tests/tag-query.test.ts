@@ -363,6 +363,31 @@ test('the tag lookup is exact and the key column is BINARY, so NOCASE is not sub
   });
 });
 
+test('a tag page reports the complete membership, not the page size', () => {
+  // The enhanced list renders a window and announces `aria-setsize` from this
+  // number. A screen reader reads it for the list announcement, so a page-sized
+  // value would announce an 18-note tag as a 7-note one. The authored corpus has
+  // 18 gardening members and `PAGE_SIZE` is 7.
+  withSnapshot((path) => {
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const db = adapter(database);
+      const first = tagPage(db, 'gardening', null, PAGE_SIZE);
+      if (!first.known) assert.fail('gardening is a known tag in the authored corpus');
+      assert.equal(first.notes.length, PAGE_SIZE, 'the first page is not one page of notes');
+      assert.equal(first.total, EXPECTED_GARDENING_SLUGS.length, 'the page reported the loaded count as the total');
+
+      // `page-14` is the cursor that yields the final three members.
+      const tail = tagPage(db, 'gardening', 'page-14', PAGE_SIZE);
+      if (!tail.known) assert.fail('gardening is a known tag in the authored corpus');
+      assert.equal(tail.notes.length, 3, 'the tail page is not the final three members');
+      assert.equal(tail.total, EXPECTED_GARDENING_SLUGS.length, 'the total changed between pages of one tag');
+    } finally {
+      database.close();
+    }
+  });
+});
+
 test('an unknown tag is distinct from a known tag with no further results', () => {
   // `docs/core-design/sqlite-contract.md`: an unknown subject/tag is a distinct
   // no-match result, and a cursor is an exclusive lower bound within the
@@ -376,6 +401,7 @@ test('an unknown tag is distinct from a known tag with no further results', () =
       const exhausted = {
         known: true as const,
         tag: { key: 'gardening', label: 'Gardening' },
+        total: EXPECTED_GARDENING_SLUGS.length,
         notes: [],
         nextCursor: null,
       };

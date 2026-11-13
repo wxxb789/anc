@@ -164,6 +164,23 @@ exhausted page returns an empty list and null cursor; an unknown subject/tag is 
 distinct no-match result. Cap and validate the positive integer page size in the
 Worker. Never treat `LIMIT` as a bound on all work performed by a complex query.
 
+The tag identity lookup carries the tag's complete membership in the same
+statement:
+
+```sql
+SELECT t.id, t.key, t.label,
+       (SELECT COUNT(*) FROM node_tags AS nt WHERE nt.tag_id = t.id) AS total
+FROM tags AS t
+WHERE t.key = :tag_key;
+```
+
+`total` is the collection size, not the page size, because the enhanced tag list
+renders a window of the collection and announces it through `aria-setsize`; see
+the a11y addendum in
+[`docs/goals/archive/0008-acceptable-browser-cost.md`](../../goals/archive/0008-acceptable-browser-cost.md).
+The count is one aggregate over the membership primary key and is part of the
+identity lookup every tag request already performs, not a second statement.
+
 Do not add `node_tags(node_id, tag_id)` merely because a build renders tags. Batch
 the build read. If a new frequent node→tags consumer or measured build workload
 needs the reverse index, evaluate it under the ablation rule; browser use is not
