@@ -21,6 +21,9 @@ export interface PreviewEntry {
 
 export const PREVIEW_TITLE_LIMIT = 400;
 
+/** The marker `previewTitle` appends when it truncates a panel title. */
+export const PREVIEW_TRUNCATION_MARKER = '…';
+
 /** A bounded title plus its public aliases, all rendered as text. */
 export function previewTitle(entry: PreviewEntry): string {
   const text =
@@ -29,7 +32,7 @@ export function previewTitle(entry: PreviewEntry): string {
       : `${entry.title} (${entry.aliases.join(', ')})`;
   return text.length <= PREVIEW_TITLE_LIMIT
     ? text
-    : `${text.slice(0, PREVIEW_TITLE_LIMIT - 1)}…`;
+    : `${text.slice(0, PREVIEW_TITLE_LIMIT - 1)}${PREVIEW_TRUNCATION_MARKER}`;
 }
 
 /** Between the link and the panel, and between the panel and the viewport edge. */

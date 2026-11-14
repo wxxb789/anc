@@ -323,10 +323,14 @@ test('previewTitleBase keeps the stored title and drops the alias group', () => 
   assert.equal(previewTitleBase('Note title'), 'Note title');
   assert.equal(previewTitleBase('Note title (alpha, beta)'), 'Note title');
   assert.equal(previewTitleBase('Interval (half-open)'), 'Interval');
-  assert.equal(previewTitleBase('A title long enough to be truncated…'), 'A title long enough to be truncated');
-  assert.equal(previewTitleBase('Truncated (alpha, be…'), 'Truncated');
   assert.equal(previewTitleBase('  Spaced title  '), 'Spaced title');
-  assert.equal(previewTitleBase('…'), '');
+  // The trailing ellipsis is the producer's truncation marker only at the
+  // producer's own bound: below it the character is authored text and is kept,
+  // so an authored `…` yields a base instead of the empty string that failed a
+  // correct render.
+  assert.equal(previewTitleBase('…'), '…');
+  assert.equal(previewTitleBase('Authored … (alpha, beta)'), 'Authored …');
+  assert.equal(previewTitleBase(`${'T'.repeat(PREVIEW_TITLE_LIMIT - 1)}…`), 'T'.repeat(PREVIEW_TITLE_LIMIT - 1));
 });
 
 test('previewTitleBase keeps its prefix of the title previewTitle produces', () => {
@@ -339,6 +343,11 @@ test('previewTitleBase keeps its prefix of the title previewTitle produces', () 
     { title: 'Interval (half-open)', excerpt: '', aliases: ['alias'] },
     { title: 'L'.repeat(PREVIEW_TITLE_LIMIT + 200), excerpt: '' },
     { title: 'L'.repeat(PREVIEW_TITLE_LIMIT + 200), excerpt: '', aliases: ['alpha', 'beta'] },
+    // An authored ellipsis, with and without an alias group. The producer keeps
+    // it — its length is far below the bound it truncates at — so the base the
+    // leg compares is the stored title itself.
+    { title: '…', excerpt: '' },
+    { title: '…', excerpt: '', aliases: ['ellipsis-alias'] },
   ];
   for (const entry of cases) {
     const base = previewTitleBase(previewTitle(entry));
@@ -346,6 +355,9 @@ test('previewTitleBase keeps its prefix of the title previewTitle produces', () 
     assert.ok(entry.title.startsWith(base), `${JSON.stringify(base)} is not a prefix of the stored title`);
     assert.ok(previewTitle(entry).length <= PREVIEW_TITLE_LIMIT, 'the producer bounded the panel title');
   }
+  assert.equal(previewTitle(cases[5]), '…');
+  assert.equal(previewTitleBase(previewTitle(cases[5])), '…');
+  assert.equal(previewTitleBase(previewTitle(cases[6])), '…');
   // An aliased long title truncates inside the alias group, so the marker has to
   // be dropped before the group is cut.
   assert.equal(previewTitleBase(previewTitle(cases[4])), 'L'.repeat(PREVIEW_TITLE_LIMIT - 1));
@@ -376,6 +388,17 @@ test('findTitle reads, trims, and entity-decodes a non-empty title', () => {
   assert.equal(findTitle('<title> Tag: agent · Notes </title>'), 'Tag: agent · Notes');
   assert.equal(findTitle('<title>   </title>'), undefined);
   assert.equal(findTitle('<html><body>no title</body></html>'), undefined);
+});
+
+test('findTitle decodes an escaped reference exactly once, as the HTML tokenizer does', () => {
+  // Astro escapes a configured title's text, so an authored `&lt;` is served as
+  // `&amp;lt;`. The HTML tokenizer consumes a reference once and never re-scans
+  // what it produced, so Chromium reports the literal `&lt;`; a decoder that
+  // replaced sequentially would turn the same bytes into `<` and fail a healthy
+  // deployment on the title equality assertion.
+  assert.equal(findTitle('<title>Escaping &amp;lt; Sites</title>'), 'Escaping &lt; Sites');
+  assert.equal(findTitle('<title>&amp;amp;</title>'), '&amp;');
+  assert.equal(findTitle('<title>&lt;b&gt;</title>'), '<b>');
 });
 
 test('findTitle collapses ASCII whitespace and preserves every other code point', () => {
@@ -1054,6 +1077,34 @@ test('the browser leg compares the site title at the HTML whitespace boundary', 
       /PASS browser-root — status=200 title="Boundary\u00a0Sites Name" served-title="Boundary\u00a0Sites Name"/,
     );
     assert.match(result.output, /PASS site-root — .*title="Boundary\u00a0Sites Name"/);
+    assert.match(result.output, /13 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(workspace);
+  }
+}, 120_000);
+
+test('the browser leg compares a site title that spells a reference literally', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'anc-site-title-'));
+  // A configured title that contains the literal spelling `&lt;` is valid
+  // authored content. Astro escapes its text once, so the served bytes carry
+  // `&amp;lt;`, and the browser decodes that once to `&lt;`. The checker reads
+  // the same bytes, so it has to decode exactly once too: a sequential decoder
+  // turns the pair into `<` and fails the title equality on a healthy
+  // deployment.
+  mkdirSync(join(workspace, 'notes'), { recursive: true });
+  writeFileSync(join(workspace, 'notes', 'publish.config.yaml'), 'title: Escaping &lt; Sites\n');
+  const built = buildIn(workspace, { 'note.md': '---\ntitle: Note\n---\n\nBody.\n' }, 'dist');
+  const site = await serveDist(built.dist);
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    assert.match(
+      result.output,
+      /PASS browser-root — status=200 title="Escaping &lt; Sites" served-title="Escaping &lt; Sites"/,
+    );
+    assert.match(result.output, /PASS site-root — .*title="Escaping &lt; Sites"/);
+    assert.match(result.output, /PASS site-root-title — title="Escaping &lt; Sites"/);
     assert.match(result.output, /13 passed, 0 failed/);
   } finally {
     await site.close();

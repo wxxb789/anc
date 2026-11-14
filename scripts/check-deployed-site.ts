@@ -55,6 +55,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import type { Browser, BrowserContext, Page, Request, Response } from 'playwright';
+import { PREVIEW_TITLE_LIMIT, PREVIEW_TRUNCATION_MARKER } from '../src/lib/preview-model.ts';
 
 /** A named assertion failed to find what the served artifact must reference. */
 export class DeployedCheckError extends Error {
@@ -71,14 +72,30 @@ export function normalizeHeaders(headers: Iterable<[string, string]>): Map<strin
   return normalized;
 }
 
-/** Entity decode the small set an HTML `<title>` can carry. */
+/** The references a `<title>`'s text can carry, and the character each decodes to. */
+const TITLE_REFERENCE_TEXT: Readonly<Record<string, string>> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+};
+
+/**
+ * Entity decode the small set an HTML `<title>` can carry, in one pass.
+ *
+ * The HTML tokenizer consumes each reference once and never re-scans what it
+ * produced, so `&amp;lt;` — what Astro emits for an authored `&lt;` — decodes to
+ * the literal `&lt;`, which is what `document.title` reports for it. A sequence
+ * of `replaceAll` calls does not: `&amp;lt;` becomes `&lt;` on the first call
+ * and `<` on the second, so the checker would compare a valid title against a
+ * different string than the browser read. One sweep with one pattern decodes
+ * each reference exactly once, because `replace` appends its replacements to the
+ * output rather than rescanning them; the pattern's set is this table's keys, so
+ * the fallback is a type total, not a case.
+ */
 function decodeEntities(text: string): string {
-  return text
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'");
+  return text.replace(/&(?:amp|lt|gt|quot|#39);/g, (reference) => TITLE_REFERENCE_TEXT[reference] ?? reference);
 }
 
 /**
@@ -439,9 +456,23 @@ async function discover(
  * string they share. A stored title that itself contains a parenthetical is cut
  * early, which only makes the containment assertion weaker and never false: the
  * remainder is still a prefix of the served title.
+ *
+ * The marker is dropped only where `previewTitle` produced it, which its length
+ * states as well as its last character: the producer appends the marker only to
+ * a panel title longer than `PREVIEW_TITLE_LIMIT`, and what it emits then is
+ * exactly `PREVIEW_TITLE_LIMIT` characters. Below that bound the character is
+ * the author's own text — a stored title is bounded at 300 characters by the
+ * content contract, so a title alone can never reach the bound — and an authored
+ * title of `…` has to keep its base instead of being reduced to the empty string
+ * that failed a correct render. Reading the bound generously in the other
+ * direction is safe: a panel title that arrives at the bound untruncated loses
+ * only its last character, and what remains is still a prefix of the served
+ * title, which is all the assertion claims.
  */
 export function previewTitleBase(panelTitle: string): string {
-  const text = panelTitle.endsWith('…') ? panelTitle.slice(0, -1) : panelTitle;
+  const truncated =
+    panelTitle.length === PREVIEW_TITLE_LIMIT && panelTitle.endsWith(PREVIEW_TRUNCATION_MARKER);
+  const text = truncated ? panelTitle.slice(0, -1) : panelTitle;
   const aliasGroup = text.indexOf(' (');
   return (aliasGroup === -1 ? text : text.slice(0, aliasGroup)).trim();
 }
