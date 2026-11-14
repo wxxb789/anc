@@ -7,6 +7,29 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+### Added
+
+- `anc check-deployed-site --browser` adds an **opt-in** browser leg that drives the same origin
+  in Chromium and asserts what the page then does with the bytes it served. The first
+  `/notes/<slug>/` link the served `/` names must open its preview panel with the Worker chunk,
+  the snapshot, and the WASM module each requested once; any console error, uncaught page error,
+  failed request, or 4xx/5xx response fails the run, and nothing is filtered as noise. Tag
+  browsing is checked against each route's own static membership — every examined route and every
+  loaded window, with the union required to render that route's static list completely once it
+  stops offering continuations — and a **validated empty tag index** passes with an explicit
+  no-tags observation rather than failing. Titles are compared on the HTML ASCII-whitespace
+  boundary, and every non-GET request is refused at the request layer before it reaches the
+  origin. The leg is off by default and the HTTP pass is unchanged; Playwright is a devDependency
+  of this repository rather than of the published package, so a consumer runs
+  `npm install playwright` and `npx playwright install chromium` first, and a host without
+  Chromium fails the run rather than skipping it. Its measurement limits belong to the check:
+  routing every request so a non-GET method can be refused disables Chromium's HTTP cache for the
+  session and blocks service workers, so the leg is evidence about the origin's bytes and about a
+  refusal, not about a returning reader's cache state. Recorded baseline against this project's
+  GitHub Pages site (Chromium 156.0.8078.4, Playwright 1.64.1): 14 assertions passed, 0 failed —
+  the nine HTTP assertions plus five browser ones; no tag there offers a continuation, so that
+  half is exercised by the fixture gate instead.
+
 ### Changed
 
 - The tag list renders a window of 120 logical rows positioned from scroll geometry instead of
