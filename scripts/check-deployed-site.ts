@@ -21,16 +21,41 @@
  * headers; it reports the ones the origin actually sent and says whether the
  * policy was applied or only survived as the page's `<meta>` tag.
  *
- * No credentials, no writes. GET only.
+ * No credentials, no writes. GET only, in both passes; the browser leg refuses
+ * any other method at the request layer, before it reaches the origin.
+ *
+ * That default pass reads the served bytes, so it proves what a host returns
+ * and nothing about what a browser then does with them. `--browser` adds an
+ * opt-in leg that drives the same origin in Chromium and asserts the three
+ * reader-visible behaviours the HTTP pass cannot reach: a hover preview renders
+ * the target note's title (which needs the Worker, the WASM module, and the
+ * snapshot to have all resolved), the page reports no console error and no
+ * failed request while doing it, and tag browsing renders rows from the live
+ * origin, continuing the list where a tag offers one. It launches the Chromium
+ * this repository's browser suite already uses — nothing is downloaded at run
+ * time — and costs a browser launch, one page per examined tag route, and,
+ * because Playwright is a devDependency, an explicit install wherever the
+ * package is consumed rather than cloned. It is emulated at 1280x800, which is
+ * neither a mobile profile nor a real device, so latency is the network's. Two
+ * properties of the run belong to the check rather than to a reader, and
+ * `docs/adoption.md` states them as the leg's measurement limits: every request
+ * in the context passes through the interception that refuses non-GET methods,
+ * and enabling that interception disables Chromium's HTTP cache and blocks
+ * service workers for the session.
  *
  * Usage:
  *   node scripts/check-deployed-site.ts --origin https://example.org/
+ *   node scripts/check-deployed-site.ts --origin https://example.org/ --browser
  *
  * Exits 0 when every assertion passes, 1 otherwise. Informational lines
  * (`INFO`) report measured host behaviour and never fail the run.
  */
 
+import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import type { Browser, BrowserContext, Page, Request, Response } from 'playwright';
+import { PREVIEW_TITLE_LIMIT, PREVIEW_TRUNCATION_MARKER } from '../src/lib/preview-model.ts';
 
 /** A named assertion failed to find what the served artifact must reference. */
 export class DeployedCheckError extends Error {
@@ -47,21 +72,60 @@ export function normalizeHeaders(headers: Iterable<[string, string]>): Map<strin
   return normalized;
 }
 
-/** Entity decode the small set an HTML `<title>` can carry. */
+/** The references a `<title>`'s text can carry, and the character each decodes to. */
+const TITLE_REFERENCE_TEXT: Readonly<Record<string, string>> = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#39;': "'",
+};
+
+/**
+ * Entity decode the small set an HTML `<title>` can carry, in one pass.
+ *
+ * The HTML tokenizer consumes each reference once and never re-scans what it
+ * produced, so `&amp;lt;` — what Astro emits for an authored `&lt;` — decodes to
+ * the literal `&lt;`, which is what `document.title` reports for it. A sequence
+ * of `replaceAll` calls does not: `&amp;lt;` becomes `&lt;` on the first call
+ * and `<` on the second, so the checker would compare a valid title against a
+ * different string than the browser read. One sweep with one pattern decodes
+ * each reference exactly once, because `replace` appends its replacements to the
+ * output rather than rescanning them; the pattern's set is this table's keys, so
+ * the fallback is a type total, not a case.
+ */
 function decodeEntities(text: string): string {
-  return text
-    .replaceAll('&amp;', '&')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'");
+  return text.replace(/&(?:amp|lt|gt|quot|#39);/g, (reference) => TITLE_REFERENCE_TEXT[reference] ?? reference);
+}
+
+/**
+ * Collapse ASCII whitespace the way an HTML `<title>` reaches a reader.
+ *
+ * `document.title` — what Playwright's `page.title()` returns and what a
+ * browser tab shows — replaces each run of ASCII whitespace (tab, line feed,
+ * form feed, carriage return, space) with one space and strips a leading or
+ * trailing run of those same characters. It leaves every other code point
+ * alone, so a non-ASCII space such as U+00A0 or U+2003 survives as itself, at a
+ * title's boundary as much as inside it. Reading a served `<title>` must apply
+ * that same rule: text that a browser reports unchanged would otherwise compare
+ * here as a different string, and a valid authored title — repeated internal
+ * spaces, or a non-breaking space — would fail an assertion it should pass.
+ *
+ * The trim is spelled as an explicit ASCII class rather than
+ * `String.prototype.trim`, which strips every code point Unicode's `WhiteSpace`
+ * production names — U+00A0 and U+2003 among them. The browser's getter does
+ * not, so a helper that used `trim` would disagree with `document.title` on
+ * exactly the titles this rule exists to preserve.
+ */
+export function normalizeTitleWhitespace(text: string): string {
+  return text.replace(/[\t\n\f\r ]+/g, ' ').replace(/^ | $/g, '');
 }
 
 /** The document's `<title>`, or `undefined` when absent or blank. */
 export function findTitle(html: string): string | undefined {
   const match = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
   if (!match) return undefined;
-  const title = decodeEntities(match[1]).replace(/\s+/g, ' ').trim();
+  const title = normalizeTitleWhitespace(decodeEntities(match[1]));
   return title === '' ? undefined : title;
 }
 
@@ -202,16 +266,24 @@ export function requireReference(
   throw new DeployedCheckError(`no ${name} reference found in the served HTML/JS`);
 }
 
-/** Parsed command line. `origin` is normalized to a bare `scheme://host[:port]`. */
+/**
+ * Parsed command line. `origin` is normalized to a bare `scheme://host[:port]`.
+ *
+ * `browser` is opt-in and off by default: the HTTP pass is what a pipeline
+ * runs, and a browser launch is a cost and a dependency that request does not
+ * imply.
+ */
 export interface DeployedCheckArguments {
   origin: string;
   timeoutMs: number;
+  browser: boolean;
 }
 
-/** Parse `--origin` (required) and `--timeout` (milliseconds). */
+/** Parse `--origin` (required), `--timeout` (milliseconds), and `--browser`. */
 export function parseArguments(argv: readonly string[]): DeployedCheckArguments {
   let origin: string | undefined;
   let timeoutMs = 15_000;
+  let browser = false;
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
     if (argument === '--origin') {
@@ -222,6 +294,8 @@ export function parseArguments(argv: readonly string[]): DeployedCheckArguments 
       timeoutMs = Number(argv[++index]);
     } else if (argument.startsWith('--timeout=')) {
       timeoutMs = Number(argument.slice('--timeout='.length));
+    } else if (argument === '--browser') {
+      browser = true;
     } else {
       throw new DeployedCheckError(`unknown argument: ${argument}`);
     }
@@ -244,7 +318,7 @@ export function parseArguments(argv: readonly string[]): DeployedCheckArguments 
   if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
     throw new DeployedCheckError(`--origin must be a bare origin with no path, query, or fragment: ${origin}`);
   }
-  return { origin: url.origin, timeoutMs };
+  return { origin: url.origin, timeoutMs, browser };
 }
 
 interface Probe {
@@ -372,11 +446,680 @@ async function discover(
   }
 }
 
+/**
+ * The stored title inside a panel title, with the alias group `previewTitle`
+ * appends and the ellipsis a long title is truncated with removed.
+ *
+ * The panel renders the note's stored title, plus `" (<aliases>)"` when the
+ * note has aliases; the note's own static page carries the stored title alone.
+ * Cutting at the first `" ("` therefore compares the two sources on the one
+ * string they share. A stored title that itself contains a parenthetical is cut
+ * early, which only makes the containment assertion weaker and never false: the
+ * remainder is still a prefix of the served title.
+ *
+ * The marker is dropped only where `previewTitle` produced it, which its length
+ * states as well as its last character: the producer appends the marker only to
+ * a panel title longer than `PREVIEW_TITLE_LIMIT`, and what it emits then is
+ * exactly `PREVIEW_TITLE_LIMIT` characters. Below that bound the character is
+ * the author's own text — a stored title is bounded at 300 characters by the
+ * content contract, so a title alone can never reach the bound — and an authored
+ * title of `…` has to keep its base instead of being reduced to the empty string
+ * that failed a correct render. Reading the bound generously in the other
+ * direction is safe: a panel title that arrives at the bound untruncated loses
+ * only its last character, and what remains is still a prefix of the served
+ * title, which is all the assertion claims.
+ */
+export function previewTitleBase(panelTitle: string): string {
+  const truncated =
+    panelTitle.length === PREVIEW_TITLE_LIMIT && panelTitle.endsWith(PREVIEW_TRUNCATION_MARKER);
+  const text = truncated ? panelTitle.slice(0, -1) : panelTitle;
+  const aliasGroup = text.indexOf(' (');
+  return (aliasGroup === -1 ? text : text.slice(0, aliasGroup)).trim();
+}
+
+/** First line of an error: Playwright's messages carry the cause there. */
+function reason(error: unknown): string {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.split('\n')[0];
+}
+
+/** Playwright's installed version, or `unknown` when its manifest cannot be read. */
+function playwrightVersion(): string {
+  try {
+    const manifest: unknown = JSON.parse(
+      readFileSync(createRequire(import.meta.url).resolve('playwright/package.json'), 'utf8'),
+    );
+    if (typeof manifest === 'object' && manifest !== null && 'version' in manifest && typeof manifest.version === 'string') {
+      return manifest.version;
+    }
+  } catch {
+    // An unreadable manifest or a blocked `./package.json` export leaves the
+    // version informational; it is not what any assertion turns on.
+  }
+  return 'unknown';
+}
+
+/** What the browser observed over the session, for the assertions that read it. */
+interface BrowserLog {
+  consoleErrors: string[];
+  pageErrors: string[];
+  failed: string[];
+  /** Non-GET requests the interception refused, one entry per attempt. */
+  nonGet: string[];
+  /** The requests this leg refused, so `requestfailed` does not re-report them. */
+  refused: WeakSet<Request>;
+  responses: number;
+  worker: number;
+  snapshot: number;
+  wasm: number;
+}
+
+/**
+ * Attach every listener before the first navigation.
+ *
+ * A failed request is one the browser could not complete at all
+ * (`requestfailed`) or one the origin answered with an error status. Both are
+ * recorded, and neither is filtered: a request the page aborted because a
+ * navigation cancelled it is a request the page did not get, and treating it as
+ * noise is how a flaky origin reads as a healthy one. The one exception is a
+ * request {@link interceptNonGet} refused — that abort is this check's own act,
+ * reported once as a non-GET attempt rather than twice as an origin failure.
+ */
+function watchBrowser(page: Page): BrowserLog {
+  const log: BrowserLog = {
+    consoleErrors: [],
+    pageErrors: [],
+    failed: [],
+    nonGet: [],
+    refused: new WeakSet(),
+    responses: 0,
+    worker: 0,
+    snapshot: 0,
+    wasm: 0,
+  };
+  page.on('console', (entry) => {
+    if (entry.type() === 'error') log.consoleErrors.push(entry.text());
+  });
+  page.on('pageerror', (error) => log.pageErrors.push(reason(error)));
+  page.on('request', (request) => {
+    // The same finders the HTTP pass uses, so one definition of each chunk name
+    // governs both passes and a renamed chunk cannot pass one of them. Non-GET
+    // methods are counted by the route handler instead: it is the observer that
+    // also sees a request a dedicated Worker issues.
+    const path = new URL(request.url()).pathname;
+    if (findWorkerChunk(path) !== undefined) log.worker += 1;
+    else if (findSnapshotUrl(path) !== undefined) log.snapshot += 1;
+    else if (findWasmUrl(path) !== undefined) log.wasm += 1;
+  });
+  page.on('requestfailed', (request) => {
+    if (log.refused.has(request)) return;
+    log.failed.push(`${request.method()} ${request.url()} — ${request.failure()?.errorText ?? 'unknown'}`);
+  });
+  page.on('response', (response) => {
+    log.responses += 1;
+    if (response.status() >= 400) log.failed.push(`${response.status()} ${response.url()}`);
+  });
+  return log;
+}
+
+/**
+ * Refuse every non-GET request in this context before it reaches the origin.
+ *
+ * The HTTP pass is GET by construction; this leg drives a real browser, where a
+ * served script could issue any method — a wrong deploy, a compromised chunk,
+ * or a page this check does not control. The route is registered on the
+ * *context* rather than the page so a request a dedicated Worker makes passes
+ * through it too, and it is registered before the first navigation. A refused
+ * request is recorded here, the one observer that sees every request including
+ * worker traffic, and `checkRequests` turns a non-zero count into a failing
+ * assertion; the abort itself is this check's act, so `watchBrowser`'s
+ * `requestfailed` handler does not also count it as a failure of the origin.
+ */
+async function interceptNonGet(context: BrowserContext, log: BrowserLog): Promise<void> {
+  await context.route('**/*', async (route) => {
+    const request = route.request();
+    if (request.method() === 'GET') {
+      await route.continue();
+      return;
+    }
+    log.nonGet.push(`${request.method()} ${request.url()}`);
+    log.refused.add(request);
+    await route.abort('blockedbyclient');
+  });
+}
+
+/** One browser session's shared state, so each assertion reads as one step. */
+interface BrowserLeg {
+  origin: string;
+  timeoutMs: number;
+  /** The served `/` HTML: its note links are the preview targets. */
+  rootHtml: string;
+  /** Tag routes the served tag index listed, in the order it listed them. */
+  tagRoutes: readonly string[];
+  /**
+   * The HTTP pass validated the tag index's supported *empty* state: the index
+   * is a healthy 200 whose page says there are no tags, so there is no route to
+   * open and tag browsing is inapplicable rather than broken.
+   */
+  tagEmpty: boolean;
+  record: (name: string, ok: boolean, detail: string) => void;
+  info: (name: string, detail: string) => void;
+}
+
+/** A browser-observed panel state, for the failure detail as well as the pass. */
+async function panelState(page: Page): Promise<string> {
+  const panel = page.locator('#link-preview');
+  if ((await panel.count()) === 0) return 'absent';
+  return (await panel.isVisible()) ? 'visible' : 'hidden';
+}
+
+/**
+ * How many continuations one tag route may offer before this check stops.
+ *
+ * A bound on the check, not on the product: a list still offering rows after
+ * this many pages is reported as a failure rather than as an exhausted list, so
+ * no run claims completion it did not observe.
+ */
+const TAG_CONTINUATION_CAP = 200;
+
+/** Observation of one tag route, before and after every continuation. */
+interface TagRouteMeasurement {
+  route: string;
+  label: string;
+  /** The enhanced region's own status line (`#tag-browser-status`) — not an HTTP status. */
+  regionStatus: string;
+  /** The enhanced region as the client left it: `visible` when it installed. */
+  state: string;
+  /** The complete no-JS list's note hrefs, deduplicated, read before the click. */
+  staticHrefs: string[];
+  /** The enhanced list's rendered note hrefs as the client left them. */
+  rows: string[];
+  /**
+   * Every unique href the list rendered across every window taken, including
+   * rows a later window slid out. This is what membership is checked on.
+   */
+  observed: string[];
+  /** The highest logical position the list had loaded, from `aria-posinset`. */
+  loaded: number;
+  /** Continuations the list offered and this run took, sliding windows included. */
+  moreClicks: number;
+  firstRowsMs: number;
+}
+
+/**
+ * Open one tag route, start its list, and take every continuation it offers.
+ *
+ * The region ships `hidden` and the client script unhides it at install, so a
+ * visible region is the runtime having run rather than markup that happens to
+ * exist. The static list is read before the list is started because a successful
+ * first render is what releases it.
+ *
+ * Progress is the list's own loaded position — the highest `aria-posinset` it
+ * has rendered — and not the number of rows in the DOM. The client keeps a
+ * bounded window of `TAG_WINDOW_SIZE` rendered rows and slides it, so a tag with
+ * more notes than the bound keeps adding logical rows while its rendered row
+ * count stops growing; an assertion that the rows grew would time out on a
+ * healthy origin. `aria-setsize` cannot serve here either: it is the tag's
+ * complete membership and does not change as pages load. Both attributes are the
+ * page's own published description of the list, so the check observes the
+ * product rather than a signal added for it.
+ *
+ * Membership is checked two ways, because the sliding window makes the final DOM
+ * the wrong place to look. Every window taken is required to name only rows the
+ * static list names — a wrong-tag row must fail even if a later window slides it
+ * out — and the union over every window is required, once the list stops
+ * offering continuations, to have rendered the static list completely, so a list
+ * that quietly stops short of its own membership fails.
+ */
+async function measureTagRoute(page: Page, leg: BrowserLeg, route: string): Promise<TagRouteMeasurement> {
+  const started = Date.now();
+  const response = await page.goto(`${leg.origin}${route}`, { waitUntil: 'load', timeout: leg.timeoutMs });
+  const status = navigationStatus(response);
+  if (status !== '200') throw new DeployedCheckError(`the route answered ${status}`);
+  await page.locator('#tag-browser').waitFor({ state: 'visible', timeout: leg.timeoutMs });
+  const staticHrefs = await noteHrefs(page, '#tag-static-list');
+  const start = page.locator('#tag-browse-start');
+  if ((await start.count()) > 0) await start.click({ timeout: leg.timeoutMs });
+  await page.waitForFunction(
+    () => document.querySelectorAll('#tag-browser-results a[href^="/notes/"]').length > 0,
+    undefined,
+    { timeout: leg.timeoutMs },
+  );
+  const firstRows = await noteHrefs(page, '#tag-browser-results');
+  const firstRowsMs = Date.now() - started;
+
+  // Every window is checked against the static list as it is taken, because the
+  // client keeps a bounded window of rendered rows and slides it: a row that
+  // arrived in an early window and later slid out is gone from the DOM by the
+  // time the list is exhausted. Checking only the last window would let a
+  // wrong-tag row pass. `observed` is the union over every window, so the
+  // exhausted list can be required to have rendered the static list *completely*
+  // rather than merely to have named no row outside it.
+  const observed = new Set<string>();
+  const takeWindow = (windowRows: readonly string[], windowIndex: number): void => {
+    const invented: string[] = [];
+    for (const href of windowRows) {
+      observed.add(href);
+      if (!staticHrefs.includes(href)) invented.push(href);
+    }
+    if (invented.length > 0) {
+      throw new DeployedCheckError(
+        `window ${windowIndex} rendered row(s) the static list does not name: ${JSON.stringify(invented)} ` +
+          `(the static list names ${staticHrefs.length} row(s))`,
+      );
+    }
+  };
+
+  let rows = firstRows;
+  let loaded = await loadedPosition(page);
+  let moreClicks = 0;
+  takeWindow(rows, 1);
+  const more = page.locator('#tag-browse-more');
+  while (await more.isVisible()) {
+    if (moreClicks >= TAG_CONTINUATION_CAP) {
+      throw new DeployedCheckError(
+        `still offered a continuation after ${moreClicks} pages (loaded ${loaded}); ` +
+          `this check stops at ${TAG_CONTINUATION_CAP} and will not report the list exhausted`,
+      );
+    }
+    const before = loaded;
+    await more.click({ timeout: leg.timeoutMs });
+    try {
+      await page.waitForFunction(
+        (position) =>
+          [...document.querySelectorAll('#tag-browser-results li[aria-posinset]')].some(
+            (row) => Number(row.getAttribute('aria-posinset')) > position,
+          ) || document.querySelector('#tag-browse-more')?.hasAttribute('hidden') === true,
+        before,
+        { timeout: leg.timeoutMs },
+      );
+    } catch (error) {
+      throw new DeployedCheckError(
+        `did not load past row ${before} on continuation ${moreClicks + 1} (${reason(error)})`,
+      );
+    }
+    loaded = Math.max(loaded, await loadedPosition(page));
+    rows = await noteHrefs(page, '#tag-browser-results');
+    moreClicks += 1;
+    takeWindow(rows, moreClicks + 1);
+  }
+
+  const missing = staticHrefs.filter((href) => !observed.has(href));
+  if (missing.length > 0) {
+    throw new DeployedCheckError(
+      `the enhanced list rendered ${observed.size} of the static list's ${staticHrefs.length} row(s) before it ` +
+        `stopped offering continuations; never rendered ${JSON.stringify(missing.slice(0, 3))}`,
+    );
+  }
+
+  const region = await tagRegion(page);
+  return {
+    route,
+    label: region.label,
+    regionStatus: region.status,
+    state: region.state,
+    staticHrefs,
+    rows,
+    observed: [...observed],
+    loaded,
+    moreClicks,
+    firstRowsMs,
+  };
+}
+
+/**
+ * The tag region's own text as it stands, read in one pass through `evaluate`.
+ *
+ * A locator read would wait out Playwright's default 30-second timeout on a
+ * region this fixture never rendered, which is the opposite of what a failure
+ * detail is for: the observation has to be taken while the assertion fails, not
+ * thirty seconds later.
+ */
+async function tagRegion(page: Page): Promise<{ label: string; status: string; state: string }> {
+  return page.evaluate(() => {
+    const region = document.querySelector('#tag-browser');
+    return {
+      label: document.querySelector('#tag-browser-current')?.textContent ?? '',
+      status: document.querySelector('#tag-browser-status')?.textContent ?? '',
+      state: region === null ? 'absent' : region.checkVisibility() ? 'visible' : 'hidden',
+    };
+  });
+}
+
+/**
+ * The highest logical position the enhanced list has rendered, or 0.
+ *
+ * `aria-posinset` is the row's 1-based position in the tag's complete
+ * collection, so the largest one rendered is how far the list has loaded; the
+ * rendered row count is bounded by the client's window and stops moving.
+ */
+async function loadedPosition(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    let position = 0;
+    for (const row of document.querySelectorAll('#tag-browser-results li[aria-posinset]')) {
+      position = Math.max(position, Number(row.getAttribute('aria-posinset')) || 0);
+    }
+    return position;
+  });
+}
+
+/** The tag region as it stands, for a failure detail rather than a bare timeout. */
+async function tagState(page: Page): Promise<string> {
+  const region = await tagRegion(page);
+  const rows = await page.locator('#tag-browser-results a[href^="/notes/"]').count();
+  const loaded = await loadedPosition(page);
+  return `region=${region.state} browser-rows=${rows} loaded=${loaded} status=${JSON.stringify(region.status)}`;
+}
+
+/** The `/notes/<slug>/` hrefs inside one region, deduplicated, in DOM order. */
+async function noteHrefs(page: Page, region: string): Promise<string[]> {
+  const hrefs = await page.locator(`${region} a[href^="/notes/"]`).evaluateAll((links) =>
+    links.map((link) => link.getAttribute('href') ?? ''),
+  );
+  return [...new Set(hrefs.filter((href) => href.startsWith('/notes/')))];
+}
+
+function sample(values: readonly string[], limit = 3): string {
+  return values.length === 0 ? '' : ` first=${JSON.stringify(values.slice(0, limit))}`;
+}
+
+/** The status one navigation produced, or `no response` when it produced none. */
+function navigationStatus(response: Response | null): string {
+  return response === null ? 'no response' : String(response.status());
+}
+
+/** Load the served `/` and compare the title a browser reads with the bytes. */
+async function checkRoot(page: Page, leg: BrowserLeg): Promise<void> {
+  const started = Date.now();
+  let status: string;
+  try {
+    status = navigationStatus(await page.goto(`${leg.origin}/`, { waitUntil: 'load', timeout: leg.timeoutMs }));
+  } catch (error) {
+    status = reason(error);
+  }
+  // `page.title()` is `document.title`, already ASCII-collapsed; `findTitle`
+  // applies the same rule to the served bytes. Normalizing both operands states
+  // that equivalence directly rather than depending on the two agreeing by
+  // accident, and it leaves non-ASCII whitespace alone on both sides.
+  const title = normalizeTitleWhitespace(await page.title());
+  const servedTitle = findTitle(leg.rootHtml);
+  leg.record(
+    'browser-root',
+    status === '200' && title !== '' && (servedTitle === undefined || title === normalizeTitleWhitespace(servedTitle)),
+    `status=${status} title=${JSON.stringify(title)} served-title=${JSON.stringify(servedTitle ?? '')} ms=${Date.now() - started}`,
+  );
+}
+
+/**
+ * Hover a note link the served `/` names and require the panel it opens to
+ * carry that note's own title.
+ *
+ * The cross-check is against the note's *static* page — a different producer
+ * and a different request — so a panel rendering a stale row, another note's
+ * row, or the source page's own title fails. The run also requires the runtime
+ * assets to have been requested: a panel that rendered without the Worker, the
+ * WASM module, and the snapshot would not be evidence of the chain this leg
+ * exists to follow.
+ */
+async function checkPreview(page: Page, leg: BrowserLeg, log: BrowserLog): Promise<void> {
+  const noteRoutes = findNoteRoutes(leg.rootHtml);
+  if (noteRoutes.length === 0) {
+    leg.record('browser-preview', false, 'the served / links to no /notes/<slug>/ route to hover');
+    return;
+  }
+  const route = noteRoutes[0];
+  const link = page.locator(`a[href="${route}"]`).first();
+  const started = Date.now();
+  let panelTitle = '';
+  let observed = '';
+  try {
+    await link.hover({ timeout: leg.timeoutMs });
+    await page.locator('#link-preview').waitFor({ state: 'visible', timeout: leg.timeoutMs });
+    panelTitle = ((await page.locator('#link-preview strong').first().textContent({ timeout: leg.timeoutMs })) ?? '').trim();
+  } catch (error) {
+    observed = ` panel=${await panelState(page)} after ${Date.now() - started} ms (${reason(error)})`;
+  }
+  const describedBy = await page.evaluate(
+    (href) => document.querySelector(`a[href="${href}"]`)?.getAttribute('aria-describedby') ?? '',
+    route,
+  );
+  // The panel renders the stored title as text nodes, so repeated internal
+  // whitespace reaches it verbatim; the target's title is read the way a browser
+  // reports `document.title`, with ASCII whitespace collapsed. Both operands are
+  // put through that same rule — non-ASCII whitespace survives on both sides —
+  // so a valid authored title like `Two  Spaces` agrees instead of failing on a
+  // representation difference between the two readers.
+  const base = previewTitleBase(panelTitle);
+  const panelBase = normalizeTitleWhitespace(base);
+
+  let targetStatus: string;
+  let targetTitle = '';
+  try {
+    const response = await page.goto(`${leg.origin}${route}`, { waitUntil: 'load', timeout: leg.timeoutMs });
+    targetStatus = navigationStatus(response);
+    targetTitle = await page.title();
+  } catch (error) {
+    targetStatus = reason(error);
+  }
+
+  const assets = `worker=${log.worker} snapshot=${log.snapshot} wasm=${log.wasm}`;
+  leg.record(
+    'browser-preview',
+    panelBase !== '' &&
+      targetStatus === '200' &&
+      normalizeTitleWhitespace(targetTitle).startsWith(panelBase) &&
+      describedBy === 'link-preview' &&
+      log.worker > 0 &&
+      log.snapshot > 0 &&
+      log.wasm > 0,
+    `${route} panel-title=${JSON.stringify(panelTitle)} panel-title-base=${JSON.stringify(base)} ` +
+      `describedby=${JSON.stringify(describedBy)} target-status=${targetStatus} ` +
+      `target-title=${JSON.stringify(targetTitle)} runtime-requests=[${assets}] ms=${Date.now() - started}${observed}`,
+  );
+}
+
+/**
+ * Start a tag route's list and take every continuation it offers.
+ *
+ * Routes are examined in the order the served index listed them and the
+ * examination stops at the first route that offers a continuation, so the
+ * load-more behaviour is exercised wherever a site has a tag large enough for
+ * it. Every examined route is measured and validated, not only the one chosen
+ * below for the detail line: `routes-examined` counting two while one route's
+ * membership was checked is the defect this rule exists to prevent. Rows must
+ * come from the Worker: a dead runtime leaves this list empty and reveals the
+ * static one instead, so an empty list is a failure even though the page still
+ * shows notes — and every row, in every window of every examined route, must be
+ * one the static list names, with the exhaustion of each route required to have
+ * rendered that static list completely. `measureTagRoute` reports either
+ * violation as this route's failure.
+ *
+ * Every continuation the list offers is taken, counted, and followed to the
+ * loaded position it names; a list still offering rows at the safety cap is a
+ * failure, never a silent claim that the list ended.
+ *
+ * A validated empty tag index is the supported no-tags state, not a broken
+ * route: `tagEmpty` carries the HTTP pass's verdict that the index is a healthy
+ * 200 whose page says the site has no tags, so there is nothing to browse and
+ * the assertion records that as a pass. An index that is absent, malformed, or
+ * not the empty state leaves `tagEmpty` false and fails here.
+ */
+async function checkTagBrowsing(page: Page, leg: BrowserLeg): Promise<void> {
+  if (leg.tagRoutes.length === 0) {
+    if (leg.tagEmpty) {
+      leg.record(
+        'browser-tags',
+        true,
+        'the served tag index has no tags (validated empty state); there is no /tags/<tag>/ route to open',
+      );
+      return;
+    }
+    leg.record('browser-tags', false, 'the served tag index listed no /tags/<tag>/ route to open');
+    return;
+  }
+  const measurements: TagRouteMeasurement[] = [];
+  for (const route of leg.tagRoutes) {
+    let measured: TagRouteMeasurement;
+    try {
+      measured = await measureTagRoute(page, leg, route);
+    } catch (error) {
+      leg.record(
+        'browser-tags',
+        false,
+        `${route}: ${reason(error)}; observed ${await tagState(page)} ` +
+          `(examined ${measurements.length + 1} of ${leg.tagRoutes.length} routes)`,
+      );
+      return;
+    }
+    measurements.push(measured);
+    if (measured.moreClicks > 0) break;
+  }
+
+  // The chosen route supplies the detail line — the continued one when a
+  // continuation was taken, else the first examined. Membership is not this
+  // route's alone: `measureTagRoute` already validated every examined route.
+  const continued = measurements.find((entry) => entry.moreClicks > 0);
+  const chosen = continued ?? measurements[0];
+  leg.record(
+    'browser-tags',
+    chosen.rows.length > 0 && chosen.staticHrefs.length > 0,
+    `${chosen.route} label=${JSON.stringify(chosen.label)} rows=${chosen.rows.length} ` +
+      `static-rows=${chosen.staticHrefs.length} loaded=${chosen.loaded} pages=${chosen.moreClicks + 1} ` +
+      `more-clicks=${chosen.moreClicks} first-rows-ms=${chosen.firstRowsMs} region=${chosen.state} ` +
+      `routes-examined=${measurements.length} status=${JSON.stringify(chosen.regionStatus)} ` +
+      `observed-rows=${chosen.observed.length}`,
+  );
+  leg.info(
+    'browser-tags-continuation',
+    continued === undefined
+      ? `examined ${measurements.length} of ${leg.tagRoutes.length} tag route(s); every one fitted a single page ` +
+          `(loaded ${measurements.map((entry) => entry.loaded).join('/')} rows against static rows ` +
+          `${measurements.map((entry) => entry.staticHrefs.length).join('/')}), so no continuation was offered to take`
+      : `${continued.route} continued ${continued.moreClicks} time(s), ending at ${continued.loaded} rows ` +
+          `(static rows ${continued.staticHrefs.length})`,
+  );
+}
+
+/** Console and page errors over the whole session, samples included. */
+function checkConsole(leg: BrowserLeg, log: BrowserLog): void {
+  leg.record(
+    'browser-console',
+    log.consoleErrors.length === 0 && log.pageErrors.length === 0,
+    `console-errors=${log.consoleErrors.length} page-errors=${log.pageErrors.length}` +
+      sample([...log.pageErrors, ...log.consoleErrors]),
+  );
+}
+
+/**
+ * Failed requests and non-GET methods over the whole session.
+ *
+ * Both halves are failures: a request the browser could not complete or the
+ * origin answered with 4xx/5xx is a reader-visible break, and a method other
+ * than GET would mean this read-only check changed something. The non-GET half
+ * is counted *and* enforced — {@link interceptNonGet} refuses each one at the
+ * request layer, so the count is the number of attempts the origin never saw
+ * rather than the number of writes it took.
+ */
+function checkRequests(leg: BrowserLeg, log: BrowserLog): void {
+  leg.record(
+    'browser-requests',
+    log.failed.length === 0 && log.nonGet.length === 0,
+    `responses=${log.responses} failed=${log.failed.length} non-get=${log.nonGet.length}` +
+      sample([...log.failed, ...log.nonGet]),
+  );
+}
+
+/**
+ * The one Playwright binding this leg uses.
+ *
+ * Typed structurally rather than by `import()` on the module, because the
+ * driver has to stay a runtime import: Playwright is a devDependency, so a
+ * static import would make the default GET-only pass — which a consumer runs
+ * from an install that has no Playwright — fail to load.
+ */
+interface PlaywrightDriver {
+  chromium: { launch: () => Promise<Browser> };
+}
+
+/** Load the browser driver, or record why the requested leg cannot run. */
+async function loadPlaywright(record: BrowserLeg['record']): Promise<PlaywrightDriver | undefined> {
+  try {
+    return await import('playwright');
+  } catch (error) {
+    record(
+      'browser-launch',
+      false,
+      `playwright is not installed (${reason(error)}); it is a devDependency of this repository, so an ` +
+        'installed copy of the package must add it before --browser can run',
+    );
+    return undefined;
+  }
+}
+
+/**
+ * The `--browser` leg: the same origin, driven by Chromium.
+ *
+ * Nothing here is a retry. Every wait has an explicit timeout and every failure
+ * records what was observed instead of a bare timeout, so an unreachable or
+ * half-broken origin fails the run rather than producing a shorter one. Every
+ * request passes through {@link interceptNonGet} before the first navigation, so
+ * the leg cannot write to the origin even if the served page tries to.
+ */
+async function runBrowserLeg(leg: BrowserLeg): Promise<void> {
+  const playwright = await loadPlaywright(leg.record);
+  if (playwright === undefined) return;
+
+  let browser: Browser;
+  try {
+    browser = await playwright.chromium.launch();
+  } catch (error) {
+    leg.record(
+      'browser-launch',
+      false,
+      `Chromium did not launch (${reason(error)}); install it with \`npx playwright install chromium\`, ` +
+        'or run the check without --browser',
+    );
+    return;
+  }
+
+  try {
+    // A context of this leg's own, because interception is registered on the
+    // *context*: that is the scope that also covers a request a dedicated Worker
+    // issues, and a service worker could issue a fetch from outside it, so
+    // service workers are blocked for the session. The product's SQLite runtime
+    // is a dedicated Worker, which `serviceWorkers: 'block'` does not touch.
+    // Both choices are measurement limits — routing also disables Chromium's
+    // HTTP cache — and `docs/adoption.md` states them.
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      serviceWorkers: 'block',
+    });
+    const page = await context.newPage();
+    const log = watchBrowser(page);
+    await interceptNonGet(context, log);
+    leg.info(
+      'browser',
+      `chromium=${browser.version()} playwright=${playwrightVersion()} viewport=1280x800 (emulated) ` +
+        'read-only=GET-enforced',
+    );
+
+    await checkRoot(page, leg);
+    await checkPreview(page, leg, log);
+    await checkTagBrowsing(page, leg);
+    checkConsole(leg, log);
+    checkRequests(leg, log);
+  } finally {
+    await browser.close();
+  }
+}
+
 function usage(): string {
   return [
-    'Usage: node scripts/check-deployed-site.ts --origin <url> [--timeout <ms>]',
+    'Usage: node scripts/check-deployed-site.ts --origin <url> [--timeout <ms>] [--browser]',
     '',
     'Read-only post-deployment check: GET requests only, no credentials, no writes.',
+    '--browser adds a Chromium leg (Playwright) asserting a hover preview, no console',
+    'or request error, and tag browsing against the same origin.',
     'Exits 0 when every assertion passes, 1 otherwise.',
   ].join('\n');
 }
@@ -387,7 +1130,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  const { origin, timeoutMs } = parseArguments(argv);
+  const { origin, timeoutMs, browser: browserLeg } = parseArguments(argv);
   const checks: CheckResult[] = [];
   const record = (name: string, ok: boolean, detail: string): void => {
     checks.push({ name, ok, detail });
@@ -462,7 +1205,10 @@ async function main(argv: readonly string[]): Promise<number> {
   const tagIndex = await probe(`${origin}/tags/`, timeoutMs);
   const tagIndexOk = tagIndex.status === 200 && isHtml(tagIndex);
   const tagRoutes = tagIndexOk ? findTagRoutes(tagIndex.text) : [];
-  const tagEmpty = tagRoutes.length === 0 && hasEmptyFacetState(tagIndex.text);
+  // The validated empty state, carried into the browser leg rather than left to
+  // be re-derived there: it is a healthy index that says the site has no tags,
+  // which is a supported generated state and not a missing route.
+  const tagEmpty = tagIndexOk && tagRoutes.length === 0 && hasEmptyFacetState(tagIndex.text);
   record(
     'tag-index',
     tagIndexOk && (tagRoutes.length > 0 || tagEmpty),
@@ -513,6 +1259,13 @@ async function main(argv: readonly string[]): Promise<number> {
       `Accept-Encoding: ${BROWSER_ACCEPT_ENCODING} -> content-encoding=${root.headers.get('content-encoding') ?? 'identity'}` +
       `${brotliEncoding === 'br' ? '' : ' (brotli not negotiated)'}`,
   );
+
+  // Last, so the HTTP pass a pipeline reads is unchanged and complete whether or
+  // not a browser is available, and so a browser failure cannot hide a host
+  // observation the earlier assertions already made.
+  if (browserLeg) {
+    await runBrowserLeg({ origin, timeoutMs, rootHtml: root.text, tagRoutes, tagEmpty, record, info });
+  }
 
   const failed = checks.filter((check) => !check.ok).length;
   console.log(`\n${checks.length - failed} passed, ${failed} failed`);

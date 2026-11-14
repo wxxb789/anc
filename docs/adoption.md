@@ -661,7 +661,9 @@ than hardcoding a content hash, prints PASS/FAIL per assertion with the observed
 non-zero on any failure. A JavaScript asset is accepted as either `application/javascript` or
 `text/javascript`, including the worker the client instantiates; a worker served as anything else
 fails the chain. A tag index with no tags passes only when it serves the supported empty state —
-the check does not invent a tag route to follow:
+the check does not invent a tag route to follow, and the opt-in browser leg records tag browsing
+as inapplicable on that same validated state rather than failing it (an index that is missing,
+malformed, or not that state fails in both passes):
 
 ```bash
 node scripts/check-deployed-site.ts --origin https://notes.example.org/
@@ -676,6 +678,87 @@ Baseline against this project's GitHub Pages site (2026-11-12): 9 assertions pas
 200 `application/wasm`, gzip, `\0asm`; `/tags/` listed 6 routes and the first tag page rendered a
 non-empty note grid; a note route returned 200 with a title. `_headers` produced no CSP response
 header, and brotli was not negotiated.
+
+**The opt-in browser leg.** The HTTP pass proves what the host returns; it cannot see what the
+page then does with those bytes. `--browser` drives the same origin in Chromium and asserts the
+three behaviours a reader actually uses:
+
+```bash
+node scripts/check-deployed-site.ts --origin https://notes.example.org/ --browser
+```
+
+It stays read-only. There are no credentials, and every non-GET request is refused by request
+interception before it reaches the origin, so nothing is written even if a served script issues
+one — a refusal fails the run and is reported as a non-GET attempt.
+
+- **A hover preview renders its target note's title.** The leg hovers the first `/notes/<slug>/`
+  link the served `/` names and requires the panel's title — minus the alias group the panel
+  appends — to be a prefix of that note's own static page title, with the hovered link carrying
+  `aria-describedby="link-preview"` and the Worker chunk, the snapshot, and the WASM module all
+  requested. Those requests are what make the panel evidence about the Worker/WASM/snapshot chain
+  rather than about markup that happened to be on the page; the title is checked against the
+  note's static page, a different producer and a different request, so a stale or wrong row fails.
+  The panel's title is text the snapshot stored, while the target is read the way a browser
+  reports `document.title`; both sides are compared under that same HTML rule — runs of ASCII
+  whitespace collapsed, every other code point kept — so a valid authored title containing
+  repeated spaces agrees rather than failing on a representation difference between the two.
+- **No console error and no failed request.** Every `console` error, uncaught page error,
+  `requestfailed`, 4xx/5xx response, and non-GET request in the session is counted and the run
+  fails on a non-zero count. Nothing is filtered as noise — a request a navigation aborted counts
+  — so a flaky origin fails loudly instead of reporting a shorter run. The one request not
+  double-counted is one the leg itself refused: it is already reported as a non-GET attempt, so
+  the refusal is not also recorded as a failure of the origin.
+- **Tag browsing renders rows.** The leg opens the tag routes the served index lists, in that
+  order, starts each enhanced list, and requires rows to arrive: a dead runtime leaves that list
+  empty and reveals the static one in its place, so rows are what shows the Worker answered.
+  **Every route it examined is validated, not only the one the detail line names** — the line
+  reports `routes-examined` and `observed-rows` beside the chosen route's own counts, and a second
+  route that disagrees with its static list fails the run even though the chosen one agrees. Every
+  loaded window of every examined route must name only rows that route's static list names, and
+  once a route's list stops offering continuations it must have rendered that static list
+  *completely*; checking only the final DOM would miss a wrong row an earlier window loaded and a
+  later one slid out, and checking only membership would miss a list that quietly stops short of
+  its own static list. A route that offers a continuation is followed to the end of its list — the run
+  stops examining further routes there — and each continuation has to advance the list's **loaded
+  position**, the largest `aria-posinset` it has rendered. The position is what to watch rather
+  than the rendered row count: the client keeps a bounded window of rendered rows and slides it,
+  so a tag with more notes than that window keeps loading while the count of rendered rows stops
+  changing. `aria-setsize` is the tag's complete membership and does not move as pages load, so it
+  cannot measure progress either. A list that keeps offering rows at the check's 200-continuation
+  bound fails the run rather than being reported exhausted, and a list whose rows never arrive
+  fails on its own bound. A **validated tag index with no tags** is the supported empty state, and
+  the assertion passes there with an explicit no-tags observation instead of failing: there is no
+  route to open.
+
+Its cost and its limits: one Chromium launch (~1 s), one navigation per tag route examined — the
+leg examines routes in index order and stops at the first that offers a continuation — plus one
+Worker query per continuation that route offers, and an install — Playwright is a devDependency
+of this repository, not of the published package, so a consumer has to `npm install playwright`
+and `npx playwright install chromium` (a browser download of roughly 150 MB into the Playwright
+cache) before the flag can run. The flag is off by default and nothing else in the check loads the
+driver. It emulates one 1280x800 desktop viewport with no mobile or device profile and no network
+throttling, and it reads the live origin, so latency is the network's: a slow origin the HTTP pass
+survives can time out here, which `--timeout` widens. A host without Chromium fails the run rather
+than skipping the leg. Two conditions of the run belong to the check rather than to a reader, and
+they are the leg's measurement limits: routing every request so a non-GET method can be refused
+disables Chromium's HTTP cache for the session, so the leg reads the origin's bytes rather than a
+returning reader's cached copy; and service workers are blocked so one cannot issue a fetch outside
+that interception — the site's own SQLite runtime is a dedicated Worker, which this does not
+affect.
+
+Baseline with the browser leg against this project's GitHub Pages site (2026-11-14, Chromium
+**156.0.8078.4**, Playwright **1.64.1**): 14 assertions passed, 0 failed — the nine HTTP
+assertions above, unchanged, plus five browser assertions, with these observed values in the
+recorded run. `/` loaded in 161 ms with the title the served bytes carry; the hover preview over
+`/notes/heterogeneous-agent-audit/` opened in 442 ms with that note's title, the hovered link's
+`aria-describedby`, and one Worker, one snapshot, and one WASM request; `/tags/agent/` rendered
+its row from the Worker in 191 ms with every row named by the static list; and the session ended
+with 0 console errors, 0 page errors, 0 failed requests, and 0 non-GET requests across 77
+responses. **No tag on that site has more than two notes**, so no continuation was offered there:
+the leg examined all 6 tag routes and said so on an `INFO browser-tags-continuation` line, and
+the continuation half, the per-route and per-window membership rules, the empty-tag-index pass,
+and the non-GET refusal are exercised by the fixture gate in `tests/check-deployed-site.test.ts`
+instead of being quietly skipped.
 
 A rough GitHub Pages workflow, given the four caveats above:
 

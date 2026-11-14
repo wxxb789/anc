@@ -172,6 +172,100 @@ CI verify run `35317922105` (80 files, 953 passed / 34 skipped) and
 Action-parity run `35317922078`, whose shallow job builds the release-ready
 workspace and whose new "Prove the artifact check can fail" step ran.
 
+Post-completion follow-up (2026-11-14, PR #55): after this record closed, the
+post-deployment check gained an opt-in `--browser` leg — Chromium through
+Playwright against the same origin, asserting a hover preview whose panel title
+agrees with the target's own static page, a session with no console error and no
+failed request, and tag browsing that follows every continuation a tag offers by
+the list's loaded position. That file is packed (`package.json`'s `files` lists
+`scripts/`, and `scripts/compile-package.ts` compiles what it packs), so **every
+identity above is historical**: the tarball `anc-0.1.0.tgz` (sha256 `1025e0a5…`,
+393,306 bytes) and the tallies `80 files / 952-953 passed / 34 skipped` describe
+the tree measured at completion, whose package carried the name and version that
+named that file. The current tree is `@wxxb789/anc@0.0.3`; the follow-up adds
+browser-leg tests to `tests/check-deployed-site.test.ts` and was **not** run
+through a whole-suite `pnpm run verify`, so no new whole-suite tally is claimed
+here — its evidence is the focused run of that file recorded with the change.
+What was measured on the first follow-up tree (apply-lane edits uncommitted) was
+the packed artifact `wxxb789-anc-0.0.3.tgz`, sha256
+`a431c981867336ac0f71c612717c52047422fd8fa823b4a2ce59d30a90c47d99`, 524,714
+bytes — a different artifact from the one above, not a correction of it, and not
+this lane's final identity either.
+
+Review fixes (2026-11-14, PR #55, later than the paragraph above): an independent
+review of the browser leg at head `dde64cf` raised four findings, all accepted and
+fixed in the working tree on top of it.
+
+- A non-GET request is now refused by request interception registered on the
+  browser *context* before the first navigation, so a dedicated Worker's traffic
+  passes through it too, rather than only being counted after it had already
+  reached the destination; service workers are blocked for the session so one
+  cannot route around that interception, and a refusal is still counted and still
+  fails the run.
+- The HTTP pass's validated empty tag-index state is carried into the browser leg,
+  which records tag browsing as inapplicable on a healthy untagged site instead of
+  failing it; an index that is missing, malformed, or not the empty state still
+  fails.
+- Every examined tag route and every loaded window is validated against its static
+  list, and the union over all windows must have rendered that list completely once
+  the list stops offering continuations — not only the single route the detail line
+  names, and not only the final DOM a sliding window leaves behind.
+- Both title comparisons — the served root title against `document.title`, and the
+  preview panel's stored title against the target's page title — normalize ASCII
+  whitespace the way the HTML `title` getter does, on both sides, so an authored
+  title containing repeated internal spaces is not a false failure and non-ASCII
+  whitespace is preserved.
+
+Each fix has a control in `tests/check-deployed-site.test.ts`, and the pre-fix
+behaviour of the non-GET, empty-tag, non-selected-route, incomplete-membership, and
+sliding-window cases was measured against the unmodified reviewed head rather than
+assumed. Only the focused gates for the touched files were run —
+`tests/check-deployed-site.test.ts` (38 passed), `tests/packaging.test.ts` (11
+passed), `pnpm run lint` and `pnpm run check` (0 errors, 0 warnings) — so no
+whole-suite tally is claimed here either. The packed artifact of that review-fix
+tree was `wxxb789-anc-0.0.3.tgz`, sha256
+`49ad0e9cacd82857bb0ad5163260fbad3eb11abc53fff19db2ebd1052bf3aadb`, 527,555 bytes,
+which supersedes `a431c981…` without correcting the completion record above.
+Nothing in the review fixes changes the build, the published artifact's kind, the
+SQLite contract, or the runtime; they change which observations a deployed
+origin's browser leg makes, and — for the first finding — that it refuses a write
+instead of merely reporting one.
+
+R4 recovery (2026-11-14, same review round, later than the paragraph above): the
+fourth finding's fix was accepted but its implementation was wrong in one
+respect, and the operator reproduced it. `normalizeTitleWhitespace` collapsed runs
+of ASCII whitespace and then called `String.prototype.trim`, which strips every
+code point Unicode's `WhiteSpace` production names — U+00A0 and U+2003 among them
+— so a served `<title>` of `U+00A0 + Title + U+00A0` read back here as `Title`
+while the real Chromium `document.title` getter returned the string with both
+non-breaking spaces intact. The helper now strips only the ASCII characters it
+collapses (`[\t\n\f\r ]`), leaving every other code point untouched at a title's
+boundary as much as inside it, which is what the finding required and what the
+helper's own documentation already claimed. Measured with
+`artifacts/pr55/r4-whitespace-probe.mjs`, which serves each input over loopback and
+reads Chromium 156.0.8078.4's own getter beside `findTitle`: before the fix
+`chromiumGetter` kept both U+00A0 while `findTitle` returned `Title`; after it the
+two agree on `\u00a0Title\u00a0`. The leg's comparison normalizes both readers, so
+it agreed even while both dropped the code points — the recovery control asserts
+the printed `title=`/`served-title=` values raw instead. Coverage added: unit cases
+for a boundary U+00A0, a boundary U+2003, ASCII padding beside one, an all-NBSP
+title, and idempotence; and a browser-leg control that replaces the built home
+page's `<title>` with `\u00a0Boundary  \u2003Sites\u00a0` and requires Chromium's
+getter and the served-byte read to report it identically. No sibling needed moving:
+`checkRoot` and `checkPreview` both call the helper on both operands, and the five
+remaining `String.prototype.trim` call sites in that file are three for
+`Content-Type` parsing, one in `previewTitleBase`, and one on the panel's `<strong>`
+read — the last two cannot diverge from the target's getter in a real build because
+the note producer (`titleFrom`) already applies `trim` to a declared title. Only the
+focused gates were re-run
+— `tests/check-deployed-site.test.ts` (40 passed), `tests/packaging.test.ts` (11
+passed), `pnpm run lint` and `pnpm run check` (0 errors, 0 warnings) — so no
+whole-suite tally is claimed. The packed artifact of the recovery tree is
+`wxxb789-anc-0.0.3.tgz`, sha256
+`5f4c3d170b03b67715e61084bea0ddb3dd36a1ec54b13eda18173d7127518712`, 527,731 bytes,
+which is this lane's final identity and supersedes `49ad0e9c…` without correcting
+either record above.
+
 ### Commands and observed results
 
 - Local `pnpm run verify` (Node v22.23.2, pnpm 11.18.0, Linux x64) — **80 test
