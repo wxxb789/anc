@@ -13,16 +13,22 @@
  *
  * The enhanced list keeps the **logical** collection in `entries` and renders
  * only a bounded window of it. Every rendered row carries `aria-setsize` (the
- * complete logical count) and `aria-posinset` (its 1-based position), so the
- * accessibility tree still describes the whole collection while the DOM stays
- * at `TAG_WINDOW_SIZE` rows plus two spacers. Without this, every continuation
- * paid a style/layout cost proportional to the number of rows loaded so far:
- * measured 10.1 ms at 100 rows and 57.2 ms at 1,000 rows (1,000-note corpus),
- * with SQL and Worker time flat below 1 ms.
+ * tag's complete membership, from the snapshot) and `aria-posinset` (its 1-based
+ * position in that collection), so the accessibility tree still describes the
+ * whole set while the DOM stays at `TAG_WINDOW_SIZE` rows plus two spacers. The
+ * announced size is deliberately not `entries.length`: a screen reader reads it
+ * for the list announcement, so a loaded count tells a reader that a
+ * thousand-note tag holds ten notes and changes on every continuation
+ * (`docs/goals/archive/0008-acceptable-browser-cost.md`, a11y addendum).
+ *
+ * Without the window, every continuation paid a style/layout cost proportional
+ * to the number of rows loaded so far: measured 10.1 ms at 100 rows and 57.2 ms
+ * at 1,000 rows (1,000-note corpus), with SQL and Worker time flat below 1 ms.
  *
  * A continuation at the tail mutates only its edges — drop the rows that left
- * the window, append the new ones, update `aria-setsize` — because recreating
- * the window on every page puts a fixed 120-node cost back into each dispatch.
+ * the window, append the new ones — because recreating the window on every page
+ * puts a fixed 120-node cost back into each dispatch; the announced set size
+ * does not change at all.
  */
 
 import { noteRoute } from '../lib/route-path.ts';
@@ -70,6 +76,8 @@ function install(root: HTMLElement): void {
 
   /** Every note the logical list contains, including rows currently released. */
   const entries: NoteSummary[] = [];
+  /** The tag's complete membership from the snapshot; every row's `aria-setsize`. */
+  let logicalTotal = 0;
   let windowStart = 0;
   let windowEnd = 0;
   /**
@@ -323,11 +331,11 @@ function install(root: HTMLElement): void {
     return layout.listTop + prefixHeight(index);
   }
 
-  function rowFor(note: NoteSummary, position: number, total: number): HTMLLIElement {
+  function rowFor(note: NoteSummary, position: number): HTMLLIElement {
     const item = document.createElement('li');
     // The DOM holds a window; these two attributes describe the complete
     // collection to assistive technology (W3C ARIA APG listbox/lazy-load rule).
-    item.setAttribute('aria-setsize', String(total));
+    item.setAttribute('aria-setsize', String(logicalTotal));
     item.setAttribute('aria-posinset', String(position + 1));
     const link = document.createElement('a');
     link.href = noteRoute(note.slug);
@@ -382,10 +390,6 @@ function install(root: HTMLElement): void {
     }
   }
 
-  function setSetsize(total: number): void {
-    for (const row of numberedRows()) row.setAttribute('aria-setsize', String(total));
-  }
-
   /**
    * Replace the rendered window. Used for the initial page, a tag reset, and a
    * scroll reposition; page appends mutate the window's edges instead. The
@@ -402,7 +406,7 @@ function install(root: HTMLElement): void {
 
     const fragment = document.createDocumentFragment();
     for (let index = range.start; index < range.end; index += 1) {
-      fragment.append(rowFor(entries[index]!, index, total));
+      fragment.append(rowFor(entries[index]!, index));
     }
     results.replaceChildren(fragment);
     windowStart = range.start;
@@ -439,10 +443,9 @@ function install(root: HTMLElement): void {
       windowStart = range.start;
     }
     for (let index = Math.max(windowStart, firstNew); index < total; index += 1) {
-      results.append(rowFor(entries[index]!, index, total));
+      results.append(rowFor(entries[index]!, index));
     }
     windowEnd = total;
-    setSetsize(total);
     // The rows just appended are inside the window, so they cannot move a
     // spacer. Size the released ranges first and measure afterwards: the
     // measurement's rect read then flushes the one layout the frame needs,
@@ -458,11 +461,10 @@ function install(root: HTMLElement): void {
 
   /**
    * A reader looking at an earlier window keeps their place: the new rows are
-   * below it, so only the bottom spacer and the logical count change.
+   * below it, so only the bottom spacer's height changes.
    */
   function appendBelowWindow(): void {
     const total = entries.length;
-    setSetsize(total);
     updateSpacers(windowStart, windowEnd, total);
     markWindowMutation();
   }
@@ -610,6 +612,7 @@ function install(root: HTMLElement): void {
 
   const reset = (): void => {
     entries.length = 0;
+    logicalTotal = 0;
     windowStart = 0;
     windowEnd = 0;
     clearMeasurements();
@@ -672,15 +675,18 @@ function install(root: HTMLElement): void {
     // window keeps their place; one at the tail follows the new rows.
     const previousTotal = entries.length;
     const atTail = windowEnd >= previousTotal;
+    // `classifyTagPage` produces a `page` state only for a known tag, and both
+    // other kinds returned above; this is the one narrowing that gives `total`
+    // and `tag` to the rest of the function.
+    if (page.known) {
+      logicalTotal = page.total;
+      current.textContent = page.tag.label;
+      current.hidden = false;
+    }
     entries.push(...state.notes);
     if (atTail) appendAtTail(previousTotal);
     else appendBelowWindow();
     if (previousTotal === 0) detachStatic();
-
-    if (page.known) {
-      current.textContent = page.tag.label;
-      current.hidden = false;
-    }
     cursor = state.nextCursor;
     if (cursor === null) {
       // Hiding the focused button would drop focus to `<body>` just as above,
