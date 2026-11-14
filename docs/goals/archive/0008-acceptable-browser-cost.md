@@ -541,9 +541,6 @@ Cleanup applied (no reader-visible behaviour change):
 - `tests/tag-query.test.ts` gained one assertion pairing `tagByKey`'s membership count with
   `tagMemberCount` for one authored tag, each against the hand-written membership: the two SQL
   spellings of one row set are now held equal.
-- The private benchmark report's announced-size key was renamed `announcedSetsize`
-  (`scripts/benchmark-workload-report.ts`, `scripts/benchmark-workload-ui.ts`), matching the value
-  it holds. Nothing published or committed named the old key.
 
 Two corrections inside the addendum above, neither of which moves a measurement:
 
@@ -566,3 +563,7 @@ passed 3 files / 17 tests; the four browser gates
 recorded. Those gates rebuild a site from this source and read the rendered `aria-setsize`, so the
 deleted restatement is covered where it mattered. No AT campaign was re-run and none of the
 utterances, tables, or timings above were re-derived.
+
+The apply-stage pass over the accepted simplify findings — deleting the last restatement comment
+and leaving the benchmark report's field names unchanged — re-ran exactly these commands on the
+final tree and reproduced the same numbers.

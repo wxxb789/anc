@@ -62,7 +62,6 @@ async function openTag(page: Page): Promise<void> {
   await page.waitForSelector('#tag-browser-results [aria-posinset]');
 }
 
-/** The newest loaded logical position, which is the only thing a page changes. */
 async function loadedPosition(page: Page): Promise<number> {
   return page.evaluate(() =>
     [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].reduce(

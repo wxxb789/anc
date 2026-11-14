@@ -465,8 +465,8 @@ class TagTelemetry {
  * complete logical collection rather than counting every accumulated row.
  */
 interface TagWindowReport {
-  /** `aria-setsize` read from the rendered rows: the tag's complete membership. */
-  announcedSetsize: number;
+  /** `aria-setsize`: the tag's complete membership, not the rows loaded. */
+  logical: number;
   /** Numbered rows actually in the DOM. */
   rendered: number;
   rows: {
@@ -495,7 +495,7 @@ async function readTagWindow(page: Page): Promise<TagWindowReport> {
       };
     });
     return {
-      announcedSetsize: rows[0]?.setsize ?? 0,
+      logical: rows[0]?.setsize ?? 0,
       rendered: rows.length,
       rows,
     };
@@ -594,13 +594,13 @@ async function browseTag(page: Page, plan: WorkloadPlan, tagNodes: readonly TagN
     await assertRenderedTagPage(page, plan, tagNodes, pages);
   }
   const finalWindow = await readTagWindow(page);
-  const announcedSetsize = finalWindow.announcedSetsize;
+  const notesShown = finalWindow.logical;
   assertExactEventCount('tag browser page replies', telemetry.byTagTotal, pages);
   if (pages > tagPageBound) {
     throw new Error(`tag browser walked ${pages} pages beyond derived bound ${tagPageBound}`);
   }
-  if (announcedSetsize !== plan.tagMembers) {
-    throw new Error(`tag browser announced setsize ${announcedSetsize}; DB plan requires ${plan.tagMembers}`);
+  if (notesShown !== plan.tagMembers) {
+    throw new Error(`tag browser logical list has ${notesShown} notes; DB plan requires ${plan.tagMembers}`);
   }
   if (finalWindow.rows.at(-1)?.position !== plan.tagMembers) {
     throw new Error(
@@ -617,7 +617,7 @@ async function browseTag(page: Page, plan: WorkloadPlan, tagNodes: readonly TagN
   return {
     tagKey: plan.tagKey!,
     pages,
-    announcedSetsize,
+    notesShown,
     renderedRows: finalWindow.rendered,
     dispatchMs: telemetry.dispatchMs,
     operationMs: telemetry.operationMs,

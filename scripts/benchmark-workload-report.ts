@@ -84,7 +84,7 @@ export interface TagBrowseReport {
   tagKey: string;
   pages: number;
   /** The announced collection size (`aria-setsize`), equal to the tag's DB membership. */
-  announcedSetsize: number;
+  notesShown: number;
   /** Rows actually in the DOM at exhaustion; bounded by `TAG_WINDOW_SIZE`. */
   renderedRows: number;
   dispatchMs: number[];
