@@ -172,6 +172,28 @@ CI verify run `35317922105` (80 files, 953 passed / 34 skipped) and
 Action-parity run `35317922078`, whose shallow job builds the release-ready
 workspace and whose new "Prove the artifact check can fail" step ran.
 
+Post-completion follow-up (2026-11-14, PR #55): after this record closed, the
+post-deployment check gained an opt-in `--browser` leg — Chromium through
+Playwright against the same origin, asserting a hover preview whose panel title
+agrees with the target's own static page, a session with no console error and no
+failed request, and tag browsing that follows every continuation a tag offers by
+the list's loaded position. That file is packed (`package.json`'s `files` lists
+`scripts/`, and `scripts/compile-package.ts` compiles what it packs), so **every
+identity above is historical**: the tarball `anc-0.1.0.tgz` (sha256 `1025e0a5…`,
+393,306 bytes) and the tallies `80 files / 952-953 passed / 34 skipped` describe
+the tree measured at completion, whose package carried the name and version that
+named that file. The current tree is `@wxxb789/anc@0.0.3`; the follow-up adds
+browser-leg tests to `tests/check-deployed-site.test.ts` and was **not** run
+through a whole-suite `pnpm run verify`, so no new whole-suite tally is claimed
+here — its evidence is the focused run of that file recorded with the change.
+What is measured on the follow-up tree (apply-lane edits uncommitted) is the
+packed artifact: `wxxb789-anc-0.0.3.tgz`, sha256
+`a431c981867336ac0f71c612717c52047422fd8fa823b4a2ce59d30a90c47d99`, 524,714
+bytes — a different artifact from the one above, not a correction of it. Nothing
+in the follow-up changes the build, the published artifact, the SQLite contract,
+or the runtime; it changes which observations a deployed origin's browser leg
+makes.
+
 ### Commands and observed results
 
 - Local `pnpm run verify` (Node v22.23.2, pnpm 11.18.0, Linux x64) — **80 test

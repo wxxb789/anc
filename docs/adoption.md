@@ -697,20 +697,29 @@ node scripts/check-deployed-site.ts --origin https://notes.example.org/ --browse
   `requestfailed`, 4xx/5xx response, and non-GET request in the session is counted and the run
   fails on a non-zero count. Nothing is filtered as noise — a request a navigation aborted counts
   — so a flaky origin fails loudly instead of reporting a shorter run.
-- **Tag browsing renders rows.** The leg opens each tag route the served index lists, starts the
-  enhanced list, and requires rows to arrive: a dead runtime leaves that list empty and reveals
-  the static one in its place, so rows are what shows the Worker answered. Every row must be one
-  the static list names, and where a tag offers a continuation the leg clicks through it and
-  requires the rows to grow.
+- **Tag browsing renders rows.** The leg opens the tag routes the served index lists, in that
+  order, starts each enhanced list, and requires rows to arrive: a dead runtime leaves that list
+  empty and reveals the static one in its place, so rows are what shows the Worker answered.
+  Every row must be one the static list names. A route that offers a continuation is followed to
+  the end of its list — the run stops examining further routes there — and each continuation has
+  to advance the list's **loaded position**, the largest `aria-posinset` it has rendered. The
+  position is what to watch rather than the rendered row count: the client keeps a bounded window
+  of rendered rows and slides it, so a tag with more notes than that window keeps loading while
+  the count of rendered rows stops changing. `aria-setsize` is the tag's complete membership and
+  does not move as pages load, so it cannot measure progress either. A list that keeps offering
+  rows at the check's 200-continuation bound fails the run rather than being reported exhausted,
+  and a list whose rows never arrive fails on its own bound.
 
-Its cost and its limits: one Chromium launch (~1 s) plus one page per tag route examined, and an
-install — Playwright is a devDependency of this repository, not of the published package, so a
-consumer has to `npm install playwright` and `npx playwright install chromium` (a browser
-download of roughly 150 MB into the Playwright cache) before the flag can run. The flag is off by
-default and nothing else in the check loads the driver. It emulates one 1280x800 desktop viewport
-with no mobile or device profile and no network throttling, and it reads the live origin, so
-latency is the network's: a slow origin the HTTP pass survives can time out here, which
-`--timeout` widens. A host without Chromium fails the run rather than skipping the leg.
+Its cost and its limits: one Chromium launch (~1 s), one navigation per tag route examined — the
+leg examines routes in index order and stops at the first that offers a continuation — plus one
+Worker query per continuation that route offers, and an install — Playwright is a devDependency
+of this repository, not of the published package, so a consumer has to `npm install playwright`
+and `npx playwright install chromium` (a browser download of roughly 150 MB into the Playwright
+cache) before the flag can run. The flag is off by default and nothing else in the check loads the
+driver. It emulates one 1280x800 desktop viewport with no mobile or device profile and no network
+throttling, and it reads the live origin, so latency is the network's: a slow origin the HTTP pass
+survives can time out here, which `--timeout` widens. A host without Chromium fails the run rather
+than skipping the leg.
 
 Baseline with the browser leg against this project's GitHub Pages site (2026-11-14, Chromium
 **156.0.8078.4**, Playwright **1.64.1**): 14 assertions passed, 0 failed — the nine HTTP

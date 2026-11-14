@@ -49,7 +49,7 @@
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import type { Browser, Page } from 'playwright';
+import type { Browser, Page, Response } from 'playwright';
 
 /** A named assertion failed to find what the served artifact must reference. */
 export class DeployedCheckError extends Error {
@@ -440,7 +440,7 @@ function playwrightVersion(): string {
   return 'unknown';
 }
 
-/** What the browser observed, in the order the assertions below consume it. */
+/** What the browser observed over the session, for the assertions that read it. */
 interface BrowserLog {
   consoleErrors: string[];
   pageErrors: string[];
@@ -514,17 +514,30 @@ async function panelState(page: Page): Promise<string> {
   return (await panel.isVisible()) ? 'visible' : 'hidden';
 }
 
-/** Observation of one tag route, before and after any continuation. */
+/**
+ * How many continuations one tag route may offer before this check stops.
+ *
+ * A bound on the check, not on the product: a list still offering rows after
+ * this many pages is reported as a failure rather than as an exhausted list, so
+ * no run claims completion it did not observe.
+ */
+const TAG_CONTINUATION_CAP = 200;
+
+/** Observation of one tag route, before and after every continuation. */
 interface TagRouteMeasurement {
   route: string;
   label: string;
-  status: string;
+  /** The enhanced region's own status line (`#tag-browser-status`) — not an HTTP status. */
+  regionStatus: string;
   /** The enhanced region as the client left it: `visible` when it installed. */
   state: string;
   /** The complete no-JS list's note hrefs, deduplicated, read before the click. */
   staticHrefs: string[];
-  /** The enhanced list's note hrefs after every continuation was taken. */
+  /** The enhanced list's rendered note hrefs as the client left them. */
   rows: string[];
+  /** The highest logical position the list had loaded, from `aria-posinset`. */
+  loaded: number;
+  /** Continuations the list offered and this run took, sliding windows included. */
   moreClicks: number;
   firstRowsMs: number;
 }
@@ -536,53 +549,78 @@ interface TagRouteMeasurement {
  * visible region is the runtime having run rather than markup that happens to
  * exist. The static list is read before the list is started because a successful
  * first render is what releases it.
+ *
+ * Progress is the list's own loaded position — the highest `aria-posinset` it
+ * has rendered — and not the number of rows in the DOM. The client keeps a
+ * bounded window of `TAG_WINDOW_SIZE` rendered rows and slides it, so a tag with
+ * more notes than the bound keeps adding logical rows while its rendered row
+ * count stops growing; an assertion that the rows grew would time out on a
+ * healthy origin. `aria-setsize` cannot serve here either: it is the tag's
+ * complete membership and does not change as pages load. Both attributes are the
+ * page's own published description of the list, so the check observes the
+ * product rather than a signal added for it.
  */
-async function measureTagRoute(
-  page: Page,
-  origin: string,
-  route: string,
-  timeoutMs: number,
-): Promise<TagRouteMeasurement> {
+async function measureTagRoute(page: Page, leg: BrowserLeg, route: string): Promise<TagRouteMeasurement> {
   const started = Date.now();
-  const response = await page.goto(`${origin}${route}`, { waitUntil: 'load', timeout: timeoutMs });
-  if (response === null || response.status() !== 200) {
-    throw new DeployedCheckError(`${route} answered ${response === null ? 'no response' : response.status()}`);
-  }
-  await page.locator('#tag-browser').waitFor({ state: 'visible', timeout: timeoutMs });
+  const response = await page.goto(`${leg.origin}${route}`, { waitUntil: 'load', timeout: leg.timeoutMs });
+  const status = navigationStatus(response);
+  if (status !== '200') throw new DeployedCheckError(`the route answered ${status}`);
+  await page.locator('#tag-browser').waitFor({ state: 'visible', timeout: leg.timeoutMs });
   const staticHrefs = await noteHrefs(page, '#tag-static-list');
   const start = page.locator('#tag-browse-start');
-  if ((await start.count()) > 0) await start.click({ timeout: timeoutMs });
+  if ((await start.count()) > 0) await start.click({ timeout: leg.timeoutMs });
   await page.waitForFunction(
     () => document.querySelectorAll('#tag-browser-results a[href^="/notes/"]').length > 0,
     undefined,
-    { timeout: timeoutMs },
+    { timeout: leg.timeoutMs },
   );
   const firstRows = await noteHrefs(page, '#tag-browser-results');
   const firstRowsMs = Date.now() - started;
 
   let rows = firstRows;
+  let loaded = await loadedPosition(page);
   let moreClicks = 0;
   const more = page.locator('#tag-browse-more');
   while (await more.isVisible()) {
-    const before = rows.length;
-    await more.click({ timeout: timeoutMs });
-    await page.waitForFunction(
-      (count) =>
-        document.querySelectorAll('#tag-browser-results a[href^="/notes/"]').length > count ||
-        document.querySelector('#tag-browse-more')?.hasAttribute('hidden') === true,
-      before,
-      { timeout: timeoutMs },
-    );
-    const next = await noteHrefs(page, '#tag-browser-results');
-    // A full window is not a stall: the logical list grew while the DOM stayed
-    // at its bound, so stop rather than wait for rows that cannot arrive.
-    if (next.length <= before) break;
-    rows = next;
+    if (moreClicks >= TAG_CONTINUATION_CAP) {
+      throw new DeployedCheckError(
+        `still offered a continuation after ${moreClicks} pages (loaded ${loaded}); ` +
+          `this check stops at ${TAG_CONTINUATION_CAP} and will not report the list exhausted`,
+      );
+    }
+    const before = loaded;
+    await more.click({ timeout: leg.timeoutMs });
+    try {
+      await page.waitForFunction(
+        (position) =>
+          [...document.querySelectorAll('#tag-browser-results li[aria-posinset]')].some(
+            (row) => Number(row.getAttribute('aria-posinset')) > position,
+          ) || document.querySelector('#tag-browse-more')?.hasAttribute('hidden') === true,
+        before,
+        { timeout: leg.timeoutMs },
+      );
+    } catch (error) {
+      throw new DeployedCheckError(
+        `did not load past row ${before} on continuation ${moreClicks + 1} (${reason(error)})`,
+      );
+    }
+    loaded = Math.max(loaded, await loadedPosition(page));
+    rows = await noteHrefs(page, '#tag-browser-results');
     moreClicks += 1;
-    if (moreClicks >= 200) break;
   }
 
-  return { route, ...(await tagRegion(page)), staticHrefs, rows, moreClicks, firstRowsMs };
+  const region = await tagRegion(page);
+  return {
+    route,
+    label: region.label,
+    regionStatus: region.status,
+    state: region.state,
+    staticHrefs,
+    rows,
+    loaded,
+    moreClicks,
+    firstRowsMs,
+  };
 }
 
 /**
@@ -604,11 +642,29 @@ async function tagRegion(page: Page): Promise<{ label: string; status: string; s
   });
 }
 
+/**
+ * The highest logical position the enhanced list has rendered, or 0.
+ *
+ * `aria-posinset` is the row's 1-based position in the tag's complete
+ * collection, so the largest one rendered is how far the list has loaded; the
+ * rendered row count is bounded by the client's window and stops moving.
+ */
+async function loadedPosition(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    let position = 0;
+    for (const row of document.querySelectorAll('#tag-browser-results li[aria-posinset]')) {
+      position = Math.max(position, Number(row.getAttribute('aria-posinset')) || 0);
+    }
+    return position;
+  });
+}
+
 /** The tag region as it stands, for a failure detail rather than a bare timeout. */
 async function tagState(page: Page): Promise<string> {
   const region = await tagRegion(page);
   const rows = await page.locator('#tag-browser-results a[href^="/notes/"]').count();
-  return `region=${region.state} browser-rows=${rows} status=${JSON.stringify(region.status)}`;
+  const loaded = await loadedPosition(page);
+  return `region=${region.state} browser-rows=${rows} loaded=${loaded} status=${JSON.stringify(region.status)}`;
 }
 
 /** The `/notes/<slug>/` hrefs inside one region, deduplicated, in DOM order. */
@@ -623,13 +679,17 @@ function sample(values: readonly string[], limit = 3): string {
   return values.length === 0 ? '' : ` first=${JSON.stringify(values.slice(0, limit))}`;
 }
 
+/** The status one navigation produced, or `no response` when it produced none. */
+function navigationStatus(response: Response | null): string {
+  return response === null ? 'no response' : String(response.status());
+}
+
 /** Load the served `/` and compare the title a browser reads with the bytes. */
 async function checkRoot(page: Page, leg: BrowserLeg): Promise<void> {
   const started = Date.now();
   let status: string;
   try {
-    const response = await page.goto(`${leg.origin}/`, { waitUntil: 'load', timeout: leg.timeoutMs });
-    status = String(response === null ? 'no response' : response.status());
+    status = navigationStatus(await page.goto(`${leg.origin}/`, { waitUntil: 'load', timeout: leg.timeoutMs }));
   } catch (error) {
     status = reason(error);
   }
@@ -681,7 +741,7 @@ async function checkPreview(page: Page, leg: BrowserLeg, log: BrowserLog): Promi
   let targetTitle = '';
   try {
     const response = await page.goto(`${leg.origin}${route}`, { waitUntil: 'load', timeout: leg.timeoutMs });
-    targetStatus = String(response === null ? 'no response' : response.status());
+    targetStatus = navigationStatus(response);
     targetTitle = await page.title();
   } catch (error) {
     targetStatus = reason(error);
@@ -704,7 +764,7 @@ async function checkPreview(page: Page, leg: BrowserLeg, log: BrowserLog): Promi
 }
 
 /**
- * Start a tag route's list and take a continuation where one is offered.
+ * Start a tag route's list and take every continuation it offers.
  *
  * Routes are examined in the order the served index listed them and the
  * examination stops at the first route that offers a continuation, so the
@@ -713,6 +773,10 @@ async function checkPreview(page: Page, leg: BrowserLeg, log: BrowserLog): Promi
  * reveals the static one instead, so an empty list is a failure even though the
  * page still shows notes — and every row must be one the static list names, so
  * rows that arrived for the wrong tag fail too.
+ *
+ * Every continuation the list offers is taken, counted, and followed to the
+ * loaded position it names; a list still offering rows at the safety cap is a
+ * failure, never a silent claim that the list ended.
  */
 async function checkTagBrowsing(page: Page, leg: BrowserLeg): Promise<void> {
   if (leg.tagRoutes.length === 0) {
@@ -723,7 +787,7 @@ async function checkTagBrowsing(page: Page, leg: BrowserLeg): Promise<void> {
   for (const route of leg.tagRoutes) {
     let measured: TagRouteMeasurement;
     try {
-      measured = await measureTagRoute(page, leg.origin, route, leg.timeoutMs);
+      measured = await measureTagRoute(page, leg, route);
     } catch (error) {
       leg.record(
         'browser-tags',
@@ -744,18 +808,19 @@ async function checkTagBrowsing(page: Page, leg: BrowserLeg): Promise<void> {
     'browser-tags',
     chosen.rows.length > 0 && chosen.staticHrefs.length > 0 && invented.length === 0,
     `${chosen.route} label=${JSON.stringify(chosen.label)} rows=${chosen.rows.length} ` +
-      `static-rows=${chosen.staticHrefs.length} pages=${chosen.moreClicks + 1} more-clicks=${chosen.moreClicks} ` +
-      `first-rows-ms=${chosen.firstRowsMs} region=${chosen.state} routes-examined=${measurements.length}${
+      `static-rows=${chosen.staticHrefs.length} loaded=${chosen.loaded} pages=${chosen.moreClicks + 1} ` +
+      `more-clicks=${chosen.moreClicks} first-rows-ms=${chosen.firstRowsMs} region=${chosen.state} ` +
+      `routes-examined=${measurements.length}${
         invented.length === 0 ? '' : ` row-not-in-static-list=${JSON.stringify(invented)}`
-      } status=${JSON.stringify(chosen.status)}`,
+      } status=${JSON.stringify(chosen.regionStatus)}`,
   );
   leg.info(
     'browser-tags-continuation',
     continued === undefined
       ? `examined ${measurements.length} of ${leg.tagRoutes.length} tag route(s); every one fitted a single page ` +
-          `(rows ${measurements.map((entry) => entry.rows.length).join('/')} against static rows ` +
+          `(loaded ${measurements.map((entry) => entry.loaded).join('/')} rows against static rows ` +
           `${measurements.map((entry) => entry.staticHrefs.length).join('/')}), so no continuation was offered to take`
-      : `${continued.route} continued ${continued.moreClicks} time(s), ending at ${continued.rows.length} rows ` +
+      : `${continued.route} continued ${continued.moreClicks} time(s), ending at ${continued.loaded} rows ` +
           `(static rows ${continued.staticHrefs.length})`,
   );
 }

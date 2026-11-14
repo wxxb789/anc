@@ -8,18 +8,25 @@
  * discovery step that quietly yields nothing would turn the check into a green
  * run that never looked at the snapshot.
  *
- * `--browser` is covered three times: that it stays opt-in; against a real build
- * served on loopback, where the hover preview, the tag list, and a continuation
- * all have to work; and against the HTTP-only fixture above, whose pages carry
- * no preview panel and no tag region. A browser leg that cannot fail would
- * prove nothing, so that last case asserts the leg fails a site the HTTP pass
- * calls green.
+ * `--browser` is covered at every level it can fail: that it stays opt-in;
+ * against real builds served on loopback, where the hover preview, the tag
+ * list, and continuations all have to work — once with a tag small enough for
+ * the list to render whole, once with one larger than the client's rendered
+ * window, where only the loaded position keeps advancing; against the HTTP-only
+ * fixture above, whose pages carry no preview panel and no tag region; against
+ * a tag page whose list stalls with its continuation still on offer; and with
+ * no Chromium installed, where the requested leg has to fail the run. A browser
+ * leg that cannot fail would prove nothing, so the fixture cases assert the leg
+ * fails a site the HTTP pass calls green.
  */
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test } from 'vitest';
 import {
@@ -41,6 +48,8 @@ import {
   previewTitleBase,
   requireReference,
 } from '../scripts/check-deployed-site.ts';
+import { PREVIEW_TITLE_LIMIT, previewTitle } from '../src/lib/preview-model.ts';
+import { TAG_PAGE_SIZE, TAG_WINDOW_SIZE } from '../src/lib/tag-browser-model.ts';
 import { buildAndServe, removeWorkspace } from './support/browser-site.ts';
 
 const SNAPSHOT = '65a6ea8ce3e2abd69f21f8e48dba0942f9b9b107afd48d782d4f116bb9f4e87e';
@@ -82,7 +91,45 @@ const EMPTY_TAG_INDEX_HTML = `<html><head><title>Tags</title></head><body>
 
 const EMPTY_TAG_STATE = /PASS tag-index — .*tag-routes=0, empty-state present/;
 
+/**
+ * A tag page whose enhanced list never loads its next page: one row is already
+ * rendered, the region is visible, and the continuation button stays visible
+ * without ever adding a row. The static page around it is well formed, so the
+ * HTTP pass calls this route green and only the browser leg objects.
+ */
+const STALL_TAG_INDEX_HTML = `<html><head><title>Tags</title></head><body>
+<ul class="facet-list">
+<li><a href="/tags/stalled/">stalled</a><span class="facet-count">30 notes</span></li>
+</ul>
+</body></html>`;
+
+const STALL_TAG_HTML = `<html><head><title>Tag: stalled</title></head><body>
+<div class="note-grid"><article class="note-card"><h2>First note</h2></article></div>
+<div id="tag-static-list"><a href="/notes/first-note/">First note</a></div>
+<section id="tag-browser">
+<p id="tag-browser-current">stalled</p>
+<p id="tag-browser-status"></p>
+<ol id="tag-browser-results">
+<li aria-setsize="30" aria-posinset="1"><a href="/notes/first-note/">First note</a></li>
+</ol>
+<button id="tag-browse-more" type="button">Load more</button>
+</section>
+</body></html>`;
+
 const SCRIPT = fileURLToPath(new URL('../scripts/check-deployed-site.ts', import.meta.url));
+
+/**
+ * One tag larger than the client renders at once (`TAG_WINDOW_SIZE`) by more
+ * than one page (`TAG_PAGE_SIZE`).
+ *
+ * A tag of exactly window + one page would slide its window on its final page,
+ * where the continuation button hides anyway; five more notes put two
+ * continuations past the first slide, so the rendered row count stops growing
+ * while rows keep loading — the case the leg has to follow by loaded position.
+ */
+const BIG_TAG_NOTES = TAG_WINDOW_SIZE + TAG_PAGE_SIZE + 5;
+/** Page loads a tag of `BIG_TAG_NOTES` takes at the client's page size. */
+const BIG_TAG_PAGES = Math.ceil(BIG_TAG_NOTES / TAG_PAGE_SIZE);
 
 interface ServedFixture {
   contentType: string;
@@ -93,6 +140,8 @@ interface SiteOptions {
   scriptContentType?: string;
   workerContentType?: string;
   tagIndexHtml?: string;
+  /** Tag routes served with their own page instead of the default `TAG_HTML`. */
+  tagPages?: Record<string, string>;
   /** Run the opt-in browser leg against the fixture. */
   browser?: boolean;
   /** Bound the browser leg's navigation and wait timeouts. */
@@ -133,6 +182,9 @@ function siteRoutes(options: SiteOptions = {}): Record<string, ServedFixture> {
     },
   };
   for (const path of options.missing ?? []) delete routes[path];
+  for (const [path, body] of Object.entries(options.tagPages ?? {})) {
+    routes[path] = { contentType: 'text/html; charset=utf-8', body };
+  }
   return routes;
 }
 
@@ -165,9 +217,14 @@ async function serve(
 }
 
 /** Run the real CLI against the fixture; stdout and stderr are the assertion message. */
-async function runCheck(origin: string, extra: readonly string[] = []): Promise<{ status: number | null; output: string }> {
+async function runCheck(
+  origin: string,
+  extra: readonly string[] = [],
+  env: Record<string, string> = {},
+): Promise<{ status: number | null; output: string }> {
   const child = spawn(process.execPath, [SCRIPT, '--origin', origin, ...extra], {
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, ...env },
   });
   let output = '';
   child.stdout.on('data', (chunk: Buffer) => {
@@ -222,13 +279,33 @@ test('parseArguments opts the browser leg in only when it is named', () => {
 test('previewTitleBase keeps the stored title and drops the alias group', () => {
   assert.equal(previewTitleBase('Note title'), 'Note title');
   assert.equal(previewTitleBase('Note title (alpha, beta)'), 'Note title');
-  // A stored title with its own parenthetical is cut early — weaker, not false:
-  // what remains is still a prefix of the note page's title.
   assert.equal(previewTitleBase('Interval (half-open)'), 'Interval');
   assert.equal(previewTitleBase('A title long enough to be truncated…'), 'A title long enough to be truncated');
   assert.equal(previewTitleBase('Truncated (alpha, be…'), 'Truncated');
   assert.equal(previewTitleBase('  Spaced title  '), 'Spaced title');
   assert.equal(previewTitleBase('…'), '');
+});
+
+test('previewTitleBase keeps its prefix of the title previewTitle produces', () => {
+  // The panel title's format belongs to `previewTitle`; asserting the
+  // agreement against that producer is what fails when the separator or the
+  // truncation marker moves, instead of pinning a copy of the format here.
+  const cases = [
+    { title: 'Note title', excerpt: '' },
+    { title: 'Note title', excerpt: '', aliases: ['alpha', 'beta'] },
+    { title: 'Interval (half-open)', excerpt: '', aliases: ['alias'] },
+    { title: 'L'.repeat(PREVIEW_TITLE_LIMIT + 200), excerpt: '' },
+    { title: 'L'.repeat(PREVIEW_TITLE_LIMIT + 200), excerpt: '', aliases: ['alpha', 'beta'] },
+  ];
+  for (const entry of cases) {
+    const base = previewTitleBase(previewTitle(entry));
+    assert.ok(base !== '', `no base in ${JSON.stringify(entry.title.slice(0, 24))}`);
+    assert.ok(entry.title.startsWith(base), `${JSON.stringify(base)} is not a prefix of the stored title`);
+    assert.ok(previewTitle(entry).length <= PREVIEW_TITLE_LIMIT, 'the producer bounded the panel title');
+  }
+  // An aliased long title truncates inside the alias group, so the marker has to
+  // be dropped before the group is cut.
+  assert.equal(previewTitleBase(previewTitle(cases[4])), 'L'.repeat(PREVIEW_TITLE_LIMIT - 1));
 });
 
 test('parseArguments rejects a missing, pathed, or unsupported origin', () => {
@@ -412,6 +489,45 @@ function browserCorpus(): Record<string, string> {
   return files;
 }
 
+/**
+ * `BIG_TAG_NOTES` notes on one tag, against a window the list cannot grow into.
+ *
+ * The client renders `TAG_WINDOW_SIZE` rows and slides them, so past the first
+ * slide the rendered row count is the bound while the loaded position keeps
+ * advancing; a leg that keys on the row count fails this corpus and a leg that
+ * keys on the loaded position passes it.
+ */
+function bigTagCorpus(): Record<string, string> {
+  const files: Record<string, string> = {
+    'home-note.md': [
+      '---',
+      'title: "Home note"',
+      'aliases: ["home-alias"]',
+      '---',
+      '',
+      '# Home note',
+      '',
+      'Body of the home note.',
+      '',
+    ].join('\n'),
+  };
+  for (let index = 1; index <= BIG_TAG_NOTES; index += 1) {
+    const id = String(index).padStart(3, '0');
+    files[`big-note-${id}.md`] = [
+      '---',
+      `title: "Big note ${id}"`,
+      'tags: [big-tag]',
+      '---',
+      '',
+      `# Big note ${id}`,
+      '',
+      `Body for big note ${id}.`,
+      '',
+    ].join('\n');
+  }
+  return files;
+}
+
 test('the browser leg is opt-in: the default run reports no browser line', async () => {
   const result = await checkSite({});
   assert.equal(result.status, 0, result.output);
@@ -424,17 +540,13 @@ test('the browser leg passes a real build and takes a tag continuation', async (
     const result = await runCheck(site.origin, ['--browser']);
     assert.equal(result.status, 0, result.output);
     assert.match(result.output, /PASS browser-root — status=200 title="[^"]+" served-title="[^"]+"/);
-    // The panel title is the stored title plus its alias group, its base is the
-    // title alone, and the target note's own page title starts with it. The
-    // runtime requests are what make the panel evidence of the Worker, the WASM
-    // module, and the snapshot rather than of markup that happened to be there.
     assert.match(
       result.output,
       /PASS browser-preview — \/notes\/[A-Za-z0-9-]+\/ panel-title="[^"]+ \([A-Za-z0-9-]+\)" panel-title-base="[^"]+" describedby="link-preview" target-status=200 target-title=".*" runtime-requests=\[worker=1 snapshot=1 wasm=1\]/,
     );
     assert.match(
       result.output,
-      /PASS browser-tags — \/tags\/browser-tag\/ label="[^"]+" rows=21 static-rows=21 pages=3 more-clicks=2/,
+      /PASS browser-tags — \/tags\/browser-tag\/ label="[^"]+" rows=21 static-rows=21 loaded=21 pages=3 more-clicks=2/,
     );
     assert.match(result.output, /INFO browser-tags-continuation — \/tags\/browser-tag\/ continued 2 time\(s\), ending at 21 rows/);
     assert.match(result.output, /PASS browser-console — console-errors=0 page-errors=0/);
@@ -445,6 +557,37 @@ test('the browser leg passes a real build and takes a tag continuation', async (
     removeWorkspace(site.workspace);
   }
 }, 180_000);
+
+test('the browser leg follows a tag larger than the client renders at once', async () => {
+  const site = await buildAndServe(bigTagCorpus());
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    // The rendered rows stop at the client's window while the list keeps
+    // loading to the last note: `rows` is the bound, `loaded` is the tag.
+    assert.match(
+      result.output,
+      new RegExp(
+        `PASS browser-tags — /tags/big-tag/ label="[^"]+" rows=${TAG_WINDOW_SIZE} ` +
+          `static-rows=${BIG_TAG_NOTES} loaded=${BIG_TAG_NOTES} pages=${BIG_TAG_PAGES} ` +
+          `more-clicks=${BIG_TAG_PAGES - 1} `,
+      ),
+    );
+    assert.match(
+      result.output,
+      new RegExp(
+        `INFO browser-tags-continuation — /tags/big-tag/ continued ${BIG_TAG_PAGES - 1} ` +
+          `time\\(s\\), ending at ${BIG_TAG_NOTES} rows`,
+      ),
+    );
+    assert.match(result.output, /PASS browser-console — console-errors=0 page-errors=0/);
+    assert.match(result.output, /PASS browser-requests — responses=\d+ failed=0 non-get=0/);
+    assert.match(result.output, /14 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 300_000);
 
 test('the browser leg fails a site with no client runtime that the HTTP pass calls green', async () => {
   const result = await checkSite({
@@ -474,3 +617,46 @@ test('the browser leg fails a site with no client runtime that the HTTP pass cal
   );
   assert.match(result.output, /10 passed, 4 failed/);
 }, 120_000);
+
+test('the browser leg fails a tag list that never loads past its first page', async () => {
+  const result = await checkSite({
+    browser: true,
+    timeoutMs: 2500,
+    tagIndexHtml: STALL_TAG_INDEX_HTML,
+    tagPages: { '/tags/stalled/': STALL_TAG_HTML },
+  });
+  assert.notEqual(result.status, 0, result.output);
+  // The static page is served and the HTTP pass calls it green; what stalls is
+  // the enhanced list, with its continuation button still on offer.
+  assert.match(result.output, /PASS tag-route — \/tags\/stalled\//);
+  assert.match(
+    result.output,
+    /FAIL browser-tags — \/tags\/stalled\/: did not load past row 1 on continuation 1 \(page\.waitForFunction: Timeout 2500ms exceeded\.\); observed region=visible browser-rows=1 loaded=1/,
+  );
+  assert.match(result.output, /PASS browser-console — console-errors=0 page-errors=0/);
+  assert.match(result.output, /PASS browser-requests — responses=\d+ failed=0 non-get=0/);
+  assert.match(result.output, /12 passed, 2 failed/);
+}, 60_000);
+
+test('a requested browser leg fails the run when no Chromium is installed', async () => {
+  // The empty cache is this run's own: a leg that silently skipped when the
+  // browser was absent would leave a consumer's gate green without ever
+  // driving the origin.
+  const cache = mkdtempSync(join(tmpdir(), 'anc-no-browsers-'));
+  const site = await serve(siteRoutes({}));
+  try {
+    const result = await runCheck(site.origin, ['--browser'], { PLAYWRIGHT_BROWSERS_PATH: cache });
+    assert.notEqual(result.status, 0, result.output);
+    // The HTTP pass is unchanged — same origin, same nine assertions — so the
+    // failure is the browser leg's and not a site the check could not reach.
+    assert.match(result.output, /PASS site-root —/);
+    assert.match(result.output, /PASS asset-chain —/);
+    assert.match(result.output, /PASS tag-route —/);
+    assert.match(result.output, /FAIL browser-launch — Chromium did not launch/);
+    assert.doesNotMatch(result.output, /PASS browser-root/);
+    assert.match(result.output, /9 passed, 1 failed/);
+  } finally {
+    await site.close();
+    rmSync(cache, { recursive: true, force: true });
+  }
+}, 60_000);
