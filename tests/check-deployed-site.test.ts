@@ -22,7 +22,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -44,13 +44,14 @@ import {
   isPlausibleSnapshotContentType,
   isPlausibleWasmContentType,
   normalizeHeaders,
+  normalizeTitleWhitespace,
   parseArguments,
   previewTitleBase,
   requireReference,
 } from '../scripts/check-deployed-site.ts';
 import { PREVIEW_TITLE_LIMIT, previewTitle } from '../src/lib/preview-model.ts';
 import { TAG_PAGE_SIZE, TAG_WINDOW_SIZE } from '../src/lib/tag-browser-model.ts';
-import { buildAndServe, removeWorkspace } from './support/browser-site.ts';
+import { buildAndServe, buildIn, buildSite, removeWorkspace, serveDist } from './support/browser-site.ts';
 
 const SNAPSHOT = '65a6ea8ce3e2abd69f21f8e48dba0942f9b9b107afd48d782d4f116bb9f4e87e';
 const WASM = '2ee8f3dab694532afc8840e07703127287662d08b74e6ff50491ce63f00d5752';
@@ -113,6 +114,48 @@ const STALL_TAG_HTML = `<html><head><title>Tag: stalled</title></head><body>
 <li aria-setsize="30" aria-posinset="1"><a href="/notes/first-note/">First note</a></li>
 </ol>
 <button id="tag-browse-more" type="button">Load more</button>
+</section>
+</body></html>`;
+
+/**
+ * A tag page whose enhanced list slides its window: the first window carries a
+ * row for the *wrong* tag that a later window replaces, and the last window
+ * names only rows the static list names. A check that validates only the final
+ * window sees agreement and passes; the first window is the disagreement.
+ */
+const SLIDING_TAG_INDEX_HTML = `<html><head><title>Tags</title></head><body>
+<ul class="facet-list">
+<li><a href="/tags/sliding/">sliding</a><span class="facet-count">2 notes</span></li>
+</ul>
+</body></html>`;
+
+const SLIDING_TAG_HTML = `<html><head><title>Tag: sliding</title></head><body>
+<div class="note-grid"><article class="note-card"><h2>First</h2></article></div>
+<div id="tag-static-list"><a href="/notes/first/">First</a><a href="/notes/second/">Second</a></div>
+<section id="tag-browser">
+<p id="tag-browser-current">sliding</p>
+<p id="tag-browser-status"></p>
+<ol id="tag-browser-results"></ol>
+<button id="tag-browse-more" type="button">Load more</button>
+<script>
+const results = document.getElementById('tag-browser-results');
+const more = document.getElementById('tag-browse-more');
+function row(position, href) {
+  const li = document.createElement('li');
+  li.setAttribute('aria-setsize', '2');
+  li.setAttribute('aria-posinset', String(position));
+  const link = document.createElement('a');
+  link.setAttribute('href', href);
+  link.textContent = href;
+  li.appendChild(link);
+  return li;
+}
+results.append(row(1, '/notes/first/'), row(2, '/notes/wrong-tag/'));
+more.addEventListener('click', () => {
+  results.replaceChildren(row(2, '/notes/second/'));
+  more.hidden = true;
+});
+</script>
 </section>
 </body></html>`;
 
@@ -333,6 +376,43 @@ test('findTitle reads, trims, and entity-decodes a non-empty title', () => {
   assert.equal(findTitle('<title> Tag: agent · Notes </title>'), 'Tag: agent · Notes');
   assert.equal(findTitle('<title>   </title>'), undefined);
   assert.equal(findTitle('<html><body>no title</body></html>'), undefined);
+});
+
+test('findTitle collapses ASCII whitespace and preserves every other code point', () => {
+  // The served `<title>` must read the way `document.title` reports it, which
+  // collapses runs of ASCII whitespace (tab, LF, FF, CR, space) and leaves the
+  // rest alone. A title the browser reports unchanged must not read here as a
+  // different string, and a non-ASCII space must survive on both sides.
+  assert.equal(normalizeTitleWhitespace('a  b'), 'a b');
+  assert.equal(normalizeTitleWhitespace('a\t\n\f\rb'), 'a b');
+  assert.equal(normalizeTitleWhitespace('  a b  '), 'a b');
+  assert.equal(normalizeTitleWhitespace('a\u00a0\u00a0b'), 'a\u00a0\u00a0b');
+  assert.equal(normalizeTitleWhitespace('a\u2003b'), 'a\u2003b');
+  assert.equal(findTitle('<title>Two  Spaces</title>'), 'Two Spaces');
+  assert.equal(findTitle('<title>Two\u00a0\u00a0Spaces</title>'), 'Two\u00a0\u00a0Spaces');
+  // Idempotent on the already-normalized value Playwright's `page.title()` returns.
+  assert.equal(normalizeTitleWhitespace(normalizeTitleWhitespace('a  b')), 'a b');
+});
+
+test('normalizeTitleWhitespace strips ASCII whitespace only, never a non-ASCII space', () => {
+  // `String.prototype.trim` — what this helper used to call — strips every code
+  // point Unicode's `WhiteSpace` production names, U+00A0 and U+2003 among them.
+  // `document.title` strips only ASCII whitespace, so a title that begins or ends
+  // with a non-ASCII space reaches the browser with that code point intact and
+  // must read back intact — at the boundary as much as in the middle.
+  assert.equal(normalizeTitleWhitespace('\u00a0Title\u00a0'), '\u00a0Title\u00a0');
+  assert.equal(normalizeTitleWhitespace('\u2003Title\u2003'), '\u2003Title\u2003');
+  assert.equal(normalizeTitleWhitespace('\n\u00a0Title\u00a0\n'), '\u00a0Title\u00a0');
+  assert.equal(normalizeTitleWhitespace(' \u00a0Title\u00a0 '), '\u00a0Title\u00a0');
+  // The ASCII run inside still collapses; the non-ASCII spaces on either side of
+  // it, and at the ends, are untouched.
+  assert.equal(normalizeTitleWhitespace('\u00a0Boundary  \u2003Sites\u00a0'), '\u00a0Boundary \u2003Sites\u00a0');
+  assert.equal(normalizeTitleWhitespace('\u00a0\u2003\t\n'), '\u00a0\u2003');
+  assert.equal(normalizeTitleWhitespace('\u00a0'), '\u00a0');
+  assert.equal(normalizeTitleWhitespace(' \t\n\f\r '), '');
+  assert.equal(normalizeTitleWhitespace(normalizeTitleWhitespace('\u00a0Title\u00a0')), '\u00a0Title\u00a0');
+  assert.equal(findTitle('<title>\u00a0Title\u00a0</title>'), '\u00a0Title\u00a0');
+  assert.equal(findTitle('<title>\u2003Title\u2003</title>'), '\u2003Title\u2003');
 });
 
 test('collectScriptUrls keeps local scripts and skips stylesheets and external scripts', () => {
@@ -660,3 +740,323 @@ test('a requested browser leg fails the run when no Chromium is installed', asyn
     rmSync(cache, { recursive: true, force: true });
   }
 }, 60_000);
+
+/**
+ * Two notes on two different tags, one note each.
+ *
+ * Every route fits a single page, so the leg examines both and chooses the
+ * first for the detail line. A route the index listed but the run did not
+ * choose is exactly the one a membership check can skip by accident.
+ */
+function twoTagCorpus(): Record<string, string> {
+  return {
+    'first.md': '---\ntitle: First\ntags: [aaa]\n---\n\nFirst body.\n',
+    'second.md': '---\ntitle: Second\ntags: [bbb]\n---\n\nSecond body.\n',
+  };
+}
+
+test('the browser leg examines and validates every tag route the index lists', async () => {
+  const site = await buildAndServe(twoTagCorpus());
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    assert.match(
+      result.output,
+      /PASS browser-tags — \/tags\/aaa\/ label="[^"]+" rows=1 static-rows=1 loaded=1 pages=1 more-clicks=0 .*routes-examined=2 .*observed-rows=1/,
+    );
+    assert.match(result.output, /14 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 120_000);
+
+test('the browser leg validates a tag route it did not choose for the detail line', async () => {
+  const site = await buildAndServe(twoTagCorpus());
+  try {
+    // The enhanced list reads its rows from the snapshot, so rewriting the
+    // *static* page's list leaves the runtime untouched. The replacement is
+    // applied to every copy — a surviving anchor would make the run inert — and
+    // `/tags/bbb/` is the second route, the one the detail line does not name.
+    const target = join(site.dist, 'tags/bbb/index.html');
+    const original = readFileSync(target, 'utf8');
+    const changed = original.replaceAll('href="/notes/second/"', 'href="/notes/first/"');
+    assert.notEqual(changed, original, 'the static-list mutation must apply');
+    assert.doesNotMatch(changed, /href="\/notes\/second\/"/, 'no surviving anchor may make the mutation inert');
+    writeFileSync(target, changed);
+    try {
+      const result = await runCheck(site.origin, ['--browser']);
+      assert.notEqual(result.status, 0, result.output);
+      assert.match(
+        result.output,
+        /FAIL browser-tags — \/tags\/bbb\/: window 1 rendered row\(s\) the static list does not name: \["\/notes\/second\/"\]/,
+      );
+      assert.match(result.output, /examined 2 of 2 routes/);
+    } finally {
+      writeFileSync(target, original);
+    }
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 120_000);
+
+test('the browser leg fails a tag list that renders fewer rows than its static list names', async () => {
+  const site = await buildAndServe({
+    'first.md': '---\ntitle: First\ntags: [aaa]\n---\n\nFirst body.\n',
+    // A real published note the tag does not carry: its route exists, so the
+    // static list can name it while the enhanced list for `aaa` never renders
+    // it. Every observed row then belongs to the static set, and the failure is
+    // incompleteness rather than a foreign row.
+    'second.md': '---\ntitle: Second\n---\n\nSecond body.\n',
+  });
+  try {
+    const target = join(site.dist, 'tags/aaa/index.html');
+    const original = readFileSync(target, 'utf8');
+    const changed = original.replace(
+      '<div id="tag-static-list">',
+      '<div id="tag-static-list"><a href="/notes/second/">Second</a>',
+    );
+    assert.notEqual(changed, original, 'the static-list mutation must apply');
+    writeFileSync(target, changed);
+    try {
+      const result = await runCheck(site.origin, ['--browser']);
+      assert.notEqual(result.status, 0, result.output);
+      assert.match(
+        result.output,
+        /FAIL browser-tags — \/tags\/aaa\/: the enhanced list rendered 1 of the static list's 2 row\(s\) before it stopped offering continuations; never rendered \["\/notes\/second\/"\]/,
+      );
+    } finally {
+      writeFileSync(target, original);
+    }
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 120_000);
+
+test('the browser leg validates each window before the list slides it out', async () => {
+  // The first window names a row for another tag; the window that replaces it
+  // names only rows the static list names. Validating the final DOM alone would
+  // pass this. The page ships its own list client because the real one only
+  // slides a window once a tag exceeds `TAG_WINDOW_SIZE` notes.
+  const result = await checkSite({
+    browser: true,
+    timeoutMs: 2500,
+    tagIndexHtml: SLIDING_TAG_INDEX_HTML,
+    tagPages: { '/tags/sliding/': SLIDING_TAG_HTML },
+  });
+  assert.notEqual(result.status, 0, result.output);
+  assert.match(
+    result.output,
+    /FAIL browser-tags — \/tags\/sliding\/: window 1 rendered row\(s\) the static list does not name: \["\/notes\/wrong-tag\/"\] \(the static list names 2 row\(s\)\)/,
+  );
+  // The static page around it is well formed and the HTTP pass calls it green,
+  // so the failure belongs to the membership rule rather than to a bad route.
+  assert.match(result.output, /PASS tag-route — \/tags\/sliding\//);
+  assert.match(result.output, /12 passed, 2 failed/);
+}, 60_000);
+
+test('a validated empty tag index is not a failure in the browser leg', async () => {
+  const site = await buildAndServe({
+    'first.md': '---\ntitle: First\n---\n\nFirst body.\n',
+    'second.md': '---\ntitle: Second\n---\n\nSecond body.\n',
+  });
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /PASS tag-index — .*tag-routes=0, empty-state present/);
+    assert.match(
+      result.output,
+      /PASS browser-tags — the served tag index has no tags \(validated empty state\); there is no \/tags\/<tag>\/ route to open/,
+    );
+    // Eight HTTP assertions (no `/tags/<tag>/` route to follow) plus five browser
+    // ones: the empty index passes `browser-tags` instead of failing it.
+    assert.match(result.output, /13 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 120_000);
+
+test('a tag index that is not the supported empty state still fails the browser leg', async () => {
+  const site = await buildAndServe({
+    'first.md': '---\ntitle: First\n---\n\nFirst body.\n',
+    'second.md': '---\ntitle: Second\n---\n\nSecond body.\n',
+  });
+  try {
+    // A 200 whose page is neither a facet list nor the empty state: no party
+    // validated this as the no-tags case, so it must fail rather than read as
+    // an empty site.
+    const target = join(site.dist, 'tags/index.html');
+    const original = readFileSync(target, 'utf8');
+    writeFileSync(
+      target,
+      '<html><head><title>Tags</title></head><body><p class="notice">no facets rendered</p></body></html>',
+    );
+    try {
+      const result = await runCheck(site.origin, ['--browser']);
+      assert.notEqual(result.status, 0, result.output);
+      assert.match(result.output, /FAIL tag-index — .*tag-routes=0, empty-state absent/);
+      assert.match(result.output, /FAIL browser-tags — the served tag index listed no \/tags\/<tag>\/ route to open/);
+    } finally {
+      writeFileSync(target, original);
+    }
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 120_000);
+
+test('the browser leg refuses a non-GET request before it reaches the origin', async () => {
+  const built = buildSite({ 'home-note.md': '---\ntitle: Home note\ntags: [home]\n---\n\nHome body.\n' });
+  const upstream = await serveDist(built.dist);
+  // The proxy stands in for the destination: it counts every POST that arrives.
+  // The probe script is injected into the served `/`, so a POST is attempted
+  // both from the document and from a dedicated Worker — the second is the
+  // traffic a page-scoped observer would be trusted to see and a page-scoped
+  // interception would not reach.
+  let mutations = 0;
+  const proxy = createServer(async (request, response) => {
+    if (request.url === '/__method-probe') {
+      if (request.method === 'POST') mutations += 1;
+      request.resume();
+      response.writeHead(200, { 'content-type': 'text/plain' });
+      response.end('synthetic local mutation');
+      return;
+    }
+    if (request.url === '/method-probe.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript' });
+      response.end(
+        "fetch('/__method-probe', { method: 'POST', body: 'from-document' }).catch(() => {});\n" +
+          "new Worker('/method-probe-worker.js', { type: 'module' });",
+      );
+      return;
+    }
+    if (request.url === '/method-probe-worker.js') {
+      response.writeHead(200, { 'content-type': 'text/javascript' });
+      response.end("fetch('/__method-probe', { method: 'POST', body: 'from-worker' }).catch(() => {});");
+      return;
+    }
+    const served = await fetch(upstream.origin + request.url);
+    let bytes = Buffer.from(await served.arrayBuffer());
+    const headers = Object.fromEntries(served.headers);
+    delete headers['transfer-encoding'];
+    if (request.url === '/') {
+      bytes = Buffer.from(bytes.toString().replace('</body>', '<script src="/method-probe.js"></script></body>'));
+    }
+    headers['content-length'] = String(bytes.length);
+    response.writeHead(served.status, headers);
+    response.end(bytes);
+  });
+  const listening = Promise.withResolvers<void>();
+  proxy.listen(0, '127.0.0.1', listening.resolve);
+  await listening.promise;
+  const { port } = proxy.address() as AddressInfo;
+  try {
+    const result = await runCheck(`http://127.0.0.1:${port}`, ['--browser']);
+    assert.notEqual(result.status, 0, result.output);
+    // Both attempts are counted and refused: no destination-side failure is
+    // reported, because the abort is this check's own act.
+    assert.match(
+      result.output,
+      /FAIL browser-requests — responses=\d+ failed=0 non-get=2 first=\["POST http:\/\/127\.0\.0\.1:\d+\/__method-probe"/,
+    );
+    // The rest of the leg still ran against the same origin.
+    assert.match(result.output, /PASS browser-root — status=200/);
+    assert.equal(mutations, 0, 'the refused POSTs never reached the destination');
+    // The counter is not stuck at zero: a POST this check does not intercept
+    // reaches the destination and is counted, so the zero above is the
+    // interception rather than a broken endpoint.
+    const control = await fetch(`http://127.0.0.1:${port}/__method-probe`, { method: 'POST', body: 'control' });
+    assert.equal(control.status, 200);
+    assert.equal(mutations, 1, 'the endpoint observes a POST that is not intercepted');
+  } finally {
+    const closing = Promise.withResolvers<void>();
+    proxy.close(() => closing.resolve());
+    await closing.promise;
+    await upstream.close();
+    removeWorkspace(built.workspace);
+  }
+}, 120_000);
+
+test('the browser leg compares an authored title at the HTML whitespace boundary', async () => {
+  const site = await buildAndServe({
+    'spaces.md': '---\ntitle: "Two  Spaces"\ntags: [spaces]\n---\n\nTwo spaces are valid authored title content.\n',
+  });
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    // The panel reads the stored title as text and keeps both spaces; the
+    // target is read the way a browser reports `document.title`, which collapses
+    // the run. Both sides are normalized, so they agree on `Two Spaces`.
+    assert.match(
+      result.output,
+      /PASS browser-preview — \/notes\/spaces\/ panel-title="Two  Spaces" panel-title-base="Two  Spaces" describedby="link-preview" target-status=200 target-title="Two Spaces · Notes" runtime-requests=\[worker=1 snapshot=1 wasm=1\]/,
+    );
+    assert.match(result.output, /PASS browser-root — status=200/);
+    assert.match(result.output, /14 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 120_000);
+
+test('the browser leg reads a non-ASCII title boundary the way document.title reports it', async () => {
+  // `document.title` collapses a run of ASCII whitespace and strips a leading or
+  // trailing run of *those* characters; it keeps U+00A0 and U+2003 wherever they
+  // sit, boundary included. The served home page is replaced with such a title so
+  // the leg observes Chromium's own getter against the bytes it served. The
+  // printed `title=` and `served-title=` values are asserted raw because the
+  // comparison alone cannot catch a defect here: it normalizes both readers, so an
+  // over-broad rule agrees with itself while silently dropping the code points.
+  const padded = '\u00a0Boundary  \u2003Sites\u00a0';
+  const built = buildSite({ 'home-note.md': '---\ntitle: Home note\n---\n\nHome body.\n' });
+  const indexPath = join(built.dist, 'index.html');
+  const html = readFileSync(indexPath, 'utf8');
+  const replaced = html.replace(/<title>[^<]*<\/title>/, `<title>${padded}</title>`);
+  assert.notEqual(replaced, html, 'the built home page carries a <title> to replace');
+  assert.match(replaced, /<title>\u00a0Boundary  \u2003Sites\u00a0<\/title>/);
+  writeFileSync(indexPath, replaced);
+  const site = await serveDist(built.dist);
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    assert.match(
+      result.output,
+      /PASS browser-root — status=200 title="\u00a0Boundary \u2003Sites\u00a0" served-title="\u00a0Boundary \u2003Sites\u00a0"/,
+    );
+    assert.match(result.output, /PASS site-root — .*title="\u00a0Boundary \u2003Sites\u00a0"/);
+    assert.match(result.output, /PASS site-root-title — title="\u00a0Boundary \u2003Sites\u00a0"/);
+    assert.match(result.output, /13 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(built.workspace);
+  }
+}, 120_000);
+
+test('the browser leg compares the site title at the HTML whitespace boundary', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'anc-site-title-'));
+  // The config lives beside the notes — `anc build` points `PUBLISH_CONFIG_DIR`
+  // at the `--content` directory — so a non-breaking space is written there. It
+  // is not ASCII whitespace, so `document.title` keeps it while collapsing the
+  // two spaces beside it; reading the served bytes with a `\s`-wide rule would
+  // collapse the non-breaking space too and disagree with the browser.
+  mkdirSync(join(workspace, 'notes'), { recursive: true });
+  writeFileSync(join(workspace, 'notes', 'publish.config.yaml'), 'title: Boundary\u00a0Sites  Name\n');
+  const built = buildIn(workspace, { 'note.md': '---\ntitle: Note\n---\n\nBody.\n' }, 'dist');
+  const site = await serveDist(built.dist);
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    assert.match(
+      result.output,
+      /PASS browser-root — status=200 title="Boundary\u00a0Sites Name" served-title="Boundary\u00a0Sites Name"/,
+    );
+    assert.match(result.output, /PASS site-root — .*title="Boundary\u00a0Sites Name"/);
+    assert.match(result.output, /13 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(workspace);
+  }
+}, 120_000);
