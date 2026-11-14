@@ -25,20 +25,20 @@ test('an unknown tag is its own state, not an empty result', () => {
 test('a known tag with no members is empty, not unknown', () => {
   // Unreachable through the writer today, and still the answer the model must
   // give if a snapshot ever carried one: the tag exists and has no notes.
-  assert.deepEqual(classifyTagPage({ known: true, tag: TAG, notes: [], nextCursor: null }), {
+  assert.deepEqual(classifyTagPage({ known: true, tag: TAG, total: 0, notes: [], nextCursor: null }), {
     kind: 'empty',
   });
 });
 
 test('a known tag with rows keeps its continuation, and exhaustion is a null cursor', () => {
-  assert.deepEqual(classifyTagPage({ known: true, tag: TAG, notes: [NOTE], nextCursor: 'seedling' }), {
+  assert.deepEqual(classifyTagPage({ known: true, tag: TAG, total: 2, notes: [NOTE], nextCursor: 'seedling' }), {
     kind: 'page',
     notes: [NOTE],
     nextCursor: 'seedling',
   });
   // The same shape with a null cursor is an exhausted page, which the browser
   // presents as "no more results" — never as the unknown sentence.
-  assert.deepEqual(classifyTagPage({ known: true, tag: TAG, notes: [NOTE], nextCursor: null }), {
+  assert.deepEqual(classifyTagPage({ known: true, tag: TAG, total: 1, notes: [NOTE], nextCursor: null }), {
     kind: 'page',
     notes: [NOTE],
     nextCursor: null,

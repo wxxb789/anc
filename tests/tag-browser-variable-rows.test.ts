@@ -76,9 +76,13 @@ let site: RunningSite;
 let browser: Browser;
 let context: BrowserContext;
 
-async function logicalSize(page: Page): Promise<number> {
+/** The newest loaded logical position, read from the rendered window. */
+async function loadedSize(page: Page): Promise<number> {
   return page.evaluate(() =>
-    Number(document.querySelector('#tag-browser-results [aria-setsize]')?.getAttribute('aria-setsize') ?? 0),
+    [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].reduce(
+      (max, item) => Math.max(max, Number(item.getAttribute('aria-posinset') ?? 0)),
+      0,
+    ),
   );
 }
 
@@ -140,18 +144,18 @@ async function openTag(page: Page): Promise<void> {
 }
 
 async function loadAll(page: Page): Promise<void> {
-  let total = await logicalSize(page);
+  let total = await loadedSize(page);
   while (total < MEMBERS) {
     await page.locator('#tag-browse-more').click();
     await page.waitForFunction(
       (before) =>
-        Number(
-          document.querySelector('#tag-browser-results [aria-setsize]')?.getAttribute('aria-setsize') ?? 0,
-        ) > before,
+        [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].some(
+          (item) => Number(item.getAttribute('aria-posinset') ?? 0) > before,
+        ),
       total,
       { timeout: 15_000 },
     );
-    total = await logicalSize(page);
+    total = await loadedSize(page);
   }
 }
 

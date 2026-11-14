@@ -96,7 +96,13 @@ export function tagPage(
       ? db.select(SNAPSHOT_QUERIES.byTagFirst, [tagKey, size + 1])
       : db.select(SNAPSHOT_QUERIES.byTagAfter, [tagKey, cursor, size + 1]);
   const { items, nextCursor } = pageOf(rows.map(summary), size);
-  return { known: true, tag: { key: String(tag['key']), label: String(tag['label']) }, notes: items, nextCursor };
+  return {
+    known: true,
+    tag: { key: String(tag['key']), label: String(tag['label']) },
+    total: Number(tag['total']),
+    notes: items,
+    nextCursor,
+  };
 }
 
 /** One node as the shared selection contract sees it. */

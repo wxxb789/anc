@@ -42,10 +42,18 @@ export interface TagIdentity {
   label: string;
 }
 
-/** Results of a `byTag` request: an unknown tag is distinct from an empty page. */
+/**
+ * Results of a `byTag` request: an unknown tag is distinct from an empty page.
+ *
+ * `total` is the tag's complete published membership, not the size of this page
+ * or of the pages a browser has loaded so far. The enhanced list renders a
+ * window of that collection and announces it as `aria-setsize`, so a screen
+ * reader hears the tag's real size rather than the number of rows loaded; see
+ * the a11y addendum in `docs/goals/archive/0008-acceptable-browser-cost.md`.
+ */
 export type TagPage =
   | { known: false }
-  | ({ known: true; tag: TagIdentity } & NotePage);
+  | ({ known: true; tag: TagIdentity; total: number } & NotePage);
 
 /** One directed edge between two nodes in a selection, by slug. */
 export interface DirectedEdge {
@@ -155,10 +163,13 @@ export const SNAPSHOT_QUERIES = {
     ORDER BY n.slug
     LIMIT ?`.trim(),
 
+  // The membership count rides the identity lookup as one aggregate over the
+  // `node_tags` primary key rather than a second statement.
   tagByKey: `
-    SELECT id, key, label
-    FROM tags
-    WHERE key = ?`.trim(),
+    SELECT t.id, t.key, t.label,
+           (SELECT COUNT(*) FROM node_tags AS nt WHERE nt.tag_id = t.id) AS total
+    FROM tags AS t
+    WHERE t.key = ?`.trim(),
 
   byTagFirst: `
     SELECT n.slug, n.title, n.language
