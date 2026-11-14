@@ -19,11 +19,25 @@ allowBuilds:
   # changes nothing at install time.
   aws4fetch: false
 
-# rolldown 1.2.2 — what vite 8.2's `~1.2.0` resolved to — folds a string
-# concatenation containing a lone-surrogate escape into U+FFFD, which broke
-# temml's lexer in the shipped chunk: every client-rendered `\command` came out
-# as letters. 1.2.9 writes the escape back correctly. Drop this once the vite
-# Astro resolves requires a fixed rolldown itself.
-# `tests/built-output.test.ts` 'the bundled math renderer still reads control words'.
+# rolldown 1.2.2 — what vite 8.2's `~1.2.0` resolved to at the time — folds a
+# string concatenation containing a lone-surrogate escape into U+FFFD, which
+# broke temml's lexer in the shipped chunk: every client-rendered `\command`
+# came out as letters. 1.2.9 writes the escape back correctly, and the only
+# evidence this hold rests on is the output gate it names below — the shipped
+# chunk, not a declared range.
+#
+# The automatic drop condition this comment used to carry ("drop once the vite
+# Astro resolves requires a fixed rolldown") is gone on purpose. The consumers'
+# ranges have since moved past the hold: astro 7.4.8 asks for `rolldown ~1.2.16`
+# and its vite 8.3.8 for `~1.2.18`, so pnpm now installs 1.2.9 below both
+# declared ranges. A satisfied range is not proof that the newer bundler writes
+# temml's control words correctly; no measurement here shows the newer versions
+# are defective either, so the hold is kept until someone measures the output.
+#
+# Ablation before removing it: delete this override, re-resolve the lock, run
+# `pnpm run build`, and confirm `tests/built-output.test.ts` — 'the bundled math
+# renderer still reads control words' — still passes: no U+FFFD in any shipped
+# script, and temml's chunk turns `\alpha` into `<mi>α</mi>`. Restore the
+# override if it does not.
 overrides:
   rolldown: 1.2.9
