@@ -677,6 +677,54 @@ Baseline against this project's GitHub Pages site (2026-11-12): 9 assertions pas
 non-empty note grid; a note route returned 200 with a title. `_headers` produced no CSP response
 header, and brotli was not negotiated.
 
+**The opt-in browser leg.** The HTTP pass proves what the host returns; it cannot see what the
+page then does with those bytes. `--browser` drives the same origin in Chromium and asserts the
+three behaviours a reader actually uses, still read-only — GET only, no credentials, nothing
+written to the origin:
+
+```bash
+node scripts/check-deployed-site.ts --origin https://notes.example.org/ --browser
+```
+
+- **A hover preview renders its target note's title.** The leg hovers the first `/notes/<slug>/`
+  link the served `/` names and requires the panel's title — minus the alias group the panel
+  appends — to be a prefix of that note's own static page title, with the hovered link carrying
+  `aria-describedby="link-preview"` and the Worker chunk, the snapshot, and the WASM module all
+  requested. Those requests are what make the panel evidence about the Worker/WASM/snapshot chain
+  rather than about markup that happened to be on the page; the title is checked against the
+  note's static page, a different producer and a different request, so a stale or wrong row fails.
+- **No console error and no failed request.** Every `console` error, uncaught page error,
+  `requestfailed`, 4xx/5xx response, and non-GET request in the session is counted and the run
+  fails on a non-zero count. Nothing is filtered as noise — a request a navigation aborted counts
+  — so a flaky origin fails loudly instead of reporting a shorter run.
+- **Tag browsing renders rows.** The leg opens each tag route the served index lists, starts the
+  enhanced list, and requires rows to arrive: a dead runtime leaves that list empty and reveals
+  the static one in its place, so rows are what shows the Worker answered. Every row must be one
+  the static list names, and where a tag offers a continuation the leg clicks through it and
+  requires the rows to grow.
+
+Its cost and its limits: one Chromium launch (~1 s) plus one page per tag route examined, and an
+install — Playwright is a devDependency of this repository, not of the published package, so a
+consumer has to `npm install playwright` and `npx playwright install chromium` (a browser
+download of roughly 150 MB into the Playwright cache) before the flag can run. The flag is off by
+default and nothing else in the check loads the driver. It emulates one 1280x800 desktop viewport
+with no mobile or device profile and no network throttling, and it reads the live origin, so
+latency is the network's: a slow origin the HTTP pass survives can time out here, which
+`--timeout` widens. A host without Chromium fails the run rather than skipping the leg.
+
+Baseline with the browser leg against this project's GitHub Pages site (2026-11-14, Chromium
+**156.0.8078.4**, Playwright **1.64.1**): 14 assertions passed, 0 failed — the nine HTTP
+assertions above, unchanged, plus five browser assertions, with these observed values in the
+recorded run. `/` loaded in 161 ms with the title the served bytes carry; the hover preview over
+`/notes/heterogeneous-agent-audit/` opened in 442 ms with that note's title, the hovered link's
+`aria-describedby`, and one Worker, one snapshot, and one WASM request; `/tags/agent/` rendered
+its row from the Worker in 191 ms with every row named by the static list; and the session ended
+with 0 console errors, 0 page errors, 0 failed requests, and 0 non-GET requests across 77
+responses. **No tag on that site has more than two notes**, so no continuation was offered there:
+the leg examined all 6 tag routes and said so on an `INFO browser-tags-continuation` line, and
+the continuation half is exercised by the fixture gate in `tests/check-deployed-site.test.ts`
+instead of being quietly skipped.
+
 A rough GitHub Pages workflow, given the four caveats above:
 
 ```yaml

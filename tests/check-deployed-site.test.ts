@@ -1,11 +1,19 @@
 /**
- * Unit coverage for the post-deployment check's parsing and derivation.
+ * Unit coverage for the post-deployment check's parsing and derivation, and for
+ * the opt-in browser leg.
  *
  * The script itself is exercised against a live origin; these fixtures cover
  * the parts that decide *what* to request and *whether* a response is the right
  * kind of file. The "no reference found" case is a failure, not a skip — a
  * discovery step that quietly yields nothing would turn the check into a green
  * run that never looked at the snapshot.
+ *
+ * `--browser` is covered three times: that it stays opt-in; against a real build
+ * served on loopback, where the hover preview, the tag list, and a continuation
+ * all have to work; and against the HTTP-only fixture above, whose pages carry
+ * no preview panel and no tag region. A browser leg that cannot fail would
+ * prove nothing, so that last case asserts the leg fails a site the HTTP pass
+ * calls green.
  */
 
 import assert from 'node:assert/strict';
@@ -30,8 +38,10 @@ import {
   isPlausibleWasmContentType,
   normalizeHeaders,
   parseArguments,
+  previewTitleBase,
   requireReference,
 } from '../scripts/check-deployed-site.ts';
+import { buildAndServe, removeWorkspace } from './support/browser-site.ts';
 
 const SNAPSHOT = '65a6ea8ce3e2abd69f21f8e48dba0942f9b9b107afd48d782d4f116bb9f4e87e';
 const WASM = '2ee8f3dab694532afc8840e07703127287662d08b74e6ff50491ce63f00d5752';
@@ -83,14 +93,24 @@ interface SiteOptions {
   scriptContentType?: string;
   workerContentType?: string;
   tagIndexHtml?: string;
+  /** Run the opt-in browser leg against the fixture. */
+  browser?: boolean;
+  /** Bound the browser leg's navigation and wait timeouts. */
+  timeoutMs?: number;
+  /** Paths the fixture answers with 404, for a leg that must notice a broken request. */
+  missing?: readonly string[];
 }
 
 const SQLITE_HEADER = new TextEncoder().encode('SQLite format 3\u0000');
 
 function siteRoutes(options: SiteOptions = {}): Record<string, ServedFixture> {
   const scriptContentType = options.scriptContentType ?? 'application/javascript; charset=utf-8';
-  return {
+  const routes: Record<string, ServedFixture> = {
     '/': { contentType: 'text/html; charset=utf-8', body: ROOT_HTML },
+    // The root links this stylesheet. The HTTP pass never asks for it — it
+    // reads scripts, not styles — but a browser does, so the fixture serves it
+    // or the browser leg would report the fixture's own gap as the site's.
+    '/_astro/Layout.B6lCtURH.css': { contentType: 'text/css; charset=utf-8', body: '/* layout */' },
     '/_astro/theme-init.CZu62CeA.js': { contentType: scriptContentType, body: '/* theme */' },
     '/_astro/Layout.astro_astro_type_script_index_0_lang.CSj7qfff.js': {
       contentType: scriptContentType,
@@ -112,6 +132,8 @@ function siteRoutes(options: SiteOptions = {}): Record<string, ServedFixture> {
       body: '<html><head><title>First note</title></head><body></body></html>',
     },
   };
+  for (const path of options.missing ?? []) delete routes[path];
+  return routes;
 }
 
 async function serve(
@@ -143,8 +165,8 @@ async function serve(
 }
 
 /** Run the real CLI against the fixture; stdout and stderr are the assertion message. */
-async function runCheck(origin: string): Promise<{ status: number | null; output: string }> {
-  const child = spawn(process.execPath, [SCRIPT, '--origin', origin], {
+async function runCheck(origin: string, extra: readonly string[] = []): Promise<{ status: number | null; output: string }> {
+  const child = spawn(process.execPath, [SCRIPT, '--origin', origin, ...extra], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -162,8 +184,12 @@ async function runCheck(origin: string): Promise<{ status: number | null; output
 
 async function checkSite(options: SiteOptions): Promise<{ status: number | null; output: string }> {
   const site = await serve(siteRoutes(options));
+  const extra = [
+    ...(options.browser === true ? ['--browser'] : []),
+    ...(options.timeoutMs === undefined ? [] : ['--timeout', String(options.timeoutMs)]),
+  ];
   try {
-    return await runCheck(site.origin);
+    return await runCheck(site.origin, extra);
   } finally {
     await site.close();
   }
@@ -173,11 +199,36 @@ test('parseArguments accepts a bare origin and optional timeout', () => {
   assert.deepEqual(parseArguments(['--origin', 'https://example.org/']), {
     origin: 'https://example.org',
     timeoutMs: 15_000,
+    browser: false,
   });
   assert.deepEqual(parseArguments(['--origin=https://example.org', '--timeout=2500']), {
     origin: 'https://example.org',
     timeoutMs: 2500,
+    browser: false,
   });
+});
+
+test('parseArguments opts the browser leg in only when it is named', () => {
+  assert.deepEqual(parseArguments(['--origin', 'https://example.org/', '--browser']), {
+    origin: 'https://example.org',
+    timeoutMs: 15_000,
+    browser: true,
+  });
+  // `--browser` is a flag, not a key that takes a value: anything else is an
+  // unknown argument rather than a silently ignored word.
+  assert.throws(() => parseArguments(['--origin', 'https://example.org/', '--browser=false']), /unknown argument/);
+});
+
+test('previewTitleBase keeps the stored title and drops the alias group', () => {
+  assert.equal(previewTitleBase('Note title'), 'Note title');
+  assert.equal(previewTitleBase('Note title (alpha, beta)'), 'Note title');
+  // A stored title with its own parenthetical is cut early — weaker, not false:
+  // what remains is still a prefix of the note page's title.
+  assert.equal(previewTitleBase('Interval (half-open)'), 'Interval');
+  assert.equal(previewTitleBase('A title long enough to be truncated…'), 'A title long enough to be truncated');
+  assert.equal(previewTitleBase('Truncated (alpha, be…'), 'Truncated');
+  assert.equal(previewTitleBase('  Spaced title  '), 'Spaced title');
+  assert.equal(previewTitleBase('…'), '');
 });
 
 test('parseArguments rejects a missing, pathed, or unsupported origin', () => {
@@ -322,3 +373,104 @@ test('a tag index with the supported empty state passes without a tag route', as
   assert.doesNotMatch(result.output, /FAIL tag-route —/);
   assert.match(result.output, /8 passed, 0 failed/);
 });
+
+/**
+ * 21 notes on one tag: two full pages and a one-row third, so the tag leg has a
+ * continuation to take. Every note carries an alias, so the panel title the
+ * preview leg reads always carries the alias group `previewTitleBase` strips —
+ * whichever note the site root happens to link to first.
+ */
+function browserCorpus(): Record<string, string> {
+  const files: Record<string, string> = {
+    'home-note.md': [
+      '---',
+      'title: "Home note"',
+      'aliases: ["home-alias"]',
+      '---',
+      '',
+      '# Home note',
+      '',
+      'Body of the home note.',
+      '',
+    ].join('\n'),
+  };
+  for (let index = 1; index <= 21; index += 1) {
+    const id = String(index).padStart(2, '0');
+    files[`browser-note-${id}.md`] = [
+      '---',
+      `title: "Browser note ${id}"`,
+      `aliases: ["alias-${id}"]`,
+      'tags: [browser-tag]',
+      '---',
+      '',
+      `# Browser note ${id}`,
+      '',
+      `Body for browser note ${id}.`,
+      '',
+    ].join('\n');
+  }
+  return files;
+}
+
+test('the browser leg is opt-in: the default run reports no browser line', async () => {
+  const result = await checkSite({});
+  assert.equal(result.status, 0, result.output);
+  assert.doesNotMatch(result.output, /browser/);
+});
+
+test('the browser leg passes a real build and takes a tag continuation', async () => {
+  const site = await buildAndServe(browserCorpus());
+  try {
+    const result = await runCheck(site.origin, ['--browser']);
+    assert.equal(result.status, 0, result.output);
+    assert.match(result.output, /PASS browser-root — status=200 title="[^"]+" served-title="[^"]+"/);
+    // The panel title is the stored title plus its alias group, its base is the
+    // title alone, and the target note's own page title starts with it. The
+    // runtime requests are what make the panel evidence of the Worker, the WASM
+    // module, and the snapshot rather than of markup that happened to be there.
+    assert.match(
+      result.output,
+      /PASS browser-preview — \/notes\/[A-Za-z0-9-]+\/ panel-title="[^"]+ \([A-Za-z0-9-]+\)" panel-title-base="[^"]+" describedby="link-preview" target-status=200 target-title=".*" runtime-requests=\[worker=1 snapshot=1 wasm=1\]/,
+    );
+    assert.match(
+      result.output,
+      /PASS browser-tags — \/tags\/browser-tag\/ label="[^"]+" rows=21 static-rows=21 pages=3 more-clicks=2/,
+    );
+    assert.match(result.output, /INFO browser-tags-continuation — \/tags\/browser-tag\/ continued 2 time\(s\), ending at 21 rows/);
+    assert.match(result.output, /PASS browser-console — console-errors=0 page-errors=0/);
+    assert.match(result.output, /PASS browser-requests — responses=\d+ failed=0 non-get=0/);
+    assert.match(result.output, /14 passed, 0 failed/);
+  } finally {
+    await site.close();
+    removeWorkspace(site.workspace);
+  }
+}, 180_000);
+
+test('the browser leg fails a site with no client runtime that the HTTP pass calls green', async () => {
+  const result = await checkSite({
+    browser: true,
+    timeoutMs: 2500,
+    // One asset the root links is withheld, so this run also contains a request
+    // a reader's browser would report as failed. A counter that only ever reads
+    // zero proves nothing; this is the case that makes it read non-zero.
+    missing: ['/_astro/Layout.B6lCtURH.css'],
+  });
+  assert.notEqual(result.status, 0, result.output);
+  // The HTTP assertions in the same run are green, so the failure belongs to
+  // the browser leg rather than to a site it could not reach, and the root
+  // assertion still passes: the page loads and its title matches the bytes.
+  assert.match(result.output, /PASS site-root —/);
+  assert.match(result.output, /PASS asset-chain —/);
+  assert.match(result.output, /PASS tag-route —/);
+  assert.match(result.output, /PASS browser-root — status=200/);
+  assert.match(result.output, /FAIL browser-preview — \/notes\/first-note\/ .*panel=absent/);
+  // The static tag page is served and HTTP-green; what is missing is the
+  // enhanced list, and the failure detail says so.
+  assert.match(result.output, /FAIL browser-tags — \/tags\/agent\/: .*observed region=absent browser-rows=0/);
+  assert.match(result.output, /FAIL browser-console — console-errors=1 page-errors=0/);
+  assert.match(
+    result.output,
+    /FAIL browser-requests — responses=\d+ failed=2 non-get=0 first=\["404 .*_astro\/Layout\.B6lCtURH\.css"/,
+  );
+  assert.match(result.output, /10 passed, 4 failed/);
+}, 120_000);
