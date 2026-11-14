@@ -40,12 +40,7 @@ let site: RunningSite;
 let browser: Browser;
 let context: BrowserContext;
 
-/**
- * Logical positions loaded so far, read from the rendered window.
- *
- * `aria-setsize` is the tag's complete membership and no longer grows with a
- * continuation, so the tail window's newest `aria-posinset` is the loaded count.
- */
+/** The newest loaded logical position, read from the rendered window. */
 async function loadedSize(page: Page): Promise<number> {
   return page.evaluate(() =>
     [...document.querySelectorAll('#tag-browser-results [aria-posinset]')].reduce(

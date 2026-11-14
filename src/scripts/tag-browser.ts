@@ -76,12 +76,7 @@ function install(root: HTMLElement): void {
 
   /** Every note the logical list contains, including rows currently released. */
   const entries: NoteSummary[] = [];
-  /**
-   * The tag's complete membership, as the snapshot reports it. This is the
-   * collection size every row announces through `aria-setsize`; `entries.length`
-   * is only what this browser has loaded, and announcing that would tell a
-   * screen-reader user the tag has ten notes when it has a thousand.
-   */
+  /** The tag's complete membership from the snapshot; every row's `aria-setsize`. */
   let logicalTotal = 0;
   let windowStart = 0;
   let windowEnd = 0;
@@ -336,14 +331,11 @@ function install(root: HTMLElement): void {
     return layout.listTop + prefixHeight(index);
   }
 
-  function rowFor(note: NoteSummary, position: number, setSize: number): HTMLLIElement {
+  function rowFor(note: NoteSummary, position: number): HTMLLIElement {
     const item = document.createElement('li');
     // The DOM holds a window; these two attributes describe the complete
     // collection to assistive technology (W3C ARIA APG listbox/lazy-load rule).
-    // `setSize` is the tag's membership, not the rows loaded so far: Orca reads
-    // the first item's `setsize` for the list announcement, so a loaded count
-    // would announce a tag of ten notes for a thousand-note tag.
-    item.setAttribute('aria-setsize', String(setSize));
+    item.setAttribute('aria-setsize', String(logicalTotal));
     item.setAttribute('aria-posinset', String(position + 1));
     const link = document.createElement('a');
     link.href = noteRoute(note.slug);
@@ -398,11 +390,6 @@ function install(root: HTMLElement): void {
     }
   }
 
-  /** Restate the announced collection size; it does not change as rows load. */
-  function setSetsize(setSize: number): void {
-    for (const row of numberedRows()) row.setAttribute('aria-setsize', String(setSize));
-  }
-
   /**
    * Replace the rendered window. Used for the initial page, a tag reset, and a
    * scroll reposition; page appends mutate the window's edges instead. The
@@ -419,7 +406,7 @@ function install(root: HTMLElement): void {
 
     const fragment = document.createDocumentFragment();
     for (let index = range.start; index < range.end; index += 1) {
-      fragment.append(rowFor(entries[index]!, index, logicalTotal));
+      fragment.append(rowFor(entries[index]!, index));
     }
     results.replaceChildren(fragment);
     windowStart = range.start;
@@ -456,10 +443,9 @@ function install(root: HTMLElement): void {
       windowStart = range.start;
     }
     for (let index = Math.max(windowStart, firstNew); index < total; index += 1) {
-      results.append(rowFor(entries[index]!, index, logicalTotal));
+      results.append(rowFor(entries[index]!, index));
     }
     windowEnd = total;
-    setSetsize(logicalTotal);
     // The rows just appended are inside the window, so they cannot move a
     // spacer. Size the released ranges first and measure afterwards: the
     // measurement's rect read then flushes the one layout the frame needs,
@@ -475,11 +461,10 @@ function install(root: HTMLElement): void {
 
   /**
    * A reader looking at an earlier window keeps their place: the new rows are
-   * below it, so only the bottom spacer and the logical count change.
+   * below it, so only the bottom spacer's height changes.
    */
   function appendBelowWindow(): void {
     const total = entries.length;
-    setSetsize(logicalTotal);
     updateSpacers(windowStart, windowEnd, total);
     markWindowMutation();
   }
@@ -690,18 +675,18 @@ function install(root: HTMLElement): void {
     // window keeps their place; one at the tail follows the new rows.
     const previousTotal = entries.length;
     const atTail = windowEnd >= previousTotal;
-    // A `page` state is produced only from a known tag, and the ternary is what
-    // makes that narrowing explicit to the type checker.
-    logicalTotal = page.known ? page.total : 0;
+    // `classifyTagPage` produces a `page` state only for a known tag, and both
+    // other kinds returned above; this is the one narrowing that gives `total`
+    // and `tag` to the rest of the function.
+    if (page.known) {
+      logicalTotal = page.total;
+      current.textContent = page.tag.label;
+      current.hidden = false;
+    }
     entries.push(...state.notes);
     if (atTail) appendAtTail(previousTotal);
     else appendBelowWindow();
     if (previousTotal === 0) detachStatic();
-
-    if (page.known) {
-      current.textContent = page.tag.label;
-      current.hidden = false;
-    }
     cursor = state.nextCursor;
     if (cursor === null) {
       // Hiding the focused button would drop focus to `<body>` just as above,

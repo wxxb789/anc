@@ -163,10 +163,8 @@ export const SNAPSHOT_QUERIES = {
     ORDER BY n.slug
     LIMIT ?`.trim(),
 
-  // The membership count is the collection size the enhanced list announces
-  // through `aria-setsize`. It rides the identity lookup because every caller
-  // that asks for a tag also needs to describe the whole set, and it is one
-  // aggregate over the `node_tags` primary key rather than a second statement.
+  // The membership count rides the identity lookup as one aggregate over the
+  // `node_tags` primary key rather than a second statement.
   tagByKey: `
     SELECT t.id, t.key, t.label,
            (SELECT COUNT(*) FROM node_tags AS nt WHERE nt.tag_id = t.id) AS total

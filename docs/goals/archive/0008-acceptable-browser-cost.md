@@ -415,7 +415,7 @@ change the measurement produced.
 
 | | |
 |---|---|
-| Corpus | `scripts/generate-corpus.ts`, seed 7, `sparse`, `metadata: true`: 1,092 generated files / **1,000 published**; every metadata note carries `笔记`, so the tag has **1,000 members** — eight windows |
+| Corpus | `scripts/generate-corpus.ts`, seed 7, `sparse`, `metadata: true`: 1,092 generated files / **1,000 published**; every metadata note carries `笔记`, so the tag has **1,000 members** — nine windows |
 | Build | this worktree's `node bin/anc.mjs build --content <corpus> --out <dist>`; residue scan 2,041 files, 0 findings |
 | Browser | **Google Chrome 157.0.8103.38**, Playwright 1.64.1, headful under Xvfb, 1200×800 viewport, no CPU throttling |
 | AT API | **AT-SPI2 2.52.0** (`at-spi2-core`), read with `python3-pyatspi` |
@@ -471,7 +471,7 @@ The reading comes from Orca's own code, not a guess:
 `getSetSize(AXObject.get_child(obj, 0))` — the **first item's** `setsize` — and only falls back to
 the rendered child count when it is absent (`:488`); `scripts/web/script_utilities.py:432` reads
 the attribute, and `:2671` maps `setsize: -1` to "List of unknown size"
-(`messages.py:2740`). So the one attribute that decides the announcement is `aria-setsize` on a
+(`messages.py:2748`). So the one attribute that decides the announcement is `aria-setsize` on a
 rendered row, and it was the loaded count.
 
 The list-object utterances were elicited by giving the `<ol>` a temporary `tabindex="-1"` and
@@ -518,3 +518,51 @@ name, which this change does not do.
   `node_tags` primary key inside the existing identity lookup.
 - `total` is a public query-shape change. ANC is pre-0.1.0 and carries no compatibility shim;
   every consumer (client, tests, benchmark) moved in the same change.
+
+## Addendum 2026-11-14 (later, cleanup) — no new AT campaign
+
+The addendum above is the original empirical record of this increment: its AT-SPI table, Orca
+utterances, AX-tree observations, corpus, and measured artifact are unchanged here, and nothing
+below repeats that campaign or claims a new measurement of Orca, AT-SPI, or the browser. This
+note records a post-completion cleanup of the same increment's code, comments, and docs, and the
+revalidation actually run on the cleaned tree.
+
+Cleanup applied (no reader-visible behaviour change):
+
+- `src/scripts/tag-browser.ts`: `setSetsize` restated `aria-setsize` on rows that already received
+  `logicalTotal` when they were created, and nothing else ever wrote a different size, so the
+  helper and its two calls were deleted. `rowFor` now reads the `logicalTotal` closure it already
+  depended on instead of taking a third parameter that had a single value. One narrowing of the
+  known reply replaced the unreachable `: 0` fallback and the repeated `page.known` test.
+- Comment-only consolidation in `src/lib/snapshot-queries.ts`, `scripts/benchmark-workload-ui.ts`,
+  `tests/tag-browser-scroll.test.ts`, `tests/tag-browser-variable-rows.test.ts`, and
+  `tests/tag-query.test.ts`: the announcement rationale is stated once, in this file and in the
+  `TagPage` contract, instead of at every row, helper, and assertion.
+- `tests/tag-query.test.ts` gained one assertion pairing `tagByKey`'s membership count with
+  `tagMemberCount` for one authored tag, each against the hand-written membership: the two SQL
+  spellings of one row set are now held equal.
+- The private benchmark report's announced-size key was renamed `announcedSetsize`
+  (`scripts/benchmark-workload-report.ts`, `scripts/benchmark-workload-ui.ts`), matching the value
+  it holds. Nothing published or committed named the old key.
+
+Two corrections inside the addendum above, neither of which moves a measurement:
+
+- The Method row's "1,000 members — eight windows" is nine window positions: 8 × 120 = 960 is less
+  than 1,000. The recorded membership, timings, artifact sizes, and hashes are as measured.
+- The `setsize: -1` mapping is at `messages.py:2748` on the Orca 46.1-1ubuntu1 named above —
+  `listItemCount`'s `_("List of unknown size")`; line 2740 is that function's own `def`. The
+  mechanism and every other citation in that paragraph are unchanged.
+
+`docs/core-design/build-and-runtime.md`'s Worker-boundary operation table now names the
+membership count that crosses the boundary in the `byTag` reply.
+
+Revalidation on the cleaned tree, 2026-11-14: `pnpm run lint` exit 0; `pnpm run check` exit 0
+(0 errors, 2 pre-existing hints); focused tests
+`pnpm exec vitest run tests/tag-browser-model.test.ts tests/tag-query.test.ts tests/graph-global-bounded.test.ts --maxWorkers=1`
+passed 3 files / 17 tests; the four browser gates
+(`tests/tag-browser-window.test.ts`, `tests/tag-browser-scroll.test.ts`,
+`tests/tag-browser-variable-rows.test.ts`, `tests/tag-browser.test.ts`) passed 4 files / 21 tests
+— window 4/4, scroll 4/4, variable-rows 1/1, tag-browser 12/12, the same tallies the change
+recorded. Those gates rebuild a site from this source and read the rendered `aria-setsize`, so the
+deleted restatement is covered where it mattered. No AT campaign was re-run and none of the
+utterances, tables, or timings above were re-derived.

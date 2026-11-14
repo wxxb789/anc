@@ -118,7 +118,7 @@ The application exposes named operations, not an SQL console:
 | --- | --- | --- |
 | `preview` | `slug` | Bounded title, excerpt, author-ordered aliases and effective note language, or no match |
 | `backlinks` / `outgoing` | `slug`, optional cursor and page size | Note summaries including effective language, and continuation |
-| `byTag` | Canonical `tagKey`, cursor and page size | Tag identity, note summaries including effective language, and continuation, or unknown tag |
+| `byTag` | Canonical `tagKey`, cursor and page size | Tag identity, the tag's complete published membership count, note summaries including effective language, and continuation, or unknown tag |
 | `localGraph` | Center `slug` | Bounded neighbors with effective language, induced directed edges, omitted count |
 | `globalGraph` | Optional canonical `tagKey` | Ranked bounded nodes with effective language, induced directed edges, omitted count |
 

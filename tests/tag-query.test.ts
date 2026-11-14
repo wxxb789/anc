@@ -20,7 +20,7 @@ import { afterAll, beforeAll, test } from 'vitest';
 
 import { validateArtifact, type ContentArtifact, type ContentEntry } from '../src/lib/schema.ts';
 import { tagPage, type SnapshotDb } from '../src/lib/snapshot-operations.ts';
-import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, type NoteSummary } from '../src/lib/snapshot-queries.ts';
+import { DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, SNAPSHOT_QUERIES, type NoteSummary } from '../src/lib/snapshot-queries.ts';
 import { DatabaseSync } from '../src/lib/sqlite.ts';
 import { NAV_LANGUAGE } from '../src/lib/translations.ts';
 import { writeSnapshot } from '../scripts/write-snapshot.ts';
@@ -364,10 +364,8 @@ test('the tag lookup is exact and the key column is BINARY, so NOCASE is not sub
 });
 
 test('a tag page reports the complete membership, not the page size', () => {
-  // The enhanced list renders a window and announces `aria-setsize` from this
-  // number. A screen reader reads it for the list announcement, so a page-sized
-  // value would announce an 18-note tag as a 7-note one. The authored corpus has
-  // 18 gardening members and `PAGE_SIZE` is 7.
+  // The authored corpus has 18 gardening members and `PAGE_SIZE` is 7, so a
+  // page-sized announcement would read as a 7-note tag.
   withSnapshot((path) => {
     const database = new DatabaseSync(path, { readOnly: true });
     try {
@@ -382,6 +380,28 @@ test('a tag page reports the complete membership, not the page size', () => {
       if (!tail.known) assert.fail('gardening is a known tag in the authored corpus');
       assert.equal(tail.notes.length, 3, 'the tail page is not the final three members');
       assert.equal(tail.total, EXPECTED_GARDENING_SLUGS.length, 'the total changed between pages of one tag');
+    } finally {
+      database.close();
+    }
+  });
+});
+
+test('the announced membership and the ranking count agree for one tag', () => {
+  // `tagByKey`'s correlated aggregate feeds the announced `aria-setsize`;
+  // `tagMemberCount` feeds a tag-filtered global ranking's candidate count and
+  // `omitted`. They are two spellings of one row set, so this pairs them against
+  // one authored tag and each against the hand-written membership; a predicate
+  // added to either statement alone fails here.
+  withSnapshot((path) => {
+    const database = new DatabaseSync(path, { readOnly: true });
+    try {
+      const db = adapter(database);
+      const page = tagPage(db, 'gardening', null, PAGE_SIZE);
+      if (!page.known) assert.fail('gardening is a known tag in the authored corpus');
+      const counted = Number(db.select(SNAPSHOT_QUERIES.tagMemberCount, ['gardening'])[0]?.['count']);
+      assert.equal(page.total, EXPECTED_GARDENING_SLUGS.length, 'the identity lookup missed authored members');
+      assert.equal(counted, EXPECTED_GARDENING_SLUGS.length, 'the ranking count missed authored members');
+      assert.equal(page.total, counted, 'the announced membership and the ranking count disagree');
     } finally {
       database.close();
     }

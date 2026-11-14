@@ -465,8 +465,8 @@ class TagTelemetry {
  * complete logical collection rather than counting every accumulated row.
  */
 interface TagWindowReport {
-  /** `aria-setsize`: the tag's complete membership, not the rows loaded. */
-  logical: number;
+  /** `aria-setsize` read from the rendered rows: the tag's complete membership. */
+  announcedSetsize: number;
   /** Numbered rows actually in the DOM. */
   rendered: number;
   rows: {
@@ -495,7 +495,7 @@ async function readTagWindow(page: Page): Promise<TagWindowReport> {
       };
     });
     return {
-      logical: rows[0]?.setsize ?? 0,
+      announcedSetsize: rows[0]?.setsize ?? 0,
       rendered: rows.length,
       rows,
     };
@@ -536,8 +536,7 @@ async function assertRenderedTagPage(
   if (window.rendered > TAG_WINDOW_SIZE) {
     throw new Error(`tag browser page ${pageCount} rendered ${window.rendered} rows; the window bound is ${TAG_WINDOW_SIZE}`);
   }
-  // The announced collection size is the tag's DB membership, from the first
-  // page on; it must not be the number of rows this walk has loaded.
+  // The announced size is the tag's DB membership, from the first page on.
   if (window.rows.some((row) => row.setsize !== tagNodes.length)) {
     throw new Error(
       `tag browser page ${pageCount} reports setsize ${[...new Set(window.rows.map((row) => row.setsize))].join(',')}; expected ${tagNodes.length}`,
@@ -595,13 +594,13 @@ async function browseTag(page: Page, plan: WorkloadPlan, tagNodes: readonly TagN
     await assertRenderedTagPage(page, plan, tagNodes, pages);
   }
   const finalWindow = await readTagWindow(page);
-  const notesShown = finalWindow.logical;
+  const announcedSetsize = finalWindow.announcedSetsize;
   assertExactEventCount('tag browser page replies', telemetry.byTagTotal, pages);
   if (pages > tagPageBound) {
     throw new Error(`tag browser walked ${pages} pages beyond derived bound ${tagPageBound}`);
   }
-  if (notesShown !== plan.tagMembers) {
-    throw new Error(`tag browser logical list has ${notesShown} notes; DB plan requires ${plan.tagMembers}`);
+  if (announcedSetsize !== plan.tagMembers) {
+    throw new Error(`tag browser announced setsize ${announcedSetsize}; DB plan requires ${plan.tagMembers}`);
   }
   if (finalWindow.rows.at(-1)?.position !== plan.tagMembers) {
     throw new Error(
@@ -618,7 +617,7 @@ async function browseTag(page: Page, plan: WorkloadPlan, tagNodes: readonly TagN
   return {
     tagKey: plan.tagKey!,
     pages,
-    notesShown,
+    announcedSetsize,
     renderedRows: finalWindow.rendered,
     dispatchMs: telemetry.dispatchMs,
     operationMs: telemetry.operationMs,
