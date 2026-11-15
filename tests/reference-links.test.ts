@@ -158,7 +158,7 @@ function definitions(markdown: string): { identifier: string; url: string; title
  *
  * Both attributes are HTML-escaped by the renderer, so comparing them as bytes
  * would compare the renderer's escaping rather than the text a reader gets.
- * happy-dom is already a runtime dependency (the Mermaid gate), and it is a
+ * happy-dom is a devDependency, and this file is its only consumer; it is a
  * real HTML parser, so this is not a decoder written to agree with the emitter.
  */
 const htmlWindow = new Window();

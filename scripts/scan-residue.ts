@@ -56,7 +56,6 @@ import { fileURLToPath } from 'node:url';
 import { basename, extname, join, relative, sep } from 'node:path';
 import { BuildFailure } from './write-report.ts';
 import { readVendorProvenance, type VendorProvenanceReadOptions } from './vendor-provenance.ts';
-import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { MARKED_ATTRIBUTE, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
 import { SNAPSHOT_DIRECTORY, SNAPSHOT_FILE_PATTERN } from '../src/lib/snapshot.ts';
@@ -1092,7 +1091,7 @@ export function scanResidue(root: string = DIST, options: ResidueScanOptions = {
  */
 export function assertNoResidue(
   root: string = DIST,
-  options: ResidueScanOptions = { requireVendorProvenance: DIAGRAM_MODE === 'client' },
+  options: ResidueScanOptions = {},
 ): number {
   const { findings, detailed, scannedCount } = scanResidue(root, options);
   if (findings.length > 0) {

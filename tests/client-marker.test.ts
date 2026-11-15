@@ -1,12 +1,10 @@
 /**
- * The renderer-owned marker, exercised in the client configuration that uses
- * it as a residue exemption.
+ * The renderer-owned marker, exercised in the client math configuration that
+ * uses it as a residue exemption.
  *
- * This file mocks only the selected rendering adapters. The production defaults
- * stay in their mode modules; the mocks let the same renderer, scanner, and
- * budget gate run their otherwise dormant client branches without rewriting a
- * source file during the suite. That matters here: the earlier gate grepped
- * those files and four behavior-changing implementations still satisfied it.
+ * This file mocks the math mode so the renderer, scanner, and budget gate run
+ * their client-path branches under a pin this file controls: a flip of the
+ * shipped constant would otherwise silently change what these rows measure.
  */
 
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -20,17 +18,11 @@ vi.mock('../src/lib/math-mode.ts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/math-mode.ts')>();
   return { ...actual, MATH_MODE: 'client' as const };
 });
-vi.mock('../src/lib/diagram-mode.ts', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/lib/diagram-mode.ts')>();
-  return { ...actual, DIAGRAM_MODE: 'client' as const };
-});
 
 import { renderMarkdown } from '../src/lib/markdown.ts';
-import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import {
   MARKED_ROOT,
-  RENDERED_DIAGRAM,
   RENDERED_MARKER,
   RENDERED_MATH,
 } from '../src/lib/rendered-marker.ts';
@@ -81,7 +73,6 @@ function filesUnder(root: string): string[] {
 
 test('only genuinely rendered client math receives the path exemption', async () => {
   assert.equal(MATH_MODE, 'client', 'the client math adapter was not selected');
-  assert.equal(DIAGRAM_MODE, 'client', 'the client diagram adapter was not selected');
 
   // Each stimulus goes through Markdown, the sanitizer, marker substitution, and
   // the scanner. These are the author-reachable shapes that defeated the old
@@ -124,14 +115,6 @@ $$
   assert.ok(genuine.html.includes(String.raw`f:\mathbb`), `the path-shaped TeX did not reach the page: ${genuine.html}`);
   assert.deepEqual(findingsFor(genuine.html), [], 'genuine client math was not exempted from the path-shaped TeX false positive');
   assert.deepEqual(scriptBudgetFor(genuine.html).earned, ['math'], 'genuine client math earned no math-runtime allowance');
-
-  const diagram = await renderMarkdown('```mermaid\ngraph TD\n  A --> B\n```\n', { pageTitle: 'x' });
-  assert.match(diagram.html, MARKED_ROOT(RENDERED_DIAGRAM), 'genuine client diagram received no rendered marker');
-  assert.deepEqual(
-    scriptBudgetFor(diagram.html).earned,
-    ['a diagram'],
-    'genuine client diagram earned no diagram-runtime allowance',
-  );
 
   // Negative control outside math: the exemption must not become a general
   // prose exemption merely because client mode is active. Highlighted code is

@@ -235,10 +235,10 @@ afterAll(async () => {
   // Under the suite's own contention — 15 workers on 16 CPUs — the same close
   // measured p50 22.4 s and max 43.3 s. This hook was observed at 51.6 s and
   // 115.9 s against the 120 s it used to carry: 97% of budget, on a run that
-  // passed. 180 s is four times the contended max, matching `search.test.ts`
-  // and `diagram-client.test.ts`, which close a browser for the same reason.
-  // Raised here rather than in `hookTimeout`, which would relax every hook in
-  // the repository to fix three that share one cost.
+  // passed. 180 s is four times the contended max, matching `search.test.ts`,
+  // which closes a browser for the same reason. Raised here rather than in
+  // `hookTimeout`, which would relax every hook in the repository to fix two
+  // that share one cost.
 }, 180_000);
 
 /** Skip with the install command when no browser is available. */

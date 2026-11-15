@@ -28,7 +28,6 @@ import sanitizeHtml from 'sanitize-html';
 import { runHighlighterWithAstro } from '@astrojs/prism/dist/highlighter';
 import prismComponents from 'prismjs/components.json' with { type: 'json' };
 import { renderMath } from './math.ts';
-import { DIAGRAM_MODE } from './diagram-mode.ts';
 import { MATH_MODE } from './math-mode.ts';
 import { RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH, type RenderedKind } from './rendered-marker.ts';
 import { NAV_LANGUAGE, translate, type Translation } from './translations.ts';
@@ -65,7 +64,7 @@ export interface RenderedNote {
   hasCode: boolean;
   /** The page has at least one math expression, rendered as plain source. */
   hasMath: boolean;
-  /** The page has at least one Mermaid block, rendered as plain source. */
+  /** The page has at least one Mermaid fence, rendered to SVG at build time. */
   hasMermaid: boolean;
 }
 
@@ -236,10 +235,7 @@ const MERMAID_LANGUAGE = 'mermaid';
  * Fence languages that are never handed to the highlighter.
  *
  * Both are rendered rather than highlighted. Math becomes native MathML via
- * Temml (`src/lib/math.ts`), and a Mermaid fence becomes either a build-time
- * SVG or a client-rendered diagram depending on `DIAGRAM_MODE` — in the client
- * case its source is emitted as escaped text for the runtime to read, which is
- * also what a reader without JavaScript is left with.
+ * Temml (`src/lib/math.ts`), and a Mermaid fence becomes a build-time SVG.
  */
 const UNHIGHLIGHTED_LANGUAGES: ReadonlySet<string> = new Set([MATH_LANGUAGE, MERMAID_LANGUAGE]);
 
@@ -333,9 +329,10 @@ const INTERNAL_HREF = /^\/([^/?#\s]+)\/(#[^\s]*)?$/;
  *
  * So each is rendered by a module that has already established its own, much
  * narrower guarantee — Temml emits a closed element set from a parsed TeX tree;
- * `mermaid-render.ts` strips scripts, handlers, styles, and external references
- * and fails the build rather than passing one through — and the sanitized HTML
- * carries a marker where it goes.
+ * `pele-render.ts` admits only a fixed element and attribute set, refuses
+ * handlers, external references, and any declaration outside its measured fixed
+ * set, and fails the build rather than passing one through — and the sanitized
+ * HTML carries a marker where it goes.
  *
  * **The marker's safety is what makes this sound**, and it rests on three
  * properties rather than on the string being unusual:
@@ -347,7 +344,7 @@ const INTERNAL_HREF = /^\/([^/?#\s]+)\/(#[^\s]*)?$/;
  *    token in its prose gets it escaped… no: a text node is escaped on output
  *    only for `&<>`, which the token has none of. The real protection is (3).
  * 3. Substitution is **positional and exhausting**: each token is replaced
- *    exactly once, in index order, and `substituteDiagrams` fails if the count
+ *    exactly once, in index order, and `substituteRendered` fails if the count
  *    of markers found does not equal the count of renders requested. A body that
  *    writes the token itself therefore fails the build loudly instead of
  *    receiving somebody else's diagram — and cannot inject markup either way,
@@ -361,10 +358,6 @@ const MATH_TOKEN_SUFFIX = 'End';
 interface DiagramRequest {
   source: string;
   token: string;
-  /** Client mode: substitute the source fence rather than rendered SVG. */
-  sourceOnly?: boolean;
-  /** The figcaption text, needed only on the source-only path. */
-  caption?: string;
 }
 
 interface MathRequest {
@@ -775,25 +768,16 @@ function codePlugin(
 }
 
 /**
- * A `<figure>` holding one diagram, in whichever form the mode calls for.
+ * A `<figure>` holding one diagram, with its caption and accessible name.
  *
- * The two modes differ only inside the figure; the figure, its caption, and its
- * accessible name are the same either way, so a reader meets the same structure
- * and the page's outline does not depend on a build flag.
- *
- * **Build-time mode** emits a placeholder that {@link substituteDiagrams} fills
- * with rendered SVG after sanitization. The SVG cannot go through the sanitizer
- * — its allowlist has no `svg`, and widening it to admit one would admit every
+ * The figure emits a placeholder that {@link substituteRendered} fills with
+ * rendered SVG after sanitization. The SVG cannot go through the sanitizer —
+ * its allowlist has no `svg`, and widening it to admit one would admit every
  * raw-HTML `<svg>` a note body cared to write, which is precisely the hole
  * §15.2 closes. So the diagram is rendered by a module that has already
- * sanitized it (`mermaid-render.ts` strips scripts, handlers, styles, and
- * external references, and fails the build rather than passing one through) and
- * is spliced in afterwards, at a marker the sanitizer itself produced.
- *
- * **Client mode** emits the diagram source as escaped text inside a `<pre>`,
- * which `src/scripts/diagram.ts` reads and replaces. That is also the
- * no-JavaScript rendering: a reader without scripting sees the diagram's source,
- * which is legible and honest, rather than an empty box.
+ * sanitized it (`pele-render.ts` admits only a fixed element and attribute set
+ * and fails the build rather than passing anything else through) and is spliced
+ * in afterwards, at a marker the sanitizer itself produced.
  */
 function diagramFigure(
   source: string,
@@ -801,49 +785,28 @@ function diagramFigure(
   format: Translation['diagramCaption'],
 ): DiagramNode {
   const caption = diagramCaption(source, format);
-
-  if (DIAGRAM_MODE === 'build-time') {
-    const token = `${DIAGRAM_TOKEN_PREFIX}${diagrams.length}${DIAGRAM_TOKEN_SUFFIX}`;
-    diagrams.push({ source, token });
-    return {
-      type: 'element',
-      tagName: 'figure',
-      properties: { className: ['diagram'], 'data-diagram': MERMAID_LANGUAGE },
-      children: [
-        // A `div` rather than the bare token, so the marker has an element to
-        // be a child of and cannot end up adjacent to the caption text.
-        // The scroll container is a keyboard stop, for exactly the reason a
-        // `<pre>` is: a diagram wider than the measure scrolls horizontally at
-        // 320 px, and a scrollable region must be reachable by keyboard (axe
-        // `scrollable-region-focusable`, WCAG 2.1.1). Display math gets the
-        // same treatment a few lines up.
-        {
-          type: 'element',
-          tagName: 'div',
-          properties: { className: ['diagram-canvas'], tabindex: '0' },
-          children: [{ type: 'text', value: token }],
-        },
-        { type: 'element', tagName: 'figcaption', properties: {}, children: [{ type: 'text', value: caption }] },
-      ],
-    };
-  }
-
-  const clientToken = `${DIAGRAM_TOKEN_PREFIX}${diagrams.length}${DIAGRAM_TOKEN_SUFFIX}`;
-  diagrams.push({ source, token: clientToken, sourceOnly: true, caption });
+  const token = `${DIAGRAM_TOKEN_PREFIX}${diagrams.length}${DIAGRAM_TOKEN_SUFFIX}`;
+  diagrams.push({ source, token });
   return {
-    // **Client mode routes through the token too**, for the same reason the math
-    // client branch does: {@link RENDERED_MARKER} is minted after the sanitizer,
-    // and this node is built before it. A first version returned the figure
-    // directly and pushed no request, so client-mode diagrams were never marked
-    // — measured with `DIAGRAM_MODE='client'`, a diagram page earned no
-    // allowance and would have been held to the base budget while shipping
-    // ~232 KB of Mermaid. Not minting is the safe direction for the residue scan
-    // and the *wrong* one for the budget, which is why this path cannot simply
-    // be skipped.
     type: 'element',
     tagName: 'figure',
     properties: { className: ['diagram'], 'data-diagram': MERMAID_LANGUAGE },
-    children: [{ type: 'text', value: clientToken }],
+    children: [
+      // A `div` rather than the bare token, so the marker has an element to
+      // be a child of and cannot end up adjacent to the caption text.
+      // The scroll container is a keyboard stop, for exactly the reason a
+      // `<pre>` is: a diagram wider than the measure scrolls horizontally at
+      // 320 px, and a scrollable region must be reachable by keyboard (axe
+      // `scrollable-region-focusable`, WCAG 2.1.1). Display math gets the
+      // same treatment a few lines up.
+      {
+        type: 'element',
+        tagName: 'div',
+        properties: { className: ['diagram-canvas'], tabindex: '0' },
+        children: [{ type: 'text', value: token }],
+      },
+      { type: 'element', tagName: 'figcaption', properties: {}, children: [{ type: 'text', value: caption }] },
+    ],
   };
 }
 
@@ -980,8 +943,7 @@ function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefin
           // needed only because MathML does not round-trip through the
           // serializer and the sanitizer, and a text node does — the serializer
           // escapes it, so `<` and `&` in an expression are safe with no work
-          // here. `diagramFigure`'s client branch does the same for the same
-          // reason.
+          // here.
           //
           // **The carrier is a `span`, not the `pre` a fence would suggest**,
           // and that is forced rather than chosen: a `<pre>` inside a `<p>` is
@@ -1379,11 +1341,12 @@ const POLICY: sanitizeHtml.IOptions = {
     blockquote: ['callout', 'callout-*'],
     // `diagram` is the figure a rendered diagram sits in; `code-block` the one a
     // fence sits in; `image-figure` a standalone image with an authored caption.
-    // `diagram-canvas` and `diagram-source` are the two shapes a diagram takes,
-    // one per mode.
+    // `diagram-canvas` is the scroll container the rendered SVG is substituted
+    // into, and it is the one `div` the `div` transform below gives a pinned
+    // `tabindex` — the same arrangement `pre` gets.
     figure: ['code-block', 'diagram', 'image-figure'],
     div: ['diagram-canvas'],
-    pre: ['diagram-source'],
+    pre: [],
     strong: ['callout-title'],
   },
   allowedSchemes: ['http', 'https', 'mailto'],
@@ -1714,9 +1677,9 @@ function sanitize(
       // would make a screen reader announce a name for every fence.
       //
       // Forced here rather than set in `codePlugin` so it reaches *every* `pre`:
-      // the highlighted code fences, the client-mode diagram source, and any
-      // raw-HTML one. Forcing also pins the value — a raw `tabindex="5"` would
-      // otherwise hijack the document's tab order.
+      // the highlighted code fences and any raw-HTML one. Forcing also pins the
+      // value — a raw `tabindex="5"` would otherwise hijack the document's tab
+      // order.
       pre: (tagName, attribs) => ({ tagName, attribs: { ...attribs, tabindex: '0' } }),
       // The display-math wrapper is the one `span` this pipeline gives a
       // `tabindex`, because it scrolls. Pinning the value here rather than
@@ -1958,30 +1921,21 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
         RENDERED_MATH,
       ),
     })),
-    // `diagramIdFor` namespaces element ids by the diagram's position, so two
-    // diagrams on one page cannot both define `#arrowhead`.
+    // The `diagram-<index>` id prefix namespaces element ids by the diagram's
+    // position on the page, so two diagrams cannot both define `#arrowhead`.
     ...(await Promise.all(
       diagrams.map(async (request, index) => ({
         token: request.token,
-        // Client mode emits the source fence for the browser to render;
-        // build-time mode emits the SVG. Both are marked here, which is the
-        // whole point of routing both through this one post-sanitization step.
+        // The SVG is rendered here, after sanitization, and marked in the same
+        // step. The import is **dynamic** on purpose: a note with no diagram
+        // never loads the renderer, so `pele` and its parser dependencies reach
+        // only pages that carry a Mermaid fence.
         markup: withRenderedMarker(
-          request.sourceOnly === true
-            ? `<pre class="diagram-source" tabindex="0"><code class="language-${MERMAID_LANGUAGE}">${escapeHtml(request.source)}</code></pre>` +
-              `<figcaption>${escapeHtml(request.caption ?? '')}</figcaption>`
-            : // This import is the dispatcher, not an adapter, and build-time
-              // mode executes it. `diagram-engine.ts` loads only the adapter
-              // named by `DIAGRAM_ENGINE`, and the only adapter that pulls in
-              // a DOM shim is `mermaid-render.ts` — reached only when the
-              // constant selects it, so the selected `pele` engine never
-              // imports the Mermaid adapter or its shim. `client` mode takes
-              // the `sourceOnly` branch above and never reaches this import.
-              await (await import('./diagram-engine.ts')).renderDiagram(
-                request.source,
-                `diagram-${index}`,
-                diagramCaption(request.source, chrome.diagramCaption),
-              ),
+          await (await import('./pele-render.ts')).renderDiagram(
+            request.source,
+            `diagram-${index}`,
+            diagramCaption(request.source, chrome.diagramCaption),
+          ),
           RENDERED_DIAGRAM,
         ),
       })),

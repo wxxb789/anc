@@ -5,7 +5,6 @@ import { wasmModuleUrl } from './src/lib/wasm-asset.ts';
 import { configuredSnapshotWorkspace } from './src/lib/snapshot.ts';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DIAGRAM_MODE } from './src/lib/diagram-mode.ts';
 import { MATH_MODE } from './src/lib/math-mode.ts';
 import { configForBuild } from './scripts/load-config.ts';
 import { vendorProvenancePlugin } from './scripts/vendor-provenance.ts';
@@ -49,16 +48,17 @@ function readStaged(name) {
 /**
  * Keep a client runtime out of the build unless client mode wants it.
  *
- * `src/pages/notes/[slug].astro` has Astro `<script>` tags importing
- * `src/scripts/diagram.ts` and `src/scripts/math.ts`, and Astro bundles such a
- * script **eagerly**: wrapping the tag in a condition or guarding the import at
- * runtime does not keep it out of `dist/`. Measured, not assumed — the guarded
- * version emitted 99 Mermaid chunks on a build whose mode was `build-time`,
- * orphaned and referenced by no page, and tripped the privacy residue scan on
- * `[[` byte sequences inside the parser.
+ * `src/pages/notes/[slug].astro` has an Astro `<script>` tag importing
+ * `src/scripts/math.ts`, and Astro bundles such a script **eagerly**: wrapping
+ * the tag in a condition or guarding the import at runtime does not keep it out
+ * of `dist/`. Measured, not assumed — when the diagram runtime this mechanism
+ * was first built for was guarded the same way, its chunks were emitted anyway
+ * on a build whose mode was `build-time`, orphaned and referenced by no page,
+ * and tripped the privacy residue scan on `[[` byte sequences inside the
+ * parser.
  *
  * A plugin rather than `resolve.alias`, because an alias is matched against the
- * *raw specifier* — here `../../scripts/diagram.ts` — before resolution, so a
+ * *raw specifier* — here `../../scripts/math.ts` — before resolution, so a
  * pattern written against the real path never fires. `resolveId` runs after the
  * path is known, which is the only place the question "is this that module" can
  * be asked reliably.
@@ -69,7 +69,7 @@ function readStaged(name) {
  * as a feature. Adding `vite` to `package.json` to annotate one function would
  * spend a dependency on a type.
  *
- * @param {'diagram' | 'math'} runtime
+ * @param {'math'} runtime
  * @param {'build-time' | 'client'} mode
  * @returns {{
  *   name: string,
@@ -86,19 +86,17 @@ function readStaged(name) {
 function clientRuntimePlugin(runtime, mode) {
   const stub = fileURLToPath(new URL(`src/scripts/${runtime}-disabled.ts`, import.meta.url));
   // The extension is matched loosely because it is not the same in both trees:
-  // this repository runs `diagram.ts` directly, while the packaged tarball ships
-  // it compiled to `diagram.js` (`scripts/compile-package.ts`). Pinning `.ts`
-  // here meant the redirect silently stopped firing once installed — Mermaid's
-  // whole runtime was then bundled into a `build-time` site, which the residue
-  // scan caught on `[[` byte sequences inside the parser. Matching either
-  // extension keeps one rule true of both trees.
+  // this repository runs `math.ts` directly, while the packaged tarball ships
+  // it compiled to `math.js` (`scripts/compile-package.ts`). Pinning `.ts` here
+  // meant the redirect silently stopped firing once installed — the diagram
+  // runtime this was first built for was then bundled whole into a `build-time`
+  // site, which the residue scan caught on `[[` byte sequences inside the
+  // parser. Matching either extension keeps one rule true of both trees.
   //
-  // **Parameterised over the runtime rather than duplicated**, because math
-  // needs exactly this arrangement for exactly this reason and a second copy is
-  // a second place for the `.ts`/`.js` lesson above to be relearned. The two
-  // modes are separate constants (`DIAGRAM_MODE`, `MATH_MODE`) — the costs and
-  // the evidence differ, so one switch must not carry the other's consequences —
-  // but the mechanism that keeps an unselected runtime out of `dist/` is one.
+  // **Parameterised over the runtime rather than inlined**, because the stub
+  // path and the matching pattern are both derived from one name: a second
+  // client runtime is a call, not a new copy where the `.ts`/`.js` lesson above
+  // would have to be relearned. `math` is the only caller today.
   const target = new RegExp(String.raw`[\\/]src[\\/]scripts[\\/]${runtime}\.(?:ts|js)$`);
   return {
     name: `anc:${runtime}-mode`,
@@ -238,7 +236,6 @@ export default defineConfig({
       __ANC_WASM_MODULE_URL__: JSON.stringify(STAGED_WASM?.['moduleUrl'] ?? wasmModuleUrl()),
     },
     plugins: [
-      clientRuntimePlugin('diagram', DIAGRAM_MODE),
       clientRuntimePlugin('math', MATH_MODE),
       vendorProvenancePlugin(fileURLToPath(new URL('.', import.meta.url))),
     ],

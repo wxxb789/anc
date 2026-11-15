@@ -8,11 +8,9 @@
  * earned no allowance.
  */
 
-import { DIAGRAM_MODE } from '../../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../../src/lib/math-mode.ts';
 import {
   MARKED_ROOT,
-  RENDERED_DIAGRAM,
   RENDERED_MATH,
   type RenderedKind,
 } from '../../src/lib/rendered-marker.ts';
@@ -27,28 +25,21 @@ interface RuntimeAllowance {
 }
 
 /**
- * These are measured floors, not aspirations: a client math page carries
- * Temml's chunk and a client diagram page Mermaid's grammar set. In build-time
- * mode Astro aliases both runtimes to empty stubs, so no page earns either
- * allowance.
+ * The measured floor for the one client runtime: a client math page carries
+ * Temml's chunk. In `build-time` math the runtime resolves to an empty stub, so
+ * no page earns the allowance. Diagrams have no client runtime at all — they
+ * are rendered to SVG at build time — so they have no floor to grant.
  *
  * Exported because `tests/math-and-diagrams.test.ts`'s site-wide total adds the
- * floor of each *selected* client mode to its own allowance, and two tables of
- * the same measured number is one table that forgets to move.
+ * floor to its own allowance, and two tables of the same measured number is one
+ * table that forgets to move.
  */
-export const CLIENT_RUNTIME_FLOOR_BYTES: Readonly<Record<RenderedKind, number>> = {
+export const CLIENT_RUNTIME_FLOOR_BYTES: Readonly<Record<typeof RENDERED_MATH, number>> = {
   [RENDERED_MATH]: 220_000,
-  [RENDERED_DIAGRAM]: 900_000,
 };
 
 const RUNTIME_ALLOWANCES: readonly RuntimeAllowance[] = [
   { kind: RENDERED_MATH, mode: MATH_MODE, bytes: CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_MATH], what: 'math' },
-  {
-    kind: RENDERED_DIAGRAM,
-    mode: DIAGRAM_MODE,
-    bytes: CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_DIAGRAM],
-    what: 'a diagram',
-  },
 ];
 
 export interface ScriptBudget {

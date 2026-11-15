@@ -67,7 +67,7 @@ import type { CssNode } from 'css-tree';
 import { parse as parseDiagram, render } from 'pele';
 import type { ParsedDiagramModel, StateModel } from 'pele';
 import { SaxesParser } from 'saxes';
-import { DiagramError } from './diagram-mode.ts';
+import { DiagramError } from './diagram-error.ts';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
@@ -549,8 +549,7 @@ function authorRefusal(directive: AuthorDirective): string {
   return 'the pele engine does not support author declarations, but the source carries one: '
     + declarationTexts(directive.declared)
     + ` (an author '${directive.origin}' directive; this engine refuses every author 'style', 'classDef' or`
-    + " 'linkStyle' declaration) — remove it, rewrite it with pele's native syntax, or set"
-    + " DIAGRAM_ENGINE = 'mermaid'";
+    + " 'linkStyle' declaration) — remove it or rewrite it with pele's native syntax";
 }
 
 function escapeXml(value: string): string {
@@ -631,7 +630,7 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
             'the renderer emitted a root style declaration this build does not recognise: ' + declaration
             + ' (the fixed set is measured from pele 1.13.0 without author directives — re-measure it in this file'
             + ' after a pele upgrade; an author %%{init}%% theme adds --pele-series-* declarations here)'
-            + " — remove the theme directive or set DIAGRAM_ENGINE = 'mermaid'",
+            + ' — remove the theme directive',
           );
         }
         const family = elementStyleClamp(declaration);
@@ -639,7 +638,7 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
           throw new Error(
             'the pele engine does not support author declarations, but one reached the output: ' + declaration
             + " (an author 'style', 'classDef' or 'linkStyle' directive; this engine strips only pele's own fixed"
-            + " inline set) — remove it, rewrite it with pele's native syntax, or set DIAGRAM_ENGINE = 'mermaid'",
+            + " inline set) — remove it or rewrite it with pele's native syntax",
           );
         }
         if (declaration === 'rx: var(--_r)') {

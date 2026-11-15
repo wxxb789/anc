@@ -624,7 +624,7 @@ main:focus:not(:focus-visible) {
  * is the list: `heading-anchor`, `code-block`, `language-*`, `token` and
  * `token-*`, `callout` and `callout-*`, `callout-title`, `contains-task-list`,
  * `task-list-item`, `footnotes`, `data-footnote-backref`, `sr-only`,
- * `math-inline`, `math-display`, `diagram`, `diagram-canvas`, `diagram-source`.
+ * `math-inline`, `math-display`, `diagram`, `diagram-canvas`.
  *
  * Quartz's thirteen-kind callout vocabulary and its mask-image icon set are
  * deliberately not imported: the corpus has zero callouts, and a colour-per-kind
@@ -739,9 +739,8 @@ main:focus:not(:focus-visible) {
  * Syntax highlighting is not here. The `token-*` map lives in
  * `src/styles/code.css`, which `src/pages/notes/[slug].astro` links only when
  * `RenderedNote.hasCode` is true — owner decision 7, heavy assets load per page.
- * `.code-block` stays in this file on purpose: a Mermaid fence renders as one
- * while setting `hasMermaid` rather than `hasCode`, so gating the figure's own
- * rules would leave a diagram-only page with an unstyled block.
+ * `.code-block` stays in this file: it is the fence's own shell, and it has
+ * always been here.
  */
 
 /*
@@ -829,10 +828,9 @@ main:focus:not(:focus-visible) {
 /*
  * Math and diagrams are styled by `src/styles/math.css` and
  * `src/styles/diagram.css`, which load only on the pages that carry one — owner
- * decision 7. `math-inline`, `math-display`, `diagram`, and the classes the
- * diagram flattening pass writes are therefore deliberately absent here rather
- * than missing: a rule in this sheet would ship the styling to every page and
- * defeat the gating.
+ * decision 7. `math-inline`, `math-display`, and `diagram` are therefore
+ * deliberately absent here rather than missing: a rule in this sheet would ship
+ * the styling to every page and defeat the gating.
  *
  * Until TK-15 this file styled `math-inline`/`math-display` as monospace source,
  * which was correct while math was a downgrade and is wrong now that it is

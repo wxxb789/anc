@@ -758,7 +758,13 @@ async function main(): Promise<number> {
     assert(welcome.includes('href="/private/"'), 'the withheld-note link is not live');
     assert(welcome.includes('href="/notes/second/"'), 'the public link to the second note is absent');
     assert(welcome.includes('language-math'), 'client math fallback did not ship');
-    assert(welcome.includes('language-mermaid'), 'client diagram fallback did not ship');
+    // The diagram is rendered at build time: the figure carries the fence's
+    // syntax name and the SVG itself, where the deleted client runtime shipped
+    // the `language-mermaid` source fallback instead.
+    assert(
+      /<figure class="diagram" data-diagram="mermaid">[\s\S]*?<svg\b/.test(welcome),
+      'the diagram did not ship as a build-time SVG',
+    );
     assert(!welcome.includes('PRIVATE-BODY-MUST-NOT-SHIP'), 'withheld body reached its linking page');
 
     // --- Image assets: eight files, one filename with a space and CJK, a static

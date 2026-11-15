@@ -1,32 +1,23 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { parse as parseCss } from 'css-tree';
 import { SaxesParser } from 'saxes';
 import { afterEach, test, vi } from 'vitest';
-import type * as DiagramConfiguration from '../src/lib/diagram-mode.ts';
-import type * as MermaidAdapter from '../src/lib/mermaid-render.ts';
 import type * as PeleAdapter from '../src/lib/pele-render.ts';
 import type * as Pele from 'pele';
 
-const selection = vi.hoisted(() => ({ engine: 'mermaid' as unknown }));
-vi.mock('../src/lib/diagram-mode.ts', async (importOriginal) => {
-  const actual = await importOriginal<typeof DiagramConfiguration>();
-  return { ...actual, DIAGRAM_MODE: 'build-time', get DIAGRAM_ENGINE() { return selection.engine; } };
-});
 vi.mock('pele', async (importOriginal) => {
   const actual = await importOriginal<typeof Pele>();
   return { ...actual, render: vi.fn<typeof Pele.render>(actual.render) };
 });
 
 import { parse as parsePele, render as renderPele } from 'pele';
-import { DiagramError } from '../src/lib/mermaid-render.ts';
+import { DiagramError } from '../src/lib/diagram-error.ts';
 import { renderMarkdown } from '../src/lib/markdown.ts';
 
-// Deferred imports intentionally exercise the adapter and dispatcher loading boundaries.
+// Deferred imports intentionally exercise the adapter's loading boundary.
 
 const DIAGRAMS: Readonly<Record<string, string>> = {
   flowchart: 'graph TD\n  A[Reader] --> B[Site]',
@@ -107,7 +98,6 @@ function assertClean(svg: string): void {
 }
 
 afterEach(() => {
-  selection.engine = 'mermaid';
   vi.mocked(renderPele).mockReset();
 });
 
@@ -144,29 +134,17 @@ test.each(DIRECTIVE_FREE_FIXTURES)('Pele preserves %s geometry and accessible co
   assert.match(svg, /^<svg\b/, 'the adapter returned no root element to compare');
 });
 
-test('the Markdown build-time seam renders with either selected engine', async () => {
+test('the Markdown seam renders a Mermaid fence through the adapter', async () => {
   const source = '```mermaid\nflowchart TD\n A[Consumer start] --> B[Consumer end]\n```\n';
-  selection.engine = 'mermaid';
-  const original = await renderMarkdown(source);
-  selection.engine = 'pele';
-  const replacement = await renderMarkdown(source);
-  for (const html of [original.html, replacement.html]) {
-    const svg = html.match(/<svg\b[\s\S]*?<\/svg>/)?.[0];
-    assert.ok(svg, 'the selected engine never reached Markdown’s post-sanitization insertion');
-    const document = inspect(svg);
-    assert.match(document.text, /Consumer start/);
-    assert.match(document.text, /Consumer end/);
-    assert.ok(document.root['aria-label']);
-    assert.doesNotMatch(svg, /<style\b|\sstyle\s*=|<script\b/i);
-  }
-  assert.match(replacement.html, /class="pele pele-flowchart"/);
-  assert.doesNotMatch(original.html, /class="pele /);
-});
-
-test('an unknown engine fails instead of silently choosing a renderer', async () => {
-  selection.engine = 'unknown-engine';
-  const { renderDiagram } = await import('../src/lib/diagram-engine.ts');
-  await assert.rejects(() => renderDiagram(DIAGRAMS['flowchart']!, 'unknown', 'Unknown engine'));
+  const { html } = await renderMarkdown(source);
+  const svg = html.match(/<svg\b[\s\S]*?<\/svg>/)?.[0];
+  assert.ok(svg, 'the adapter never reached Markdown’s post-sanitization insertion');
+  const document = inspect(svg);
+  assert.match(document.text, /Consumer start/);
+  assert.match(document.text, /Consumer end/);
+  assert.ok(document.root['aria-label']);
+  assert.doesNotMatch(svg, /<style\b|\sstyle\s*=|<script\b/i);
+  assert.match(html, /class="pele pele-flowchart"/);
 });
 
 test('Pele namespaces gradients and accessible titles without render-order state', async () => {
@@ -192,12 +170,10 @@ test('Pele namespaces gradients and accessible titles without render-order state
 });
 
 test('Pele is byte-deterministic across fresh Node processes', () => {
-  // The child script is inlined rather than taken from `tests/support/render-diagram.ts`
-  // so the test exercises `pele-render.ts` itself, independent of the constant's current
-  // value: a fresh child cannot see this file's `vi.mock` of `diagram-mode.ts`, so a bare
-  // harness run follows the real configured engine through the dispatcher — currently
-  // `pele` (`tests/support/render-diagram.ts:75`, where an absent `--adapter` imports
-  // `src/lib/diagram-engine.ts`).
+  // The child script is inlined rather than taken from
+  // `tests/support/render-diagram.ts` so the test exercises `pele-render.ts`
+  // itself: a fresh child cannot see this file's mocks, and the hash it prints
+  // is of the raw adapter output rather than of anything this process held.
   const adapter = new URL('../src/lib/pele-render.ts', import.meta.url).href;
   const source = DIAGRAMS['sankey']!;
   const script = `import { createHash } from 'node:crypto';
@@ -650,7 +626,12 @@ async function expectAuthorRefused(
   assert.ok(failure.message.includes(declaration), `the refusal does not name ${declaration}: ${failure.message}`);
   assert.ok(failure.message.includes(`an author '${origin}' directive`),
     `the refusal does not name '${origin}' as the directive that carried the declaration: ${failure.message}`);
-  assert.ok(failure.message.includes("DIAGRAM_ENGINE = 'mermaid'"), `the refusal names no remedy: ${failure.message}`);
+  assert.ok(failure.message.includes("remove it or rewrite it with pele's native syntax"),
+    `the refusal names no remedy: ${failure.message}`);
+  // The remedy has to be an action that exists: the deleted engine constant is
+  // not one, and naming it would send an author to a knob this tree no longer has.
+  assert.ok(!failure.message.includes('DIAGRAM_ENGINE'),
+    `the refusal names a constant that no longer exists: ${failure.message}`);
 }
 
 /** The source shape every probe row reads: `style A` lands on the first node's box or its label. */
@@ -1055,8 +1036,8 @@ test('Pele refuses an author theme, which writes --pele-series-* into the root b
     `the root refusal does not say what it is refusing: ${failure.message}`);
   assert.ok(failure.message.includes('remove the theme directive'),
     `the root refusal names no author remedy for the theme: ${failure.message}`);
-  assert.ok(failure.message.includes("DIAGRAM_ENGINE = 'mermaid'"),
-    `the root refusal names no engine remedy: ${failure.message}`);
+  assert.ok(!failure.message.includes('DIAGRAM_ENGINE'),
+    `the root refusal names a constant that no longer exists: ${failure.message}`);
 });
 
 const SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">';
@@ -1141,7 +1122,6 @@ async function openDiagramPage(markup: string) {
 }
 
 test('Pele preserves subscript, superscript and bold labels under external CSS', async () => {
-  selection.engine = 'pele';
   const { html } = await renderMarkdown(
     '```mermaid\nflowchart TD\n A["H<sub>2</sub>O"] --> B["x<sup>3</sup> and <b>Bold</b> plus <strong>Strong</strong>"]\n```\n',
   );
@@ -1175,8 +1155,8 @@ test('Pele preserves subscript, superscript and bold labels under external CSS',
 });
 
 /**
- * The Pele row of `diagram-mode.ts`'s table names `diagram.css`'s variable block
- * as the whole of its presentation, and no committed gate observed it: deleting
+ * Pele's root block is the whole of its presentation — the adapter strips it and
+ * `diagram.css` re-creates it — and no committed gate observed it: deleting
  * `--_tw`, `--_fm`, the `--_s` mapping or `.pele-rounded` left the suite green.
  *
  * Each assertion is an ablation, not a snapshot of a value: drop the alias and
@@ -1186,7 +1166,6 @@ test('Pele preserves subscript, superscript and bold labels under external CSS',
  * fixtures below render elements that consume it, but no row reads it.
  */
 test('diagram.css resolves Pele’s title weight, rounding, paint and mono label', async () => {
-  selection.engine = 'pele';
   const { html } = await renderMarkdown(
     '```mermaid\n' + DIAGRAMS['gantt']! + '\n```\n\n' +
     '```mermaid\nflowchart TD\n A["run <code>pnpm build</code> now"] --> B[Site]\n```\n',
@@ -1255,7 +1234,6 @@ test('diagram.css resolves Pele’s title weight, rounding, paint and mono label
  * dropped the clamp and fell back to the token cannot pass.
  */
 test('the clamp and member-underline carriers resolve under the build-time policy', async () => {
-  selection.engine = 'pele';
   const { html } = await renderMarkdown(
     '```mermaid\n' + BRANCH_FIXTURES['classStaticMember']! + '\n```\n\n' +
     '```mermaid\n' + BRANCH_FIXTURES['treemapClampVisible']! + '\n```\n',
@@ -1338,169 +1316,30 @@ test('a critical-path Gantt task paints with the site token, not Pele’s own re
 });
 
 /**
- * The dispatcher exists to load *only* the selected adapter (P1 design §5.1).
- * The factories registered in the loop below are what count a request.
+ * A note without a diagram must never load the renderer: `markdown.ts` reaches
+ * `pele-render.ts` through a **dynamic** import, and the factories registered
+ * below are what count a request. The positive half is what makes the negative
+ * mean something — it proves the instrument can observe a request at all.
  *
  * Placed after every row that compares a module instance against a held
  * binding, because `vi.resetModules()` invalidates the module instances those
- * rows hold: `DiagramError` is compared by `instanceof`, and after a reset they
- * would compare a fresh class against the binding this file imported before it.
- *
- * The source is valid on purpose: this row counts *requests*, and it is about the
- * success path. The failure path is gated where it can be observed — a fresh
- * process with a loader hook, in `a Pele failure loads neither Mermaid’s adapter
- * nor its DOM shim` below. That row exists because this one was green while
- * `pele-render.ts` imported `mermaid-render.ts` from its own `catch`.
+ * rows hold (`DiagramError` is compared by `instanceof`), so this stays last
+ * among the rows that hold one.
  */
-test('selecting an engine requests only that engine’s adapter', async () => {
+test('a note without a diagram never requests the renderer', async () => {
+  vi.resetModules();
+  // Re-registered on purpose. A mocked module is instantiated once and kept for
+  // the rest of the file — measured: `vi.resetModules()` alone does not drop
+  // it, so a re-registration is what makes this factory run again.
   const requested: string[] = [];
-  for (const engine of ['mermaid', 'pele']) {
-    vi.resetModules();
-    // Re-registered per phase on purpose. A mocked module is instantiated once
-    // and kept for the rest of the file — measured: `vi.resetModules()` alone
-    // does not drop it, so a second phase would reuse the first phase's instance
-    // and count nothing, which is a green that means only that the factory had
-    // already run. `vi.doMock` re-registration does drop it, so each phase below
-    // counts a fresh set of requests.
-    vi.doMock('../src/lib/mermaid-render.ts', async (importOriginal) => {
-      requested.push('mermaid-render.ts');
-      return { ...(await importOriginal<typeof MermaidAdapter>()) };
-    });
-    vi.doMock('../src/lib/pele-render.ts', async (importOriginal) => {
-      requested.push('pele-render.ts');
-      return { ...(await importOriginal<typeof PeleAdapter>()) };
-    });
-    requested.length = 0;
-    selection.engine = engine;
-    const { renderDiagram } = await import('../src/lib/diagram-engine.ts');
-    assert.match(await renderDiagram(DIAGRAMS['flowchart']!, `lazy-${engine}`, 'Lazy diagram'), /^<svg\b/);
-    assert.deepEqual(requested, [`${engine}-render.ts`], `${engine}: the unselected adapter was requested`);
-  }
-});
-
-/**
- * The rows below observe a *module graph*, which only a fresh process can
- * honestly report: an in-process mock counts the requests made through its own
- * factory, and this suite's own imports are part of the graph it would measure.
- * `tests/support/render-diagram.ts` takes `--adapter`, `--hash` and `--resolves`,
- * and `--resolves` records every specifier the run asked for through a loader
- * hook.
- *
- * They sit after the `vi.resetModules()` row because a child sees none of this
- * file's module registry either way.
- */
-const SUPPORT = fileURLToPath(new URL('support/render-diagram.ts', import.meta.url));
-const REPOSITORY = fileURLToPath(new URL('../', import.meta.url));
-
-function runInChild(
-  adapter: string | undefined,
-  source: string,
-  options: { hash?: boolean; resolves?: boolean } = {},
-): { status: number | null; stdout: string; stderr: string; record: string[] } {
-  const directory = mkdtempSync(join(tmpdir(), 'anc-diagram-probe-'));
-  const log = join(directory, 'resolves.txt');
-  try {
-    const argv = [SUPPORT, ...(adapter === undefined ? [] : ['--adapter', adapter])];
-    if (options.hash) argv.push('--hash');
-    if (options.resolves) argv.push('--resolves');
-    argv.push(source);
-    const result = spawnSync(process.execPath, argv, {
-      cwd: REPOSITORY,
-      encoding: 'utf8',
-      timeout: 90_000,
-      env: { ...process.env, ...(options.resolves ? { DIAGRAM_RESOLVE_LOG: log } : {}) },
-    });
-    return {
-      status: result.status,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      record: options.resolves ? readFileSync(log, 'utf8').split('\n').filter((line) => line !== '') : [],
-    };
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-}
-
-/**
- * Pele's failure path used to reach Mermaid's adapter through a dynamic import
- * of one class, and with it `mermaid-environment.ts` and `happy-dom` — the DOM
- * shim the engine seam exists to keep off the unselected path. The control is
- * what makes the negative mean something: the same hook, on a run that must see
- * the shim, has to see it.
- */
-test('a Pele failure loads neither Mermaid’s adapter nor its DOM shim', () => {
-  const failure = runInChild('src/lib/pele-render.ts', 'notadiagram\n A --> B', { resolves: true });
-  assert.match(failure.stderr, /render error: DiagramError/, 'the malformed fixture no longer fails through DiagramError');
-  const reachable = failure.record.join('\n');
-  assert.match(reachable, /pele-render\.ts/, 'the hook recorded nothing, so the negative assertions below are vacuous');
-  assert.doesNotMatch(reachable, /mermaid-render\.ts/, 'Pele’s failure path requested Mermaid’s adapter');
-  assert.doesNotMatch(reachable, /mermaid-environment\.ts/, 'Pele’s failure path requested Mermaid’s environment');
-  assert.doesNotMatch(reachable, /happy-dom/, 'Pele’s failure path requested the DOM shim');
-
-  const control = runInChild('src/lib/mermaid-render.ts', DIAGRAMS['flowchart']!, { resolves: true });
-  assert.equal(control.status, 0, control.stderr);
-  const controlReachable = control.record.join('\n');
-  assert.match(controlReachable, /mermaid-environment\.ts/, 'the hook cannot see Mermaid’s environment at all');
-  assert.match(controlReachable, /happy-dom/, 'the hook cannot see the DOM shim at all');
-});
-
-/**
- * P1 design §5(5): with the selected engine the seam is a pass-through, byte
- * for byte. The existing two-engine row compares the dispatcher against itself,
- * so it cannot see a dispatcher that post-processes its engine's output — which
- * is exactly what this pair binds.
- *
- * **The pair is bound against the engine the tree selects** (`pele` since the
- * engine switch). A fresh child cannot see this file's `vi.mock` of
- * `diagram-mode.ts` and there is no runtime override, so the child renders the
- * configured engine, whatever that is; the pair follows the constant instead of
- * naming it. The Mermaid half of §5(5) is bound separately by the row below,
- * in-process.
- *
- * Two fresh processes, not one, for the reason `tests/support/render-diagram.ts`
- * gives: Mermaid seeds gitgraph's hashes from `Math.random` and keeps
- * module-level counters, so a same-process pair shares state the design's claim
- * is not about. It is also the evidence that moving `DiagramError` out of
- * `mermaid-render.ts` did not touch what the selected engine’s row renders.
- */
-test('the selected engine reaches the same bytes through the dispatcher and its adapter', async () => {
-  const realEngine = (await vi.importActual<typeof DiagramConfiguration>('../src/lib/diagram-mode.ts')).DIAGRAM_ENGINE;
-  const adapter = { mermaid: 'src/lib/mermaid-render.ts', pele: 'src/lib/pele-render.ts' }[realEngine];
-  const source = DIAGRAMS['flowchart']!;
-  const dispatched = runInChild(undefined, source, { hash: true });
-  const direct = runInChild(adapter, source, { hash: true });
-  assert.equal(dispatched.status, 0, dispatched.stderr);
-  assert.equal(direct.status, 0, direct.stderr);
-  assert.match(dispatched.stdout, /^[a-f0-9]{64}$/, 'the child no longer prints a digest');
-  assert.equal(
-    dispatched.stdout,
-    direct.stdout,
-    `the dispatcher no longer passes ${realEngine}’s output through unchanged`,
-  );
-});
-
-/**
- * The same pass-through, for the engine this tree does not select, in-process.
- *
- * No fresh child can run the dispatcher with Mermaid while `pele` is the
- * constant, so the two paths are called back to back on the same source with
- * the same id — measured stable for these two sources (2026-11-16; gitgraph's
- * `Math.random`-seeded hashes are the reason the fresh-process pair above uses
- * a fresh process, and this row deliberately uses sources Mermaid renders
- * deterministically for shared state). A dispatcher that post-processes
- * Mermaid's bytes fails it: both sides start from the same state, and the only
- * difference between them is which module did the rendering.
- */
-test('with the Mermaid engine selected the dispatcher passes its adapter through unchanged', async () => {
-  // Deferred like every adapter and dispatcher import in this file (see the
-  // module header): the mock's `DIAGRAM_ENGINE` getter is read at call time, and
-  // `vi.importActual` is the only way to read the real constant beside it.
-  selection.engine = 'mermaid';
-  const { renderDiagram: direct } = await import('../src/lib/mermaid-render.ts');
-  const { renderDiagram: dispatched } = await import('../src/lib/diagram-engine.ts');
-  for (const source of [DIAGRAMS['flowchart']!, DIAGRAMS['sequence']!]) {
-    const directBytes = await direct(source, 'pass-through', 'Pass-through diagram');
-    const dispatchedBytes = await dispatched(source, 'pass-through', 'Pass-through diagram');
-    assert.equal(dispatchedBytes, directBytes, `${source.split('\n')[0]}: the dispatcher changed Mermaid's output`);
-  }
+  vi.doMock('../src/lib/pele-render.ts', async (importOriginal) => {
+    requested.push('pele-render.ts');
+    return { ...(await importOriginal<typeof PeleAdapter>()) };
+  });
+  const { renderMarkdown: renderFresh } = await import('../src/lib/markdown.ts');
+  await renderFresh('Just prose, with no fence at all.\n');
+  assert.deepEqual(requested, [], 'a diagram-free note requested the diagram renderer');
+  const diagram = await renderFresh('```mermaid\nflowchart TD\n A --> B\n```\n');
+  assert.deepEqual(requested, ['pele-render.ts'], 'a diagram note did not load the renderer through its dynamic import');
+  assert.match(diagram.html, /<svg\b/, 'the diagram did not render, so the positive half proves nothing');
 });

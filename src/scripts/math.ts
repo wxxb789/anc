@@ -2,28 +2,25 @@
  * Client-mode math rendering.
  *
  * Loaded only when `MATH_MODE` is `'client'` and only on pages that contain an
- * expression. In the shipped mode (`'build-time'`) this file is never imported,
- * so none of it — and none of Temml — reaches any page. See
- * `src/lib/math-mode.ts` for what the two modes cost.
+ * expression. In `'build-time'` mode `astro.config.mjs` substitutes an empty
+ * stub, so none of it — and none of Temml — reaches any page. See
+ * `src/lib/math-mode.ts` for what the selected mode costs.
  *
- * ## What this deliberately does *not* copy from `src/scripts/diagram.ts`
+ * ## What this runtime leaves out, and why
  *
- * That file is the template, and two thirds of its machinery is unnecessary
- * here. Both omissions are measurements rather than judgements:
+ * Two pieces of machinery a rendering runtime can need are unnecessary here.
+ * Both omissions are measurements rather than judgements:
  *
- * 1. **No theme re-rendering.** Mermaid bakes its palette into the SVG at render
- *    time, so a theme toggle leaves a diagram frozen in the old colours and the
- *    runtime has to re-run `initialize` and redraw. MathML does not: it inherits
- *    CSS colour like any other element, and measured, Temml's output carries no
- *    colour attribute at all except `\rule`'s hardcoded `black` — which
- *    `src/lib/math.ts` already rewrites to `currentColor` at build time and
- *    which {@link currentColorRule} applies here for the same reason. A
- *    `MutationObserver` on `data-theme` would be complexity for nothing.
- * 2. **No serialized render passes.** The diagram runtime chains its renders
- *    because Mermaid's `render()` is async and two overlapping passes can
- *    interleave a half-painted figure. `temml.renderToString` is **synchronous**
- *    — measured, it returns a `string` rather than a `Promise` — so there is no
- *    interleaving to prevent and nothing to serialize.
+ * 1. **No theme re-rendering.** MathML inherits CSS colour like any other
+ *    element, and measured, Temml's output carries no colour attribute at all
+ *    except `\rule`'s hardcoded `black` — which `src/lib/math.ts` already
+ *    rewrites to `currentColor` at build time and which {@link currentColorRule}
+ *    applies here for the same reason. A `MutationObserver` on `data-theme`
+ *    would be complexity for nothing.
+ * 2. **No serialized render passes.** `temml.renderToString` is **synchronous**
+ *    — measured, it returns a `string` rather than a `Promise` — so two
+ *    overlapping renders cannot interleave a half-rendered element and there is
+ *    nothing to serialize.
  *
  * ## What it does keep, because these are the properties that matter
  *
@@ -33,10 +30,10 @@
  * 2. **The source stays until the MathML replaces it.** The `<code>` the
  *    renderer emitted is removed only after a successful render, so a failure at
  *    any point leaves the reader with the TeX rather than an empty span. This is
- *    load-bearing in a way it is not for diagrams: `src/lib/math.ts` sets
- *    `throwOnError: true` and a malformed expression aborts the *build*, so
- *    under client rendering there is no build-time gate at all and a throw would
- *    otherwise leave the element empty — measured.
+ *    load-bearing: `src/lib/math.ts` sets `throwOnError: true` and a malformed
+ *    expression aborts the *build*, so under client rendering there is no
+ *    build-time gate at all and a throw would otherwise leave the element empty
+ *    — measured.
  */
 
 import type { MathMode } from '../lib/math-mode.ts';

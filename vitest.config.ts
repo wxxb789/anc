@@ -36,58 +36,49 @@ export default getViteConfig({
      */
     globalSetup: ['./tests/lock-dist.ts'],
     /**
-     * Raised from Vitest's 5 s default because a single render can now lay out
-     * real diagrams.
+     * Raised from Vitest's 5 s default because a single render can lay out real
+     * diagrams and gates re-render the whole fixture corpus.
      *
-     * Since TK-15 a Mermaid fence is rendered to SVG at build time rather than
-     * escaped, and that costs a one-off ~1.4 s to import and initialize Mermaid
-     * plus ~50 ms per diagram — each rendered twice, once per palette, to pair
-     * the themes. Measured on the fixture corpus: 2.9 s for all 32 notes on a
-     * cold process, 0.6 s warm. Gates that re-render every note therefore
-     * exceeded 5 s and failed as timeouts rather than on any assertion.
+     * **Raised to 90 s after measuring it under the real run rather than
+     * alone.** `isolate: true` gives every file its own worker and they
+     * compete. Measured under `pnpm run verify` on the Mermaid-era tree: two
+     * diagram gates took 36.4 s and 40.6 s — both timeouts, neither an
+     * assertion, and the second was waiting on children it had itself budgeted
+     * 120 s each. A gate whose inner budget is four times its outer one cannot
+     * fail the way it intends to.
      *
-     * 30 s is chosen to be comfortably above the cold-process cost while still
-     * failing a genuine hang in under a minute. It is not a way to tolerate a
-     * slow test: `tests/rendered-page.test.ts` drives a real browser and sets
-     * its own longer bounds where it needs them.
-     *
-     * **Raised to 90 s after measuring it under the real run rather than alone.**
-     * The 2.9 s figure above is a cold process with the machine to itself;
-     * `isolate: true` gives all 32 files their own worker and they compete.
-     * Measured under `pnpm run verify`: `every diagram type renders to CSP-clean
-     * SVG` took 36.4 s and `diagram rendering is deterministic across processes`
-     * took 40.6 s — both timeouts, neither an assertion, and the second was
-     * waiting on children it had itself budgeted 120 s each. A gate whose inner
-     * budget is four times its outer one cannot fail the way it intends to.
-     *
-     * This is the ceiling being raised to where the work actually is, not a
-     * tolerance for slowness: 90 s still fails a hung render well inside a
-     * two-minute run, and every gate that needs more still says so itself.
+     * **The Mermaid-era cost that motivated the raise is gone** — that engine
+     * was deleted, and `pele` renders in a fraction of a second (measured in
+     * `tests/math-and-diagrams.test.ts`). The value is kept deliberately rather
+     * than re-derived here: deleting an engine is not the change to re-time the
+     * suite in, and a ceiling that still fails a genuine hang well inside a
+     * two-minute run costs nothing but headroom. Every gate that needs more
+     * declares its own bound.
      */
     testTimeout: 90_000,
     /**
      * `hookTimeout` is left at Vitest's 10 s default, deliberately.
      *
-     * Ten top-level hooks exist across four files, and every one of them now
+     * Seven top-level hooks exist across three files, and every one of them now
      * declares its own budget:
      *
      * | hook | cost | budget |
      * | --- | --- | --- |
      * | `preview-server` `beforeAll` | 35 s alone, **187 s** worst over seven runs | 360 s |
-     * | `search` / `rendered-page` / `diagram-client` `afterAll` | a Chromium close: p50 22 s, max 43 s contended | 180 s each |
+     * | `search` / `rendered-page` `afterAll` | a Chromium close: p50 22 s, max 43 s contended | 180 s each |
      * | `preview-server` `afterEach` (×16) / `afterAll` | 12.9 s worst over six runs / 0 ms | 45 s each |
      * | `search` `beforeAll` | 0.4-0.9 s | 120 s |
      * | `rendered-page` `beforeAll` | 0.5 s typical, **23.7 s** worst | 120 s |
-     * | `diagram-client` `beforeAll` | 0.8 s, but it also builds a fixture site | `BROWSER_TIMEOUT` |
      *
      * The `afterEach` row is the one that had to be measured twice: five runs put
      * it at 5-6.5 s against the 10 s default, which reads as a bound worth
      * keeping tight, and the sixth put it at 12.9 s — over, on a run that
      * otherwise passed. A margin argued from five samples was wrong at six.
      *
-     * Raising the global would relax all ten to accommodate six, and the
-     * argument is the same one that gave `math-and-diagrams`'s every-diagram-type
-     * gate its own 300 s rather than lifting `testTimeout`.
+     * Raising the global would relax all seven to accommodate the ones that
+     * genuinely need minutes, and the argument is the same one that keeps
+     * `tests/math-and-diagrams.test.ts`'s across-processes gate on its own
+     * budget rather than lifting `testTimeout`.
      *
      * **The gap this closes was real and cost a red run.** `search.test.ts` does
      * its browser teardown in `afterAll` and carried 60 s, which is the one
