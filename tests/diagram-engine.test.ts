@@ -394,227 +394,113 @@ test.each(corpusDiagrams())('the real corpus diagram $path survives the adapter 
 });
 
 /**
- * An author's `style`/`classDef`/`linkStyle` directive reaches this adapter as a
- * `style` attribute, and every `style` attribute used to be dropped: the box was
- * measured with the label at 40 px and the label then rendered at whatever the
- * page's stylesheet said. The raw render is asserted to carry the declaration, so
- * a fixture that stopped exercising the conversion cannot make the row pass by
- * having nothing to convert.
- */
-test('Pele emits an author’s declaration as the presentation attribute it stands for', async () => {
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const original = inspect(renderPele(AUTHORED_SIZE, { idPrefix: 'authored', links: false, images: false }).svg);
-  assert.ok(
-    original.elements.some(({ attributes }) => attributes['style']?.includes('font-size:40px')),
-    'the fixture no longer emits the declaration this row converts',
-  );
-  const svg = await renderDiagram(AUTHORED_SIZE, 'authored', 'Authored size');
-  const { elements, root } = inspect(svg);
-  assertClean(svg);
-  assert.equal(root['viewBox'], original.root['viewBox'], 'the fixture no longer measures its label at the authored size');
-  const label = elements.find(({ attributes }) => attributes['class'] === 'pele-label');
-  assert.equal(label?.attributes['font-size'], '40px', 'the authored size did not reach the element');
-  const { browser, page } = await openDiagramPage(`<figure class="diagram">${svg}</figure>`);
-  try {
-    const measured = await page.evaluate(() => {
-      const element = document.querySelector('svg.pele text.pele-label');
-      if (element === null) throw new Error('the fixture no longer renders the label this row measures');
-      return Number.parseFloat(getComputedStyle(element).fontSize);
-    });
-    assert.equal(measured, 40, 'the label still renders at the stylesheet’s size, in a box measured at the authored one');
-  } finally {
-    await browser.close();
-  }
-});
-
-/**
- * A `style` declaration outranks a presentation attribute in CSS, so where the
- * author's declaration and Pele's own attribute name the same property the
- * attribute has to lose — and where Pele's attribute holds a `var()`, the value
- * cannot be compared at build time, which is why it is displacing rather than
- * merging. Both are asserted, in the browser, because the failure this catches is
- * a rendering difference: a `font-weight="var(--_w)"` left beside a
- * `font-weight="600"` would be a duplicate attribute, and one left *instead of*
- * it would render `bold` where the author wrote 600.
- */
-test('Pele keeps an authored declaration even where it displaces its own attribute', async () => {
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const original = inspect(renderPele(AUTHORED_PAINT, { idPrefix: 'declared', links: false, images: false }).svg);
-  const rawStyles = original.elements.flatMap(({ attributes }) => attributes['style'] ?? []).join(' ');
-  assert.match(rawStyles, /fill:#ff0000/, 'the fixture no longer emits the authored paint declaration');
-  assert.match(rawStyles, /font-weight:600/, 'the fixture no longer emits the authored weight declaration');
-  const svg = await renderDiagram(AUTHORED_PAINT, 'declared', 'Declared style');
-  const { elements, root } = inspect(svg);
-  assertClean(svg);
-  assert.equal(root['viewBox'], original.root['viewBox'], 'the fixture no longer renders the geometry this row compares');
-  const box = elements.find(({ attributes }) => attributes['class']?.includes('pele-rounded'));
-  assert.ok(box, 'the box lost the class that carries its corner radius');
-  assert.deepEqual(
-    Object.fromEntries(['fill', 'stroke', 'stroke-width', 'opacity'].map((name) => [name, box.attributes[name]])),
-    { fill: '#ff0000', stroke: '#00ff00', 'stroke-width': '3px', opacity: '0.5' },
-    'an authored declaration did not displace the attribute it outranks',
-  );
-  const label = elements.find(({ attributes }) => attributes['class'] === 'pele-label');
-  assert.ok(label, 'the fixture no longer renders a label');
-  assert.deepEqual(
-    Object.fromEntries(['font-weight', 'font-style', 'font-family', 'letter-spacing'].map((name) => [name, label.attributes[name]])),
-    { 'font-weight': '600', 'font-style': 'italic', 'font-family': 'Georgia', 'letter-spacing': '2px' },
-  );
-  // Pele's own `font-weight` attribute carries a `var()`, which a filter or a
-  // later style element could not be trusted to leave alone; the emitted value is
-  // a literal, and this is the reason it is allowed to be.
-  assert.equal(label.attributes['font-weight'], '600');
-  const { browser, page } = await openDiagramPage(`<figure class="diagram">${svg}</figure>`);
-  try {
-    const measured = await page.evaluate(() => {
-      const rect = document.querySelector('svg.pele rect.pele-rounded');
-      const text = document.querySelector('svg.pele text.pele-label');
-      if (rect === null || text === null) throw new Error('the fixture no longer renders what this row measures');
-      const style = getComputedStyle(text);
-      return { fill: getComputedStyle(rect).fill, weight: Number(style.fontWeight), spacing: style.letterSpacing };
-    });
-    assert.equal(measured.fill, 'rgb(255, 0, 0)', 'the authored fill did not reach the rendering');
-    assert.equal(measured.weight, 600, 'the authored weight did not reach the rendering');
-    assert.equal(measured.spacing, '2px', 'the authored letter spacing did not reach the rendering');
-  } finally {
-    await browser.close();
-  }
-});
-
-/**
- * A literal `rx` is the one case where the class mechanism and the declaration
- * cannot both be honoured: `.diagram svg.pele .pele-rounded` is a class rule and
- * would beat the presentation attribute, so an element carrying both would render
- * `var(--_r)` and drop the author's radius. `rx:var(--_r);rx:8px` is Pele's own
- * output for `style A rx:8px`, and the last declaration wins, as CSS says.
- */
-test('a literal radius becomes the attribute, not the class that would outrank it', async () => {
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A rx:8px';
-  const svg = await renderDiagram(source, 'literal-radius', 'Literal radius');
-  const { elements } = inspect(svg);
-  assertClean(svg);
-  const sized = elements.find(({ attributes }) => attributes['rx'] !== undefined);
-  assert.equal(sized?.attributes['rx'], '8px', 'the authored radius is not on the element');
-  assert.ok(
-    !sized.attributes['class']?.includes('pele-rounded'),
-    'the class that carries var(--_r) was added beside a literal radius',
-  );
-  assert.ok(
-    elements.some(({ attributes }) => attributes['class']?.includes('pele-rounded')),
-    'the unstyled node lost the class that carries var(--_r)',
-  );
-});
-
-/**
- * The displacement rule's other half, and the half it did not hold: a
- * declaration the renderer drops is not a declaration at all — the attribute it
- * was meant to outrank still applies. Projecting it *deletes* that attribute
- * instead, because the `fill="not-a-color"` emitted in its place is dropped by
- * the same parse: the box that paints from `var(--_s)` in the raw render loses
- * its fill and inherits the root's paint. A rendering change with no error
- * anywhere is exactly what the build refuses here, naming the declaration.
- * `fill:not-a-color` is a cell of the measured face whose verdict the property
- * grammar and the renderer agree on; the cells they disagree on are the two
- * tables in `pele-render.ts`, and each has its own row below.
+ * The fixed-set gate: the declarations Pele writes into a `style` attribute of
+ * a diagram with no author declarations have to be members of the set this
+ * adapter strips, the adapter has to leave none of them behind, and the set has
+ * to be exactly what these renders produce — no member Pele stopped writing, no
+ * declaration the set fails to name.
  *
- * The control is the raw render: it must carry both the declaration and the
- * `var()` attribute it displaces, or the row would pass by having nothing to
- * project.
- */
-test('Pele refuses an authored declaration with no measured projection', async () => {
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A fill:not-a-color';
-  const original = inspect(renderPele(source, { idPrefix: 'declared-invalid', links: false, images: false }).svg);
-  const node = original.elements.find(({ attributes }) => attributes['style']?.includes('fill:not-a-color'));
-  assert.ok(node, 'the fixture no longer emits the declaration this row refuses');
-  assert.equal(node.attributes['fill'], 'var(--_s)', 'the fixture no longer carries the attribute the declaration displaces');
-  await assert.rejects(() => renderDiagram(source, 'declared-invalid', 'Declared invalid'), (error: unknown) =>
-    error instanceof DiagramError && error.source === source && /fill: not-a-color/.test(error.message));
-});
-
-/**
- * The second refusal at the same point, and why the grammar is not the whole
- * oracle: these are rows of `NON_NEGATIVE`, whose values the renderer requires
- * to be non-negative while the grammar for them is sign-agnostic. Measured in
- * Chromium 158, `rx:-4px` is dropped from a declaration — so the raw render
- * still rounds the box from `rx: var(--_r)` — while `rx="-4px"` is taken back as
- * a presentation attribute, so the projection would lose the rounding *and*
- * carry a value the declaration never had.
+ * The sources are the 23-type matrix and the three real corpus diagrams, which
+ * is what decision C names; the bold-run probe is added because neither of
+ * those produces a bold run, so `--_w` — the one member Pele appends only for a
+ * body that consumes it — would have no producer here while the rich-label row
+ * further down still renders one through the adapter.
  *
- * The four probes are every table row an author directive can reach, and the
- * control is the raw render carrying the declaration exactly as written.
+ * The instruments are read at both ends: the raw render (what arrives) and the
+ * adapter's own output (what survives). Measured 2026-11-15 over these 27
+ * sources: 22 root members, 1 element member, 0 residual declarations. The
+ * set's own measurement and its re-measurement trigger are documented at
+ * `ROOT_STYLE_DECLARATIONS` in `pele-render.ts`.
  */
-test.each(['rx:-4px', 'stroke-width:-2px', 'stroke-dasharray:-2%', 'ry:-50%'])(
-  'Pele refuses a negative value for a non-negative property: %s', async (declaration) => {
-    const { renderDiagram } = await import('../src/lib/pele-render.ts');
-    const source = `flowchart TD\n A[Reader] --> B[Site]\n style A ${declaration}`;
-    const original = inspect(renderPele(source, { idPrefix: 'negative', links: false, images: false }).svg);
-    assert.ok(
-      original.elements.some(({ attributes }) => attributes['style']?.includes(declaration)),
-      'the fixture no longer emits the negative declaration this row refuses',
-    );
-    await assert.rejects(() => renderDiagram(source, 'negative', 'Negative value'), (error: unknown) =>
-      error instanceof DiagramError && error.source === source && error.message.includes(declaration.replace(':', ': ')));
+const FIXED_SET_PROBE = 'flowchart TD\n A["run <b>Bold</b> now"] --> B[Site]';
+
+/** Test-side reader for a `style` attribute: `property: value`, value as written. */
+function declarationsOf(style: string): string[] {
+  return (parseCss(style, { context: 'declarationList', positions: true }).children?.toArray() ?? []).map((node) => {
+    const fields: Record<string, unknown> = node;
+    const property = fields['property'];
+    const loc = (fields['value'] as { loc?: { start: { offset: number }; end: { offset: number } } } | undefined)?.loc;
+    assert.ok(typeof property === 'string', `unreadable declaration in ${style}`);
+    assert.ok(loc !== undefined, `unreadable declaration in ${style}`);
+    return `${property}: ${style.slice(loc.start.offset, loc.end.offset).trim()}`;
   });
+}
 
-/**
- * The complement of the table, and the reason it is a table rather than a sign
- * rule: the renderer keeps a negative for `letter-spacing` and
- * `stroke-dashoffset` — measured in both spellings — so a negative declaration
- * there has to become the attribute as before. Refusing it would refuse a value
- * the browser honours. `stroke-dashoffset` reaches the shape and
- * `letter-spacing` the label, so a missing projection on either is its own
- * failure.
- */
-test('Pele keeps a negative declaration where the renderer keeps the value', async () => {
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A letter-spacing:-2px,stroke-dashoffset:-2';
-  const svg = await renderDiagram(source, 'negative-kept', 'Negative kept');
-  const { elements } = inspect(svg);
-  assertClean(svg);
-  const label = elements.find(({ attributes }) => attributes['letter-spacing'] !== undefined);
-  assert.equal(label?.attributes['letter-spacing'], '-2px', 'a negative the renderer keeps did not reach the label');
-  const shape = elements.find(({ attributes }) => attributes['stroke-dashoffset'] !== undefined);
-  assert.equal(shape?.attributes['stroke-dashoffset'], '-2', 'a negative the renderer keeps did not reach the shape');
+test('Pele strips its own fixed inline declarations and leaves no residual style', async () => {
+  const { renderDiagram, ROOT_STYLE_DECLARATIONS, ELEMENT_STYLE_DECLARATIONS } = await import('../src/lib/pele-render.ts');
+  const accepted = { root: new Set(ROOT_STYLE_DECLARATIONS), element: new Set(ELEMENT_STYLE_DECLARATIONS) };
+  const produced = { root: new Set<string>(), element: new Set<string>() };
+  const sources: ReadonlyArray<readonly [name: string, source: string]> = [
+    ...Object.entries(DIAGRAMS),
+    ...corpusDiagrams().map(({ path, source }) => [path, source] as const),
+    ['bold-run probe', FIXED_SET_PROBE],
+  ];
+  for (const [name, source] of sources) {
+    // What arrives: every declaration the raw renderer wrote, held to the fixed
+    // set of the element kind it was written on — the root block and the
+    // element set are separate whitelists on purpose.
+    const rawParser = new SaxesParser({ xmlns: true });
+    let isRoot = true;
+    rawParser.on('opentag', (tag) => {
+      const kind = isRoot ? 'root' : 'element';
+      for (const declaration of declarationsOf(tag.attributes['style']?.value ?? '')) {
+        assert.ok(accepted[kind].has(declaration),
+          `${name}: Pele emitted an inline declaration outside its fixed ${kind} set: ${declaration}`);
+        produced[kind].add(declaration);
+      }
+      isRoot = false;
+    });
+    rawParser.write(renderPele(source, { idPrefix: 'fixed-set', links: false, images: false }).svg).close();
+    // What survives: nothing. The adapter strips the whole fixed set, so no
+    // element of its output may carry a `style` attribute or a declaration
+    // inside one.
+    const svg = await renderDiagram(source, 'fixed-set', 'Fixed set');
+    const residual = inspect(svg).elements.flatMap(({ attributes }) => declarationsOf(attributes['style'] ?? ''));
+    assert.equal(residual.length, 0, `${name}: declarations survived sanitization: ${residual.join(', ')}`);
+  }
+  assert.ok(produced.root.size >= 20 && produced.element.size >= 1,
+    'the probe corpus stopped exercising the fixed sets, so the equality below would pass vacuously');
+  // The set is exactly what these sources produce: a member Pele stopped
+  // writing — or one the corpus can no longer reach — fails here rather than
+  // sitting in the strip set as a hole a stray declaration could hide in.
+  assert.deepEqual([...produced.root].sort(), [...ROOT_STYLE_DECLARATIONS].sort());
+  assert.deepEqual([...produced.element].sort(), [...ELEMENT_STYLE_DECLARATIONS].sort());
 });
 
 /**
- * The measured face, one row per `RENDERER_KEPT_NUMBER` row in
- * `pele-render.ts` (r3): every spelling below is a real `style A` directive,
- * rendered through the raw renderer and the adapter and read back side by side
- * in the browser. The reading is pinned to the value the r3 measurements (the
- * 380-cell sweep and its boundary probe) read for *both* forms, so a browser
- * that starts dropping a spelling — or an adapter that starts normalising one —
- * fails here instead of passing a drop-versus-drop comparison. `specified` is
- * asserted non-empty on the raw element: the declaration survived the renderer's
- * parse, which is the half of the row the property grammar gets wrong.
+ * Render one source and return the failure, asserting it is this adapter's own
+ * refusal: decision C converts no author declaration, so every source below has
+ * to fail with `DiagramError` rather than publish a guessed rendering.
  */
-const UNITLESS_FACE: ReadonlyArray<readonly [
-  property: string,
-  values: ReadonlyArray<readonly [value: string, reading: string]>,
-]> = [
-  ['rx', [['4', '4px'], ['0.5', '0.5px'], ['1e2', '100px'], ['1500', '1500px'], ['+4', '4px'], ['4.0', '4px']]],
-  ['ry', [['4', '4px'], ['0.5', '0.5px'], ['1e2', '100px'], ['1500', '1500px']]],
-  ['fill-opacity', [['4', '1'], ['-2', '0'], ['1e2', '1'], ['1500', '1']]],
-  ['font-size', [['4', '4px'], ['0.5', '0.5px'], ['1e2', '100px'], ['1500', '1500px']]],
-  ['letter-spacing', [['4', '4px'], ['-2', '-2px'], ['1e2', '100px'], ['1500', '1500px']]],
-  ['word-spacing', [['4', '4px'], ['-2', '-2px'], ['1e2', '100px'], ['1500', '1500px']]],
-];
+async function refuse(source: string): Promise<DiagramError> {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const failure: unknown = await renderDiagram(source, 'author-probe', 'Author probe')
+    .then(() => null, (error: unknown) => error);
+  assert.ok(failure instanceof DiagramError, 'the adapter published an author declaration instead of refusing it');
+  assert.equal(failure.source, source, 'the refusal lost the diagram source');
+  return failure;
+}
 
-/** The `RENDERER_KEPT_PERCENTAGE` row — `word-spacing`'s percentage, both signs. */
-const PERCENTAGE_FACE: ReadonlyArray<readonly [value: string, reading: string]> = [
-  ['50%', '50%'],
-  ['-50%', '-50%'],
-];
+/**
+ * The refusal, held to the three things decision C requires its message to name:
+ * the declaration exactly as written, how it got in, and what to do instead.
+ */
+async function expectAuthorRefused(source: string, declaration: string): Promise<void> {
+  const failure = await refuse(source);
+  assert.ok(failure.message.includes(declaration), `the refusal does not name ${declaration}: ${failure.message}`);
+  for (const origin of ["'style'", "'classDef'", "'linkStyle'"]) {
+    assert.ok(failure.message.includes(origin), `the refusal does not name ${origin} as the origin: ${failure.message}`);
+  }
+  assert.ok(failure.message.includes("DIAGRAM_ENGINE = 'mermaid'"), `the refusal names no remedy: ${failure.message}`);
+}
 
-/** The source shape every face row reads: `style A` lands on the first node's box or its label. */
+/** The source shape every probe row reads: `style A` lands on the first node's box or its label. */
 function faceSource(property: string, value: string): string {
   return `flowchart TD\n A[Reader] --> B[Site]\n style A ${property}:${value}`;
 }
 
 /**
- * The same declaration through a parser that forwards it, for the r4 face.
+ * The same declaration through parsers that forward it, for the reachable face.
  *
  * The flowchart directive parser rejects a function value at its own parse
  * (measured), so `faceSource` cannot reach the cells below at all; `state`
@@ -629,403 +515,125 @@ function blockFaceSource(property: string, value: string): string {
   return `block-beta\n  columns 2\n  A B\n  style A ${property}:${value}`;
 }
 
-/**
- * Render each cell's source through the raw renderer and the adapter, serve
- * every pair side by side without a policy (`openDiagramPage` above), and read
- * each pair back: the raw element carrying the author's declaration, the
- * adapter element carrying the property, and the computed value of both.
- *
- * The element controls are the point of the helper. `localName` and the `x`/`y`
- * geometry have to match between the two — the adapter must not be compared
- * across elements — and the adapter's attribute has to carry the author's own
- * spelling, which is what projection as-is means.
+/*
+ * The seven rows below replace the r2–r6 conversion tests one for one: each
+ * source used to assert a projection — or a refusal justified by what the
+ * projection would have rendered — and under decision C each asserts the same
+ * refusal instead. The raw render stays as the control that the declaration
+ * really arrives, so a fixture that stopped producing it cannot make a row pass
+ * by having nothing to refuse.
  */
-async function measureCells(cells: ReadonlyArray<{ property: string; value: string; source: string }>) {
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const blocks: string[] = [];
-  for (const [index, cell] of cells.entries()) {
-    const { svg } = renderPele(cell.source, { idPrefix: `face-${index}`, links: false, images: false });
-    const adapter = await renderDiagram(cell.source, `face-${index}`, 'Face probe');
-    assertClean(adapter);
-    blocks.push(`<figure class="diagram" data-role="raw-${index}">${svg}</figure>`);
-    blocks.push(`<figure class="diagram" data-role="adapter-${index}">${adapter}</figure>`);
-  }
-  const { browser, page } = await openDiagramPage(blocks.join(''), { policy: null });
-  try {
-    return await page.evaluate((probes) => probes.map(({ property, value, index }) => {
-      const elements = (role: string): Element[] => {
-        const figure = document.querySelector(`figure[data-role="${role}"]`);
-        if (figure === null) throw new Error(`the page lost the ${role} block`);
-        return [...figure.querySelectorAll('*')];
-      };
-      const raw = elements(`raw-${index}`).filter((element) =>
-        element.localName !== 'svg' && (element.getAttribute('style') ?? '').includes(`${property}:${value}`));
-      // The adapter side is matched by the *emitted spelling* — the value the
-      // projection was measured to carry. Matching on the attribute name alone
-      // would also catch the renderer's own attributes (`fill="var(--_s)"` on
-      // the neighbouring node), which is a different cell.
-      const adapter = elements(`adapter-${index}`).filter((element) => element.getAttribute(property) === value);
-      if (raw.length !== 1) throw new Error(`${property}:${value} is on ${raw.length} raw elements, not one`);
-      if (adapter.length !== 1) throw new Error(`${property}:${value} is on ${adapter.length} adapter elements, not one`);
-      const geometry = (element: Element): string => `${element.getAttribute('x')}/${element.getAttribute('y')}`;
-      const reading = (element: Element): string => getComputedStyle(element).getPropertyValue(property);
-      return {
-        rawTag: raw[0]!.localName,
-        adapterTag: adapter[0]!.localName,
-        rawGeometry: geometry(raw[0]!),
-        adapterGeometry: geometry(adapter[0]!),
-        specified: (raw[0] as SVGElement).style.getPropertyValue(property),
-        emitted: adapter[0]!.getAttribute(property),
-        raw: reading(raw[0]!),
-        adapter: reading(adapter[0]!),
-      };
-    }), cells.map((cell, index) => ({ property: cell.property, value: cell.value, index })));
-  } finally {
-    await browser.close();
-  }
-}
+test('Pele refuses an authored font-size instead of converting it to an attribute', async () => {
+  const original = inspect(renderPele(AUTHORED_SIZE, { idPrefix: 'authored', links: false, images: false }).svg);
+  assert.ok(
+    original.elements.some(({ attributes }) => attributes['style']?.includes('font-size:40px')),
+    'the fixture no longer emits the declaration this row refuses',
+  );
+  await expectAuthorRefused(AUTHORED_SIZE, 'font-size: 40px');
+});
 
-test.each(UNITLESS_FACE)(
-  'a unitless %s declaration is projected as the renderer keeps it', async (property, values) => {
-    const cells = values.map(([value]) => ({ property, value, source: faceSource(property, value) }));
-    const measured = await measureCells(cells);
-    for (const [index, [value, reading]] of values.entries()) {
-      const cell = measured[index]!;
-      const label = `${property}:${value}`;
-      assert.equal(cell.rawTag, cell.adapterTag, `${label}: the two forms are not the same kind of element`);
-      assert.equal(cell.rawGeometry, cell.adapterGeometry, `${label}: the two forms are not the same element`);
-      assert.notEqual(cell.specified, '', `${label}: the browser no longer keeps the declaration — the row's premise is gone`);
-      assert.equal(cell.emitted, value, `${label}: the projection did not carry the author's spelling`);
-      assert.equal(cell.raw, reading, `${label}: the raw render no longer computes ${reading}`);
-      assert.equal(cell.adapter, reading, `${label}: the projection computes ${cell.adapter}, not ${reading}`);
-    }
-  },
-);
+test('Pele refuses an authored paint declaration, naming the declaration it meets', async () => {
+  const original = inspect(renderPele(AUTHORED_PAINT, { idPrefix: 'declared', links: false, images: false }).svg);
+  const rawStyles = original.elements.flatMap(({ attributes }) => attributes['style'] ?? []).join(' ');
+  assert.match(rawStyles, /fill:#ff0000/, 'the fixture no longer emits the authored paint declaration');
+  assert.match(rawStyles, /font-weight:600/, 'the fixture no longer emits the authored weight declaration');
+  await expectAuthorRefused(AUTHORED_PAINT, 'fill: #ff0000');
+});
 
-test.each(PERCENTAGE_FACE)(
-  'a %s word-spacing declaration is projected as the renderer keeps it', async (value, reading) => {
-    const source = faceSource('word-spacing', value);
-    const [cell] = await measureCells([{ property: 'word-spacing', value, source }]);
-    assert.notEqual(cell!.specified, '', `word-spacing:${value}: the browser no longer keeps the declaration`);
-    assert.equal(cell!.emitted, value, `word-spacing:${value}: the projection did not carry the author's spelling`);
-    assert.equal(cell!.raw, reading, `word-spacing:${value}: the raw render no longer computes ${reading}`);
-    assert.equal(cell!.adapter, reading, `word-spacing:${value}: the projection computes ${cell!.adapter}, not ${reading}`);
-  },
-);
+test('Pele refuses an authored literal radius rather than choose between it and the rounding class', async () => {
+  const source = faceSource('rx', '8px');
+  const { svg } = renderPele(source, { idPrefix: 'literal-radius', links: false, images: false });
+  assert.match(svg, /style="rx:var\(--_r\);rx:8px;"/, 'the raw render no longer carries the declarations this row reads');
+  await expectAuthorRefused(source, 'rx: 8px');
+});
+
+test('Pele refuses an authored declaration the renderer itself would have dropped', async () => {
+  const source = faceSource('fill', 'not-a-color');
+  const original = inspect(renderPele(source, { idPrefix: 'declared-invalid', links: false, images: false }).svg);
+  const node = original.elements.find(({ attributes }) => attributes['style']?.includes('fill:not-a-color'));
+  assert.ok(node, 'the fixture no longer emits the declaration this row refuses');
+  assert.equal(node.attributes['fill'], 'var(--_s)', 'the fixture no longer carries the attribute the declaration displaces');
+  await expectAuthorRefused(source, 'fill: not-a-color');
+});
+
+test('Pele refuses a negative declaration even where the renderer keeps the value', async () => {
+  const source = faceSource('letter-spacing', '-2px');
+  const { svg } = renderPele(source, { idPrefix: 'negative-kept', links: false, images: false });
+  assert.match(svg, /style="letter-spacing:-2px;"/, 'the raw render no longer carries the declaration this row refuses');
+  await expectAuthorRefused(source, 'letter-spacing: -2px');
+});
+
+test('Pele refuses the authored unitless radius the r3 sweep projected', async () => {
+  const source = faceSource('rx', '4');
+  const { svg } = renderPele(source, { idPrefix: 'unitless-radius', links: false, images: false });
+  assert.match(svg, /style="rx:var\(--_r\);rx:4;"/, 'the raw render no longer carries the declaration this row refuses');
+  await expectAuthorRefused(source, 'rx: 4');
+});
+
+test('Pele refuses an authored word-spacing declaration the emit allowlist used to reject by name', async () => {
+  const source = faceSource('word-spacing', '-2px');
+  const { svg } = renderPele(source, { idPrefix: 'word-spacing', links: false, images: false });
+  assert.match(svg, /style="word-spacing:-2px;"/, 'the raw render no longer carries the declaration this row refuses');
+  await expectAuthorRefused(source, 'word-spacing: -2px');
+});
 
 /**
- * The r4 face: a declaration the state (and block) parser forwards that the
- * flowchart parser cannot, measured the same way the r3 rows are — the raw
- * render against the adapter's own output, element by element, in the browser.
- * Every reading below was measured 2026-11-15 in Chromium 158 (r4-sweep.tsv);
- * the row pins it so an adapter that normalises a value — or refuses one it
- * measured fit to project — fails here.
- *
- * The cells divide by what made them reachable:
- *
- * - a math function whose value is of the property's own type — `calc()`,
- *   `min()`, `calc(1em)`, and the negative-inside-`calc()` and `abs()`
- *   spellings the renderer clamps in both forms (`stroke-width:calc(-4px)`
- *   computes `0px` either way, measured, which is why this property is not
- *   refused for a sign its own renderer handles);
- * - the reference shapes `var()`, `env()` and `attr()`, which substitute — or
- *   fail to substitute — identically in both forms: `var(--pele-accent)`
- *   resolves the site token, `var(--r4-missing)` falls back to the same
- *   inherited paint the declaration's own invalid-at-computed-value-time does;
- * - a colour function on a paint property, `rgb(var(--_c))` and
- *   `rgb(0 0 0 / 50%)`, which the paint guard admits because it is a colour;
- * - a `<number>`-valued function on a property that takes a number,
- *   `fill-opacity:calc(0.5)`.
+ * The rest of the refused face: the spellings the r4–r6 sweeps measured for the
+ * conversion, now under the one disposition decision C gives them. `state` and
+ * `block` are here because their parsers forward a function value the flowchart
+ * parser rejects at its own parse (measured 2026-11-15), so these are cells an
+ * author can really reach.
  */
-const FUNCTION_FACE: ReadonlyArray<readonly [graph: 'state' | 'block', property: string, value: string, reading: string]> = [
-  ['state', 'stroke-width', 'calc(4px)', '4px'],
-  ['state', 'stroke-width', 'calc(1em)', '16px'],
-  ['state', 'stroke-width', 'calc(2 * 4px)', '8px'],
-  ['state', 'stroke-width', 'min(4px)', '4px'],
-  ['state', 'stroke-width', 'calc(-4px)', '0px'],
-  ['state', 'stroke-width', 'abs(-2px)', '2px'],
-  ['state', 'stroke-width', 'calc(var(--pele-radius) * 2)', '12px'],
-  ['state', 'stroke-width', 'var(--pele-radius)', '6px'],
-  ['state', 'stroke-width', 'env(safe-area-inset-top)', '0px'],
-  ['state', 'stroke-width', 'attr(data-w)', '1px'],
-  ['state', 'stroke-dasharray', 'calc(4px)', '4px'],
-  ['state', 'stroke-dashoffset', 'calc(2px)', '2px'],
-  ['state', 'rx', 'calc(4px)', '4px'],
-  ['state', 'rx', 'var(--pele-radius)', '6px'],
-  ['state', 'ry', 'calc(4px)', '4px'],
-  ['state', 'letter-spacing', 'calc(2px)', '2px'],
-  ['state', 'letter-spacing', 'var(--pele-accent)', 'normal'],
-  ['state', 'word-spacing', 'calc(2px)', '2px'],
-  ['state', 'font-size', 'calc(40px)', '40px'],
-  ['state', 'font-size', 'var(--pele-radius)', '6px'],
-  ['state', 'text-decoration', 'calc(4px)', '4px'],
-  ['state', 'fill-opacity', 'calc(0.5)', '0.5'],
-  ['state', 'fill', 'rgb(0 0 0 / 50%)', 'rgba(0, 0, 0, 0.5)'],
-  ['state', 'fill', 'var(--pele-accent)', 'rgb(31, 111, 60)'],
-  ['state', 'fill', 'var(--r4-missing)', 'rgb(27, 31, 36)'],
-  ['state', 'fill', 'rgb(var(--_c))', 'rgb(27, 31, 36)'],
-  ['state', 'stroke', 'var(--pele-accent)', 'rgb(31, 111, 60)'],
-  ['block', 'stroke-width', 'calc(4px)', '4px'],
-  ['block', 'rx', 'calc(4px)', '4px'],
-  ['block', 'fill', 'var(--pele-accent)', 'rgb(31, 111, 60)'],
-  // The r5 face, measured 2026-11-15 in the same page (r5-sweep.tsv), one row
-  // per judgement the token-order fold and the case-sensitive name tables got
-  // wrong. The sign rows are the F1 family: a result that *is* non-negative
-  // (`abs(-2px)` is `2px`; `calc(100% - 50%)` is `50%`) projects, a negative
-  // *number* result is taken back by neither form (`calc(4 - 8)` computes
-  // `calc(-4px)` in both) while a negative length is refused below, and an
-  // expression whose sign cannot be decided is refused on a geometry property
-  // and projected on a stroke one (`1em - 2px` is `14px` in both forms here).
-  // The arithmetic rows are F3 — precedence and parentheses — and the name rows
-  // are F4, including the measured radian reading of a number argument.
-  ['state', 'stroke-width', 'calc(4px + 2 * 2px)', '8px'],
-  ['state', 'stroke-width', 'calc((4px))', '4px'],
-  ['state', 'rx', 'calc(4px + 2 * 2px)', '8px'],
-  ['state', 'rx', 'calc((4px))', '4px'],
-  ['block', 'rx', 'calc(4px + 2 * 2px)', '8px'],
-  ['state', 'rx', 'calc(100% - 50%)', '50%'],
-  ['state', 'rx', 'calc(4 - 8)', 'calc(-4px)'],
-  ['state', 'rx', 'abs(-2px)', '2px'],
-  ['state', 'rx', 'sign(2px)', 'calc(1px)'],
-  ['state', 'rx', 'calc(1em + 2px)', '18px'],
-  ['state', 'stroke-width', 'calc(1em - 2px)', '14px'],
-  ['state', 'rx', 'SIN(200)', 'calc(-0.873297px)'],
-  ['state', 'fill', 'hwb(120 0% 0%)', 'rgb(0, 255, 0)'],
-  ['state', 'fill', 'RGB(0 255 0)', 'rgb(0, 255, 0)'],
-  ['state', 'stroke', 'HWB(120 0% 0%)', 'rgb(0, 255, 0)'],
-  ['state', 'fill', 'lab(50% 40 59.5)', 'lab(50 40 59.5)'],
-  ['state', 'fill', 'rgb(from red r g b)', 'color(srgb 1 0 0)'],
-  ['state', 'fill', 'VAR(--pele-accent)', 'rgb(31, 111, 60)'],
+const REFUSED_DECLARATIONS: ReadonlyArray<{ graph: 'state' | 'block'; property: string; value: string }> = [
+  { graph: 'state', property: 'rx', value: 'clamp(4px)' },
+  { graph: 'state', property: 'rx', value: 'calc(4px)' },
+  { graph: 'state', property: 'rx', value: 'calc(0px - 4px)' },
+  { graph: 'state', property: 'stroke-width', value: 'calc(4px)' },
+  { graph: 'state', property: 'fill', value: 'var(--pele-accent)' },
+  { graph: 'state', property: 'fill', value: 'rgb(from red r g b)' },
+  { graph: 'state', property: 'fill', value: 'rgb(calc(255) 0 0)' },
+  { graph: 'block', property: 'rx', value: 'calc(4px)' },
 ];
 
-test.each(FUNCTION_FACE)(
-  'a %s declaration of %s:%s is projected as the renderer keeps it',
-  async (graph, property, value, reading) => {
+test.each(REFUSED_DECLARATIONS)(
+  'Pele refuses the reachable authored declaration $graph $property:$value',
+  async ({ graph, property, value }) => {
     const source = graph === 'state' ? stateFaceSource(property, value) : blockFaceSource(property, value);
-    const [cell] = await measureCells([{ property, value, source }]);
-    const label = `${graph} ${property}:${value}`;
-    assert.notEqual(cell!.specified, '', `${label}: the browser no longer keeps the declaration — the row's premise is gone`);
-    assert.equal(cell!.emitted, value, `${label}: the projection did not carry the author's spelling`);
-    assert.equal(cell!.rawTag, cell!.adapterTag, `${label}: the two forms are not the same kind of element`);
-    assert.equal(cell!.rawGeometry, cell!.adapterGeometry, `${label}: the two forms are not the same element`);
-    assert.equal(cell!.raw, reading, `${label}: the raw render no longer computes ${reading}`);
-    assert.equal(cell!.adapter, reading, `${label}: the projection computes ${cell!.adapter}, not ${reading}`);
-  },
-);
-
-/**
- * The r3 finding, source-level: `style A rx:4`. The raw render carries
- * `style="rx:var(--_r);rx:4"` — the browser keeps the declaration, the last one
- * wins, and the box rounds at 4 user units — while the adapter used to fail the
- * whole build on the property grammar's verdict, refusing a value the browser
- * keeps. The class mechanism has to stay off this element: a `.pele-rounded`
- * class rule would outrank the projected attribute and render `var(--_r)`,
- * which is a different radius, while the other node keeps its class.
- */
-test('the authored unitless radius is projected, and the class that would outrank it stays off', async () => {
-  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A rx:4';
-  const { svg: raw } = renderPele(source, { idPrefix: 'unitless-radius', links: false, images: false });
-  assert.match(raw, /style="rx:var\(--_r\);rx:4;"/, 'the raw render no longer carries the declaration this row projects');
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const svg = await renderDiagram(source, 'unitless-radius', 'Unitless radius');
-  const { elements } = inspect(svg);
-  assertClean(svg);
-  const sized = elements.find(({ attributes }) => attributes['rx'] !== undefined);
-  assert.equal(sized?.attributes['rx'], '4', 'the authored radius is not on the element');
-  assert.ok(
-    !sized?.attributes['class']?.includes('pele-rounded'),
-    'the class that carries var(--_r) was added beside the projected radius',
-  );
-  assert.ok(
-    elements.some(({ attributes }) => attributes['class']?.includes('pele-rounded')),
-    'the unstyled node lost the class that carries var(--_r)',
-  );
-  const [cell] = await measureCells([{ property: 'rx', value: '4', source }]);
-  assert.equal(cell!.raw, '4px', 'the raw render no longer rounds the box at the authored unit');
-  assert.equal(cell!.adapter, '4px', 'the projected radius does not compute the raw render’s radius');
-});
-
-/**
- * The r3 finding, source-level: `word-spacing` is a legal SVG presentation
- * attribute and the renderer keeps `-2px`, but it was missing from the emit
- * allowlist, so every authored `word-spacing` was refused as having “no safe
- * equivalent” — measured false. It is projected like the `letter-spacing`
- * beside it, onto the label the declaration reached.
- */
-test('an authored word-spacing reaches the label as its presentation attribute', async () => {
-  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A word-spacing:-2px';
-  const { svg: raw } = renderPele(source, { idPrefix: 'word-spacing', links: false, images: false });
-  assert.match(raw, /style="word-spacing:-2px;"/, 'the raw render no longer carries the declaration this row projects');
-  const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const svg = await renderDiagram(source, 'word-spacing', 'Word spacing');
-  const { elements } = inspect(svg);
-  assertClean(svg);
-  const label = elements.find(({ attributes }) => attributes['word-spacing'] !== undefined);
-  assert.equal(label?.attributes['word-spacing'], '-2px', 'the authored spacing is not on the label');
-  const [cell] = await measureCells([{ property: 'word-spacing', value: '-2px', source }]);
-  assert.equal(cell!.raw, '-2px', 'the raw render no longer spaces the words at the authored value');
-  assert.equal(cell!.adapter, '-2px', 'the projected spacing does not compute the raw render’s value');
-});
-
-/**
- * The refused half of the face, one spelling per measured reason: the sign
- * boundary of a `'positive'` row (`rx:-2`, `ry:-2`, `font-size:-2`), the shape
- * boundary that keeps the number and drops the dimension
- * (`fill-opacity:-4px`), a list that must not be read as its first number
- * (`rx:4 -2`), and a value the renderer drops outright (`rx:not-a-color`,
- * `word-spacing:bold`).
- *
- * The r4 rows below are the same demonstration for the cells the state parser
- * made reachable: a CSS-wide keyword or `auto` on a geometry property (the
- * declaration keeps it, the attribute reads the zero length), a negative inside
- * a function (`rx:calc(-4px)`: clamped by the declaration, taken back by the
- * attribute), a `<number>`-valued function on a property that expects a length
- * (`letter-spacing:calc(4)`, `sin(45deg)`, `font-size:calc(4)`), a
- * length-valued function on a property that expects a number
- * (`fill-opacity:calc(4px)`), a type-invalid function (`rx:calc(1px * 1px)`,
- * `stroke-width:calc(1px * 1px)`), and a math function on a paint property
- * (`fill:calc(4px)`). Their `graph` column is `state` because the flowchart
- * parser rejects a function value before the adapter is reached — the reason
- * this face went unmeasured through r3.
- *
- * Each row has the adapter fail loudly on the real source, then shows *why*
- * refusal is the direction that preserves the rendering, in the same browser:
- * the declaration is dropped on an element that carries nothing else
- * (`specified` is empty — the value that would render comes from what the
- * declaration displaces), and on a pele-shaped element that carries a value of
- * its own, the projection's attribute form computes something else than the
- * dropped declaration left behind. The last assertion is the ablatable half:
- * it is what makes each refusal necessary rather than merely safe.
- */
-const REFUSED_FACE: ReadonlyArray<{
-  graph?: 'state';
-  property: string;
-  value: string;
-  element: 'rect' | 'text';
-  displaced: string;
-  /**
-   * `dropped` — the renderer drops the declaration (its `specified` value is
-   * empty), so the projected attribute would delete the value that actually
-   * renders. `kept` — the renderer keeps it, and the attribute form reads
-   * something else entirely; `cleanReading` is the value the declaration
-   * itself produces.
-   */
-  declaration: 'dropped' | 'kept';
-  cleanReading?: string;
-  displacedReading: string;
-  projectedReading: string;
-}> = [
-  { property: 'rx', value: '-2', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
-  { property: 'ry', value: '-2', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
-  { property: 'font-size', value: '-2', element: 'text', declaration: 'dropped', displaced: '33px', displacedReading: '33px', projectedReading: '16px' },
-  { property: 'fill-opacity', value: '-4px', element: 'rect', declaration: 'dropped', displaced: '0.25', displacedReading: '0.25', projectedReading: '1' },
-  { property: 'rx', value: 'not-a-color', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
-  { property: 'rx', value: '4 -2', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
-  { property: 'word-spacing', value: 'bold', element: 'text', declaration: 'dropped', displaced: '5px', displacedReading: '5px', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'inherit', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'initial', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'unset', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'revert', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'auto', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'ry', value: 'auto', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'calc(-4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
-  { graph: 'state', property: 'ry', value: 'calc(-4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
-  { graph: 'state', property: 'rx', value: 'calc(1px * 1px)', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
-  { graph: 'state', property: 'stroke-width', value: 'calc(1px * 1px)', element: 'rect', declaration: 'dropped', displaced: '3px', displacedReading: '3px', projectedReading: '1px' },
-  { graph: 'state', property: 'letter-spacing', value: 'calc(4)', element: 'text', declaration: 'dropped', displaced: '5px', displacedReading: '5px', projectedReading: 'calc(4px)' },
-  { graph: 'state', property: 'letter-spacing', value: 'sin(45deg)', element: 'text', declaration: 'dropped', displaced: '5px', displacedReading: '5px', projectedReading: 'calc(0.707107px)' },
-  { graph: 'state', property: 'font-size', value: 'calc(4)', element: 'text', declaration: 'dropped', displaced: '33px', displacedReading: '33px', projectedReading: '4px' },
-  { graph: 'state', property: 'fill-opacity', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: '0.25', displacedReading: '0.25', projectedReading: '1' },
-  { graph: 'state', property: 'fill', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: '#ff0000', displacedReading: 'rgb(255, 0, 0)', projectedReading: 'rgb(0, 0, 0)' },
-  { graph: 'state', property: 'stroke', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: '#00ff00', displacedReading: 'rgb(0, 255, 0)', projectedReading: 'none' },
-  { graph: 'state', property: 'stroke-linejoin', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: 'round', displacedReading: 'round', projectedReading: 'miter' },
-  { graph: 'state', property: 'font-weight', value: 'calc(4px)', element: 'text', declaration: 'dropped', displaced: '600', displacedReading: '600', projectedReading: '400' },
-  { graph: 'state', property: 'text-decoration', value: 'calc(4)', element: 'text', declaration: 'dropped', displaced: 'underline', displacedReading: 'underline', projectedReading: 'calc(4px)' },
-  // The r5 refusals, measured in the r5 sweep. F1 is the result-based sign:
-  // `calc(0px - 4px)` resolves to `-4px` exactly as `calc(-4px)` does — the
-  // declaration clamps it to zero and the attribute form takes it back — and
-  // `calc(1em - 100px)` is the same divergence reached through `em`, whose sign
-  // the build cannot decide at all. F2 is a keyword's case: `INITIAL` is
-  // `initial`. The rest are the other half of the r5 name work: an angle result
-  // the renderer drops (`asin(0.5)`), a colour function name the renderer does
-  // not keep (`device-cmyk()`), a malformed colour function that passes the
-  // *name* guard and is refused by the grammar (`rgb()`), and `calc(4px + 2)`,
-  // whose type is not a length under any precedence.
-  { graph: 'state', property: 'rx', value: 'calc(0px - 4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
-  { graph: 'state', property: 'ry', value: 'calc(0px - 4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
-  { graph: 'state', property: 'rx', value: 'calc(50% - 100%)', element: 'rect', declaration: 'kept', cleanReading: '0%', displaced: '9px', displacedReading: '0%', projectedReading: '-50%' },
-  { graph: 'state', property: 'rx', value: 'calc(1em - 100px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-84px' },
-  { graph: 'state', property: 'rx', value: 'INITIAL', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'Inherit', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'ry', value: 'INITIAL', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
-  { graph: 'state', property: 'rx', value: 'asin(0.5)', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
-  { graph: 'state', property: 'stroke-width', value: 'calc(4px + 2)', element: 'rect', declaration: 'dropped', displaced: '3px', displacedReading: '3px', projectedReading: '1px' },
-  { graph: 'state', property: 'fill', value: 'device-cmyk(0 0 0 1)', element: 'rect', declaration: 'dropped', displaced: '#ff0000', displacedReading: 'rgb(255, 0, 0)', projectedReading: 'rgb(0, 0, 0)' },
-  { graph: 'state', property: 'fill', value: 'rgb()', element: 'rect', declaration: 'dropped', displaced: '#ff0000', displacedReading: 'rgb(255, 0, 0)', projectedReading: 'rgb(0, 0, 0)' },
-];
-
-test.each(REFUSED_FACE)(
-  'Pele refuses $property:$value, and the projection would move the rendering',
-  async (row) => {
-    const { property, value, element, displaced, displacedReading, projectedReading } = row;
-    const source = row.graph === 'state' ? stateFaceSource(property, value) : faceSource(property, value);
-    const { renderDiagram } = await import('../src/lib/pele-render.ts');
-    await assert.rejects(() => renderDiagram(source, 'refused-face', 'Refused face'), (error: unknown) =>
-      error instanceof DiagramError && error.source === source && error.message.includes(`${property}: ${value}`));
-    const { svg: raw } = renderPele(source, { idPrefix: 'refused-face', links: false, images: false });
-    const box = element === 'rect' ? 'x="5" y="5" width="50" height="20"' : 'x="5" y="20"';
-    const probe = (role: string, attributes: string): string =>
-      `<figure class="diagram" data-role="${role}"><svg xmlns="http://www.w3.org/2000/svg" class="pele" ` +
-      `viewBox="0 0 100 100" width="100" height="100"><${element} ${attributes}/></svg></figure>`;
-    const { browser, page } = await openDiagramPage(
-      `<figure class="diagram" data-role="raw">${raw}</figure>` +
-      probe('clean', `style="${property}:${value}"`) +
-      probe('displaced', `${box} ${property}="${displaced}" style="${property}:${value}"`) +
-      probe('projected', `${box} ${property}="${value}"`),
-      { policy: null },
+    // The control: the declaration really arrives in a `style` attribute, so
+    // the row cannot pass by having nothing to refuse.
+    const { svg } = renderPele(source, { idPrefix: 'refused-declaration', links: false, images: false });
+    assert.ok(
+      inspect(svg).elements.some(({ attributes }) => attributes['style']?.includes(`${property}:${value}`)),
+      `the raw render no longer carries ${property}:${value}`,
     );
-    try {
-      const measured = await page.evaluate(({ property, value }) => {
-        const one = (role: string): Element => {
-          const figure = document.querySelector(`figure[data-role="${role}"]`);
-          if (figure === null) throw new Error(`the page lost the ${role} block`);
-          const found = [...figure.querySelectorAll('*')].filter((element) =>
-            role === 'raw'
-              ? element.localName !== 'svg' && (element.getAttribute('style') ?? '').includes(`${property}:${value}`)
-              : element.hasAttribute('style') || element.hasAttribute(property));
-          if (found.length !== 1) throw new Error(`${role}: ${property} is on ${found.length} elements, not one`);
-          return found[0]!;
-        };
-        const reading = (role: string): string => getComputedStyle(one(role)).getPropertyValue(property);
-        return {
-          specified: (one('clean') as SVGElement).style.getPropertyValue(property),
-          clean: reading('clean'),
-          displaced: reading('displaced'),
-          projected: reading('projected'),
-        };
-      }, { property, value });
-      const label = `${property}:${value}`;
-      if (row.declaration === 'kept') {
-        assert.notEqual(measured.specified, '', `${label}: the browser no longer keeps this declaration`);
-        assert.equal(measured.clean, row.cleanReading, `${label}: the declaration no longer computes its own value`);
-      } else {
-        assert.equal(measured.specified, '', `${label}: the browser no longer drops this declaration`);
-      }
-      assert.equal(
-        measured.displaced, displacedReading,
-        `${label}: the displaced element no longer renders its own value`,
-      );
-      assert.equal(measured.projected, projectedReading, `${label}: the projection no longer computes what it used to`);
-      assert.notEqual(
-        measured.displaced, measured.projected,
-        `${label}: the projection no longer moves the rendering, so the refusal is no longer measured as necessary`,
-      );
-    } finally {
-      await browser.close();
-    }
+    await expectAuthorRefused(source, `${property}: ${value}`);
   },
 );
 
+test.each([
+  ['classDef',
+    'flowchart TD\n A[Reader] --> B[Site]\n classDef red fill:#ff0000,stroke:#00ff00\n class A red',
+    'fill:#ff0000', 'fill: #ff0000'],
+  ['linkStyle',
+    'flowchart TD\n A[Reader] --> B[Site]\n linkStyle 0 stroke:#5b7bd5,stroke-width:4px',
+    'stroke:#5b7bd5', 'stroke: #5b7bd5'],
+])('Pele refuses a %s declaration the same way as an authored style', async (_directive, source, written, named) => {
+  const { svg } = renderPele(source, { idPrefix: 'refused-directive', links: false, images: false });
+  assert.ok(
+    inspect(svg).elements.some(({ attributes }) => attributes['style']?.includes(written)),
+    `the raw render no longer carries ${written}`,
+  );
+  await expectAuthorRefused(source, named);
+});
+
+test('Pele refuses an author theme, which writes --pele-series-* into the root block', async () => {
+  const source = '%%{init: {"themeVariables": {"pie1": "#ff0000"}}}%%\npie title Sources\n  "Notes" : 45';
+  const failure = await refuse(source);
+  assert.ok(failure.message.includes('--pele-series-1: #ff0000'),
+    `the root refusal does not name the declaration the theme wrote: ${failure.message}`);
+  assert.ok(failure.message.includes('root style declaration'),
+    `the root refusal does not say what it is refusing: ${failure.message}`);
+});
 
 const SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">';
 test.each([
@@ -1042,6 +650,12 @@ test.each([
   ['external paint', `${SVG_OPEN}<path fill="url(https://example.invalid/p.svg#paint)" d="M0 0L1 1"/></svg>`],
   ['fallback external paint', `${SVG_OPEN}<path fill="var(--paint,url(https://example.invalid/p.svg#paint))" d="M0 0L1 1"/></svg>`],
   ['escaped external paint', `${SVG_OPEN}<path fill="u\\72l(https://example.invalid/p.svg#paint)" d="M0 0L1 1"/></svg>`],
+  // Decision C's two refusals, reached through a renderer this suite controls:
+  // a declaration in an element's own `style` attribute, and a root block that
+  // drifts from the measured fixed set — by a property and by a value.
+  ['element style declaration', `${SVG_OPEN}<path style="fill:red" d="M0 0L1 1"/></svg>`],
+  ['unknown root declaration', `${SVG_OPEN.replace('>', ' style="color:red">')}<path d="M0 0L1 1"/></svg>`],
+  ['fixed declaration with another value', `${SVG_OPEN.replace('>', ' style="--_bg:var(--not-pele-bg)">')}<path d="M0 0L1 1"/></svg>`],
   ['DOCTYPE', `<!DOCTYPE svg [<!ENTITY probe SYSTEM "file:///nonexistent-diagram-canary">]>${SVG_OPEN}<text>&probe;</text></svg>`],
   ['stylesheet instruction', `<?xml-stylesheet href="https://example.invalid/s.css"?>${SVG_OPEN}<path d="M0 0L1 1"/></svg>`],
 ])('Pele rejects unsafe or blank upstream output: %s', async (_name, svg) => {
