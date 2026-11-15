@@ -22,7 +22,7 @@ vi.mock('pele', async (importOriginal) => {
   return { ...actual, render: vi.fn<typeof Pele.render>(actual.render) };
 });
 
-import { render as renderPele } from 'pele';
+import { parse as parsePele, render as renderPele } from 'pele';
 import { DiagramError } from '../src/lib/mermaid-render.ts';
 import { renderMarkdown } from '../src/lib/markdown.ts';
 
@@ -470,6 +470,25 @@ test('Pele strips its own fixed inline declarations and leaves no residual style
 });
 
 /**
+ * The adapter's provenance check reads the model it renders (r7), so this binds
+ * that choice: `render(model, options)` must be byte-identical to
+ * `render(source, options)` over every source the census rows read. It is the
+ * measurement `src/lib/pele-render.ts` cites, taken as a gate — a future pele
+ * that rendered a passed model differently would otherwise slip through the
+ * parity rows above, which compare geometry and text, not bytes.
+ */
+test('Pele renders a parsed model to the same bytes as its own source', () => {
+  const options = { idPrefix: 'model-parity', links: false, images: false, now: 0 };
+  for (const source of censusSources()) {
+    assert.equal(
+      renderPele(parsePele(source), options).svg,
+      renderPele(source, options).svg,
+      `rendering the parsed model diverged from rendering the source: ${source.slice(0, 60)}`,
+    );
+  }
+});
+
+/**
  * Render one source and return the failure, asserting it is this adapter's own
  * refusal: decision C converts no author declaration, so every source below has
  * to fail with `DiagramError` rather than publish a guessed rendering.
@@ -628,6 +647,98 @@ test.each([
   await expectAuthorRefused(source, named);
 });
 
+/**
+ * The r7 finding: membership in `ELEMENT_STYLE_SET` is a spelling, not a
+ * provenance. Measured 2026-11-15, Pele's writer normalises the text it writes —
+ * `RX:var(--_r)`, `Rx:var(--_r)` and `rx : var(--_r)` all reach an element's
+ * `style` attribute as `rx:var(--_r)`, `ELEMENT_STYLE_DECLARATIONS`'s own
+ * member — so the output-level strip silently converted an authored
+ * declaration.
+ *
+ * These are the model types whose parser accepts the directive *and* whose
+ * renderer forwards it onto an element that exists without the directive too
+ * (the sweep behind `authorDirectives` reads every registered type); each
+ * control is the same source with its directive lines removed, so the raw
+ * render must carry one more `rx: var(--_r)` declaration than the control
+ * before the row can pass — a control that is not vacuous.
+ */
+const COLLIDING_DECLARATIONS: ReadonlyArray<{ name: string; source: string; control: string; refused: string }> = [
+  {
+    name: 'stateDiagram-v2 style',
+    source: 'stateDiagram-v2\n  A --> B\n  style A rx:var(--_r)',
+    control: 'stateDiagram-v2\n  A --> B',
+    refused: 'rx: var(--_r)',
+  },
+  {
+    name: 'stateDiagram-v2 style, the property laundered by pele’s writer',
+    source: 'stateDiagram-v2\n  A --> B\n  style A RX:var(--_r)',
+    control: 'stateDiagram-v2\n  A --> B',
+    refused: 'RX: var(--_r)',
+  },
+  {
+    name: 'stateDiagram-v2 style, whitespace laundered by pele’s writer',
+    source: 'stateDiagram-v2\n  A --> B\n  style A rx : var(--_r)',
+    control: 'stateDiagram-v2\n  A --> B',
+    refused: 'rx: var(--_r)',
+  },
+  {
+    name: 'stateDiagram-v2 classDef',
+    source: 'stateDiagram-v2\n  A --> B\n  classDef red rx:var(--_r)\n  class A red',
+    control: 'stateDiagram-v2\n  A --> B',
+    refused: 'rx: var(--_r)',
+  },
+  {
+    name: 'classDiagram style',
+    source: 'classDiagram\n  class Artifact { +slug }\n  Artifact <|-- Note\n  style Artifact rx:var(--_r)',
+    control: 'classDiagram\n  class Artifact { +slug }\n  Artifact <|-- Note',
+    refused: 'rx: var(--_r)',
+  },
+  {
+    name: 'block style',
+    source: 'block-beta\n  columns 2\n  A B\n  style A rx:var(--_r)',
+    control: 'block-beta\n  columns 2\n  A B',
+    refused: 'rx: var(--_r)',
+  },
+  {
+    name: 'block classDef',
+    source: 'block-beta\n  columns 2\n  A B\n  classDef red rx:var(--_r)\n  class A red',
+    control: 'block-beta\n  columns 2\n  A B',
+    refused: 'rx: var(--_r)',
+  },
+  {
+    name: 'usecase style',
+    source: 'usecase-beta\na\n  style a rx:var(--_r)',
+    control: 'usecase-beta\na',
+    refused: 'rx: var(--_r)',
+  },
+  {
+    name: 'usecase classDef',
+    source: 'usecase-beta\na\n  classDef red rx:var(--_r)\n  class a red',
+    control: 'usecase-beta\na',
+    refused: 'rx: var(--_r)',
+  },
+];
+
+/** Every declaration the raw renderer wrote into an element’s `style`, in document order. */
+function elementDeclarations(source: string): string[] {
+  return inspect(renderPele(source, { idPrefix: 'collision', links: false, images: false }).svg)
+    .elements.flatMap(({ attributes }) => (attributes['style'] === undefined ? [] : declarationsOf(attributes['style'])));
+}
+
+test.each(COLLIDING_DECLARATIONS)(
+  'Pele refuses the authored fixed-set collision: $name',
+  async ({ source, control, refused }) => {
+    const member = 'rx: var(--_r)';
+    const arrived = elementDeclarations(source).filter((declaration) => declaration === member);
+    const own = elementDeclarations(control).filter((declaration) => declaration === member);
+    assert.ok(
+      arrived.length > own.length,
+      'the raw render no longer forwards the authored rounding declaration, so the row would pass vacuously',
+    );
+    await expectAuthorRefused(source, refused);
+  },
+);
+
 test('Pele refuses an author theme, which writes --pele-series-* into the root block', async () => {
   const source = '%%{init: {"themeVariables": {"pie1": "#ff0000"}}}%%\npie title Sources\n  "Notes" : 45';
   const failure = await refuse(source);
@@ -635,6 +746,10 @@ test('Pele refuses an author theme, which writes --pele-series-* into the root b
     `the root refusal does not name the declaration the theme wrote: ${failure.message}`);
   assert.ok(failure.message.includes('root style declaration'),
     `the root refusal does not say what it is refusing: ${failure.message}`);
+  assert.ok(failure.message.includes('remove the theme directive'),
+    `the root refusal names no author remedy for the theme: ${failure.message}`);
+  assert.ok(failure.message.includes("DIAGRAM_ENGINE = 'mermaid'"),
+    `the root refusal names no engine remedy: ${failure.message}`);
 });
 
 const SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">';
