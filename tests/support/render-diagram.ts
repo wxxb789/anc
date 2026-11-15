@@ -6,21 +6,25 @@
  * "The same source produces the same bytes" is a claim about a *fresh* process,
  * not about two calls in one: a renderer keeping any module-level state would
  * share whatever the first call left behind, which is exactly what would hide
- * the defect. And "only the selected adapter was loaded" is a claim about the
- * module graph of a run, which only a loader hook can observe.
+ * the defect.
  *
  * The entry point is `src/lib/pele-render.ts`, the one build-time renderer this
  * tree has. `--hash` prints the SHA-256 of the result instead of the result.
  * `--resolves` installs a resolve-recording loader hook whose module appends
  * every specifier the run requested, one bare line each, to the file named by
- * `DIAGRAM_RESOLVE_LOG` — the caller reads that file, and the only stderr write
- * is `render error: …`; a failing render is reported, not thrown, in that mode,
- * because the module graph of the failure path is what the caller is asking
- * about.
+ * `DIAGRAM_RESOLVE_LOG`; in that mode a failing render is reported on stderr as
+ * `render error: …` rather than thrown, so the resolve log a failed render
+ * already wrote survives.
+ *
+ * **No row passes either flag today.** `--hash` is for a caller that compares
+ * digests across fresh processes; `--resolves` is for one that wants the module
+ * graph of a run, which only a loader hook can observe. The suite's only spawn
+ * site (`tests/math-and-diagrams.test.ts`, the determinism gate) runs this
+ * script with a source and no flags.
  *
  * It lives in `tests/support/` rather than `scripts/` because it is a test
- * fixture, not a harness command: `scripts/` holds the five build steps
- * `package.json` names, and adding a sixth for one assertion is how a clean
+ * fixture, not a harness command: `scripts/` holds the build steps
+ * `package.json` names, and adding another for one assertion is how a clean
  * harness becomes a junk drawer.
  */
 

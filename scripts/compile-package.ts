@@ -141,7 +141,9 @@ function filesUnder(directory: string, predicate: (path: string) => boolean): st
  * silently stopped matching once the file shipped as `.js`, bundling the whole
  * runtime into a `build-time` site. That regex is now extension-agnostic.
  * The gate in `tests/packaging.test.ts` scans *every* staged file for a
- * surviving `.ts` string, which is what catches the next one.
+ * surviving `.ts` name in a quoted string, which is what catches the next one.
+ * Quoted forms only: a name a template literal builds is outside both this
+ * rewrite and that scan.
  */
 function rewriteSpecifiers(source: string, file: string): string {
   return source.replaceAll(/(['"])([^'"`\n]*?)\.ts\1/g, (match, quote: string, path: string) => {

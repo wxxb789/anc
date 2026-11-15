@@ -1786,7 +1786,7 @@ export { MARKED_ROOT, RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH } from '.
  * one renderer's own output rather than arbitrary HTML, and the alternative is a
  * second parse of every expression and diagram on the page. The root element is
  * the first tag in the string by construction: `renderMath` returns `<math…>`
- * and `renderDiagram` a `<figure…>`.
+ * and `renderDiagram` a `<svg…>`.
  *
  * Returns the markup unchanged when it does not begin with a tag, so a renderer
  * whose output shape changes degrades to *unmarked* rather than to corrupt. That

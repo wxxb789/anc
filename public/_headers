@@ -7,7 +7,7 @@
 # anywhere.
 #
 # Hash-pinning was measured and cannot replace a relaxation: a CSP hash never
-# covers a `style=` attribute. See the Mermaid feasibility probe, section 7.3.
+# covers a `style=` attribute.
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin

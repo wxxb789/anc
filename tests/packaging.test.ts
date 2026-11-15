@@ -692,7 +692,8 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
         'package, so something was compiled and then lost',
     );
 
-    // And **no file in the tarball** may still name a `.ts` file. `tsc` rewrites
+    // And **no file in the tarball** may still name a `.ts` file in a quoted
+    // string. `tsc` rewrites
     // the specifiers in what it compiles; the `.astro` components and the two
     // `.mjs` files are rewritten by `compile-package.ts` because no compiler
     // sees them. Measured: with only a `.js` sibling present, Vite does *not*
@@ -707,11 +708,16 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
     // reads, invisible because of the filter. A gate that measures a subset of
     // its stated property is worse than none, because it reports success.
     //
-    // Two forms are excluded, because naming a `.ts` path is their job rather
-    // than a stale reference to one: an entry in `package.json`'s `files` that
-    // *excludes* a source (`"!scripts/build-fixture.ts"`), and a `.d.ts`
-    // declaration reference in `tsconfig.json`, which describes types and
-    // resolves nothing at run time.
+    // Three forms escape the scan's pattern, and all three are named because
+    // the exclusion set is part of what this gate measures. Two are deliberate,
+    // because naming a `.ts` path is their job rather than a stale reference to
+    // one: an entry in `package.json`'s `files` that *excludes* a source
+    // (`"!scripts/build-fixture.ts"`), and a `.d.ts` declaration reference in
+    // `tsconfig.json`, which describes types and resolves nothing at run time.
+    // The third is a limit of the pattern rather than a decision: it reads
+    // quoted strings only, so a `.ts` name inside a template literal is
+    // invisible — and one is live, `astro.config.mjs:87`'s client-runtime stub
+    // path; widening the pattern would fire on that file today.
     const stale: string[] = [];
     for (const file of sourceFilesUnder(staging, () => true)) {
       for (const [, specifier] of readFileSync(file, 'utf8').matchAll(/['"]([^'"`\n]*?\.ts)['"]/g)) {
@@ -723,9 +729,9 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
-  // A full type-checked compile of 29 files: ~13 s alone, and this suite runs a
-  // worker per file, so it competes with the render-heavy gates for the same
-  // cores. Measured on the Mermaid-era tree, both this gate and
+  // A full type-checked compile, in a suite that runs a worker per file, so it
+  // competes with the render-heavy gates for the same cores. Measured on the
+  // Mermaid-era tree, both this gate and
   // `math-and-diagrams.test.ts` then exceeded `vitest.config.ts`'s 30 s default
   // and failed as timeouts rather than on any assertion. The bound is generous
   // rather than tight because what it must catch is a hang, not a slow machine.
