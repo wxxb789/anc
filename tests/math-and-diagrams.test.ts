@@ -543,7 +543,10 @@ test('two diagrams on one page do not collide on element ids', async (t: TestCon
 
   // Every internal reference resolves. A unique-id check alone would pass a
   // renaming that changed the definitions and left `url(#…)` pointing at the
-  // old names — which renders as a diagram with no arrowheads.
+  // old names — and a sankey has no arrowheads: the definitions are
+  // `<linearGradient>` paint servers referenced from each link path's `fill`,
+  // so a dangling reference costs each link its gradient (it paints the flat
+  // fallback colour in the same `fill`), not an arrowhead.
   const references = [...rendered.html.matchAll(/url\(#([^)]*)\)/g)].map(([, id]) => id!);
   assert.ok(
     references.length >= 8,
