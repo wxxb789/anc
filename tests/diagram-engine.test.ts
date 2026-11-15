@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseCss } from 'css-tree';
 import { SaxesParser } from 'saxes';
 import { afterEach, test, vi } from 'vitest';
 import type * as DiagramConfiguration from '../src/lib/diagram-mode.ts';
@@ -174,6 +177,280 @@ test.each(['flowchart TD\n A -->', 'sequenceDiagram\n ????', 'notadiagram\n A --
       error instanceof DiagramError && error.source === source);
   },
 );
+
+const AUTHORED_SIZE = 'flowchart TD\n A[Reader] --> B[Site]\n style A font-size:40px';
+const AUTHORED_PAINT = 'flowchart TD\n A[Reader] --> B[Site]\n style A fill:#ff0000,stroke:#00ff00,'
+  + 'stroke-width:3px,font-weight:600,font-style:italic,font-family:Georgia,letter-spacing:2px,opacity:0.5';
+const CRIT_GANTT = 'gantt\n  dateFormat YYYY-MM-DD\n  section Build\n  Render :crit, a1, 2026-01-01, 5d';
+
+/**
+ * Every source the census rows below read: the 23-type matrix, the three real
+ * corpus diagrams (read from the files that ship them, not copied here), and the
+ * probes that make an authored declaration or a critical task observable.
+ */
+function censusSources(): string[] {
+  const corpus = [
+    'docs/core-design/architecture.md',
+    'example/guides/feature-showcase.md',
+    'tests/fixtures/markdown/kitchen-sink.md',
+  ];
+  const sources = corpus.flatMap((path) =>
+    [...readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').matchAll(/```mermaid\n([\s\S]*?)```/g)]
+      .map((match) => match[1]!));
+  assert.equal(sources.length, 3, 'the real corpus no longer carries the three diagrams this census reads');
+  return [
+    ...Object.values(DIAGRAMS), ...sources, AUTHORED_SIZE, AUTHORED_PAINT, CRIT_GANTT,
+    'flowchart TD\n A[Reader] --> B[Site]\n style A fill:#111111',
+    'flowchart TD\n A[Reader] --> B[Site]\n style A rx:8px',
+  ];
+}
+
+const DIAGRAM_CSS = readFileSync(new URL('../src/styles/diagram.css', import.meta.url), 'utf8');
+
+/** The body of one rule in `diagram.css`, so a declaration is cited where it lives. */
+function ruleBody(selector: string): string {
+  const start = DIAGRAM_CSS.indexOf(`\n${selector} {`);
+  assert.notEqual(start, -1, `diagram.css no longer declares \`${selector}\``);
+  const end = DIAGRAM_CSS.indexOf('\n}', start);
+  assert.notEqual(end, -1, `\`${selector}\` has no closing brace`);
+  return DIAGRAM_CSS.slice(start, end);
+}
+
+/**
+ * Pele's root `style` block, declaration by declaration, and the `diagram.css`
+ * rule that supplies the same value.
+ *
+ * The block cannot ship — `style-src 'self'` is the build-time policy, and a
+ * `style=` attribute is not a hashable thing — so the sanitizer drops it whole.
+ * That is only safe while every declaration in it has a named counterpart, which
+ * is what this table asserts and why the adapter refuses an unlisted property
+ * instead of dropping it. `font-family` has no declaration of its own: the
+ * `font` shorthand supplies it, which is the one place the CSS states the family
+ * once rather than twice.
+ */
+const ROOT_DECLARATIONS: Readonly<Record<string, readonly [rule: string, css: string]>> = {
+  'max-width': ['.diagram svg', 'max-width: 100%;'],
+  height: ['.diagram svg', 'height: auto;'],
+  font: ['.diagram svg.pele', 'font: 16px var(--pele-font);'],
+  'font-family': ['.diagram svg.pele', 'font: 16px var(--pele-font);'],
+  color: ['.diagram svg.pele', 'color: var(--_fg);'],
+  'letter-spacing': ['.diagram svg.pele', 'letter-spacing: normal;'],
+  'word-spacing': ['.diagram svg.pele', 'word-spacing: normal;'],
+  'text-transform': ['.diagram svg.pele', 'text-transform: none;'],
+  direction: ['.diagram svg.pele', 'direction: ltr;'],
+  '--_bg': ['.diagram svg.pele', '--_bg: var(--pele-bg);'],
+  '--_fg': ['.diagram svg.pele', '--_fg: var(--pele-fg);'],
+  '--_m': ['.diagram svg.pele', '--_m: var(--pele-muted);'],
+  '--_l': ['.diagram svg.pele', '--_l: var(--pele-line);'],
+  '--_s': ['.diagram svg.pele', '--_s: var(--pele-surface);'],
+  '--_a': ['.diagram svg.pele', '--_a: var(--pele-surface-alt);'],
+  '--_b': ['.diagram svg.pele', '--_b: var(--pele-border);'],
+  '--_c': ['.diagram svg.pele', '--_c: var(--pele-accent);'],
+  '--_r': ['.diagram svg.pele', '--_r: var(--pele-radius);'],
+  '--_fm': ['.diagram svg.pele', '--_fm: var(--pele-font-mono);'],
+  '--_tw': ['.diagram svg.pele', '--_tw: var(--pele-title-weight, bold);'],
+  '--_hw': ['.diagram svg.pele', '--_hw: var(--pele-heading-weight, bold);'],
+  '--_w': ['.diagram svg.pele', '--_w: var(--pele-bold-weight, bold);'],
+};
+
+test('diagram.css supplies every declaration of Pele’s root style block', async () => {
+  const observed = new Set<string>();
+  for (const source of censusSources()) {
+    const { svg } = renderPele(source, { idPrefix: 'census', links: false, images: false });
+    const parser = new SaxesParser({ xmlns: true });
+    let isRoot = true;
+    parser.on('opentag', (tag) => {
+      if (!isRoot) return;
+      isRoot = false;
+      const style = tag.attributes['style']?.value;
+      assert.ok(style, 'the root no longer carries the style block this row accounts for');
+      for (const node of parseCss(style, { context: 'declarationList' }).children?.toArray() ?? []) {
+        const property = node['property'];
+        if (node.type === 'Declaration' && typeof property === 'string') observed.add(property.toLowerCase());
+      }
+    });
+    parser.write(svg).close();
+  }
+  assert.deepEqual([...observed].sort(), Object.keys(ROOT_DECLARATIONS).sort(),
+    'the root block Pele emits and the declarations diagram.css supplies have drifted apart');
+  const bodies = new Map<string, string>();
+  for (const [rule] of Object.values(ROOT_DECLARATIONS)) {
+    if (!bodies.has(rule)) bodies.set(rule, ruleBody(rule));
+  }
+  for (const [property, [rule, css]] of Object.entries(ROOT_DECLARATIONS)) {
+    assert.ok(bodies.get(rule)!.includes(css), `${property} is dropped, but ${rule} does not supply \`${css}\``);
+  }
+});
+
+/**
+ * Names the variable block deliberately leaves to Pele's own value, with the
+ * default the markup carries and the alias that reproduces it.
+ *
+ * The first three are the site's opt-in weights: `--_tw` and friends hold
+ * `var(--pele-x, bold)`, so a site that wants different weights sets the public
+ * variable and the alias inherits it, and one that does not gets Pele's `bold`.
+ * Defining them in `diagram.css` would win over the reader's own `:root` value
+ * and take that choice away. `css: null` is the honest form of the remaining
+ * two: Pele chooses `--pele-fg-on-light`/`on-dark` from the fill it was handed,
+ * as an absolute colour, and this palette is themed — there is no token here
+ * that means "ink for a known-light fill", so the gap is recorded rather than
+ * filled with a token that means something else.
+ */
+const FALLBACK_ONLY: Readonly<Record<string, { fallback: string; css: string | null }>> = {
+  '--pele-title-weight': { fallback: 'bold', css: 'var(--pele-title-weight, bold)' },
+  '--pele-heading-weight': { fallback: 'bold', css: 'var(--pele-heading-weight, bold)' },
+  '--pele-bold-weight': { fallback: 'bold', css: 'var(--pele-bold-weight, bold)' },
+  '--pele-fg-on-light': { fallback: '#1f1f1f', css: null },
+  '--pele-fg-on-dark': { fallback: '#fff', css: null },
+};
+
+/**
+ * The generalisation of `--pele-critical`: a public variable the emitted markup
+ * consumes and `diagram.css` never defines renders Pele's own palette, and that
+ * was invisible until a Gantt critical task painted `#e45756` on a themed page.
+ * Consumed is measured over the raw render, so a variable only ever used inside
+ * the dropped root block still counts.
+ */
+test('every Pele variable the emitted markup consumes is defined or deliberately defaulted', async () => {
+  const block = ruleBody('.diagram svg.pele');
+  const defined = new Set([...block.matchAll(/^\s*(--[\w-]+):/gm)].map((match) => match[1]!));
+  assert.ok(defined.size >= 20, `the variable block no longer parses as a declaration list: ${defined.size} names`);
+  const consumed = new Map<string, Set<string | undefined>>();
+  for (const source of censusSources()) {
+    const { svg } = renderPele(source, { idPrefix: 'census', links: false, images: false });
+    for (const match of svg.matchAll(/var\((--pele-[\w-]+)(,([^()]*))?\)/g)) {
+      const fallbacks = consumed.get(match[1]!) ?? new Set<string | undefined>();
+      fallbacks.add(match[3]);
+      consumed.set(match[1]!, fallbacks);
+    }
+  }
+  assert.ok(consumed.size >= 15, `the census stopped seeing the palette: ${consumed.size} names`);
+  for (const [name, fallbacks] of consumed) {
+    if (defined.has(name)) continue;
+    assert.equal(fallbacks.size, 1, `${name} is consumed with ${[...fallbacks].join(' and ')} as its default`);
+    const [fallback] = [...fallbacks];
+    const recorded = FALLBACK_ONLY[name];
+    assert.ok(recorded, `${name} is consumed by the emitted SVG and diagram.css never defines it`);
+    assert.equal(fallback, recorded.fallback, `${name} carries a default other than the recorded ${recorded.fallback}`);
+    if (recorded.css !== null) {
+      assert.ok(block.includes(recorded.css), `${recorded.css} is gone, so ${name} no longer resolves to what it did`);
+    }
+  }
+});
+
+/**
+ * An author's `style`/`classDef`/`linkStyle` directive reaches this adapter as a
+ * `style` attribute, and every `style` attribute used to be dropped: the box was
+ * measured with the label at 40 px and the label then rendered at whatever the
+ * page's stylesheet said. The raw render is asserted to carry the declaration, so
+ * a fixture that stopped exercising the conversion cannot make the row pass by
+ * having nothing to convert.
+ */
+test('Pele emits an author’s declaration as the presentation attribute it stands for', async () => {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const original = inspect(renderPele(AUTHORED_SIZE, { idPrefix: 'authored', links: false, images: false }).svg);
+  assert.ok(
+    original.elements.some(({ attributes }) => attributes['style']?.includes('font-size:40px')),
+    'the fixture no longer emits the declaration this row converts',
+  );
+  const svg = await renderDiagram(AUTHORED_SIZE, 'authored', 'Authored size');
+  const { elements, root } = inspect(svg);
+  assertClean(svg);
+  assert.equal(root['viewBox'], original.root['viewBox'], 'the fixture no longer measures its label at the authored size');
+  const label = elements.find(({ attributes }) => attributes['class'] === 'pele-label');
+  assert.equal(label?.attributes['font-size'], '40px', 'the authored size did not reach the element');
+  const { browser, page } = await openDiagramPage(`<figure class="diagram">${svg}</figure>`);
+  try {
+    const measured = await page.evaluate(() => {
+      const element = document.querySelector('svg.pele text.pele-label');
+      if (element === null) throw new Error('the fixture no longer renders the label this row measures');
+      return Number.parseFloat(getComputedStyle(element).fontSize);
+    });
+    assert.equal(measured, 40, 'the label still renders at the stylesheet’s size, in a box measured at the authored one');
+  } finally {
+    await browser.close();
+  }
+});
+
+/**
+ * A `style` declaration outranks a presentation attribute in CSS, so where the
+ * author's declaration and Pele's own attribute name the same property the
+ * attribute has to lose — and where Pele's attribute holds a `var()`, the value
+ * cannot be compared at build time, which is why it is displacing rather than
+ * merging. Both are asserted, in the browser, because the failure this catches is
+ * a rendering difference: a `font-weight="var(--_w)"` left beside a
+ * `font-weight="600"` would be a duplicate attribute, and one left *instead of*
+ * it would render `bold` where the author wrote 600.
+ */
+test('Pele keeps an authored declaration even where it displaces its own attribute', async () => {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const original = inspect(renderPele(AUTHORED_PAINT, { idPrefix: 'declared', links: false, images: false }).svg);
+  const rawStyles = original.elements.flatMap(({ attributes }) => attributes['style'] ?? []).join(' ');
+  assert.match(rawStyles, /fill:#ff0000/, 'the fixture no longer emits the authored paint declaration');
+  assert.match(rawStyles, /font-weight:600/, 'the fixture no longer emits the authored weight declaration');
+  const svg = await renderDiagram(AUTHORED_PAINT, 'declared', 'Declared style');
+  const { elements, root } = inspect(svg);
+  assertClean(svg);
+  assert.equal(root['viewBox'], original.root['viewBox'], 'the fixture no longer renders the geometry this row compares');
+  const box = elements.find(({ attributes }) => attributes['class']?.includes('pele-rounded'));
+  assert.ok(box, 'the box lost the class that carries its corner radius');
+  assert.deepEqual(
+    Object.fromEntries(['fill', 'stroke', 'stroke-width', 'opacity'].map((name) => [name, box.attributes[name]])),
+    { fill: '#ff0000', stroke: '#00ff00', 'stroke-width': '3px', opacity: '0.5' },
+    'an authored declaration did not displace the attribute it outranks',
+  );
+  const label = elements.find(({ attributes }) => attributes['class'] === 'pele-label');
+  assert.ok(label, 'the fixture no longer renders a label');
+  assert.deepEqual(
+    Object.fromEntries(['font-weight', 'font-style', 'font-family', 'letter-spacing'].map((name) => [name, label.attributes[name]])),
+    { 'font-weight': '600', 'font-style': 'italic', 'font-family': 'Georgia', 'letter-spacing': '2px' },
+  );
+  // Pele's own `font-weight` attribute carries a `var()`, which a filter or a
+  // later style element could not be trusted to leave alone; the emitted value is
+  // a literal, and this is the reason it is allowed to be.
+  assert.equal(label.attributes['font-weight'], '600');
+  const { browser, page } = await openDiagramPage(`<figure class="diagram">${svg}</figure>`);
+  try {
+    const measured = await page.evaluate(() => {
+      const rect = document.querySelector('svg.pele rect.pele-rounded');
+      const text = document.querySelector('svg.pele text.pele-label');
+      if (rect === null || text === null) throw new Error('the fixture no longer renders what this row measures');
+      const style = getComputedStyle(text);
+      return { fill: getComputedStyle(rect).fill, weight: Number(style.fontWeight), spacing: style.letterSpacing };
+    });
+    assert.equal(measured.fill, 'rgb(255, 0, 0)', 'the authored fill did not reach the rendering');
+    assert.equal(measured.weight, 600, 'the authored weight did not reach the rendering');
+    assert.equal(measured.spacing, '2px', 'the authored letter spacing did not reach the rendering');
+  } finally {
+    await browser.close();
+  }
+});
+
+/**
+ * A literal `rx` is the one case where the class mechanism and the declaration
+ * cannot both be honoured: `.diagram svg.pele .pele-rounded` is a class rule and
+ * would beat the presentation attribute, so an element carrying both would render
+ * `var(--_r)` and drop the author's radius. `rx:var(--_r);rx:8px` is Pele's own
+ * output for `style A rx:8px`, and the last declaration wins, as CSS says.
+ */
+test('a literal radius becomes the attribute, not the class that would outrank it', async () => {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A rx:8px';
+  const svg = await renderDiagram(source, 'literal-radius', 'Literal radius');
+  const { elements } = inspect(svg);
+  assertClean(svg);
+  const sized = elements.find(({ attributes }) => attributes['rx'] !== undefined);
+  assert.equal(sized?.attributes['rx'], '8px', 'the authored radius is not on the element');
+  assert.ok(
+    !sized.attributes['class']?.includes('pele-rounded'),
+    'the class that carries var(--_r) was added beside a literal radius',
+  );
+  assert.ok(
+    elements.some(({ attributes }) => attributes['class']?.includes('pele-rounded')),
+    'the unstyled node lost the class that carries var(--_r)',
+  );
+});
+
 
 const SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">';
 test.each([
@@ -355,6 +632,37 @@ test('diagram.css resolves Pele’s title weight, rounding, paint and mono label
 });
 
 /**
+ * Pele paints a Gantt critical task from `var(--pele-critical, #e45756)` and the
+ * variable block never defined it, so the site's own pages carried Pele's red.
+ * Resolved in the browser rather than compared as text: the binding is only
+ * worth anything if the cascade reaches the bar under the build-time policy.
+ */
+test('a critical-path Gantt task paints with the site token, not Pele’s own red', async () => {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const svg = await renderDiagram(CRIT_GANTT, 'critical', 'Critical path');
+  assertClean(svg);
+  const bar = inspect(svg).elements.find(({ attributes }) => attributes['fill']?.startsWith('var(--pele-critical,'));
+  assert.ok(bar, 'the fixture no longer paints a critical bar from the variable');
+  const { browser, page } = await openDiagramPage(`<figure class="diagram">${svg}</figure>`);
+  try {
+    const { painted, token } = await page.evaluate(() => {
+      const element = document.querySelector('svg.pele .pele-crit rect');
+      if (element === null) throw new Error('the fixture no longer renders a critical bar');
+      const probe = document.createElement('span');
+      probe.style.setProperty('color', 'var(--color-syntax-literal)');
+      document.body.append(probe);
+      const resolved = getComputedStyle(probe).color;
+      probe.remove();
+      return { painted: getComputedStyle(element).fill, token: resolved };
+    });
+    assert.equal(painted, token, 'the critical bar resolved Pele’s own red instead of the site token');
+    assert.notEqual(painted, 'rgb(228, 87, 86)', 'the bar is still Pele’s literal #e45756');
+  } finally {
+    await browser.close();
+  }
+});
+
+/**
  * The dispatcher exists to load *only* the selected adapter (P1 design §5.1).
  * The factories registered in the loop below are what count a request.
  *
@@ -363,9 +671,11 @@ test('diagram.css resolves Pele’s title weight, rounding, paint and mono label
  * reset those rows would compare a fresh class against the binding this file
  * imported before it.
  *
- * The source is valid on purpose: `pele-render.ts` imports `mermaid-render.ts`
- * on its *failure* path, so a malformed fixture would request both adapters
- * legitimately and the assertion below would be false.
+ * The source is valid on purpose: this row counts *requests*, and it is about the
+ * success path. The failure path is gated where it can be observed — a fresh
+ * process with a loader hook, in `a Pele failure loads neither Mermaid’s adapter
+ * nor its DOM shim` below. That row exists because this one was green while
+ * `pele-render.ts` imported `mermaid-render.ts` from its own `catch`.
  */
 test('selecting an engine requests only that engine’s adapter', async () => {
   const requested: string[] = [];
@@ -391,4 +701,92 @@ test('selecting an engine requests only that engine’s adapter', async () => {
     assert.match(await renderDiagram(DIAGRAMS['flowchart']!, `lazy-${engine}`, 'Lazy diagram'), /^<svg\b/);
     assert.deepEqual(requested, [`${engine}-render.ts`], `${engine}: the unselected adapter was requested`);
   }
+});
+
+/**
+ * The rows below observe a *module graph*, which only a fresh process can
+ * honestly report: an in-process mock counts the requests made through its own
+ * factory, and this suite's own imports are part of the graph it would measure.
+ * `tests/support/render-diagram.ts` takes `--adapter`, `--hash` and `--resolves`,
+ * and `--resolves` records every specifier the run asked for through a loader
+ * hook.
+ *
+ * They sit after the `vi.resetModules()` row because a child sees none of this
+ * file's module registry either way.
+ */
+const SUPPORT = fileURLToPath(new URL('support/render-diagram.ts', import.meta.url));
+const REPOSITORY = fileURLToPath(new URL('../', import.meta.url));
+
+function runInChild(
+  adapter: string | undefined,
+  source: string,
+  options: { hash?: boolean; resolves?: boolean } = {},
+): { status: number | null; stdout: string; stderr: string; record: string[] } {
+  const directory = mkdtempSync(join(tmpdir(), 'anc-diagram-probe-'));
+  const log = join(directory, 'resolves.txt');
+  try {
+    const argv = [SUPPORT, ...(adapter === undefined ? [] : ['--adapter', adapter])];
+    if (options.hash) argv.push('--hash');
+    if (options.resolves) argv.push('--resolves');
+    argv.push(source);
+    const result = spawnSync(process.execPath, argv, {
+      cwd: REPOSITORY,
+      encoding: 'utf8',
+      timeout: 90_000,
+      env: { ...process.env, ...(options.resolves ? { DIAGRAM_RESOLVE_LOG: log } : {}) },
+    });
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      record: options.resolves ? readFileSync(log, 'utf8').split('\n').filter((line) => line !== '') : [],
+    };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Pele's failure path used to reach Mermaid's adapter through a dynamic import
+ * of one class, and with it `mermaid-environment.ts` and `happy-dom` — the DOM
+ * shim the engine seam exists to keep off the unselected path. The control is
+ * what makes the negative mean something: the same hook, on a run that must see
+ * the shim, has to see it.
+ */
+test('a Pele failure loads neither Mermaid’s adapter nor its DOM shim', () => {
+  const failure = runInChild('src/lib/pele-render.ts', 'notadiagram\n A --> B', { resolves: true });
+  assert.match(failure.stderr, /render error: DiagramError/, 'the malformed fixture no longer fails through DiagramError');
+  const reachable = failure.record.join('\n');
+  assert.match(reachable, /pele-render\.ts/, 'the hook recorded nothing, so the negative assertions below are vacuous');
+  assert.doesNotMatch(reachable, /mermaid-render\.ts/, 'Pele’s failure path requested Mermaid’s adapter');
+  assert.doesNotMatch(reachable, /mermaid-environment\.ts/, 'Pele’s failure path requested Mermaid’s environment');
+  assert.doesNotMatch(reachable, /happy-dom/, 'Pele’s failure path requested the DOM shim');
+
+  const control = runInChild('src/lib/mermaid-render.ts', DIAGRAMS['flowchart']!, { resolves: true });
+  assert.equal(control.status, 0, control.stderr);
+  const controlReachable = control.record.join('\n');
+  assert.match(controlReachable, /mermaid-environment\.ts/, 'the hook cannot see Mermaid’s environment at all');
+  assert.match(controlReachable, /happy-dom/, 'the hook cannot see the DOM shim at all');
+});
+
+/**
+ * P1 design §5(5): with `DIAGRAM_ENGINE = 'mermaid'` the seam is a pass-through,
+ * byte for byte. The existing two-engine row compares the dispatcher against
+ * itself, so it cannot see a dispatcher that post-processes Mermaid's output —
+ * which is exactly what this pair binds.
+ *
+ * Two fresh processes, not one, for the reason `tests/support/render-diagram.ts`
+ * gives: Mermaid seeds gitgraph's hashes from `Math.random` and keeps
+ * module-level counters, so a same-process pair shares state the design's claim
+ * is not about. It is also the evidence that moving `DiagramError` out of
+ * `mermaid-render.ts` did not touch what Mermaid's row renders.
+ */
+test('the mermaid engine reaches the same bytes through the dispatcher and its adapter', () => {
+  const source = DIAGRAMS['flowchart']!;
+  const dispatched = runInChild(undefined, source, { hash: true });
+  const direct = runInChild('src/lib/mermaid-render.ts', source, { hash: true });
+  assert.equal(dispatched.status, 0, dispatched.stderr);
+  assert.equal(direct.status, 0, direct.stderr);
+  assert.match(dispatched.stdout, /^[a-f0-9]{64}$/, 'the child no longer prints a digest');
+  assert.equal(dispatched.stdout, direct.stdout, 'the dispatcher no longer passes Mermaid’s output through unchanged');
 });

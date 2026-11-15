@@ -63,6 +63,18 @@
   --pele-series-6: var(--color-line-strong);
   --pele-series-7: var(--color-text);
   --pele-series-8: var(--color-surface-alt);
+  /*
+   * Gantt's critical-path tasks. Pele falls back to its own literal red,
+   * `#e45756`, and this site has no danger token to bind instead: its one
+   * status vocabulary is deliberately neutral — "Nothing here is signalled by
+   * colour" (`global.css`, the callout rule) — so the nearest existing hue is
+   * the warm one, which a chart reads as emphasis without inventing a colour
+   * literal here. **Provisional, and marked as such**: whether the site wants a
+   * real danger token is an owner decision, and `tests/diagram-engine.test.ts`
+   * reads this declaration as data, so removing it fails rather than silently
+   * restoring Pele's palette.
+   */
+  --pele-critical: var(--color-syntax-literal);
   --pele-font: var(--font-sans);
   --pele-font-mono: var(--font-mono);
   --pele-radius: var(--radius-sm);

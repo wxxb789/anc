@@ -49,6 +49,28 @@ export type DiagramEngine = 'mermaid' | 'pele';
 export const DIAGRAM_ENGINE: DiagramEngine = 'mermaid';
 
 /**
+ * Thrown when a diagram cannot be rendered safely. The build stops.
+ *
+ * It lives here, beside the switch that names the two adapters, because both
+ * adapters throw it and neither may import the other. `pele-render.ts` importing
+ * `mermaid-render.ts` for one class cost the DOM shim on every Pele failure —
+ * measured with a loader hook: a malformed source resolved `mermaid-render.ts`,
+ * then `mermaid-environment.ts`, then `happy-dom`, which is exactly the cost the
+ * engine seam exists to avoid (P1 design §1). This module imports nothing and
+ * has no DOM, so the failure path of either adapter loads only itself.
+ * `mermaid-render.ts` re-exports the class, so its existing importers are fine.
+ */
+export class DiagramError extends Error {
+  readonly source: string;
+
+  constructor(source: string, message: string) {
+    super(`${message}\n  in diagram: ${source.trim().slice(0, 200)}`);
+    this.name = 'DiagramError';
+    this.source = source;
+  }
+}
+
+/**
  * The `style-src` value each mode requires, measured rather than reasoned.
  *
  * `client` needs both the element and the attribute form relaxed and a single

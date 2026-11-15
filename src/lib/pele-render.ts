@@ -1,6 +1,31 @@
+/**
+ * Pele's SVG, reduced to what a build-time page may ship.
+ *
+ * Pele writes presentation in three places and the sanitizer has a disposition
+ * for each, because dropping any of them silently is what made a box measured
+ * at 40 px render its label at 16 px:
+ *
+ * 1. **A `style` declaration on a non-root element** — an author's `style A
+ *    font-size:40px`, or the `rx`/paint Pele derives from one. It becomes the
+ *    presentation attribute of the same name, which carries the same value in
+ *    the same cascade position. Where the element already has that attribute,
+ *    the declaration wins and the attribute is replaced: a `style` attribute
+ *    outranks a presentation attribute in CSS, so that is the rendering Pele
+ *    produced, not a preference.
+ * 2. **`rx: var(--_r)`** — the one declaration a presentation attribute cannot
+ *    take, because `var()` does not resolve there. It stays a class, with the
+ *    value supplied by `.diagram svg.pele .pele-rounded` in `diagram.css`.
+ * 3. **The root `style` block** — Pele's palette, its measurement font and the
+ *    reset of the inheritable text properties, as one attribute on `<svg>`.
+ *    `src/styles/diagram.css` re-creates it under `.diagram svg.pele` and
+ *    `.diagram svg`; {@link ROOT_STYLE_RULES} is that list, so a declaration
+ *    added upstream stops the build instead of disappearing.
+ */
+
 import { parse, walk } from 'css-tree';
 import { render } from 'pele';
 import { SaxesParser } from 'saxes';
+import { DiagramError } from './diagram-mode.ts';
 
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
@@ -23,7 +48,7 @@ const ATTRIBUTES: Readonly<Record<string, true>> = {
   'stroke-linecap': true, 'stroke-linejoin': true, opacity: true, 'font-size': true,
   'font-family': true, 'font-weight': true, 'font-style': true, 'text-anchor': true,
   'text-decoration': true, 'dominant-baseline': true, 'clip-path': true, 'clip-rule': true,
-  'baseline-shift': true,
+  'baseline-shift': true, 'letter-spacing': true,
   gradientUnits: true, gradientTransform: true, offset: true, 'stop-color': true,
   'stop-opacity': true, 'marker-start': true, 'marker-mid': true, 'marker-end': true,
   markerWidth: true, markerHeight: true, markerUnits: true, refX: true, refY: true, orient: true,
@@ -38,6 +63,71 @@ const COLOUR_FUNCTIONS: Readonly<Record<string, true>> = {
 const XML_ENTITIES: Readonly<Record<string, string>> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;',
 };
+
+/**
+ * Every declaration of Pele's root `style` block, and nothing else.
+ *
+ * Each is supplied, with the value Pele intends, by `src/styles/diagram.css`:
+ * `max-width` and `height` by its `.diagram svg` rule, the palette and the
+ * measurement font by `.diagram svg.pele`. `tests/diagram-engine.test.ts` reads
+ * the emitted declaration set against this table in both directions, so a
+ * property Pele adds upstream fails the build here rather than vanishing, and a
+ * property in the table with no CSS counterpart fails the test that resolves it.
+ */
+const ROOT_STYLE_RULES: Readonly<Record<string, true>> = {
+  'max-width': true, height: true, color: true, font: true, 'font-family': true,
+  'letter-spacing': true, 'word-spacing': true, 'text-transform': true, direction: true,
+  '--_bg': true, '--_fg': true, '--_m': true, '--_l': true, '--_s': true, '--_a': true,
+  '--_b': true, '--_c': true, '--_r': true, '--_fm': true, '--_tw': true, '--_hw': true, '--_w': true,
+};
+
+/**
+ * A `style` attribute's declarations, the last one per property winning, as CSS
+ * defines it.
+ *
+ * Last-wins is load-bearing: Pele writes `rx:var(--_r)` on every rounded rect
+ * and appends an author's own `rx` when the author set one, so `rx:var(--_r);
+ * rx:8px` means the literal radius, while `rx:8px;rx:var(--_r)` means the class.
+ * A node the parser cannot read as a declaration is an error, not a skip: this
+ * input reaches the build from a renderer, and a half-parsed declaration list is
+ * how a dropped value hides.
+ *
+ * The value is read as source, from the position the parser reports, rather than
+ * rebuilt from the AST: an emitted declaration has to carry the author's own
+ * spelling of it (`#fff`, `Georgia`, `0.5`) and `css-tree`'s declared slice here
+ * — `src/types/css-tree.d.ts` — deliberately has no generator.
+ */
+function styleDeclarations(style: string): Map<string, string> {
+  const declarations = new Map<string, string>();
+  const list = parse(style, { context: 'declarationList', positions: true });
+  for (const node of list.children?.toArray() ?? []) {
+    if (node.type !== 'Declaration') {
+      throw new Error(`the renderer emitted an unreadable style attribute: ${style.slice(0, 80)}`);
+    }
+    const property = node['property'];
+    if (typeof property !== 'string' || property === '') {
+      throw new Error(`the renderer emitted a style declaration with no property: ${style.slice(0, 80)}`);
+    }
+    if (node['important'] === true) {
+      throw new Error(`the renderer emitted !important in a style attribute: ${property}`);
+    }
+    declarations.set(property.toLowerCase(), sourceRangeOf(node['value'], style));
+  }
+  return declarations;
+}
+
+/** One node's own text, from the offsets the parser reported for it. */
+function sourceRangeOf(node: unknown, source: string): string {
+  const loc = typeof node === 'object' && node !== null ? (node as Record<string, unknown>)['loc'] : undefined;
+  if (typeof loc !== 'object' || loc === null) throw new Error('the parser reported no source position');
+  const offsets = loc as Record<string, unknown>;
+  const start = offsets['start'];
+  const end = offsets['end'];
+  const from = typeof start === 'object' && start !== null ? (start as Record<string, unknown>)['offset'] : undefined;
+  const to = typeof end === 'object' && end !== null ? (end as Record<string, unknown>)['offset'] : undefined;
+  if (typeof from !== 'number' || typeof to !== 'number') throw new Error('the parser reported no source offset');
+  return source.slice(from, to).trim();
+}
 
 function escapeXml(value: string): string {
   return value.replace(/[&<>"\t\n\r]/g, (character) => XML_ENTITIES[character]!);
@@ -77,7 +167,30 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
       rootSeen = true;
     }
     if (GRAPHICS[tag.local] === true) hasGraphics = true;
-    const rounded = /(?:^|;)\s*rx\s*:\s*var\(--_r\)\s*(?:;|$)/.test(tag.attributes['style']?.value ?? '');
+    const declared = new Map<string, string>();
+    let rounded = false;
+    const style = tag.attributes['style']?.value ?? '';
+    if (style !== '') {
+      for (const [property, value] of styleDeclarations(style)) {
+        if (isRoot) {
+          if (ROOT_STYLE_RULES[property] !== true) {
+            throw new Error(`the renderer emitted a root style declaration with no CSS counterpart: ${property}`);
+          }
+          continue;
+        }
+        // `rx: var(--_r)` is the one declaration `diagram.css` supplies as a
+        // class: a presentation attribute cannot carry `var()`.
+        if (property === 'rx' && value === 'var(--_r)') {
+          rounded = true;
+          continue;
+        }
+        if (ATTRIBUTES[property] !== true || value.includes('var(')) {
+          throw new Error(`the renderer emitted a style declaration with no safe equivalent: ${property}: ${value}`);
+        }
+        inspectPaint(value);
+        declared.set(property, value);
+      }
+    }
     let hasClass = false;
     output.push(`<${tag.local}`);
     for (const name in tag.attributes) {
@@ -98,10 +211,14 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
       // Pele's root role and accessible-name attributes are replaced by the site's caption.
       if (isRoot && ['role', 'aria-label', 'aria-labelledby'].includes(name)) continue;
       if (PAINT_ATTRIBUTES[name] === true) inspectPaint(attribute.value);
+      // A `style` declaration outranks a presentation attribute in CSS, so the
+      // attribute it displaces is dropped rather than emitted twice.
+      if (declared.has(name)) continue;
       const value = name === 'class' && rounded ? `${attribute.value} pele-rounded` : attribute.value;
       if (name === 'class') hasClass = true;
       output.push(` ${name}="${escapeXml(value)}"`);
     }
+    for (const [property, value] of declared) output.push(` ${property}="${escapeXml(value)}"`);
     if (rounded && !hasClass) output.push(' class="pele-rounded"');
     if (isRoot) {
       output.push(` role="graphics-document" aria-label="${escapeXml(accessibleName)}" focusable="false"`);
@@ -122,8 +239,6 @@ export async function renderDiagram(source: string, diagramId: string, accessibl
     const { svg } = render(source, { idPrefix: diagramId, links: false, images: false, now: 0 });
     return sanitizeSvg(svg, accessibleName);
   } catch (error) {
-    // Importing the existing error class statically would load Mermaid's DOM shim on every success.
-    const { DiagramError } = await import('./mermaid-render.ts');
     throw new DiagramError(source, error instanceof Error ? error.message.split('\n')[0]! : String(error));
   }
 }
