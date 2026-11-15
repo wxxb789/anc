@@ -86,10 +86,17 @@ afterEach(() => {
   vi.mocked(renderPele).mockReset();
 });
 
-test.each(Object.entries(DIAGRAMS))('Pele preserves %s geometry and accessible content without inline execution', async (_name, source) => {
+/**
+ * Render one diagram source through the adapter and hold it to the raw render:
+ * clean of inline execution, the same root geometry, the adapter's own
+ * accessible name, and the same visible text.
+ *
+ * Shared by the 23-type matrix row and the real-corpus rows below, because the
+ * corpus needs the *same* disposition — the r4 finding was that the corpus was
+ * read only through the bare renderer, so the trust boundary never touched it.
+ */
+async function expectAdapterParity(source: string, name: string, id: string): Promise<string> {
   const { renderDiagram } = await import('../src/lib/pele-render.ts');
-  const id = 'geometry-probe';
-  const name = 'Reader’s diagram <with markup> & "quotes"';
   const original = inspect(renderPele(source, { idPrefix: id, links: false, images: false }).svg);
   const svg = await renderDiagram(source, id, name);
   const result = inspect(svg);
@@ -103,6 +110,12 @@ test.each(Object.entries(DIAGRAMS))('Pele preserves %s geometry and accessible c
   assert.equal(result.root['aria-label'], name);
   assert.equal(result.root['focusable'], 'false');
   assert.equal(result.text, original.text, 'sanitization lost visible labels or descriptions');
+  return svg;
+}
+
+test.each(Object.entries(DIAGRAMS))('Pele preserves %s geometry and accessible content without inline execution', async (_name, source) => {
+  const svg = await expectAdapterParity(source, 'Reader’s diagram <with markup> & "quotes"', 'geometry-probe');
+  assert.match(svg, /^<svg\b/, 'the adapter returned no root element to compare');
 });
 
 test('the Markdown build-time seam renders with either selected engine', async () => {
@@ -184,24 +197,46 @@ const AUTHORED_PAINT = 'flowchart TD\n A[Reader] --> B[Site]\n style A fill:#ff0
 const CRIT_GANTT = 'gantt\n  dateFormat YYYY-MM-DD\n  section Build\n  Render :crit, a1, 2026-01-01, 5d';
 
 /**
+ * The three real corpus diagrams, read from the files that ship them.
+ *
+ * Shared deliberately. The census rows read them through the *bare* renderer —
+ * an inventory measurement of what Pele emits — and the rows further down read
+ * the same sources through the adapter: the r4 finding was that only the first
+ * reading existed, so the corpus never touched the trust boundary (an
+ * `assertClean` over it was never run). Both readings are kept; they answer
+ * different questions.
+ */
+const CORPUS_FILES = [
+  'docs/core-design/architecture.md',
+  'example/guides/feature-showcase.md',
+  'tests/fixtures/markdown/kitchen-sink.md',
+] as const;
+
+function corpusDiagrams(): { path: string; source: string }[] {
+  const diagrams = CORPUS_FILES.flatMap((path) =>
+    [...readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').matchAll(/```mermaid\n([\s\S]*?)```/g)]
+      .map((match) => ({ path, source: match[1]! })));
+  assert.equal(diagrams.length, 3, 'the real corpus no longer carries the three diagrams this build reads');
+  for (const { path, source } of diagrams) {
+    assert.notEqual(source.trim(), '', `${path} carries an empty diagram, so its row would pass vacuously`);
+  }
+  return diagrams;
+}
+
+/**
  * Every source the census rows below read: the 23-type matrix, the three real
- * corpus diagrams (read from the files that ship them, not copied here), and the
- * probes that make an authored declaration or a critical task observable.
+ * corpus diagrams, the probes that make an authored declaration or a critical
+ * task observable, and the state/block function-face probes r4 added.
  */
 function censusSources(): string[] {
-  const corpus = [
-    'docs/core-design/architecture.md',
-    'example/guides/feature-showcase.md',
-    'tests/fixtures/markdown/kitchen-sink.md',
-  ];
-  const sources = corpus.flatMap((path) =>
-    [...readFileSync(new URL(`../${path}`, import.meta.url), 'utf8').matchAll(/```mermaid\n([\s\S]*?)```/g)]
-      .map((match) => match[1]!));
-  assert.equal(sources.length, 3, 'the real corpus no longer carries the three diagrams this census reads');
   return [
-    ...Object.values(DIAGRAMS), ...sources, AUTHORED_SIZE, AUTHORED_PAINT, CRIT_GANTT,
+    ...Object.values(DIAGRAMS), ...corpusDiagrams().map(({ source }) => source),
+    AUTHORED_SIZE, AUTHORED_PAINT, CRIT_GANTT,
     'flowchart TD\n A[Reader] --> B[Site]\n style A fill:#111111',
     'flowchart TD\n A[Reader] --> B[Site]\n style A rx:8px',
+    stateFaceSource('stroke-width', 'calc(4px)'),
+    stateFaceSource('fill', 'var(--pele-accent)'),
+    blockFaceSource('rx', 'calc(4px)'),
   ];
 }
 
@@ -336,6 +371,26 @@ test('every Pele variable the emitted markup consumes is defined or deliberately
       assert.ok(block.includes(recorded.css), `${recorded.css} is gone, so ${name} no longer resolves to what it did`);
     }
   }
+});
+
+/**
+ * P1 design §5(2): the real corpus, *through the adapter*.
+ *
+ * The two census rows above read the corpus through the bare renderer, which is
+ * the right instrument for what they measure (the root block's declaration set
+ * and the variables Pele's markup consumes) and the wrong one for this: no row
+ * in the suite ran `assertClean` or the parity assertions over a corpus diagram
+ * through the trust boundary, so "the three real diagrams still come out clean
+ * after the adapter" was an absence, not a result — the r4 finding. These rows
+ * are that gate; the census rows stay as the independent raw measurement.
+ *
+ * `corpusDiagrams` throws at collection if the three sources are missing or
+ * empty, so the rows cannot pass by having nothing to read.
+ */
+test.each(corpusDiagrams())('the real corpus diagram $path survives the adapter clean', async ({ path, source }) => {
+  const name = `The ${path.split('/').at(-1)!} diagram`;
+  const svg = await expectAdapterParity(source, name, 'corpus-probe');
+  assert.match(svg, /^<svg\b/, 'the adapter returned no root element to compare');
 });
 
 /**
@@ -559,6 +614,22 @@ function faceSource(property: string, value: string): string {
 }
 
 /**
+ * The same declaration through a parser that forwards it, for the r4 face.
+ *
+ * The flowchart directive parser rejects a function value at its own parse
+ * (measured), so `faceSource` cannot reach the cells below at all; `state`
+ * forwards the raw value and `block` does too — two independent parsers, which
+ * is the evidence that this is the face and not one diagram type's quirk.
+ */
+function stateFaceSource(property: string, value: string): string {
+  return `stateDiagram-v2\n  A --> B\n  style A ${property}:${value}`;
+}
+
+function blockFaceSource(property: string, value: string): string {
+  return `block-beta\n  columns 2\n  A B\n  style A ${property}:${value}`;
+}
+
+/**
  * Render each cell's source through the raw renderer and the adapter, serve
  * every pair side by side without a policy (`openDiagramPage` above), and read
  * each pair back: the raw element carrying the author's declaration, the
@@ -589,9 +660,13 @@ async function measureCells(cells: ReadonlyArray<{ property: string; value: stri
       };
       const raw = elements(`raw-${index}`).filter((element) =>
         element.localName !== 'svg' && (element.getAttribute('style') ?? '').includes(`${property}:${value}`));
-      const adapter = elements(`adapter-${index}`).filter((element) => element.hasAttribute(property));
+      // The adapter side is matched by the *emitted spelling* — the value the
+      // projection was measured to carry. Matching on the attribute name alone
+      // would also catch the renderer's own attributes (`fill="var(--_s)"` on
+      // the neighbouring node), which is a different cell.
+      const adapter = elements(`adapter-${index}`).filter((element) => element.getAttribute(property) === value);
       if (raw.length !== 1) throw new Error(`${property}:${value} is on ${raw.length} raw elements, not one`);
-      if (adapter.length !== 1) throw new Error(`${property} is on ${adapter.length} adapter elements, not one`);
+      if (adapter.length !== 1) throw new Error(`${property}:${value} is on ${adapter.length} adapter elements, not one`);
       const geometry = (element: Element): string => `${element.getAttribute('x')}/${element.getAttribute('y')}`;
       const reading = (element: Element): string => getComputedStyle(element).getPropertyValue(property);
       return {
@@ -635,6 +710,78 @@ test.each(PERCENTAGE_FACE)(
     assert.equal(cell!.emitted, value, `word-spacing:${value}: the projection did not carry the author's spelling`);
     assert.equal(cell!.raw, reading, `word-spacing:${value}: the raw render no longer computes ${reading}`);
     assert.equal(cell!.adapter, reading, `word-spacing:${value}: the projection computes ${cell!.adapter}, not ${reading}`);
+  },
+);
+
+/**
+ * The r4 face: a declaration the state (and block) parser forwards that the
+ * flowchart parser cannot, measured the same way the r3 rows are — the raw
+ * render against the adapter's own output, element by element, in the browser.
+ * Every reading below was measured 2026-11-15 in Chromium 158 (r4-sweep.tsv);
+ * the row pins it so an adapter that normalises a value — or refuses one it
+ * measured fit to project — fails here.
+ *
+ * The cells divide by what made them reachable:
+ *
+ * - a math function whose value is of the property's own type — `calc()`,
+ *   `min()`, `calc(1em)`, and the negative-inside-`calc()` and `abs()`
+ *   spellings the renderer clamps in both forms (`stroke-width:calc(-4px)`
+ *   computes `0px` either way, measured, which is why this property is not
+ *   refused for a sign its own renderer handles);
+ * - the reference shapes `var()`, `env()` and `attr()`, which substitute — or
+ *   fail to substitute — identically in both forms: `var(--pele-accent)`
+ *   resolves the site token, `var(--r4-missing)` falls back to the same
+ *   inherited paint the declaration's own invalid-at-computed-value-time does;
+ * - a colour function on a paint property, `rgb(var(--_c))` and
+ *   `rgb(0 0 0 / 50%)`, which the paint guard admits because it is a colour;
+ * - a `<number>`-valued function on a property that takes a number,
+ *   `fill-opacity:calc(0.5)`.
+ */
+const FUNCTION_FACE: ReadonlyArray<readonly [graph: 'state' | 'block', property: string, value: string, reading: string]> = [
+  ['state', 'stroke-width', 'calc(4px)', '4px'],
+  ['state', 'stroke-width', 'calc(1em)', '16px'],
+  ['state', 'stroke-width', 'calc(2 * 4px)', '8px'],
+  ['state', 'stroke-width', 'min(4px)', '4px'],
+  ['state', 'stroke-width', 'calc(-4px)', '0px'],
+  ['state', 'stroke-width', 'abs(-2px)', '2px'],
+  ['state', 'stroke-width', 'calc(var(--pele-radius) * 2)', '12px'],
+  ['state', 'stroke-width', 'var(--pele-radius)', '6px'],
+  ['state', 'stroke-width', 'env(safe-area-inset-top)', '0px'],
+  ['state', 'stroke-width', 'attr(data-w)', '1px'],
+  ['state', 'stroke-dasharray', 'calc(4px)', '4px'],
+  ['state', 'stroke-dashoffset', 'calc(2px)', '2px'],
+  ['state', 'rx', 'calc(4px)', '4px'],
+  ['state', 'rx', 'var(--pele-radius)', '6px'],
+  ['state', 'ry', 'calc(4px)', '4px'],
+  ['state', 'letter-spacing', 'calc(2px)', '2px'],
+  ['state', 'letter-spacing', 'var(--pele-accent)', 'normal'],
+  ['state', 'word-spacing', 'calc(2px)', '2px'],
+  ['state', 'font-size', 'calc(40px)', '40px'],
+  ['state', 'font-size', 'var(--pele-radius)', '6px'],
+  ['state', 'text-decoration', 'calc(4px)', '4px'],
+  ['state', 'fill-opacity', 'calc(0.5)', '0.5'],
+  ['state', 'fill', 'rgb(0 0 0 / 50%)', 'rgba(0, 0, 0, 0.5)'],
+  ['state', 'fill', 'var(--pele-accent)', 'rgb(31, 111, 60)'],
+  ['state', 'fill', 'var(--r4-missing)', 'rgb(27, 31, 36)'],
+  ['state', 'fill', 'rgb(var(--_c))', 'rgb(27, 31, 36)'],
+  ['state', 'stroke', 'var(--pele-accent)', 'rgb(31, 111, 60)'],
+  ['block', 'stroke-width', 'calc(4px)', '4px'],
+  ['block', 'rx', 'calc(4px)', '4px'],
+  ['block', 'fill', 'var(--pele-accent)', 'rgb(31, 111, 60)'],
+];
+
+test.each(FUNCTION_FACE)(
+  'a %s declaration of %s:%s is projected as the renderer keeps it',
+  async (graph, property, value, reading) => {
+    const source = graph === 'state' ? stateFaceSource(property, value) : blockFaceSource(property, value);
+    const [cell] = await measureCells([{ property, value, source }]);
+    const label = `${graph} ${property}:${value}`;
+    assert.notEqual(cell!.specified, '', `${label}: the browser no longer keeps the declaration — the row's premise is gone`);
+    assert.equal(cell!.emitted, value, `${label}: the projection did not carry the author's spelling`);
+    assert.equal(cell!.rawTag, cell!.adapterTag, `${label}: the two forms are not the same kind of element`);
+    assert.equal(cell!.rawGeometry, cell!.adapterGeometry, `${label}: the two forms are not the same element`);
+    assert.equal(cell!.raw, reading, `${label}: the raw render no longer computes ${reading}`);
+    assert.equal(cell!.adapter, reading, `${label}: the projection computes ${cell!.adapter}, not ${reading}`);
   },
 );
 
@@ -700,6 +847,19 @@ test('an authored word-spacing reaches the label as its presentation attribute',
  * (`rx:4 -2`), and a value the renderer drops outright (`rx:not-a-color`,
  * `word-spacing:bold`).
  *
+ * The r4 rows below are the same demonstration for the cells the state parser
+ * made reachable: a CSS-wide keyword or `auto` on a geometry property (the
+ * declaration keeps it, the attribute reads the zero length), a negative inside
+ * a function (`rx:calc(-4px)`: clamped by the declaration, taken back by the
+ * attribute), a `<number>`-valued function on a property that expects a length
+ * (`letter-spacing:calc(4)`, `sin(45deg)`, `font-size:calc(4)`), a
+ * length-valued function on a property that expects a number
+ * (`fill-opacity:calc(4px)`), a type-invalid function (`rx:calc(1px * 1px)`,
+ * `stroke-width:calc(1px * 1px)`), and a math function on a paint property
+ * (`fill:calc(4px)`). Their `graph` column is `state` because the flowchart
+ * parser rejects a function value before the adapter is reached — the reason
+ * this face went unmeasured through r3.
+ *
  * Each row has the adapter fail loudly on the real source, then shows *why*
  * refusal is the direction that preserves the rendering, in the same browser:
  * the declaration is dropped on an element that carries nothing else
@@ -710,27 +870,56 @@ test('an authored word-spacing reaches the label as its presentation attribute',
  * it is what makes each refusal necessary rather than merely safe.
  */
 const REFUSED_FACE: ReadonlyArray<{
+  graph?: 'state';
   property: string;
   value: string;
   element: 'rect' | 'text';
   displaced: string;
+  /**
+   * `dropped` — the renderer drops the declaration (its `specified` value is
+   * empty), so the projected attribute would delete the value that actually
+   * renders. `kept` — the renderer keeps it, and the attribute form reads
+   * something else entirely; `cleanReading` is the value the declaration
+   * itself produces.
+   */
+  declaration: 'dropped' | 'kept';
+  cleanReading?: string;
   displacedReading: string;
   projectedReading: string;
 }> = [
-  { property: 'rx', value: '-2', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
-  { property: 'ry', value: '-2', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
-  { property: 'font-size', value: '-2', element: 'text', displaced: '33px', displacedReading: '33px', projectedReading: '16px' },
-  { property: 'fill-opacity', value: '-4px', element: 'rect', displaced: '0.25', displacedReading: '0.25', projectedReading: '1' },
-  { property: 'rx', value: 'not-a-color', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
-  { property: 'rx', value: '4 -2', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
-  { property: 'word-spacing', value: 'bold', element: 'text', displaced: '5px', displacedReading: '5px', projectedReading: '0px' },
+  { property: 'rx', value: '-2', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
+  { property: 'ry', value: '-2', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
+  { property: 'font-size', value: '-2', element: 'text', declaration: 'dropped', displaced: '33px', displacedReading: '33px', projectedReading: '16px' },
+  { property: 'fill-opacity', value: '-4px', element: 'rect', declaration: 'dropped', displaced: '0.25', displacedReading: '0.25', projectedReading: '1' },
+  { property: 'rx', value: 'not-a-color', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
+  { property: 'rx', value: '4 -2', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
+  { property: 'word-spacing', value: 'bold', element: 'text', declaration: 'dropped', displaced: '5px', displacedReading: '5px', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'inherit', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'initial', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'unset', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'revert', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'auto', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'ry', value: 'auto', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'calc(-4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
+  { graph: 'state', property: 'ry', value: 'calc(-4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
+  { graph: 'state', property: 'rx', value: 'calc(1px * 1px)', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
+  { graph: 'state', property: 'stroke-width', value: 'calc(1px * 1px)', element: 'rect', declaration: 'dropped', displaced: '3px', displacedReading: '3px', projectedReading: '1px' },
+  { graph: 'state', property: 'letter-spacing', value: 'calc(4)', element: 'text', declaration: 'dropped', displaced: '5px', displacedReading: '5px', projectedReading: 'calc(4px)' },
+  { graph: 'state', property: 'letter-spacing', value: 'sin(45deg)', element: 'text', declaration: 'dropped', displaced: '5px', displacedReading: '5px', projectedReading: 'calc(0.707107px)' },
+  { graph: 'state', property: 'font-size', value: 'calc(4)', element: 'text', declaration: 'dropped', displaced: '33px', displacedReading: '33px', projectedReading: '4px' },
+  { graph: 'state', property: 'fill-opacity', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: '0.25', displacedReading: '0.25', projectedReading: '1' },
+  { graph: 'state', property: 'fill', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: '#ff0000', displacedReading: 'rgb(255, 0, 0)', projectedReading: 'rgb(0, 0, 0)' },
+  { graph: 'state', property: 'stroke', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: '#00ff00', displacedReading: 'rgb(0, 255, 0)', projectedReading: 'none' },
+  { graph: 'state', property: 'stroke-linejoin', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: 'round', displacedReading: 'round', projectedReading: 'miter' },
+  { graph: 'state', property: 'font-weight', value: 'calc(4px)', element: 'text', declaration: 'dropped', displaced: '600', displacedReading: '600', projectedReading: '400' },
+  { graph: 'state', property: 'text-decoration', value: 'calc(4)', element: 'text', declaration: 'dropped', displaced: 'underline', displacedReading: 'underline', projectedReading: 'calc(4px)' },
 ];
 
 test.each(REFUSED_FACE)(
   'Pele refuses $property:$value, and the projection would move the rendering',
   async (row) => {
     const { property, value, element, displaced, displacedReading, projectedReading } = row;
-    const source = faceSource(property, value);
+    const source = row.graph === 'state' ? stateFaceSource(property, value) : faceSource(property, value);
     const { renderDiagram } = await import('../src/lib/pele-render.ts');
     await assert.rejects(() => renderDiagram(source, 'refused-face', 'Refused face'), (error: unknown) =>
       error instanceof DiagramError && error.source === source && error.message.includes(`${property}: ${value}`));
@@ -761,19 +950,26 @@ test.each(REFUSED_FACE)(
         const reading = (role: string): string => getComputedStyle(one(role)).getPropertyValue(property);
         return {
           specified: (one('clean') as SVGElement).style.getPropertyValue(property),
+          clean: reading('clean'),
           displaced: reading('displaced'),
           projected: reading('projected'),
         };
       }, { property, value });
-      assert.equal(measured.specified, '', `${property}:${value}: the browser no longer drops this declaration`);
+      const label = `${property}:${value}`;
+      if (row.declaration === 'kept') {
+        assert.notEqual(measured.specified, '', `${label}: the browser no longer keeps this declaration`);
+        assert.equal(measured.clean, row.cleanReading, `${label}: the declaration no longer computes its own value`);
+      } else {
+        assert.equal(measured.specified, '', `${label}: the browser no longer drops this declaration`);
+      }
       assert.equal(
         measured.displaced, displacedReading,
-        `${property}:${value}: the element's own value no longer survives the dropped declaration`,
+        `${label}: the displaced element no longer renders its own value`,
       );
-      assert.equal(measured.projected, projectedReading, `${property}:${value}: the projection no longer computes what it used to`);
+      assert.equal(measured.projected, projectedReading, `${label}: the projection no longer computes what it used to`);
       assert.notEqual(
         measured.displaced, measured.projected,
-        `${property}:${value}: the projection no longer moves the rendering, so the refusal is no longer measured as necessary`,
+        `${label}: the projection no longer moves the rendering, so the refusal is no longer measured as necessary`,
       );
     } finally {
       await browser.close();

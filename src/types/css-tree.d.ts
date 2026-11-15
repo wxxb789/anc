@@ -11,9 +11,10 @@
  * time.
  *
  * `CssNode` is deliberately structural rather than exhaustive. The policy walks
- * the AST and asks each node four questions — what type is it, what is its name,
- * what URL does a `Url` node carry, and what child list, selector or declaration
- * block does a container carry — so those are the only members declared.
+ * the AST and asks each node five questions — what type is it, what is its name,
+ * what URL does a `Url` node carry, what unit does a `Dimension` carry, and what
+ * child list, selector or declaration block does a container carry — so those
+ * are the only members declared.
  * Anything else is read through the `unknown` index and must be narrowed by the
  * caller. `lexer.matchType` is declared because the suppression whitelist asks
  * the parser's bundled syntax whether one value resolves as a colour, rather

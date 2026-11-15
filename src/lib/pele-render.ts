@@ -15,16 +15,41 @@
  *    value and is dropped too, while the raw render still has the attribute the
  *    declaration never won. The verdict is therefore measured rather than
  *    grammatical: the parser's grammar decides the values that need no further
- *    reading, {@link NON_NEGATIVE} and {@link RENDERER_KEPT_NUMBER} record the
- *    cells where a measurement showed the grammar's verdict is not the
- *    renderer's, and a value outside both is refused loudly rather than
+ *    reading, {@link NON_NEGATIVE}, {@link RENDERER_KEPT_NUMBER},
+ *    {@link RENDERER_KEPT_PERCENTAGE} and {@link FUNCTION_VALUE_TYPES} record
+ *    the cells where a measurement showed the grammar's verdict is not the
+ *    renderer's, and a value outside them is refused loudly rather than
  *    guessed. Where the element already has that attribute, the declaration
  *    wins and the attribute is replaced: a `style` attribute outranks a
  *    presentation attribute in CSS, so that is the rendering Pele produced, not
  *    a preference.
- * 2. **`rx: var(--_r)`** — the one declaration a presentation attribute cannot
- *    take, because `var()` does not resolve there. It stays a class, with the
- *    value supplied by `.diagram svg.pele .pele-rounded` in `diagram.css`.
+ *
+ *    Which declarations arrive at all is a property of the *diagram type*, and
+ *    the r3 sweep read only one of them. Measured 2026-11-15 over the 23-type
+ *    matrix and every directive form: the flowchart parser drops a function
+ *    value at its own directive parse (`style`/`classDef`/`linkStyle` with
+ *    `calc(4px)`, `var(--x)` or `url(#p)` is a parse error), while the state,
+ *    block and class parsers forward the raw value — `stateDiagram-v2` +
+ *    `style A stroke-width:calc(4px)` reaches this file as
+ *    `style="stroke-width:calc(4px)"`. So a parenthesised value is a face cell
+ *    here, not a hypothetical, and the dispositions below are keyed to it:
+ *    functions the property keeps are projected, functions it does not are
+ *    refused by name, and `var()`/`env()`/`attr()` references are projected
+ *    after measurement. Pele's own value filter is the other boundary: it
+ *    drops any value carrying `url(` — measured, which is why the resource
+ *    guard below has no reachable declaration cell and exists for the
+ *    attribute path — and its 1.13.0 filter also refuses `expression(`,
+ *    `javascript:`, `@import`, `image-set`, comments and control characters,
+ *    read from the bundle rather than measured cell by cell.
+ * 2. **`rx: var(--_r)`** — Pele's own corner rounding, carried as a class
+ *    rather than an attribute. The reason the class was introduced (that
+ *    `var()` does not resolve in a presentation attribute) is false as
+ *    measured: in Chromium 158 `rx="var(--_r)"` computes the same length as the
+ *    declaration does. The class is a carrier choice, not a necessity —
+ *    `.diagram svg.pele .pele-rounded` in `diagram.css` names the site's radius
+ *    token once, and the class is left off any element whose own declaration
+ *    wins, because a class rule outranks a presentation attribute and keeping
+ *    both would render `var(--_r)` over the author's literal radius.
  * 3. **The root `style` block** — Pele's palette, its measurement font and the
  *    reset of the inheritable text properties, as one attribute on `<svg>`.
  *    `src/styles/diagram.css` re-creates it under `.diagram svg.pele` and
@@ -33,6 +58,7 @@
  */
 
 import { lexer, parse, walk } from 'css-tree';
+import type { CssNode } from 'css-tree';
 import { render } from 'pele';
 import { SaxesParser } from 'saxes';
 import { DiagramError } from './diagram-mode.ts';
@@ -130,14 +156,16 @@ const NON_NEGATIVE: Readonly<Record<string, true>> = {
  * declaration (`font-size:normal`, `rx:not-a-color`, `fill-opacity:-4px`,
  * `rx:4 -2` — the unit is a boundary of the shape: the `<number>` is kept and
  * the `Dimension` is not). The second is a guard on the renderer's contract
- * rather than a face cell: a parenthesised value cannot arrive through a
- * directive at all — measured 2026-11-15, `style`/`classDef`/`linkStyle` with
- * `var(--x)`, `url(#g)` or `calc(4px)` fails Pele's own directive parse and the
- * adapter reports that as a `DiagramError` — so the branch exists for whatever a
- * future renderer emits: a declaration whose value an attribute cannot carry is
- * refused, never moved. Neither is silently dropped;
- * `tests/diagram-engine.test.ts` gates the first with a source-level row per
- * shape, and the refusal path names the property and the value.
+ * rather than a face cell: a *scalar* spelling is what these rows are about,
+ * and a parenthesised value is a different shape with its own disposition
+ * above — {@link FUNCTION_VALUE_TYPES} for a math function, the reference
+ * branch for `var()`/`env()`/`attr()`. This paragraph used to claim those
+ * values could not arrive through a directive at all; measured 2026-11-15,
+ * that holds for the flowchart parser only (see item 1 of this file's header),
+ * and the claim is gone rather than left standing beside a reachable cell.
+ * Neither is silently dropped; `tests/diagram-engine.test.ts` gates the first
+ * with a source-level row per shape, and the refusal path names the property
+ * and the value.
  */
 const RENDERER_KEPT_NUMBER: Readonly<Record<string, 'any' | 'positive'>> = {
   'fill-opacity': 'any',
@@ -155,6 +183,153 @@ const RENDERER_KEPT_NUMBER: Readonly<Record<string, 'any' | 'positive'>> = {
  * form too (the computed value keeps the percentage itself).
  */
 const RENDERER_KEPT_PERCENTAGE: Readonly<Record<string, true>> = { 'word-spacing': true };
+
+/**
+ * The units a `<length>` may carry, so a `Dimension` in a function's argument
+ * list can be told from an angle, a time or a frequency.
+ */
+const LENGTH_UNITS: Readonly<Record<string, true>> = {
+  px: true, cm: true, mm: true, q: true, in: true, pt: true, pc: true,
+  em: true, rem: true, ex: true, ch: true, cap: true, ic: true, lh: true, rlh: true,
+  vw: true, vh: true, vi: true, vb: true, vmin: true, vmax: true,
+};
+
+/**
+ * The math functions whose result is a `<number>` — a measurement of the type
+ * boundary `FUNCTION_VALUE_TYPES` reads, not a second copy of the CSS grammar.
+ *
+ * `sin(45deg)` is the spelling that made this table necessary: the flowchart
+ * parser refuses it, the state parser forwards it, and the two forms disagree
+ * on the properties that expect a length — `letter-spacing:sin(45deg)` is
+ * dropped by the declaration while `letter-spacing="sin(45deg)"` is taken as
+ * `calc(0.707107px)`, measured in Chromium 158.
+ */
+const NUMBER_RESULT_FUNCTIONS: Readonly<Record<string, true>> = {
+  sin: true, cos: true, tan: true, asin: true, acos: true, atan: true, atan2: true,
+  pow: true, sqrt: true, log: true, exp: true, sign: true, sinh: true, cosh: true, tanh: true,
+};
+
+/**
+ * The math functions whose result type follows from their arguments, folded by
+ * the operator rules in {@link combineTypes}.
+ */
+const UNIT_PRESERVING_FUNCTIONS: Readonly<Record<string, true>> = {
+  calc: true, min: true, max: true, clamp: true, round: true, mod: true, rem: true, abs: true, hypot: true,
+};
+
+/**
+ * The functions whose value is a reference resolved at computed-value time —
+ * `var()` against the page's custom properties, `env()` against the display
+ * environment, `attr()` against the element's own data.
+ *
+ * All three are measured equal in both forms over the whole reachable
+ * properties × spellings matrix (r4 sweep: `var(--pele-accent)`,
+ * `var(--pele-radius)`, `var(--r4-missing)`, `var(--x)` inside `calc()` and
+ * inside `rgb()`, `env(safe-area-inset-top)`, `attr(data-w)` — some fifty cells,
+ * no divergent one): the declaration and the attribute substitute, or fail to
+ * substitute, in the same environment, and an unresolvable reference is treated
+ * as `unset` in both. They are admitted *because* that was measured, not
+ * because a reference looks harmless.
+ *
+ * `url()` is deliberately not here: Pele's own filter drops any value carrying
+ * it (measured on state, block and class), so the only reachable resource is
+ * the resource guard's territory.
+ */
+const REFERENCE_FUNCTIONS: Readonly<Record<string, true>> = { var: true, env: true, attr: true };
+
+/**
+ * The function-value types each property's own declaration keeps, measured
+ * 2026-11-15 in Chromium 158 against the r4 sweep and its focused follow-ups
+ * (the declaration form, the attribute form, control elements with neither).
+ *
+ * The rows are not a guess about CSS typing; they are the cells where a math
+ * function's *value type* decides whether the two forms agree:
+ *
+ * - `stroke-width`, `stroke-dasharray`, `stroke-dashoffset`, `rx`, `ry` keep a
+ *   `<number>` as well as a `<length>` (`stroke-width:calc(4)` computes 4px,
+ *   `calc(2 * 4px)` 8px, `hypot(3px)` 3px, and the attribute form agrees),
+ *   which is why they admit all three scalar types. The type-invalid spellings
+ *   are refused: `rx:calc(1px * 1px)` and `rx:calc(4px + 2)` measure divergent
+ *   (the declaration is dropped, the displaced `rx="10"` survives in the raw
+ *   render, while the projected attribute is read as the zero length).
+ * - `font-size`, `letter-spacing`, `word-spacing`, `text-decoration` keep a
+ *   length (or, for `font-size`, a percentage) and *drop* a `<number>`-valued
+ *   function, while the attribute form coerces the number to user units:
+ *   `letter-spacing:calc(4)` computes `normal` where `letter-spacing="calc(4)"`
+ *   computes `calc(4px)`; same for `sin(45deg)`, `sqrt(4)`, `sign(2px)` and
+ *   `calc(4px / 2px)`.
+ * - `opacity`, `fill-opacity`, `stroke-opacity`, `font-weight` keep a number
+ *   and drop a length-valued function (`fill-opacity:calc(4px)` is dropped
+ *   where the attribute form is ignored, so the projection would delete a
+ *   displaced `fill-opacity="0.25"` and render `1`).
+ *
+ * A property with no row never reaches this decision — its function values are
+ * refused by the grammar path below, and a reference is admitted before the
+ * table is consulted. The measured spellings behind each row are named in
+ * `r4-sweep.tsv`; the cells the rule refuses while measuring equal are recorded
+ * as its conservative side in the r4 report.
+ */
+const FUNCTION_VALUE_TYPES: Readonly<Record<string, Readonly<Record<string, true>>>> = {
+  'stroke-width': { length: true, percentage: true, number: true },
+  'stroke-dasharray': { length: true, percentage: true, number: true },
+  'stroke-dashoffset': { length: true, percentage: true, number: true },
+  rx: { length: true, percentage: true, number: true },
+  ry: { length: true, percentage: true, number: true },
+  'font-size': { length: true, percentage: true },
+  'letter-spacing': { length: true, percentage: true },
+  'word-spacing': { length: true, percentage: true },
+  'text-decoration': { length: true },
+  opacity: { number: true },
+  'fill-opacity': { number: true },
+  'stroke-opacity': { number: true },
+  'font-weight': { number: true },
+};
+
+/**
+ * The geometry properties whose presentation attribute the renderer parses as
+ * a `<length>` in the SVG legacy grammar rather than as the CSS value.
+ *
+ * `rx` and `ry` are the two the Pele filter reaches; the others are the same
+ * attribute family, measured with the same spellings (`x`, `y`, `width`,
+ * `height`, `cx`, `cy`, `r` — a CSS-wide keyword is kept by the declaration and
+ * read as the zero length by the attribute).
+ */
+const GEOMETRY_PROPERTIES: Readonly<Record<string, true>> = {
+  x: true, y: true, width: true, height: true, cx: true, cy: true, r: true, rx: true, ry: true,
+};
+
+/**
+ * The values a geometry attribute reads as a length instead of as the value the
+ * declaration names — the one cell family where the grammar accepts and the
+ * projection would move the rendering.
+ *
+ * Measured in Chromium 158: `rx:inherit`, `rx:initial`, `rx:unset`,
+ * `rx:revert` and `rx:auto` are all kept by the declaration (`rx:inherit`
+ * computes `auto` — the inherited value — and `rx:auto` the keyword itself)
+ * while the attribute form computes `0px` in every one of them; the same
+ * measurement holds across the geometry family. `auto` is refused only while
+ * the declaration would keep it: where `auto` is invalid for the property the
+ * grammar path below refuses it anyway.
+ */
+const GEOMETRY_KEYWORD_VALUES: Readonly<Record<string, true>> = {
+  auto: true, inherit: true, initial: true, unset: true, revert: true, 'revert-layer': true,
+};
+
+/**
+ * The properties whose attribute form takes a negative back when it arrives
+ * inside a function — the geometry attributes again, measured: `rx:calc(-4px)`
+ * is kept by the declaration and computes `0px` (clamped), while
+ * `rx="calc(-4px)"` computes `-4px`. The stroke properties clamp in both forms
+ * (`stroke-width:calc(-4px)` computes `0px` in each), so their function values
+ * are not refused for a sign the renderer already handles — `stroke-width:
+ * abs(-2px)` computes `2px` in both forms and is projected. A *scalar* negative
+ * is a different cell and stays refused for every {@link NON_NEGATIVE}
+ * property, measured and gated since r2.
+ */
+const FUNCTION_NEGATIVE_TAKEN_BACK: Readonly<Record<string, true>> = { rx: true, ry: true };
+
+/** The value types {@link FUNCTION_VALUE_TYPES} and the walk below can name. */
+type ValueType = 'length' | 'percentage' | 'number' | 'other';
 
 const XML_ENTITIES: Readonly<Record<string, string>> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;',
@@ -273,17 +448,153 @@ function measuredProjection(property: string, value: string): string | null {
   return null;
 }
 
-/** CSS variables can hide a resource in a fallback; css-tree keeps that fallback as Raw. */
-function inspectPaint(value: string): void {
+/**
+ * One walk over a value, with `css-tree`'s own parse: the AST for everything it
+ * parses, plus the `Raw` nodes it keeps for text it cannot parse — a CSS
+ * variable's fallback arrives that way, and a resource can hide inside it.
+ */
+function visitValue(value: string, visit: (node: CssNode) => void): void {
   walk(parse(value, { context: 'value' }), (node) => {
-    if (node.type === 'Url' && !/^#[A-Za-z0-9_.:-]+$/.test(node.value ?? '')) {
-      throw new Error('the renderer emitted an external paint reference');
-    }
-    if (node.type === 'Function' && COLOUR_FUNCTIONS[node.name ?? ''] !== true) {
-      throw new Error('the renderer emitted an unsupported paint function');
-    }
-    if (node.type === 'Raw') inspectPaint(node.value ?? '');
+    visit(node);
+    if (node.type === 'Raw') visitValue(node.value ?? '', visit);
   });
+}
+
+/**
+ * An external resource anywhere in a value is refused, a paint property or not:
+ * `url(#fragment)` is the renderer's own namespace and passes, anything else is
+ * a fetch the page would make.
+ *
+ * Through an author directive this guard has no reachable cell — Pele's own
+ * filter drops every value containing `url(` — so it guards the attribute path
+ * (a future renderer's output) rather than a face cell, and the r4 sweep
+ * records that as measured, not assumed.
+ */
+function inspectResources(value: string): void {
+  visitValue(value, (node) => {
+    if (node.type === 'Url' && !/^#[A-Za-z0-9_.:-]+$/.test(node.value ?? '')) {
+      throw new Error(`the renderer emitted an external paint reference: url(${node.value ?? ''})`);
+    }
+  });
+}
+
+/**
+ * A paint property's value is a colour: the renderer's own palette functions
+ * (`var()`, `light-dark()`, `color-mix()`, the `rgb`/`hsl` families) and
+ * nothing else.
+ *
+ * Measured 2026-11-15 over the reachable spellings: every math function on
+ * `fill`/`stroke` is dropped by the declaration form while the attribute form
+ * is taken or ignored differently, so `fill:calc(4px)` and `fill:rgb(0 0 0 /
+ * 50%)` are in different classes here for a measured reason — `rgb(...)` is a
+ * colour and computes the same in both forms; `calc(...)` is not.
+ */
+function inspectColourFunctions(property: string, value: string): void {
+  visitValue(value, (node) => {
+    if (node.type === 'Function' && COLOUR_FUNCTIONS[node.name ?? ''] !== true) {
+      throw new Error(`the renderer emitted a paint value with an unsupported function: ${property}: ${value}`);
+    }
+  });
+}
+
+/** Whether the value carries a `var()`/`env()`/`attr()` reference, directly or in a fallback. */
+function hasReference(value: string): boolean {
+  let found = false;
+  visitValue(value, (node) => {
+    if (node.type === 'Function' && REFERENCE_FUNCTIONS[node.name ?? ''] === true) found = true;
+  });
+  return found;
+}
+
+/** The type of one scalar or function node, as far as {@link FUNCTION_VALUE_TYPES} reads it. */
+function componentType(node: CssNode): ValueType {
+  if (node.type === 'Number') return 'number';
+  if (node.type === 'Percentage') return 'percentage';
+  if (node.type === 'Dimension') {
+    const unit = node['unit'];
+    return typeof unit === 'string' && LENGTH_UNITS[unit.toLowerCase()] === true ? 'length' : 'other';
+  }
+  if (node.type === 'Function') return functionType(node);
+  return 'other';
+}
+
+/**
+ * One operator applied to two operand types, conservatively: a combination the
+ * CSS type rules reject — `4px + 2`, `1px * 1px`, a number divided by a length
+ * — is `other`, and `other` is sticky, so a later operator cannot rescue it.
+ */
+function combineTypes(operator: string, left: ValueType, right: ValueType): ValueType {
+  if (left === 'other' || right === 'other') return 'other';
+  if (operator === '*') {
+    if (left === 'number') return right;
+    if (right === 'number') return left;
+    return 'other';
+  }
+  if (operator === '/') {
+    if (right === 'number') return left;
+    if (left === 'number') return 'other';
+    return left === right ? 'number' : 'other';
+  }
+  return left === right ? left : 'other';
+}
+
+/**
+ * The type a function value resolves to, from the function's name and its
+ * arguments' types — the walk {@link FUNCTION_VALUE_TYPES} is consulted with.
+ *
+ * A reference never reaches this branch (the caller admits it first). A
+ * number-result function is a number unless it is handed a length — `sqrt(4)`
+ * is a number, `sqrt(4px)` is not a value at all, and both are refused on a
+ * property that expects a length. A unit-preserving function folds its operand
+ * list left to right: arguments without operators are a list (`round(1.5px,
+ * 1px)` parses as two components) and must agree.
+ */
+function functionType(node: CssNode): ValueType {
+  const name = (node.name ?? '').toLowerCase();
+  const parts = node.children?.toArray() ?? [];
+  if (NUMBER_RESULT_FUNCTIONS[name] === true) {
+    const unitful = parts.some((part) => {
+      const type = part.type === 'Operator' ? 'other' : componentType(part);
+      return type === 'length' || type === 'percentage';
+    });
+    return unitful ? 'other' : 'number';
+  }
+  if (UNIT_PRESERVING_FUNCTIONS[name] !== true) return 'other';
+  let current: ValueType | null = null;
+  let operator: string | null = null;
+  for (const part of parts) {
+    if (part.type === 'Operator') {
+      operator = (part.value ?? '').trim();
+      continue;
+    }
+    const type = componentType(part);
+    if (current === null) {
+      current = type;
+      continue;
+    }
+    current = operator === null ? (current === type ? type : 'other') : combineTypes(operator, current, type);
+    operator = null;
+    if (current === 'other') return 'other';
+  }
+  return current ?? 'other';
+}
+
+/** The type of a value's single component — a function value, as the caller has already checked. */
+function functionValueType(value: string): ValueType {
+  const children = parse(value, { context: 'value' }).children?.toArray() ?? [];
+  return children.length === 1 && children[0] !== undefined ? componentType(children[0]) : 'other';
+}
+
+/**
+ * Whether the value's single component is a function call.
+ *
+ * `calc(4px)`, `min(4px)`, `sin(45deg)` and `var(--x)` are; `4px`, `4 -2` and
+ * `Georgia` are not, and a list is not either — the tables above read scalars,
+ * and a list of scalars is the grammar path's business.
+ */
+function isFunctionValue(value: string): boolean {
+  const children = parse(value, { context: 'value' }).children?.toArray() ?? [];
+  return children.length === 1 && children[0]?.type === 'Function';
 }
 
 function sanitizeSvg(svg: string, accessibleName: string): string {
@@ -318,16 +629,58 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
           }
           continue;
         }
-        // `rx: var(--_r)` is the one declaration `diagram.css` supplies as a
-        // class: a presentation attribute cannot carry `var()`.
+        // `rx: var(--_r)` is Pele's own rounding, which `diagram.css` supplies
+        // as a class; see item 2 of this file's header for why it is a class
+        // though the attribute form would resolve the same length.
         if (property === 'rx' && value === 'var(--_r)') {
           rounded = true;
           continue;
         }
-        if (ATTRIBUTES[property] !== true || value.includes('var(')) {
+        if (ATTRIBUTES[property] !== true) {
           throw new Error(`the renderer emitted a style declaration with no safe equivalent: ${property}: ${value}`);
         }
-        inspectPaint(value);
+        inspectResources(value);
+        // `var()`/`env()`/`attr()` are references, not values: the measurement
+        // that admits them is in REFERENCE_FUNCTIONS. Admitting them before the
+        // paint guard and the tables is deliberate — the paint guard exists for
+        // *functions* whose declaration the renderer drops (measured on
+        // `fill:calc(4px)`), and a reference is not one of those; the grammar
+        // rejects every reference too, and a value the grammar rejects with no
+        // table row is refused below.
+        if (hasReference(value)) {
+          declared.set(property, value);
+          continue;
+        }
+        if (PAINT_ATTRIBUTES[property] === true) inspectColourFunctions(property, value);
+        if (GEOMETRY_PROPERTIES[property] === true && GEOMETRY_KEYWORD_VALUES[value] === true) {
+          throw new Error(`the renderer emitted a style declaration whose attribute form is the zero length, not the value it names: ${property}: ${value}`);
+        }
+        // The renderer's requirement is not the grammar's; the table above
+        // records the properties where that difference is measured. The check
+        // splits by shape, because the sign boundary does: a *scalar* negative
+        // (`-2px`, `-50%`) is dropped from the declaration for every property
+        // in NON_NEGATIVE, while a negative inside a function is kept and
+        // clamped by the declaration for the stroke and radius-less properties
+        // and taken back by the attribute only for the geometry ones —
+        // `stroke-width:calc(-4px)` computes `0px` in both forms, and
+        // `rx:calc(-4px)` computes `0px` where `rx="calc(-4px)"` computes
+        // `-4px`, measured.
+        if (NON_NEGATIVE[property] === true && hasNegativeComponent(value)
+          && (!isFunctionValue(value) || FUNCTION_NEGATIVE_TAKEN_BACK[property] === true)) {
+          throw new Error(`the renderer emitted a style declaration with a negative value for a non-negative property: ${property}: ${value}`);
+        }
+        // A math function is decided by its *value type*, not by the grammar:
+        // `css-tree` matches every function name without typing its arithmetic,
+        // while the renderer keeps a function only when its value is of the
+        // property's own type. The table is measured; see FUNCTION_VALUE_TYPES.
+        if (FUNCTION_VALUE_TYPES[property] !== undefined && isFunctionValue(value)) {
+          const type = functionValueType(value);
+          if (FUNCTION_VALUE_TYPES[property]?.[type] !== true) {
+            throw new Error(`the renderer emitted a style declaration with a function the property does not keep as a ${type}: ${property}: ${value}`);
+          }
+          declared.set(property, value);
+          continue;
+        }
         // `lexer.matchProperty` is the parser's own property grammar, the same
         // oracle `svg-css.ts` resolves colours with, and it decides the values
         // that need no further reading. Where it rejects, the decision is the
@@ -342,11 +695,6 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
           }
           declared.set(property, projection);
           continue;
-        }
-        // The grammar is sign-agnostic where the renderer is not; the table
-        // above records the properties where that difference is measured.
-        if (NON_NEGATIVE[property] === true && hasNegativeComponent(value)) {
-          throw new Error(`the renderer emitted a style declaration with a negative value for a non-negative property: ${property}: ${value}`);
         }
         declared.set(property, value);
       }
@@ -370,7 +718,10 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
       if (attribute.prefix !== '' || ATTRIBUTES[name] !== true) continue;
       // Pele's root role and accessible-name attributes are replaced by the site's caption.
       if (isRoot && ['role', 'aria-label', 'aria-labelledby'].includes(name)) continue;
-      if (PAINT_ATTRIBUTES[name] === true) inspectPaint(attribute.value);
+      if (PAINT_ATTRIBUTES[name] === true) {
+        inspectResources(attribute.value);
+        inspectColourFunctions(name, attribute.value);
+      }
       // A `style` declaration outranks a presentation attribute in CSS, so the
       // attribute it displaces is dropped rather than emitted twice.
       if (declared.has(name)) continue;
