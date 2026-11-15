@@ -451,6 +451,77 @@ test('a literal radius becomes the attribute, not the class that would outrank i
   );
 });
 
+/**
+ * The displacement rule's other half, and the half it did not hold: a
+ * declaration the property's grammar rejects is one the browser drops at parse
+ * time, so it is not a declaration at all — the attribute it was meant to
+ * outrank still applies. Projecting it *deletes* that attribute instead, because
+ * the `fill="not-a-color"` emitted in its place is dropped by the same parse:
+ * the box that paints from `var(--_s)` in the raw render loses its fill and
+ * inherits the root's paint. A rendering change with no error anywhere is
+ * exactly what the build refuses here, naming the declaration.
+ *
+ * The control is the raw render: it must carry both the declaration and the
+ * `var()` attribute it displaces, or the row would pass by having nothing to
+ * project.
+ */
+test('Pele refuses an authored declaration the property’s grammar rejects', async () => {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A fill:not-a-color';
+  const original = inspect(renderPele(source, { idPrefix: 'declared-invalid', links: false, images: false }).svg);
+  const node = original.elements.find(({ attributes }) => attributes['style']?.includes('fill:not-a-color'));
+  assert.ok(node, 'the fixture no longer emits the declaration this row refuses');
+  assert.equal(node.attributes['fill'], 'var(--_s)', 'the fixture no longer carries the attribute the declaration displaces');
+  await assert.rejects(() => renderDiagram(source, 'declared-invalid', 'Declared invalid'), (error: unknown) =>
+    error instanceof DiagramError && error.source === source && /fill: not-a-color/.test(error.message));
+});
+
+/**
+ * The second refusal at the same point, and why the grammar is not the whole
+ * oracle: these are rows of `NON_NEGATIVE`, whose values the renderer requires
+ * to be non-negative while the grammar for them is sign-agnostic. Measured in
+ * Chromium 158, `rx:-4px` is dropped from a declaration — so the raw render
+ * still rounds the box from `rx: var(--_r)` — while `rx="-4px"` is taken back as
+ * a presentation attribute, so the projection would lose the rounding *and*
+ * carry a value the declaration never had.
+ *
+ * The four probes are every table row an author directive can reach, and the
+ * control is the raw render carrying the declaration exactly as written.
+ */
+test.each(['rx:-4px', 'stroke-width:-2px', 'stroke-dasharray:-2%', 'ry:-50%'])(
+  'Pele refuses a negative value for a non-negative property: %s', async (declaration) => {
+    const { renderDiagram } = await import('../src/lib/pele-render.ts');
+    const source = `flowchart TD\n A[Reader] --> B[Site]\n style A ${declaration}`;
+    const original = inspect(renderPele(source, { idPrefix: 'negative', links: false, images: false }).svg);
+    assert.ok(
+      original.elements.some(({ attributes }) => attributes['style']?.includes(declaration)),
+      'the fixture no longer emits the negative declaration this row refuses',
+    );
+    await assert.rejects(() => renderDiagram(source, 'negative', 'Negative value'), (error: unknown) =>
+      error instanceof DiagramError && error.source === source && error.message.includes(declaration.replace(':', ': ')));
+  });
+
+/**
+ * The complement of the table, and the reason it is a table rather than a sign
+ * rule: the renderer keeps a negative for `letter-spacing` and
+ * `stroke-dashoffset` — measured in both spellings — so a negative declaration
+ * there has to become the attribute as before. Refusing it would refuse a value
+ * the browser honours. `stroke-dashoffset` reaches the shape and
+ * `letter-spacing` the label, so a missing projection on either is its own
+ * failure.
+ */
+test('Pele keeps a negative declaration where the renderer keeps the value', async () => {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A letter-spacing:-2px,stroke-dashoffset:-2';
+  const svg = await renderDiagram(source, 'negative-kept', 'Negative kept');
+  const { elements } = inspect(svg);
+  assertClean(svg);
+  const label = elements.find(({ attributes }) => attributes['letter-spacing'] !== undefined);
+  assert.equal(label?.attributes['letter-spacing'], '-2px', 'a negative the renderer keeps did not reach the label');
+  const shape = elements.find(({ attributes }) => attributes['stroke-dashoffset'] !== undefined);
+  assert.equal(shape?.attributes['stroke-dashoffset'], '-2', 'a negative the renderer keeps did not reach the shape');
+});
+
 
 const SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">';
 test.each([

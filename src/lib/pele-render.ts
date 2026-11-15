@@ -8,10 +8,18 @@
  * 1. **A `style` declaration on a non-root element** — an author's `style A
  *    font-size:40px`, or the `rx`/paint Pele derives from one. It becomes the
  *    presentation attribute of the same name, which carries the same value in
- *    the same cascade position. Where the element already has that attribute,
- *    the declaration wins and the attribute is replaced: a `style` attribute
- *    outranks a presentation attribute in CSS, so that is the rendering Pele
- *    produced, not a preference.
+ *    the same cascade position — for a value the renderer's parser keeps, and
+ *    only for one. A declaration the browser drops at parse time is not a
+ *    declaration, so projecting it would not replace the attribute it displaces
+ *    but delete it: the emitted attribute carries the same rejected value and is
+ *    dropped too, while the raw render still has the attribute the declaration
+ *    never won. Two checks stand in for the browser where the declaration is
+ *    projected — the parser's own grammar for the property, and
+ *    {@link NON_NEGATIVE} for the properties whose grammar is sign-agnostic —
+ *    and both refuse rather than guess. Where the element already has that
+ *    attribute, the declaration wins and the attribute is replaced: a `style`
+ *    attribute outranks a presentation attribute in CSS, so that is the
+ *    rendering Pele produced, not a preference.
  * 2. **`rx: var(--_r)`** — the one declaration a presentation attribute cannot
  *    take, because `var()` does not resolve there. It stays a class, with the
  *    value supplied by `.diagram svg.pele .pele-rounded` in `diagram.css`.
@@ -22,7 +30,7 @@
  *    added upstream stops the build instead of disappearing.
  */
 
-import { parse, walk } from 'css-tree';
+import { lexer, parse, walk } from 'css-tree';
 import { render } from 'pele';
 import { SaxesParser } from 'saxes';
 import { DiagramError } from './diagram-mode.ts';
@@ -59,6 +67,31 @@ const PAINT_ATTRIBUTES: Readonly<Record<string, true>> = {
 };
 const COLOUR_FUNCTIONS: Readonly<Record<string, true>> = {
   var: true, 'light-dark': true, 'color-mix': true, rgb: true, rgba: true, hsl: true, hsla: true,
+};
+
+/**
+ * The properties whose declared values the renderer requires to be non-negative
+ * while the parser's grammar for them is sign-agnostic: measured in Chromium
+ * 158, a negative is dropped from a *declaration* for every one of these
+ * (`stroke-width:-2`, `stroke-dasharray:4 -2`, `rx:-2%`, `ry:-50%`, `r:-4px`)
+ * and admitted by the grammar — the one direction the grammar alone cannot
+ * close, and a silent rendering change by the road item 1 of this file's header
+ * describes. `rx` and `ry` are the worst of the five: the renderer takes the
+ * same negative back as a *presentation attribute*, so the projection would not
+ * even preserve the drop.
+ *
+ * The properties that are absent are measured too, and for two different
+ * reasons: the grammar already carries the constraint for `width`, `height` and
+ * `font-size`, so their negatives never reach this table; and the renderer keeps
+ * a negative for `x`, `y`, `cx`, `cy`, `stroke-dashoffset`, `letter-spacing`,
+ * `word-spacing` and the opacity family, so refusing one there would be a
+ * refusal of a value the browser honours. `r` has no producer here yet — Pele
+ * filters it out of an author's `style` and `classDef` — and it is a row
+ * anyway, because a row is a fact about the renderer's parser rather than about
+ * what Pele currently forwards.
+ */
+const NON_NEGATIVE: Readonly<Record<string, true>> = {
+  'stroke-width': true, 'stroke-dasharray': true, rx: true, ry: true, r: true,
 };
 const XML_ENTITIES: Readonly<Record<string, string>> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;',
@@ -133,6 +166,21 @@ function escapeXml(value: string): string {
   return value.replace(/[&<>"\t\n\r]/g, (character) => XML_ENTITIES[character]!);
 }
 
+/**
+ * Whether any numeric component of the value is negative — `-2`, `-2px`, `-2%`
+ * and a later component of a list (`4 -2`) all count; `-0` does not, which is
+ * what the renderer does with it too (measured: `stroke-width:-0px` computes to
+ * `0px`, declaration and attribute alike).
+ */
+function hasNegativeComponent(value: string): boolean {
+  let negative = false;
+  walk(parse(value, { context: 'value' }), (node) => {
+    if (node.type !== 'Number' && node.type !== 'Dimension' && node.type !== 'Percentage') return;
+    if (typeof node.value === 'string' && Number.parseFloat(node.value) < 0) negative = true;
+  });
+  return negative;
+}
+
 /** CSS variables can hide a resource in a fallback; css-tree keeps that fallback as Raw. */
 function inspectPaint(value: string): void {
   walk(parse(value, { context: 'value' }), (node) => {
@@ -188,6 +236,19 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
           throw new Error(`the renderer emitted a style declaration with no safe equivalent: ${property}: ${value}`);
         }
         inspectPaint(value);
+        // `lexer.matchProperty` is the parser's own property grammar, the same
+        // oracle `svg-css.ts` resolves colours with. Its verdict is the loud
+        // side of its accuracy: it refuses a unitless user unit Chromium keeps
+        // (`rx:4`, which this grammar reads as neither a length nor a
+        // percentage) along with the values both sides drop.
+        if (lexer.matchProperty(property, value).matched === null) {
+          throw new Error(`the renderer emitted a style declaration the property's grammar rejects: ${property}: ${value}`);
+        }
+        // The grammar is sign-agnostic where the renderer is not; the table
+        // above records the five properties where that difference is measured.
+        if (NON_NEGATIVE[property] === true && hasNegativeComponent(value)) {
+          throw new Error(`the renderer emitted a style declaration with a negative value for a non-negative property: ${property}: ${value}`);
+        }
         declared.set(property, value);
       }
     }
