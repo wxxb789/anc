@@ -225,18 +225,20 @@ function corpusDiagrams(): { path: string; source: string }[] {
 
 /**
  * Every source the census rows below read: the 23-type matrix, the three real
- * corpus diagrams, the probes that make an authored declaration or a critical
- * task observable, and the state/block function-face probes r4 added.
+ * corpus diagrams, and the probes that make an authored paint or a critical
+ * task observable.
+ *
+ * The two authored-paint probes are load-bearing, not decorative:
+ * `AUTHORED_PAINT` is the only source here that produces `--_w`, which the
+ * root row's 22-member equality needs, and the only one behind the
+ * `--pele-bold-weight` and `--pele-fg-on-light` observations `FALLBACK_ONLY`
+ * records; the `fill:#111111` probe is the only producer of `--pele-fg-on-dark`.
  */
 function censusSources(): string[] {
   return [
     ...Object.values(DIAGRAMS), ...corpusDiagrams().map(({ source }) => source),
-    AUTHORED_SIZE, AUTHORED_PAINT, CRIT_GANTT,
+    AUTHORED_PAINT, CRIT_GANTT,
     'flowchart TD\n A[Reader] --> B[Site]\n style A fill:#111111',
-    'flowchart TD\n A[Reader] --> B[Site]\n style A rx:8px',
-    stateFaceSource('stroke-width', 'calc(4px)'),
-    stateFaceSource('fill', 'var(--pele-accent)'),
-    blockFaceSource('rx', 'calc(4px)'),
   ];
 }
 
@@ -686,16 +688,9 @@ test('Pele treats hostile label text and accessible names as text, not markup', 
  *
  * `style-src 'self'` is the policy the build-time row ships, so anything
  * measuring that row's cascade has to measure it under that policy — see the
- * token row below for what it blocks. `policy: null` serves the same document
- * with no policy at all, which is the only way to measure the *raw* render
- * beside the adapter: the raw render carries its presentation in `style=`
- * attributes and this policy blocks exactly those, so a policy-bearing page
- * would measure the blocked declaration rather than the rendering the adapter
- * has to reproduce. The adapter's own output never carries `style=`
- * (`assertClean` gates that), so nothing that the policy could block reaches
- * its elements, and the two blocks below are measured under one cascade.
+ * token row below for what it blocks.
  */
-async function openDiagramPage(markup: string, options: { policy?: string | null } = {}) {
+async function openDiagramPage(markup: string) {
   const { chromium } = await import('playwright');
   const styles: Readonly<Record<string, string>> = {
     '/tokens.css': readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8'),
@@ -706,10 +701,10 @@ async function openDiagramPage(markup: string, options: { policy?: string | null
   await page.route('https://diagram.test/**', async (route) => {
     const { pathname } = new URL(route.request().url());
     if (pathname === '/') {
-      const policy = options.policy === undefined ? "default-src 'none'; style-src 'self'" : options.policy;
+      const policy = "default-src 'none'; style-src 'self'";
       await route.fulfill({
         contentType: 'text/html',
-        headers: policy === null ? {} : { 'content-security-policy': policy },
+        headers: { 'content-security-policy': policy },
         body: '<!doctype html><html><head><link rel="stylesheet" href="/tokens.css">' +
           `<link rel="stylesheet" href="/diagram.css"></head><body>${markup}</body></html>`,
       });
@@ -863,10 +858,10 @@ test('a critical-path Gantt task paints with the site token, not Pele’s own re
  * The dispatcher exists to load *only* the selected adapter (P1 design §5.1).
  * The factories registered in the loop below are what count a request.
  *
- * Last in the file because `vi.resetModules()` invalidates the module instances
- * every row above holds: `DiagramError` is compared by `instanceof`, and after a
- * reset those rows would compare a fresh class against the binding this file
- * imported before it.
+ * Placed after every row that compares a module instance against a held
+ * binding, because `vi.resetModules()` invalidates the module instances those
+ * rows hold: `DiagramError` is compared by `instanceof`, and after a reset they
+ * would compare a fresh class against the binding this file imported before it.
  *
  * The source is valid on purpose: this row counts *requests*, and it is about the
  * success path. The failure path is gated where it can be observed — a fresh

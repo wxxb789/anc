@@ -12,11 +12,13 @@
  *
  * `--adapter <repo-relative path>` renders through that module instead of the
  * dispatcher, so a gate can compare the seam against the adapter it dispatches
- * to. `--hash` prints the SHA-256 of the result instead of the result. `--resolves`
- * installs a resolve-recording loader hook and prints every specifier the run
- * requested, to stderr, as `resolves: [...]`; a failing render is reported, not
- * thrown, in that mode, because the module graph of the failure path is what the
- * caller is asking about.
+ * to. `--hash` prints the SHA-256 of the result instead of the result.
+ * `--resolves` installs a resolve-recording loader hook whose module appends
+ * every specifier the run requested, one bare line each, to the file named by
+ * `DIAGRAM_RESOLVE_LOG` — the caller reads that file, and the only stderr write
+ * is `render error: …`; a failing render is reported, not thrown, in that mode,
+ * because the module graph of the failure path is what the caller is asking
+ * about.
  *
  * It lives in `tests/support/` rather than `scripts/` because it is a test
  * fixture, not a harness command: `scripts/` holds the five build steps

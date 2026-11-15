@@ -118,8 +118,9 @@ const XML_ENTITIES: Readonly<Record<string, string>> = {
  * `style` attribute with the same `css-tree` reader this file uses — so the
  * measurement and the gate cannot disagree about a value's spelling.
  *
- * The block is not one constant string. Read from Pele's own bundle, the last
- * four members are appended only when the rendered markup consumes them: Pele
+ * The block is not one constant string. Read from Pele's own bundle, four
+ * members — `--_r`, `--_tw`, `--_hw` and `--_w` — are appended only when the
+ * rendered markup consumes them: Pele
  * matches `/var\(--_(r|tw|hw|w)\)/` over the body before it writes the root
  * block, so a source that rounds a corner carries `--_r`, one with a title or a
  * heading carries `--_tw`/`--_hw`, and one with a bold run carries `--_w`.
