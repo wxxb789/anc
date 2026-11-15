@@ -95,6 +95,7 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
         continue;
       }
       if (attribute.prefix !== '' || ATTRIBUTES[name] !== true) continue;
+      // Pele's root role and accessible-name attributes are replaced by the site's caption.
       if (isRoot && ['role', 'aria-label', 'aria-labelledby'].includes(name)) continue;
       if (PAINT_ATTRIBUTES[name] === true) inspectPaint(attribute.value);
       const value = name === 'class' && rounded ? `${attribute.value} pele-rounded` : attribute.value;

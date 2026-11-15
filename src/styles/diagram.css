@@ -14,6 +14,10 @@
  * 86% of its rules (1,279 of 1,495) match no element in any rendered diagram,
  * because Mermaid emits the union of every shape it could draw.
  *
+ * Mermaid's colour is likewise absent here. Each diagram carries its own
+ * `light-dark(light, dark)` values, paired at build time from two renders, so
+ * one SVG follows the system preference and the site's own theme toggle with no
+ * second file and no script.
  */
 
 .diagram {

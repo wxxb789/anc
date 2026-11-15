@@ -1970,9 +1970,11 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
           request.sourceOnly === true
             ? `<pre class="diagram-source" tabindex="0"><code class="language-${MERMAID_LANGUAGE}">${escapeHtml(request.source)}</code></pre>` +
               `<figcaption>${escapeHtml(request.caption ?? '')}</figcaption>`
-            : // Imported only on this branch: `mermaid-render.ts` loads a DOM
-              // shim that costs about a second, and `client` mode — the one that
-              // ships — never reaches here, so it never pays for it.
+            : // Imported only on this branch: `diagram-engine.ts` picks one
+              // adapter from `DIAGRAM_ENGINE` and loads only that one, and the
+              // only adapter that loads a DOM shim is `mermaid-render.ts` —
+              // reached when the constant selects it. `client` mode, the one
+              // that ships, never reaches here, so it never pays for it.
               await (await import('./diagram-engine.ts')).renderDiagram(
                 request.source,
                 `diagram-${index}`,

@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
 import { SaxesParser } from 'saxes';
 import { afterEach, test, vi } from 'vitest';
 import type * as DiagramConfiguration from '../src/lib/diagram-mode.ts';
+import type * as MermaidAdapter from '../src/lib/mermaid-render.ts';
+import type * as PeleAdapter from '../src/lib/pele-render.ts';
 import type * as Pele from 'pele';
 
 const selection = vi.hoisted(() => ({ engine: 'mermaid' as unknown }));
@@ -144,11 +145,14 @@ test('Pele namespaces gradients and accessible titles without render-order state
 
   const titled = inspect(await renderDiagram('flowchart TD\n accTitle: Authored title\n A --> B', 'titled', 'Caption name'));
   assert.equal(titled.root['aria-label'], 'Caption name');
-  assert.equal(titled.root['aria-labelledby'], undefined, 'an authored title overrides the requested accessible name');
+  assert.equal(titled.root['aria-labelledby'], undefined, 'the requested accessible name replaces pele’s authored-title reference');
   assert.match(titled.text, /Authored title/);
 });
 
 test('Pele is byte-deterministic across fresh Node processes', () => {
+  // The child script is inlined rather than taken from `tests/support/render-diagram.ts`
+  // because a fresh child cannot see this file's `vi.mock` of `diagram-mode.ts` and there
+  // is no runtime override, so the harness would render the configured `mermaid` engine.
   const adapter = new URL('../src/lib/pele-render.ts', import.meta.url).href;
   const source = DIAGRAMS['sankey']!;
   const script = `import { createHash } from 'node:crypto';
@@ -205,6 +209,46 @@ test('Pele treats hostile label text and accessible names as text, not markup', 
   assert.match(inspect(svg).text, /Reader/);
 });
 
+/**
+ * Serve one rendered document under the site's own stylesheets and the
+ * build-time CSP, and hand back the live page.
+ *
+ * `playwright` is imported here rather than at the top of the file: every other
+ * row is a build-time assertion, and a static import turns an absent browser
+ * package into a collection error for all of them instead of a named failure
+ * for the two rows that need a browser.
+ *
+ * `style-src 'self'` is the policy the build-time row ships, so anything
+ * measuring that row's cascade has to measure it under that policy — see the
+ * token row below for what it blocks.
+ */
+async function openDiagramPage(markup: string) {
+  const { chromium } = await import('playwright');
+  const styles: Readonly<Record<string, string>> = {
+    '/tokens.css': readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8'),
+    '/diagram.css': readFileSync(new URL('../src/styles/diagram.css', import.meta.url), 'utf8'),
+  };
+  const browser = await chromium.launch();
+  const page = await browser.newPage();
+  await page.route('https://diagram.test/**', async (route) => {
+    const { pathname } = new URL(route.request().url());
+    if (pathname === '/') {
+      await route.fulfill({
+        contentType: 'text/html',
+        headers: { 'content-security-policy': "default-src 'none'; style-src 'self'" },
+        body: '<!doctype html><html><head><link rel="stylesheet" href="/tokens.css">' +
+          `<link rel="stylesheet" href="/diagram.css"></head><body>${markup}</body></html>`,
+      });
+      return;
+    }
+    const css = styles[pathname];
+    if (css !== undefined) await route.fulfill({ contentType: 'text/css', body: css });
+    else await route.abort();
+  });
+  await page.goto('https://diagram.test/');
+  return { browser, page };
+}
+
 test('Pele preserves subscript, superscript and bold labels under external CSS', async () => {
   selection.engine = 'pele';
   const { html } = await renderMarkdown(
@@ -213,29 +257,8 @@ test('Pele preserves subscript, superscript and bold labels under external CSS',
   const svg = html.match(/<svg\b[\s\S]*?<\/svg>/)?.[0];
   assert.ok(svg);
   assertClean(svg);
-  const styles: Readonly<Record<string, string>> = {
-    '/tokens.css': readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8'),
-    '/diagram.css': readFileSync(new URL('../src/styles/diagram.css', import.meta.url), 'utf8'),
-  };
-  const browser = await chromium.launch();
+  const { browser, page } = await openDiagramPage(html);
   try {
-    const page = await browser.newPage();
-    await page.route('https://diagram.test/**', async (route) => {
-      const { pathname } = new URL(route.request().url());
-      if (pathname === '/') {
-        await route.fulfill({
-          contentType: 'text/html',
-          headers: { 'content-security-policy': "default-src 'none'; style-src 'self'" },
-          body: '<!doctype html><html><head><link rel="stylesheet" href="/tokens.css">' +
-            `<link rel="stylesheet" href="/diagram.css"></head><body>${html}</body></html>`,
-        });
-        return;
-      }
-      const css = styles[pathname];
-      if (css !== undefined) await route.fulfill({ contentType: 'text/css', body: css });
-      else await route.abort();
-    });
-    await page.goto('https://diagram.test/');
     const formatting = await page.locator('svg tspan').evaluateAll((spans) => spans.map((span) => {
       const style = getComputedStyle(span);
       const parentStyle = getComputedStyle(span.parentElement!);
@@ -257,5 +280,115 @@ test('Pele preserves subscript, superscript and bold labels under external CSS',
     }
   } finally {
     await browser.close();
+  }
+});
+
+/**
+ * The Pele row of `diagram-mode.ts`'s table names `diagram.css`'s variable block
+ * as the whole of its presentation, and no committed gate observed it: deleting
+ * `--_tw`, `--_fm`, the `--_s` mapping or `.pele-rounded` left the suite green.
+ *
+ * Each assertion is an ablation, not a snapshot of a value: drop the alias and
+ * the property falls back to what it would otherwise inherit — `400`, `auto`,
+ * the sans stack — which is what these rows compare against. `--_hw` stays
+ * unobserved: the `journey`, `class`, `c4`, `requirement` and `treemap`
+ * fixtures below render elements that consume it, but no row reads it.
+ */
+test('diagram.css resolves Pele’s title weight, rounding, paint and mono label', async () => {
+  selection.engine = 'pele';
+  const { html } = await renderMarkdown(
+    '```mermaid\n' + DIAGRAMS['gantt']! + '\n```\n\n' +
+    '```mermaid\nflowchart TD\n A["run <code>pnpm build</code> now"] --> B[Site]\n```\n',
+  );
+  const { browser, page } = await openDiagramPage(html);
+  try {
+    const measured = await page.evaluate(() => {
+      const svg = document.querySelector('svg.pele');
+      const title = document.querySelector('svg.pele .pele-title');
+      const rounded = document.querySelector('svg.pele rect.pele-rounded');
+      const node = [...document.querySelectorAll('svg.pele rect')].find((rect) => rect.getAttribute('fill') === 'var(--_s)');
+      const code = document.querySelector('svg.pele tspan[font-family]');
+      const label = document.querySelector('svg.pele text.pele-label');
+      if (svg === null || title === null || rounded === null || node === undefined || code === null || label === null) {
+        throw new Error('the fixture no longer renders the elements this row measures');
+      }
+      // `setAttribute('style', …)` is blocked by this document's `style-src
+      // 'self'`: Chromium logs the violation and the declaration never lands, so
+      // a probe built that way silently measures the inherited value instead of
+      // the token. `style.setProperty` is not blocked, which is why it is used.
+      const resolve = (property: string, value: string): string => {
+        const probe = document.createElement('span');
+        probe.style.setProperty(property, value);
+        document.body.append(probe);
+        const computed = getComputedStyle(probe).getPropertyValue(property);
+        probe.remove();
+        return computed;
+      };
+      const rxProbe = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      rxProbe.style.setProperty('rx', 'var(--_r)');
+      svg.append(rxProbe);
+      const resolvedRx = getComputedStyle(rxProbe).rx;
+      rxProbe.remove();
+      return {
+        titleWeight: getComputedStyle(title).fontWeight,
+        labelWeight: getComputedStyle(label).fontWeight,
+        roundedRx: getComputedStyle(rounded).rx,
+        resolvedRx,
+        nodeFill: getComputedStyle(node).fill,
+        surface: resolve('color', 'var(--color-surface)'),
+        codeFont: getComputedStyle(code).fontFamily,
+        mono: resolve('font-family', 'var(--font-mono)'),
+        rootFont: getComputedStyle(svg).fontFamily,
+        sans: resolve('font-family', 'var(--font-sans)'),
+      };
+    });
+    assert.equal(measured.titleWeight, '700', 'the title weight token no longer resolves to bold');
+    assert.equal(measured.labelWeight, '400', 'a plain label is bold, so the title row proves nothing');
+    assert.match(measured.roundedRx, /^\d+(?:\.\d+)?px$/, 'the rounded-corner rule no longer reaches the rect');
+    assert.equal(measured.roundedRx, measured.resolvedRx, 'the corner radius is not the length var(--_r) resolves to');
+    assert.equal(measured.nodeFill, measured.surface, 'a node’s fill no longer resolves to --color-surface');
+    assert.equal(measured.rootFont, measured.sans, 'the diagram root no longer uses --pele-font');
+    assert.equal(measured.codeFont, measured.mono, 'the code label run no longer consumes --_fm');
+  } finally {
+    await browser.close();
+  }
+});
+
+/**
+ * The dispatcher exists to load *only* the selected adapter (P1 design §5.1).
+ * The factories registered in the loop below are what count a request.
+ *
+ * Last in the file because `vi.resetModules()` invalidates the module instances
+ * every row above holds: `DiagramError` is compared by `instanceof`, and after a
+ * reset those rows would compare a fresh class against the binding this file
+ * imported before it.
+ *
+ * The source is valid on purpose: `pele-render.ts` imports `mermaid-render.ts`
+ * on its *failure* path, so a malformed fixture would request both adapters
+ * legitimately and the assertion below would be false.
+ */
+test('selecting an engine requests only that engine’s adapter', async () => {
+  const requested: string[] = [];
+  for (const engine of ['mermaid', 'pele']) {
+    vi.resetModules();
+    // Re-registered per phase on purpose. A mocked module is instantiated once
+    // and kept for the rest of the file — measured: `vi.resetModules()` alone
+    // does not drop it, so a second phase would reuse the first phase's instance
+    // and count nothing, which is a green that means only that the factory had
+    // already run. `vi.doMock` re-registration does drop it, so each phase below
+    // counts a fresh set of requests.
+    vi.doMock('../src/lib/mermaid-render.ts', async (importOriginal) => {
+      requested.push('mermaid-render.ts');
+      return { ...(await importOriginal<typeof MermaidAdapter>()) };
+    });
+    vi.doMock('../src/lib/pele-render.ts', async (importOriginal) => {
+      requested.push('pele-render.ts');
+      return { ...(await importOriginal<typeof PeleAdapter>()) };
+    });
+    requested.length = 0;
+    selection.engine = engine;
+    const { renderDiagram } = await import('../src/lib/diagram-engine.ts');
+    assert.match(await renderDiagram(DIAGRAMS['flowchart']!, `lazy-${engine}`, 'Lazy diagram'), /^<svg\b/);
+    assert.deepEqual(requested, [`${engine}-render.ts`], `${engine}: the unselected adapter was requested`);
   }
 });
