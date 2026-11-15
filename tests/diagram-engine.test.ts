@@ -768,6 +768,34 @@ const FUNCTION_FACE: ReadonlyArray<readonly [graph: 'state' | 'block', property:
   ['block', 'stroke-width', 'calc(4px)', '4px'],
   ['block', 'rx', 'calc(4px)', '4px'],
   ['block', 'fill', 'var(--pele-accent)', 'rgb(31, 111, 60)'],
+  // The r5 face, measured 2026-11-15 in the same page (r5-sweep.tsv), one row
+  // per judgement the token-order fold and the case-sensitive name tables got
+  // wrong. The sign rows are the F1 family: a result that *is* non-negative
+  // (`abs(-2px)` is `2px`; `calc(100% - 50%)` is `50%`) projects, a negative
+  // *number* result is taken back by neither form (`calc(4 - 8)` computes
+  // `calc(-4px)` in both) while a negative length is refused below, and an
+  // expression whose sign cannot be decided is refused on a geometry property
+  // and projected on a stroke one (`1em - 2px` is `14px` in both forms here).
+  // The arithmetic rows are F3 — precedence and parentheses — and the name rows
+  // are F4, including the measured radian reading of a number argument.
+  ['state', 'stroke-width', 'calc(4px + 2 * 2px)', '8px'],
+  ['state', 'stroke-width', 'calc((4px))', '4px'],
+  ['state', 'rx', 'calc(4px + 2 * 2px)', '8px'],
+  ['state', 'rx', 'calc((4px))', '4px'],
+  ['block', 'rx', 'calc(4px + 2 * 2px)', '8px'],
+  ['state', 'rx', 'calc(100% - 50%)', '50%'],
+  ['state', 'rx', 'calc(4 - 8)', 'calc(-4px)'],
+  ['state', 'rx', 'abs(-2px)', '2px'],
+  ['state', 'rx', 'sign(2px)', 'calc(1px)'],
+  ['state', 'rx', 'calc(1em + 2px)', '18px'],
+  ['state', 'stroke-width', 'calc(1em - 2px)', '14px'],
+  ['state', 'rx', 'SIN(200)', 'calc(-0.873297px)'],
+  ['state', 'fill', 'hwb(120 0% 0%)', 'rgb(0, 255, 0)'],
+  ['state', 'fill', 'RGB(0 255 0)', 'rgb(0, 255, 0)'],
+  ['state', 'stroke', 'HWB(120 0% 0%)', 'rgb(0, 255, 0)'],
+  ['state', 'fill', 'lab(50% 40 59.5)', 'lab(50 40 59.5)'],
+  ['state', 'fill', 'rgb(from red r g b)', 'color(srgb 1 0 0)'],
+  ['state', 'fill', 'VAR(--pele-accent)', 'rgb(31, 111, 60)'],
 ];
 
 test.each(FUNCTION_FACE)(
@@ -913,6 +941,27 @@ const REFUSED_FACE: ReadonlyArray<{
   { graph: 'state', property: 'stroke-linejoin', value: 'calc(4px)', element: 'rect', declaration: 'dropped', displaced: 'round', displacedReading: 'round', projectedReading: 'miter' },
   { graph: 'state', property: 'font-weight', value: 'calc(4px)', element: 'text', declaration: 'dropped', displaced: '600', displacedReading: '600', projectedReading: '400' },
   { graph: 'state', property: 'text-decoration', value: 'calc(4)', element: 'text', declaration: 'dropped', displaced: 'underline', displacedReading: 'underline', projectedReading: 'calc(4px)' },
+  // The r5 refusals, measured in the r5 sweep. F1 is the result-based sign:
+  // `calc(0px - 4px)` resolves to `-4px` exactly as `calc(-4px)` does — the
+  // declaration clamps it to zero and the attribute form takes it back — and
+  // `calc(1em - 100px)` is the same divergence reached through `em`, whose sign
+  // the build cannot decide at all. F2 is a keyword's case: `INITIAL` is
+  // `initial`. The rest are the other half of the r5 name work: an angle result
+  // the renderer drops (`asin(0.5)`), a colour function name the renderer does
+  // not keep (`device-cmyk()`), a malformed colour function that passes the
+  // *name* guard and is refused by the grammar (`rgb()`), and `calc(4px + 2)`,
+  // whose type is not a length under any precedence.
+  { graph: 'state', property: 'rx', value: 'calc(0px - 4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
+  { graph: 'state', property: 'ry', value: 'calc(0px - 4px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-4px' },
+  { graph: 'state', property: 'rx', value: 'calc(50% - 100%)', element: 'rect', declaration: 'kept', cleanReading: '0%', displaced: '9px', displacedReading: '0%', projectedReading: '-50%' },
+  { graph: 'state', property: 'rx', value: 'calc(1em - 100px)', element: 'rect', declaration: 'kept', cleanReading: '0px', displaced: '9px', displacedReading: '0px', projectedReading: '-84px' },
+  { graph: 'state', property: 'rx', value: 'INITIAL', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'Inherit', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'ry', value: 'INITIAL', element: 'rect', declaration: 'kept', cleanReading: 'auto', displaced: '9px', displacedReading: 'auto', projectedReading: '0px' },
+  { graph: 'state', property: 'rx', value: 'asin(0.5)', element: 'rect', declaration: 'dropped', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
+  { graph: 'state', property: 'stroke-width', value: 'calc(4px + 2)', element: 'rect', declaration: 'dropped', displaced: '3px', displacedReading: '3px', projectedReading: '1px' },
+  { graph: 'state', property: 'fill', value: 'device-cmyk(0 0 0 1)', element: 'rect', declaration: 'dropped', displaced: '#ff0000', displacedReading: 'rgb(255, 0, 0)', projectedReading: 'rgb(0, 0, 0)' },
+  { graph: 'state', property: 'fill', value: 'rgb()', element: 'rect', declaration: 'dropped', displaced: '#ff0000', displacedReading: 'rgb(255, 0, 0)', projectedReading: 'rgb(0, 0, 0)' },
 ];
 
 test.each(REFUSED_FACE)(

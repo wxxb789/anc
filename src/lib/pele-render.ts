@@ -16,10 +16,16 @@
  *    declaration never won. The verdict is therefore measured rather than
  *    grammatical: the parser's grammar decides the values that need no further
  *    reading, {@link NON_NEGATIVE}, {@link RENDERER_KEPT_NUMBER},
- *    {@link RENDERER_KEPT_PERCENTAGE} and {@link FUNCTION_VALUE_TYPES} record
- *    the cells where a measurement showed the grammar's verdict is not the
- *    renderer's, and a value outside them is refused loudly rather than
- *    guessed. Where the element already has that attribute, the declaration
+ *    {@link RENDERER_KEPT_PERCENTAGE}, {@link RENDERER_KEPT_RELATIVE_COLOUR}
+ *    and {@link FUNCTION_VALUE_TYPES} record the cells where a measurement
+ *    showed the grammar's verdict is not the renderer's, and a value outside
+ *    them is refused loudly rather than guessed. A function value is read the
+ *    way the renderer reads it — one expression walk with CSS's precedence,
+ *    parentheses, ASCII-case names and the *sign of the result* (r5, measured:
+ *    `calc(0px - 4px)` is a negative length and diverges, `calc(4px + 2 * 2px)`
+ *    is a length that does not, `calc(4px + 2)` is not a value at all) —
+ *    rather than as a fold over tokens in the order they parse. Where the
+ *    element already has that attribute, the declaration
  *    wins and the attribute is replaced: a `style` attribute outranks a
  *    presentation attribute in CSS, so that is the rendering Pele produced, not
  *    a preference.
@@ -93,8 +99,34 @@ const PAINT_ATTRIBUTES: Readonly<Record<string, true>> = {
   fill: true, stroke: true, 'stop-color': true, 'clip-path': true,
   'marker-start': true, 'marker-mid': true, 'marker-end': true,
 };
+/**
+ * The colour functions a paint property's declaration keeps — the renderer's
+ * own palette, measured, rather than the CSS Color function list copied out.
+ *
+ * Completed per CSS Color 4/5 and measured 2026-11-15 in Chromium 158 with the
+ * r5 sweep (`fill` and `stroke`, the declaration form against the attribute
+ * form): `hwb(120 0% 0%)`, `hwb(120 0% 0% / 50%)`, `RGB(0 255 0)`,
+ * `lab(50% 40 59.5)`, `LCH(52.2% 72.2 50)`, `oklab(0.59 0.11 0.1)`,
+ * `oklch(0.63 0.2 30)`, `color(srgb 0 0 0)` and `color(display-p3 1 0 0)` are
+ * every one kept by the declaration and compute the same in both forms. The
+ * names are compared in ASCII case, measured the same way: `HWB(...)`,
+ * `RGB(...)`, `COLOR(...)` and `VAR(...)` compute what their lowercase
+ * spellings do, and before the r5 fix the mixed-case spellings were refused
+ * while the lowercase ones were projected.
+ *
+ * Two exclusions are measured rather than assumed. `device-cmyk()` is in the
+ * CSS Color 5 list and `css-tree`'s own grammar accepts it, while the renderer
+ * drops the declaration *and* the projected attribute — with the element's own
+ * `fill` displaced, that deletes a paint that was rendering (measured
+ * DIVERGENT in the r5 sweep), so the name is deliberately absent. The relative
+ * colour syntax (`rgb(from red r g b)`) is the other direction: the renderer
+ * keeps it while `css-tree`'s grammar does not parse it, and it is admitted by
+ * the measured row {@link RENDERER_KEPT_RELATIVE_COLOUR} instead.
+ */
 const COLOUR_FUNCTIONS: Readonly<Record<string, true>> = {
-  var: true, 'light-dark': true, 'color-mix': true, rgb: true, rgba: true, hsl: true, hsla: true,
+  var: true, 'light-dark': true, 'color-mix': true,
+  rgb: true, rgba: true, hsl: true, hsla: true, hwb: true,
+  lab: true, lch: true, oklab: true, oklch: true, color: true,
 };
 
 /**
@@ -107,6 +139,12 @@ const COLOUR_FUNCTIONS: Readonly<Record<string, true>> = {
  * describes. `rx` and `ry` are the worst of the five: the renderer takes the
  * same negative back as a *presentation attribute*, so the projection would not
  * even preserve the drop.
+ *
+ * The gate below reads the value's *components* — each scalar's own sign, a
+ * list component by component, which is what the renderer parses (a list is not
+ * an expression) — and a value that is one function is a different rule
+ * ({@link FUNCTION_NEGATIVE_TAKEN_BACK}): its sign is the *result's*, which is
+ * the r5 finding `rx:calc(0px - 4px)` is.
  *
  * The properties that are absent are measured too, and for two different
  * reasons: the grammar already carries the constraint for `width`, `height` and
@@ -185,6 +223,22 @@ const RENDERER_KEPT_NUMBER: Readonly<Record<string, 'any' | 'positive'>> = {
 const RENDERER_KEPT_PERCENTAGE: Readonly<Record<string, true>> = { 'word-spacing': true };
 
 /**
+ * The one paint spelling `css-tree`'s own colour grammar rejects while the
+ * renderer keeps it: the relative-colour syntax, `rgb(from red r g b)`.
+ *
+ * Measured 2026-11-15 in Chromium 158 in the r5 sweep: the declaration is kept
+ * (`specified` is `rgb(from red r g b)`) and the declaration and the attribute
+ * form both compute `color(srgb 1 0 0)`. `css-tree` 3.2.1's `fill` grammar
+ * rejects the value — its colour syntax predates the relative form — which is
+ * why the projection is a measured row beside {@link RENDERER_KEPT_NUMBER}
+ * rather than a grammar decision. The row is per function name: `rgb` is the
+ * spelling that was measured, and the other functions' relative forms are
+ * unmeasured and stay with the grammar path, which refuses them loudly — the
+ * direction an unmeasured spelling takes everywhere in this file.
+ */
+const RENDERER_KEPT_RELATIVE_COLOUR: Readonly<Record<string, true>> = { rgb: true };
+
+/**
  * The units a `<length>` may carry, so a `Dimension` in a function's argument
  * list can be told from an angle, a time or a frequency.
  */
@@ -195,23 +249,76 @@ const LENGTH_UNITS: Readonly<Record<string, true>> = {
 };
 
 /**
- * The math functions whose result is a `<number>` — a measurement of the type
- * boundary `FUNCTION_VALUE_TYPES` reads, not a second copy of the CSS grammar.
+ * The units an `<angle>` may carry, as the radians one of each is — the
+ * conversion the trigonometric functions do, and a measured one: `sin(45deg)`
+ * computes `calc(0.707107px)` in both forms, and `Math.sin(Math.PI / 4)` is
+ * that number. A *number* argument is radians, also measured: `sin(200)`
+ * computes `calc(-0.873297px)` in both forms, which is `Math.sin(200)` to the
+ * digit — not `sin(200deg)`, whose sign is negative.
+ */
+const ANGLE_UNITS: Readonly<Record<string, number>> = {
+  deg: Math.PI / 180, grad: Math.PI / 200, rad: 1, turn: Math.PI * 2,
+};
+
+/**
+ * The trigonometric functions, the ones whose argument may be an angle as well
+ * as a number — measured in both spellings: `sin(45deg)` and `sin(200)` are
+ * both kept by the declaration where the property takes a number and both
+ * compute what {@link NUMBER_RESULT_FUNCTIONS} computes for them.
+ */
+const TRIG_FUNCTIONS: Readonly<Record<string, true>> = { sin: true, cos: true, tan: true };
+
+/**
+ * The math functions whose result is a `<number>`, each with the number the
+ * renderer computes for it — a measurement of the type boundary
+ * `FUNCTION_VALUE_TYPES` reads, and of the arithmetic, not a second copy of the
+ * CSS grammar.
  *
  * `sin(45deg)` is the spelling that made this table necessary: the flowchart
  * parser refuses it, the state parser forwards it, and the two forms disagree
  * on the properties that expect a length — `letter-spacing:sin(45deg)` is
  * dropped by the declaration while `letter-spacing="sin(45deg)"` is taken as
- * `calc(0.707107px)`, measured in Chromium 158.
+ * `calc(0.707107px)`, measured in Chromium 158. The numbers are measured too
+ * and they are the renderer's own: `sin(45deg)` is `Math.sin(π / 4)`, a number
+ * argument is radians (`sin(200)` computes `calc(-0.873297px)` in both forms),
+ * `sqrt(4)` computes `calc(2px)`. The one function whose result keeps its
+ * argument's type is not here — `abs()` is measured to compute `calc(2px)` for
+ * a `2px` argument, and `hypot(3px)` computes `3px`, so
+ * {@link UNIT_PRESERVING_FUNCTIONS} is where they belong; `sign()` *is* a
+ * number but takes any argument, so it has its own branch in
+ * {@link evaluateFunction}.
  */
-const NUMBER_RESULT_FUNCTIONS: Readonly<Record<string, true>> = {
-  sin: true, cos: true, tan: true, asin: true, acos: true, atan: true, atan2: true,
-  pow: true, sqrt: true, log: true, exp: true, sign: true, sinh: true, cosh: true, tanh: true,
+const NUMBER_RESULT_FUNCTIONS: Readonly<Record<string, (...arguments_: number[]) => number>> = {
+  sin: Math.sin, cos: Math.cos, tan: Math.tan,
+  pow: Math.pow, sqrt: Math.sqrt,
+  log: (value: number, base = Math.E) => Math.log(value) / Math.log(base),
+  exp: Math.exp, sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh,
 };
 
 /**
- * The math functions whose result type follows from their arguments, folded by
- * the operator rules in {@link combineTypes}.
+ * The math functions whose result is an `<angle>`, split from
+ * {@link NUMBER_RESULT_FUNCTIONS} on a measurement.
+ *
+ * `rx:asin(0.5)` is *dropped* by the renderer — its `specified` value is empty
+ * — while `rx="asin(0.5)"` is taken as the zero length, so a walk that read
+ * this family as a number would project the declaration away and delete the
+ * attribute that was rendering: measured DIVERGENT in the r5 sweep. None of the
+ * measured rows keeps a function of type `angle`, so the type alone refuses it
+ * wherever it arrives. The values are radians because an angle's sign is the
+ * same in either unit and the sign is all this table is read for.
+ */
+const ANGLE_RESULT_FUNCTIONS: Readonly<Record<string, (...arguments_: number[]) => number>> = {
+  asin: Math.asin, acos: Math.acos, atan: Math.atan, atan2: Math.atan2,
+};
+
+/**
+ * The math functions whose result type follows from their arguments, resolved
+ * by the operator rules in {@link combineOperands} — `calc(2 * 4px)` is a
+ * length, `abs(-2px)` is the `calc(2px)` measured in both forms, `hypot(3px)`
+ * the `calc(3px)` measured in both. `sign()` is *not* one of these even though
+ * it is written the same way: measured, `sign(2px)` computes `calc(1)` — a
+ * `<number>`, which is why the length-only properties drop it — so it has its
+ * own branch in {@link evaluateFunction}.
  */
 const UNIT_PRESERVING_FUNCTIONS: Readonly<Record<string, true>> = {
   calc: true, min: true, max: true, clamp: true, round: true, mod: true, rem: true, abs: true, hypot: true,
@@ -229,7 +336,9 @@ const UNIT_PRESERVING_FUNCTIONS: Readonly<Record<string, true>> = {
  * no divergent one): the declaration and the attribute substitute, or fail to
  * substitute, in the same environment, and an unresolvable reference is treated
  * as `unset` in both. They are admitted *because* that was measured, not
- * because a reference looks harmless.
+ * because a reference looks harmless. The names are compared in ASCII case,
+ * measured the same way in the r5 sweep: `VAR(--pele-accent)` computes the
+ * token, `VAR(--pele-radius)` the length.
  *
  * `url()` is deliberately not here: Pele's own filter drops any value carrying
  * it (measured on state, block and class), so the only reachable resource is
@@ -268,6 +377,19 @@ const REFERENCE_FUNCTIONS: Readonly<Record<string, true>> = { var: true, env: tr
  * table is consulted. The measured spellings behind each row are named in
  * `r4-sweep.tsv`; the cells the rule refuses while measuring equal are recorded
  * as its conservative side in the r4 report.
+ *
+ * The row is consulted with a *result type* rather than a fold over tokens: the
+ * value is evaluated the way the renderer evaluates it — `*` and `/` binding
+ * tighter than `+` and `-`, parentheses their own operand, function names and
+ * units compared in ASCII case, a number argument to a trigonometric function
+ * read as radians — and r5 measured what the token-order fold got wrong in both
+ * directions: `calc(4px + 2 * 2px)` and `calc((4px))` are lengths (`8px` and
+ * `4px` in both forms) while `calc(4px + 2)` is not a value the renderer keeps.
+ * A result of type `angle` is a row of its own — no row admits it, for the
+ * reason on {@link ANGLE_RESULT_FUNCTIONS} — and a value this walk cannot
+ * resolve is `other`, which no row admits either, so an unreadable expression is
+ * refused rather than guessed. The *sign* of a result is a separate rule, on
+ * {@link FUNCTION_NEGATIVE_TAKEN_BACK}.
  */
 const FUNCTION_VALUE_TYPES: Readonly<Record<string, Readonly<Record<string, true>>>> = {
   'stroke-width': { length: true, percentage: true, number: true },
@@ -307,9 +429,14 @@ const GEOMETRY_PROPERTIES: Readonly<Record<string, true>> = {
  * `rx:revert` and `rx:auto` are all kept by the declaration (`rx:inherit`
  * computes `auto` — the inherited value — and `rx:auto` the keyword itself)
  * while the attribute form computes `0px` in every one of them; the same
- * measurement holds across the geometry family. `auto` is refused only while
- * the declaration would keep it: where `auto` is invalid for the property the
- * grammar path below refuses it anyway.
+ * measurement holds across the geometry family. The lookup is ASCII
+ * case-insensitive, because a CSS keyword is — measured in the r5 sweep, where
+ * the mixed-case spellings were the finding: `rx:INITIAL` (declaration keeps
+ * `initial`, attribute computes `0px`), `rx:Inherit`, `rx:AUTO`, `rx:Unset` and
+ * `rx:REVERT` each compute exactly what their lowercase spellings do, and the
+ * table's earlier case-sensitive lookup admitted them. `auto` is refused only
+ * while the declaration would keep it: where `auto` is invalid for the property
+ * the grammar path below refuses it anyway.
  */
 const GEOMETRY_KEYWORD_VALUES: Readonly<Record<string, true>> = {
   auto: true, inherit: true, initial: true, unset: true, revert: true, 'revert-layer': true,
@@ -319,17 +446,44 @@ const GEOMETRY_KEYWORD_VALUES: Readonly<Record<string, true>> = {
  * The properties whose attribute form takes a negative back when it arrives
  * inside a function — the geometry attributes again, measured: `rx:calc(-4px)`
  * is kept by the declaration and computes `0px` (clamped), while
- * `rx="calc(-4px)"` computes `-4px`. The stroke properties clamp in both forms
- * (`stroke-width:calc(-4px)` computes `0px` in each), so their function values
- * are not refused for a sign the renderer already handles — `stroke-width:
- * abs(-2px)` computes `2px` in both forms and is projected. A *scalar* negative
- * is a different cell and stays refused for every {@link NON_NEGATIVE}
- * property, measured and gated since r2.
+ * `rx="calc(-4px)"` computes `-4px`.
+ *
+ * The sign that decides is the *result's*, not a literal minus in the source,
+ * which is the r5 finding: `rx:calc(0px - 4px)` resolves to `-4px` — the same
+ * value as `calc(-4px)` — and diverges the same way (measured: declaration
+ * `0px`, attribute `-4px`), and `rx:calc(1em - 100px)` computes `-84px` in this
+ * page's context while its sign cannot be decided at build time at all. A
+ * result whose sign the walk does not resolve (`calc(1em - 2px)` is `14px` here
+ * and negative for a smaller font) is therefore refused on these properties
+ * rather than guessed. The result *type* is part of the rule: a
+ * `<number>`-typed result is taken back by neither form — `rx:calc(4 - 8)`
+ * computes `calc(-4px)` in both, measured — so only a length or a percentage
+ * has to be provably non-negative.
+ *
+ * The stroke properties clamp in both forms (`stroke-width:calc(-4px)` computes
+ * `0px` in each), so their function values are not refused for a sign the
+ * renderer already handles — `stroke-width:calc(0px - 4px)` and `abs(-2px)`
+ * compute the same in both forms, measured. A *scalar* negative is a different
+ * cell and stays refused for every {@link NON_NEGATIVE} property, measured and
+ * gated since r2.
  */
 const FUNCTION_NEGATIVE_TAKEN_BACK: Readonly<Record<string, true>> = { rx: true, ry: true };
 
-/** The value types {@link FUNCTION_VALUE_TYPES} and the walk below can name. */
-type ValueType = 'length' | 'percentage' | 'number' | 'other';
+/**
+ * The value types {@link FUNCTION_VALUE_TYPES} and the walk below can name.
+ * `angle` is the one the renderer types but no measured row keeps, and `other`
+ * is what the walk returns for everything it does not read.
+ */
+type ValueType = 'length' | 'percentage' | 'number' | 'angle' | 'other';
+
+/** How the type gate's message names one of those types. */
+const TYPE_NAMES: Readonly<Record<ValueType, string>> = {
+  length: 'a length',
+  percentage: 'a percentage',
+  number: 'a number',
+  angle: 'an angle',
+  other: 'a type this build does not read',
+};
 
 const XML_ENTITIES: Readonly<Record<string, string>> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;',
@@ -405,18 +559,353 @@ function escapeXml(value: string): string {
 }
 
 /**
- * Whether any numeric component of the value is negative — `-2`, `-2px`, `-2%`
- * and a later component of a list (`4 -2`) all count; `-0` does not, which is
- * what the renderer does with it too (measured: `stroke-width:-0px` computes to
- * `0px`, declaration and attribute alike).
+ * CSS compares property names, keywords and function names in *ASCII* case — a
+ * spelling like `RGB(0 255 0)` is the function `rgb` — while a Unicode
+ * `toLowerCase` folds more than CSS does. Everything this file compares by name
+ * goes through here.
  */
-function hasNegativeComponent(value: string): boolean {
-  let negative = false;
-  walk(parse(value, { context: 'value' }), (node) => {
-    if (node.type !== 'Number' && node.type !== 'Dimension' && node.type !== 'Percentage') return;
-    if (typeof node.value === 'string' && Number.parseFloat(node.value) < 0) negative = true;
+function asciiLower(value: string): string {
+  return value.replace(/[A-Z]/g, (character) => String.fromCharCode(character.charCodeAt(0) + 32));
+}
+
+/**
+ * The signs a computed number can carry, as a mask: a result the arithmetic
+ * does not decide keeps all three, and the rules below read that as "not
+ * provably non-negative" rather than picking one.
+ */
+const SIGN_NEGATIVE = 1;
+const SIGN_ZERO = 2;
+const SIGN_POSITIVE = 4;
+const SIGN_ANY = SIGN_NEGATIVE | SIGN_ZERO | SIGN_POSITIVE;
+
+/** The sign of one computed number; NaN — `sqrt(-4)` — decides nothing. */
+function signOf(value: number): number {
+  if (Number.isNaN(value)) return SIGN_ANY;
+  if (value < 0) return SIGN_NEGATIVE;
+  return value > 0 ? SIGN_POSITIVE : SIGN_ZERO;
+}
+
+/**
+ * `a + b` over sign sets: a zero operand leaves the other's sign, equal
+ * operands keep theirs (two positives are positive; two negatives negative),
+ * and anything else is undecided — conservatively, so a set the exact
+ * arithmetic could narrow (`{0, positive} + {positive}` is positive) stays a
+ * set and is refused wherever a set is not provable.
+ */
+function signSum(left: number, right: number): number {
+  if (left === SIGN_ZERO) return right;
+  if (right === SIGN_ZERO) return left;
+  return left === right ? left : SIGN_ANY;
+}
+
+/** The sign set of `-a`. */
+function signNegated(sign: number): number {
+  let negated = sign & SIGN_ZERO;
+  if (sign & SIGN_NEGATIVE) negated |= SIGN_POSITIVE;
+  if (sign & SIGN_POSITIVE) negated |= SIGN_NEGATIVE;
+  return negated;
+}
+
+/**
+ * `a * b`. A definite zero times a definite number is a zero; a zero times an
+ * undecided sign is not — `0 * NaN` is `NaN` in the renderer's arithmetic too.
+ */
+function signProduct(left: number, right: number): number {
+  if (left === SIGN_ZERO || right === SIGN_ZERO) {
+    return left === SIGN_ANY || right === SIGN_ANY ? SIGN_ANY : SIGN_ZERO;
+  }
+  const definite = (sign: number): boolean => sign === SIGN_NEGATIVE || sign === SIGN_POSITIVE;
+  if (definite(left) && definite(right)) return left === right ? SIGN_POSITIVE : SIGN_NEGATIVE;
+  return SIGN_ANY;
+}
+
+/** `a / b`; a divisor that can be zero, or a sign set, decides nothing. */
+function signQuotient(left: number, right: number): number {
+  if ((right & SIGN_ZERO) !== 0) return SIGN_ANY;
+  if (left === SIGN_ZERO) return SIGN_ZERO;
+  return signProduct(left, right);
+}
+
+/** The sign set of `|a|` — what `abs()` carries. */
+function signMagnitude(sign: number): number {
+  let magnitude = sign & SIGN_ZERO;
+  if (sign & (SIGN_NEGATIVE | SIGN_POSITIVE)) magnitude |= SIGN_POSITIVE;
+  return magnitude;
+}
+
+/**
+ * What one operand or expression resolves to: the value type the measured
+ * tables read, the number it resolves to where the arithmetic has one, the unit
+ * that number is carried in, and the signs the result can carry.
+ *
+ * The three fields answer the three questions the declaration walk asks: the
+ * type whether the property's own declaration keeps the value at all
+ * ({@link FUNCTION_VALUE_TYPES}), the sign whether the attribute form's
+ * clamping would change it ({@link FUNCTION_NEGATIVE_TAKEN_BACK}), and the unit
+ * whether two operands resolve to one number (`calc(50% - 100%)` is `-50%`,
+ * `calc(1em - 2px)` is not one number at all).
+ */
+type Evaluated = {
+  readonly type: ValueType;
+  readonly value: number | null;
+  readonly unit: string | null;
+  readonly sign: number;
+};
+
+/** A value this walk does not read: a keyword, a `url()`, a `Raw` tail, a stray operator. */
+const UNREADABLE: Evaluated = { type: 'other', value: null, unit: null, sign: SIGN_ANY };
+
+/** One scalar — a `Number`, a `Percentage`, a `Dimension` — as a result. */
+function scalar(type: ValueType, unit: string, value: number): Evaluated {
+  return { type, value, unit, sign: signOf(value) };
+}
+
+/**
+ * A result of that type carrying the number the operands resolved to, or — where
+ * they resolved to none — their signs alone. Where a number is there, the sign is
+ * the number's, so a fallback can never contradict a result.
+ */
+function resultOf(type: ValueType, unit: string | null, value: number | null, sign: number): Evaluated {
+  if (value === null) return { type, value: null, unit: null, sign };
+  return { type, value, unit, sign: signOf(value) };
+}
+
+/** One node's own value, as far as this walk reads it. */
+function evaluateNode(node: CssNode): Evaluated {
+  if (node.type === 'Number' || node.type === 'Percentage' || node.type === 'Dimension') {
+    const value = Number.parseFloat(node.value ?? '');
+    if (!Number.isFinite(value)) return UNREADABLE;
+    if (node.type === 'Number') return scalar('number', '', value);
+    if (node.type === 'Percentage') return scalar('percentage', '%', value);
+    const unit = asciiLower(String(node['unit'] ?? ''));
+    if (LENGTH_UNITS[unit] === true) return scalar('length', unit, value);
+    if (ANGLE_UNITS[unit] !== undefined) return scalar('angle', unit, value);
+    return { type: 'other', value: null, unit: null, sign: signOf(value) };
+  }
+  if (node.type === 'Parentheses') return evaluateExpression(node.children?.toArray() ?? []);
+  if (node.type === 'Function') return evaluateFunction(node);
+  return UNREADABLE;
+}
+
+/**
+ * One function's value. A reference is unreadable here — the caller admits
+ * `var()`/`env()`/`attr()` before this walk — a math function follows its own
+ * table, and anything else (an unknown function, a colour, a shape this build
+ * cannot read) is `other`.
+ */
+function evaluateFunction(node: CssNode): Evaluated {
+  const name = asciiLower(node.name ?? '');
+  const parts = node.children?.toArray() ?? [];
+  if (REFERENCE_FUNCTIONS[name] === true) return UNREADABLE;
+  if (name === 'sign') {
+    // `sign()` answers a `<number>` about *any* argument it can resolve — a
+    // number or a dimension alike. Measured: `sign(2px)` computes `calc(1)`
+    // (a number: `rx` coerces it to `calc(1px)`, the length-only properties
+    // drop the declaration) while `abs(-2px)` beside it computes `calc(2px)`.
+    const argument = argumentValues(parts);
+    const [only] = argument ?? [];
+    if (argument === null || argument.length !== 1 || only === undefined || only.type === 'other') return UNREADABLE;
+    return resultOf('number', '', only.value === null ? null : Math.sign(only.value), only.sign | SIGN_ZERO);
+  }
+  const number = NUMBER_RESULT_FUNCTIONS[name];
+  if (number !== undefined) {
+    const arguments_ = numberArguments(parts, TRIG_FUNCTIONS[name] === true);
+    return arguments_ === null ? UNREADABLE : scalar('number', '', number(...arguments_));
+  }
+  const angle = ANGLE_RESULT_FUNCTIONS[name];
+  if (angle !== undefined) {
+    const arguments_ = numberArguments(parts, false);
+    return arguments_ === null ? UNREADABLE : scalar('angle', 'rad', angle(...arguments_));
+  }
+  if (UNIT_PRESERVING_FUNCTIONS[name] !== true) return UNREADABLE;
+  return evaluateUnitFunction(name, parts);
+}
+
+/**
+ * A function's arguments, each evaluated as its own expression. A list with an
+ * empty group (`min(4px,)`) is null rather than a shorter list.
+ */
+function argumentValues(parts: readonly CssNode[]): Evaluated[] | null {
+  const groups: CssNode[][] = [[]];
+  for (const part of parts) {
+    if (part.type === 'Operator' && (part.value ?? '').trim() === ',') groups.push([]);
+    else groups[groups.length - 1]!.push(part);
+  }
+  if (groups.some((group) => group.length === 0)) return null;
+  return groups.map((group) => evaluateExpression(group));
+}
+
+/**
+ * The numeric arguments of a math function, with an angle read as radians where
+ * the function takes one — measured: `sin(45deg)` is `Math.sin(π / 4)`, and a
+ * number argument is radians (`sin(200)` computes `calc(-0.873297px)`).
+ */
+function numberArguments(parts: readonly CssNode[], angles: boolean): number[] | null {
+  const arguments_ = argumentValues(parts);
+  if (arguments_ === null) return null;
+  const numbers: number[] = [];
+  for (const argument of arguments_) {
+    if (argument.type === 'number' && argument.value !== null) {
+      numbers.push(argument.value);
+      continue;
+    }
+    if (angles && argument.type === 'angle' && argument.value !== null && argument.unit !== null) {
+      numbers.push(argument.value * ANGLE_UNITS[argument.unit]!);
+      continue;
+    }
+    return null;
+  }
+  return numbers;
+}
+
+/**
+ * A math function whose result carries its arguments' type. `calc()` folds one
+ * expression; `min()`, `max()` and `clamp()` take a list and keep its type; and
+ * the rest keep the type they were handed, with the sign the function implies:
+ * `abs(-2px)` is `2px` (proved non-negative, so projectable where `calc(-2px)`
+ * is not), `hypot(3px)` is non-negative by construction, and a rounding
+ * function can reach zero. The value is left unresolved because only the sign
+ * and the type are read.
+ */
+function evaluateUnitFunction(name: string, parts: readonly CssNode[]): Evaluated {
+  if (name === 'calc') {
+    const comma = parts.some((part) => part.type === 'Operator' && (part.value ?? '').trim() === ',');
+    return comma ? UNREADABLE : evaluateExpression(parts);
+  }
+  const arguments_ = argumentValues(parts);
+  if (arguments_ === null || arguments_.length === 0) return UNREADABLE;
+  const first = arguments_[0]!;
+  if (arguments_.some((argument) => argument.type !== first.type || argument.type === 'other')) return UNREADABLE;
+  const signs = arguments_.reduce((mask, argument) => mask | argument.sign, 0);
+  if (name === 'abs') {
+    return resultOf(first.type, first.unit, first.value === null ? null : Math.abs(first.value), signMagnitude(first.sign));
+  }
+  if (name === 'hypot') return resultOf(first.type, null, null, signMagnitude(signs));
+  if (name === 'round' || name === 'mod' || name === 'rem') return resultOf(first.type, null, null, signs | SIGN_ZERO);
+  return resultOf(first.type, null, null, signs);
+}
+
+/** A position in one function's child list, so the precedence walk can look ahead. */
+type Cursor = { readonly parts: readonly CssNode[]; at: number };
+
+/**
+ * One expression, with CSS's own precedence: `*` and `/` bind tighter than `+`
+ * and `-`, a `Parentheses` node is its own operand, and a sequence that is not
+ * one expression — a missing operand, a stray token, two operands with no
+ * operator between them — is `other` rather than a fold over whatever parsed.
+ */
+function evaluateExpression(parts: readonly CssNode[]): Evaluated {
+  const cursor: Cursor = { parts, at: 0 };
+  const evaluated = evaluateSum(cursor);
+  return cursor.at === parts.length ? evaluated : UNREADABLE;
+}
+
+function evaluateSum(cursor: Cursor): Evaluated {
+  let left = evaluateProduct(cursor);
+  for (;;) {
+    const operator = operatorAt(cursor);
+    if (operator !== '+' && operator !== '-') return left;
+    cursor.at += 1;
+    left = combineOperands(operator, left, evaluateProduct(cursor));
+  }
+}
+
+function evaluateProduct(cursor: Cursor): Evaluated {
+  let left = evaluateOperand(cursor);
+  for (;;) {
+    const operator = operatorAt(cursor);
+    if (operator !== '*' && operator !== '/') return left;
+    cursor.at += 1;
+    left = combineOperands(operator, left, evaluateOperand(cursor));
+  }
+}
+
+/** The operator at the cursor, or null where the next part is not one. */
+function operatorAt(cursor: Cursor): string | null {
+  const part = cursor.parts[cursor.at];
+  return part?.type === 'Operator' ? (part.value ?? '').trim() : null;
+}
+
+function evaluateOperand(cursor: Cursor): Evaluated {
+  const part = cursor.parts[cursor.at];
+  if (part === undefined) return UNREADABLE;
+  cursor.at += 1;
+  return evaluateNode(part);
+}
+
+/**
+ * One operator over two operands, with CSS's type rules: `4px + 2` and
+ * `1px * 1px` are not values the renderer keeps (`other` — measured: the
+ * declaration is dropped while the displaced attribute survives), `2 * 4px` is
+ * a length and `4px / 2px` a number (the units cancel).
+ *
+ * The result's sign is the sign of the number the operands resolved to where
+ * they resolved to one (`calc(0px - 4px)` is `-4px`, `calc(100% - 50%)` is
+ * `+50%`, `calc(4px / 0)` is positive infinity, which is what the renderer
+ * computes too), and the operands' own signs where they resolved to none:
+ * `1em + 2px` is positive whatever `em` resolves to, while `1em - 2px` carries
+ * both signs and is refused on a property whose attribute form takes a negative
+ * back.
+ */
+function combineOperands(operator: string, left: Evaluated, right: Evaluated): Evaluated {
+  if (left.type === 'other' || right.type === 'other') return UNREADABLE;
+  if (operator === '+' || operator === '-') {
+    // Unlike types are the arithmetic the renderer's own parser drops
+    // (`calc(4px + 2)`), and a percentage added to a length is a type of its
+    // own that no measured row admits either.
+    if (left.type !== right.type) return UNREADABLE;
+    const sign = operator === '+'
+      ? signSum(left.sign, right.sign)
+      : signSum(left.sign, signNegated(right.sign));
+    const value = left.unit === right.unit && left.value !== null && right.value !== null
+      ? (operator === '+' ? left.value + right.value : left.value - right.value)
+      : null;
+    return resultOf(left.type, left.unit, value, sign);
+  }
+  if (operator === '*') {
+    if (right.type === 'number') return product(left, right, signProduct(left.sign, right.sign));
+    if (left.type === 'number') return product(right, left, signProduct(left.sign, right.sign));
+    return UNREADABLE;
+  }
+  if (operator === '/') {
+    if (right.type === 'number') {
+      const value = left.value === null || right.value === null ? null : left.value / right.value;
+      return resultOf(left.type, left.unit, value, signQuotient(left.sign, right.sign));
+    }
+    // A quotient of two same-typed values is a number — `4px / 2px` is `2`.
+    if (left.type === right.type) {
+      const value = left.unit === right.unit && left.value !== null && right.value !== null
+        ? left.value / right.value
+        : null;
+      return resultOf('number', '', value, signQuotient(left.sign, right.sign));
+    }
+    return UNREADABLE;
+  }
+  return UNREADABLE;
+}
+
+/** One operand scaled by a number: the type and the unit survive, the sign does not. */
+function product(target: Evaluated, factor: Evaluated, sign: number): Evaluated {
+  const value = target.value === null || factor.value === null ? null : target.value * factor.value;
+  return resultOf(target.type, target.unit, value, sign);
+}
+
+/**
+ * Whether a value the function rules do not own — one scalar, a list of them,
+ * or a list that carries a function — can be negative anywhere in it.
+ *
+ * The components are read one at a time: a scalar's own sign *is* its value's
+ * sign, and a function component's is its result's, so `4 calc(-4px)` is
+ * negative while `4 abs(-2px)` is not. A component this walk does not read at
+ * all — a keyword, a `url()`, a `Raw` tail — is the grammar path's business.
+ */
+function anyNegativeComponent(value: string): boolean {
+  const children = parse(value, { context: 'value' }).children?.toArray() ?? [];
+  return children.some((child) => {
+    const evaluated = evaluateNode(child);
+    if (evaluated.type === 'other' && evaluated.value === null) return false;
+    return (evaluated.sign & SIGN_NEGATIVE) !== 0;
   });
-  return negative;
 }
 
 /**
@@ -445,7 +934,26 @@ function measuredProjection(property: string, value: string): string | null {
     if (scalar !== null && (sign === 'any' || scalar > 0)) return value;
   }
   if (RENDERER_KEPT_PERCENTAGE[property] === true && singleComponent(value, 'Percentage') !== null) return value;
+  if (PAINT_ATTRIBUTES[property] === true && isRelativeColour(value)) return value;
   return null;
+}
+
+/**
+ * Whether a paint value is the relative-colour spelling `css-tree`'s colour
+ * grammar does not parse: one function whose name is a measured colour function
+ * and whose first argument is `from`.
+ *
+ * The row it belongs to is {@link RENDERER_KEPT_RELATIVE_COLOUR}; a spelling
+ * outside it — `hwb(from …)`, or a malformed `rgb(from)` — is left to the
+ * grammar path, which refuses it.
+ */
+function isRelativeColour(value: string): boolean {
+  const children = parse(value, { context: 'value' }).children?.toArray() ?? [];
+  const [only] = children;
+  if (children.length !== 1 || only?.type !== 'Function') return false;
+  if (RENDERER_KEPT_RELATIVE_COLOUR[asciiLower(only.name ?? '')] !== true) return false;
+  const [first] = only.children?.toArray() ?? [];
+  return first?.type === 'Identifier' && asciiLower(first.name ?? '') === 'from';
 }
 
 /**
@@ -479,122 +987,58 @@ function inspectResources(value: string): void {
 }
 
 /**
- * A paint property's value is a colour: the renderer's own palette functions
- * (`var()`, `light-dark()`, `color-mix()`, the `rgb`/`hsl` families) and
+ * A paint property's value is a colour: the renderer's own palette functions —
+ * the measured list in {@link COLOUR_FUNCTIONS}, compared in ASCII case — and
  * nothing else.
  *
  * Measured 2026-11-15 over the reachable spellings: every math function on
  * `fill`/`stroke` is dropped by the declaration form while the attribute form
  * is taken or ignored differently, so `fill:calc(4px)` and `fill:rgb(0 0 0 /
  * 50%)` are in different classes here for a measured reason — `rgb(...)` is a
- * colour and computes the same in both forms; `calc(...)` is not.
+ * colour and computes the same in both forms; `calc(...)` is not. A *malformed*
+ * colour function is the grammar path's business, not this guard's: `fill:rgb()`
+ * and `fill:hwb(120)` pass this name check and are then refused by the property
+ * grammar, measured DIVERGENT in both (the renderer drops the declaration and
+ * the projected attribute alike, so the element's own paint would go with them).
  */
 function inspectColourFunctions(property: string, value: string): void {
   visitValue(value, (node) => {
-    if (node.type === 'Function' && COLOUR_FUNCTIONS[node.name ?? ''] !== true) {
+    if (node.type === 'Function' && COLOUR_FUNCTIONS[asciiLower(node.name ?? '')] !== true) {
       throw new Error(`the renderer emitted a paint value with an unsupported function: ${property}: ${value}`);
     }
   });
 }
 
-/** Whether the value carries a `var()`/`env()`/`attr()` reference, directly or in a fallback. */
+/**
+ * Whether the value carries a `var()`/`env()`/`attr()` reference, directly or in
+ * a fallback. The names are compared in ASCII case like every other name here;
+ * measured, `VAR(--pele-accent)` substitutes the token exactly as `var()` does.
+ */
 function hasReference(value: string): boolean {
   let found = false;
   visitValue(value, (node) => {
-    if (node.type === 'Function' && REFERENCE_FUNCTIONS[node.name ?? ''] === true) found = true;
+    if (node.type === 'Function' && REFERENCE_FUNCTIONS[asciiLower(node.name ?? '')] === true) found = true;
   });
   return found;
 }
 
-/** The type of one scalar or function node, as far as {@link FUNCTION_VALUE_TYPES} reads it. */
-function componentType(node: CssNode): ValueType {
-  if (node.type === 'Number') return 'number';
-  if (node.type === 'Percentage') return 'percentage';
-  if (node.type === 'Dimension') {
-    const unit = node['unit'];
-    return typeof unit === 'string' && LENGTH_UNITS[unit.toLowerCase()] === true ? 'length' : 'other';
-  }
-  if (node.type === 'Function') return functionType(node);
-  return 'other';
-}
-
 /**
- * One operator applied to two operand types, conservatively: a combination the
- * CSS type rules reject — `4px + 2`, `1px * 1px`, a number divided by a length
- * — is `other`, and `other` is sticky, so a later operator cannot rescue it.
- */
-function combineTypes(operator: string, left: ValueType, right: ValueType): ValueType {
-  if (left === 'other' || right === 'other') return 'other';
-  if (operator === '*') {
-    if (left === 'number') return right;
-    if (right === 'number') return left;
-    return 'other';
-  }
-  if (operator === '/') {
-    if (right === 'number') return left;
-    if (left === 'number') return 'other';
-    return left === right ? 'number' : 'other';
-  }
-  return left === right ? left : 'other';
-}
-
-/**
- * The type a function value resolves to, from the function's name and its
- * arguments' types — the walk {@link FUNCTION_VALUE_TYPES} is consulted with.
+ * The value's own function component evaluated, or null where the value is not
+ * exactly one function call.
  *
- * A reference never reaches this branch (the caller admits it first). A
- * number-result function is a number unless it is handed a length — `sqrt(4)`
- * is a number, `sqrt(4px)` is not a value at all, and both are refused on a
- * property that expects a length. A unit-preserving function folds its operand
- * list left to right: arguments without operators are a list (`round(1.5px,
- * 1px)` parses as two components) and must agree.
+ * `calc(4px)`, `min(4px)`, `sin(45deg)` and `var(--x)` are one function
+ * component; `4px`, `4 -2` and `Georgia` are not, and a list is not either —
+ * the measured tables read single function results, and a list is the grammar
+ * path's business. A function that is *there* but unreadable (`Georgia()`)
+ * evaluates to `other` and is not null, so the two outcomes are not the same
+ * answer.
  */
-function functionType(node: CssNode): ValueType {
-  const name = (node.name ?? '').toLowerCase();
-  const parts = node.children?.toArray() ?? [];
-  if (NUMBER_RESULT_FUNCTIONS[name] === true) {
-    const unitful = parts.some((part) => {
-      const type = part.type === 'Operator' ? 'other' : componentType(part);
-      return type === 'length' || type === 'percentage';
-    });
-    return unitful ? 'other' : 'number';
-  }
-  if (UNIT_PRESERVING_FUNCTIONS[name] !== true) return 'other';
-  let current: ValueType | null = null;
-  let operator: string | null = null;
-  for (const part of parts) {
-    if (part.type === 'Operator') {
-      operator = (part.value ?? '').trim();
-      continue;
-    }
-    const type = componentType(part);
-    if (current === null) {
-      current = type;
-      continue;
-    }
-    current = operator === null ? (current === type ? type : 'other') : combineTypes(operator, current, type);
-    operator = null;
-    if (current === 'other') return 'other';
-  }
-  return current ?? 'other';
-}
-
-/** The type of a value's single component — a function value, as the caller has already checked. */
-function functionValueType(value: string): ValueType {
+function evaluateFunctionValue(value: string): Evaluated | null {
   const children = parse(value, { context: 'value' }).children?.toArray() ?? [];
-  return children.length === 1 && children[0] !== undefined ? componentType(children[0]) : 'other';
-}
-
-/**
- * Whether the value's single component is a function call.
- *
- * `calc(4px)`, `min(4px)`, `sin(45deg)` and `var(--x)` are; `4px`, `4 -2` and
- * `Georgia` are not, and a list is not either — the tables above read scalars,
- * and a list of scalars is the grammar path's business.
- */
-function isFunctionValue(value: string): boolean {
-  const children = parse(value, { context: 'value' }).children?.toArray() ?? [];
-  return children.length === 1 && children[0]?.type === 'Function';
+  const [only] = children;
+  return children.length === 1 && only !== undefined && only.type === 'Function'
+    ? evaluateNode(only)
+    : null;
 }
 
 function sanitizeSvg(svg: string, accessibleName: string): string {
@@ -652,31 +1096,42 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
           continue;
         }
         if (PAINT_ATTRIBUTES[property] === true) inspectColourFunctions(property, value);
-        if (GEOMETRY_PROPERTIES[property] === true && GEOMETRY_KEYWORD_VALUES[value] === true) {
+        if (GEOMETRY_PROPERTIES[property] === true && GEOMETRY_KEYWORD_VALUES[asciiLower(value)] === true) {
           throw new Error(`the renderer emitted a style declaration whose attribute form is the zero length, not the value it names: ${property}: ${value}`);
         }
+        const functionValue = evaluateFunctionValue(value);
         // The renderer's requirement is not the grammar's; the table above
         // records the properties where that difference is measured. The check
-        // splits by shape, because the sign boundary does: a *scalar* negative
-        // (`-2px`, `-50%`) is dropped from the declaration for every property
-        // in NON_NEGATIVE, while a negative inside a function is kept and
-        // clamped by the declaration for the stroke and radius-less properties
-        // and taken back by the attribute only for the geometry ones —
-        // `stroke-width:calc(-4px)` computes `0px` in both forms, and
-        // `rx:calc(-4px)` computes `0px` where `rx="calc(-4px)"` computes
-        // `-4px`, measured.
-        if (NON_NEGATIVE[property] === true && hasNegativeComponent(value)
-          && (!isFunctionValue(value) || FUNCTION_NEGATIVE_TAKEN_BACK[property] === true)) {
-          throw new Error(`the renderer emitted a style declaration with a negative value for a non-negative property: ${property}: ${value}`);
+        // splits by shape, because the sign boundary does: a *scalar* component
+        // negative (`-2px`, `-50%`, the second half of `4 -2`) is dropped from
+        // the declaration for every property in NON_NEGATIVE, and a list is read
+        // component by component so a negative inside a function in one counts
+        // too — while a value that *is* one function is the function rules'
+        // business below, not this one's.
+        if (NON_NEGATIVE[property] === true && functionValue === null && anyNegativeComponent(value)) {
+          throw new Error(`the renderer emitted a style declaration with a negative or undecided sign for a non-negative property: ${property}: ${value}`);
         }
         // A math function is decided by its *value type*, not by the grammar:
-        // `css-tree` matches every function name without typing its arithmetic,
-        // while the renderer keeps a function only when its value is of the
-        // property's own type. The table is measured; see FUNCTION_VALUE_TYPES.
-        if (FUNCTION_VALUE_TYPES[property] !== undefined && isFunctionValue(value)) {
-          const type = functionValueType(value);
+        // `css-tree` matches every function name without typing its arithmetic
+        // (`lexer.matchProperty('rx', 'calc(4px + 2)')` matches), while the
+        // renderer keeps a function only when its value is of the property's own
+        // type. The type is evaluated — precedence, parentheses and ASCII case
+        // included — and the table is measured; see FUNCTION_VALUE_TYPES.
+        if (FUNCTION_VALUE_TYPES[property] !== undefined && functionValue !== null) {
+          const { type } = functionValue;
           if (FUNCTION_VALUE_TYPES[property]?.[type] !== true) {
-            throw new Error(`the renderer emitted a style declaration with a function the property does not keep as a ${type}: ${property}: ${value}`);
+            throw new Error(`the renderer emitted a style declaration with a function the property does not keep (${TYPE_NAMES[type]}): ${property}: ${value}`);
+          }
+          // The second half of the sign rule, and the one that reads the
+          // *result* rather than a minus sign in the source: for the properties
+          // whose attribute form takes a negative back, a length- or
+          // percentage-valued function must be provably non-negative, and a
+          // result whose sign the walk does not resolve is refused rather than
+          // guessed. A number-valued result is taken back by neither form
+          // (`rx:calc(4 - 8)` computes `calc(-4px)` in both), so it passes.
+          if (FUNCTION_NEGATIVE_TAKEN_BACK[property] === true && type !== 'number'
+            && (functionValue.sign & SIGN_NEGATIVE) !== 0) {
+            throw new Error(`the renderer emitted a style declaration whose result is not provably non-negative for a property whose attribute form takes a negative back: ${property}: ${value}`);
           }
           declared.set(property, value);
           continue;
