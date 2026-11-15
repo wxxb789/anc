@@ -1,5 +1,5 @@
 /**
- * The one place the diagram rendering mode is written down.
+ * The one place diagram rendering mode and build-time engine are written down.
  *
  * Owner decision 5 makes Mermaid dual-mode. The two modes differ in what ships,
  * what the CSP must permit, and what a reader with JavaScript disabled sees, so
@@ -29,6 +29,46 @@
 export type DiagramMode = 'build-time' | 'client';
 
 export const DIAGRAM_MODE: DiagramMode = 'client';
+
+/**
+ * The build-time engine is independent of when diagrams render. Client mode
+ * continues to use its existing Mermaid runtime; this switch only selects the
+ * adapter loaded by `diagram-engine.ts` when rendering at build time.
+ * Select the engine here; no environment or runtime override is read.
+ *
+ * | Engine | Build-time SVG | Browser/DOM dependency on success | Styles |
+ * | --- | --- | --- | --- |
+ * | `mermaid` (default) | Existing two-palette projection, byte-for-byte unchanged | Headless DOM | Flattened presentation attributes |
+ * | `pele` | Deterministic, namespaced SVG with text positioning preserved | None | Static token variables, rich-label weights and rounded geometry in `diagram.css` |
+ *
+ * Both adapters fail with `DiagramError` rather than publishing unsafe or blank
+ * output. Selecting an engine does not change DIAGRAM_MODE or its CSP policy.
+ */
+export type DiagramEngine = 'mermaid' | 'pele';
+
+export const DIAGRAM_ENGINE: DiagramEngine = 'mermaid';
+
+/**
+ * Thrown when a diagram cannot be rendered safely. The build stops.
+ *
+ * It lives here, beside the switch that names the two adapters, because both
+ * adapters throw it and neither may import the other. `pele-render.ts` importing
+ * `mermaid-render.ts` for one class cost the DOM shim on every Pele failure —
+ * measured with a loader hook: a malformed source resolved `mermaid-render.ts`,
+ * then `mermaid-environment.ts`, then `happy-dom`, which is exactly the cost the
+ * engine seam exists to avoid (P1 design §1). This module imports nothing and
+ * has no DOM, so the failure path of either adapter loads only itself.
+ * `mermaid-render.ts` re-exports the class, so its existing importers are fine.
+ */
+export class DiagramError extends Error {
+  readonly source: string;
+
+  constructor(source: string, message: string) {
+    super(`${message}\n  in diagram: ${source.trim().slice(0, 200)}`);
+    this.name = 'DiagramError';
+    this.source = source;
+  }
+}
 
 /**
  * The `style-src` value each mode requires, measured rather than reasoned.

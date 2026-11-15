@@ -1,0 +1,718 @@
+/**
+ * Pele's SVG, reduced to what a build-time page may ship.
+ *
+ * Owner decision C, 2026-11-15: this adapter converts **no author
+ * declarations**. Pele writes presentation in three places and the sanitizer
+ * has one disposition for each:
+ *
+ * 1. **The root `style` block** — Pele's palette, its measurement font and the
+ *    reset of the inheritable text properties, as one attribute on `<svg>`.
+ *    `src/styles/diagram.css` re-creates it under `.diagram svg.pele` and
+ *    `.diagram svg`; {@link ROOT_STYLE_DECLARATIONS} is the declaration set
+ *    Pele 1.13.0 was measured to write, and a root declaration outside it stops
+ *    the build by name instead of disappearing.
+ * 2. **Pele's own element-level presentation** — everything the renderer writes
+ *    into a non-root `style` attribute of a directive-free source, which is
+ *    three forms and no more ({@link ELEMENT_STYLE_DECLARATIONS}):
+ *    `rx: var(--_r)`, its corner rounding; the parametric
+ *    `rx:min(var(--_r),Npx)` its treemap renderer substitutes for a cell
+ *    narrower than four of its radii ({@link elementStyleClamp}); and
+ *    `text-decoration: underline` on a static class member. Each is stripped
+ *    and carried where the site's CSS already resolves it: the class
+ *    `pele-rounded`, which `diagram.css` supplies `rx: var(--_r)` for, for the
+ *    rounding (the class names the site's radius token once instead of
+ *    re-emitting the reference on every element); the element's own `rx`
+ *    attribute for the clamp, whose value is parametric and so cannot be named
+ *    by a class; and the element's own `text-decoration` attribute for the
+ *    member underline, the carrier Pele itself uses for the same property on a
+ *    formatted run. Both attribute carriers were measured in Chromium under
+ *    the build-time policy to compute the same value as the declaration they
+ *    replace (2026-11-16), and neither needs a `diagram.css` rule.
+ * 3. **Everything else** — an author declaration (`style A …`, `classDef`,
+ *    `linkStyle`), which Pele carries into an element's `style` attribute, and
+ *    an author theme (`%%{init: …}%%`), which adds `--pele-series-*`
+ *    declarations to the root block. Refused with `DiagramError` naming the
+ *    declaration, the directive that carried it and the remedy. No conversion,
+ *    no silent drop.
+ *
+ * An author declaration is refused **from the parsed model**, not from the
+ * output it produced: Pele's writer normalises the text it writes — measured
+ * 2026-11-15, an authored `rx : var(--_r)` or `RX:var(--_r)` reaches the
+ * element as `rx:var(--_r)`, the spelling of Pele's own rounding — so a
+ * declaration read back from the output can be spelled like the fixed set
+ * without being Pele's ({@link ELEMENT_STYLE_DECLARATIONS} documents that
+ * measurement). The model still carries the author's own text;
+ * {@link authorDirectives} reads it and the refusal quotes it. The output-level
+ * checks stay as the backstop for a declaration that arrives from somewhere the
+ * model does not report — the author theme is the one measured case.
+ *
+ * Why the conversion was dropped rather than fixed: the adapter used to project
+ * each author declaration onto the presentation attribute of the same name,
+ * which required an oracle for "does the renderer keep this value in the
+ * attribute form?" — the parser's grammar first, then measured tables for the
+ * cells the grammar gets wrong, walked by an arithmetic evaluator for function
+ * values. Six review rounds (r2–r6, 2026-11-15, cross-family) each found
+ * further cells that oracle got wrong, in both directions, and every wrong cell
+ * silently moved a rendering. The measured cost of closing the face instead:
+ * none of the three real corpus diagrams (`docs/core-design/architecture.md`,
+ * `example/guides/feature-showcase.md`,
+ * `tests/fixtures/markdown/kitchen-sink.md`) uses
+ * `style`/`classDef`/`linkStyle`, so refusing them has no observable effect on
+ * the site this build ships. A refusal names the declaration and the remedy; a
+ * conversion guessed at the rendering.
+ */
+
+import { parse, walk } from 'css-tree';
+import type { CssNode } from 'css-tree';
+import { parse as parseDiagram, render } from 'pele';
+import type { ParsedDiagramModel, StateModel } from 'pele';
+import { SaxesParser } from 'saxes';
+import { DiagramError } from './diagram-mode.ts';
+
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const XML_NAMESPACE = 'http://www.w3.org/XML/1998/namespace';
+const ELEMENTS: Readonly<Record<string, true>> = {
+  svg: true, g: true, defs: true, title: true, desc: true, path: true, line: true, polyline: true,
+  polygon: true, rect: true, circle: true, ellipse: true, text: true, tspan: true,
+  linearGradient: true, radialGradient: true, stop: true, clipPath: true, marker: true,
+};
+const GRAPHICS: Readonly<Record<string, true>> = {
+  path: true, line: true, polyline: true, polygon: true, rect: true, circle: true, ellipse: true, text: true,
+};
+/**
+ * The attributes a build-time page may carry, keyed by qualified name.
+ *
+ * This is an emission allowlist, not a property table: anything the renderer
+ * emits that is not here is dropped, and the attributes that could execute or
+ * fetch — `on*`, `href`, `src` — are refused above it rather than filtered
+ * through it. It survives decision C unchanged because it never decided how a
+ * CSS value renders; it decides which of the renderer's own attributes a page
+ * may keep.
+ */
+const SAFE_ATTRIBUTES: Readonly<Record<string, true>> = {
+  id: true, class: true, role: true, 'aria-label': true, 'aria-labelledby': true,
+  'aria-describedby': true, 'aria-roledescription': true, 'data-id': true, 'data-icon': true,
+  viewBox: true, width: true, height: true, preserveAspectRatio: true,
+  x: true, y: true, x1: true, y1: true, x2: true, y2: true, cx: true, cy: true,
+  r: true, rx: true, ry: true, dx: true, dy: true, d: true, points: true, transform: true,
+  fill: true, 'fill-opacity': true, 'fill-rule': true, stroke: true, 'stroke-width': true,
+  'stroke-opacity': true, 'stroke-dasharray': true, 'stroke-dashoffset': true,
+  'stroke-linecap': true, 'stroke-linejoin': true, opacity: true, 'font-size': true,
+  'font-family': true, 'font-weight': true, 'font-style': true, 'text-anchor': true,
+  'text-decoration': true, 'dominant-baseline': true, 'clip-path': true, 'clip-rule': true,
+  'baseline-shift': true, 'letter-spacing': true, 'word-spacing': true,
+  gradientUnits: true, gradientTransform: true, offset: true, 'stop-color': true,
+  'stop-opacity': true, 'marker-start': true, 'marker-mid': true, 'marker-end': true,
+  markerWidth: true, markerHeight: true, markerUnits: true, refX: true, refY: true, orient: true,
+};
+/**
+ * The attributes whose value the renderer resolves as a resource reference:
+ * paint servers, clip paths and markers. Their values are the ones
+ * {@link inspectResources} walks.
+ *
+ * Scoped by measurement rather than by a value rule. Measured 2026-11-15: a
+ * value-context walk of *every* attribute value of the 23-type matrix and the
+ * corpus fails on the renderer's own `xmlns="http://www.w3.org/2000/svg"` and
+ * `data-id="A->B"` (css-tree cannot parse `http://…` or a bare `->` as a CSS
+ * value), so the guard's scope cannot be widened to all attributes without
+ * turning real output into errors; it is the family whose value *is* a URL when
+ * it is anything.
+ */
+const RESOURCE_ATTRIBUTES: Readonly<Record<string, true>> = {
+  fill: true, stroke: true, 'stop-color': true, 'clip-path': true,
+  'marker-start': true, 'marker-mid': true, 'marker-end': true,
+};
+
+const XML_ENTITIES: Readonly<Record<string, string>> = {
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;',
+};
+
+/**
+ * Every declaration Pele 1.13.0 was measured to write into the root `style`
+ * block, as `property: value` with the value spelled exactly as the renderer
+ * writes it, in the order the renderer writes them.
+ *
+ * Measured 2026-11-15 by rendering the 23-type matrix of
+ * `tests/diagram-engine.test.ts`, the three real corpus diagrams
+ * (`docs/core-design/architecture.md`, `example/guides/feature-showcase.md`,
+ * `tests/fixtures/markdown/kitchen-sink.md`) and a bold-run probe through
+ * `pele.render()` with the options this adapter pins, then reading every
+ * `style` attribute with the same `css-tree` reader this file uses — so the
+ * measurement and the gate cannot disagree about a value's spelling.
+ * Re-measured 2026-11-16 over the fixed-set row's 30 sources, which now add the
+ * branch-only fixtures (`+member$` in a class diagram and two treemap leaves
+ * below the clamp threshold): all 22 members still produced, none added, none
+ * dropped.
+ *
+ * The block is not one constant string. Read from Pele's own bundle, four
+ * members — `--_r`, `--_tw`, `--_hw` and `--_w` — are appended only when the
+ * rendered markup consumes them: Pele
+ * matches `/var\(--_(r|tw|hw|w)\)/` over the body before it writes the root
+ * block, so a source that rounds a corner carries `--_r`, one with a title or a
+ * heading carries `--_tw`/`--_hw`, and one with a bold run carries `--_w`.
+ * Measured over the 29 matrix-and-corpus sources (the r8 fixtures included):
+ * `--_r` in 22, `--_tw` in 7, `--_hw` in 7, `--_w` in 0 — the bold probe is
+ * what exercises the last one, and the gate carries the same probe for the same
+ * reason.
+ *
+ * Re-measure when `pele` in `package.json` moves. The equality half of the
+ * fixed-set gate in `tests/diagram-engine.test.ts` fails on a member here that
+ * the renders no longer produce, and a new member Pele starts writing stops the
+ * build in this file by name instead of dropping the declaration.
+ */
+export const ROOT_STYLE_DECLARATIONS: readonly string[] = [
+  'max-width: 100%',
+  'height: auto',
+  '--_bg: var(--pele-bg,#fff)',
+  '--_fg: var(--pele-fg,#1f1f1f)',
+  '--_m: var(--pele-muted,#6e6e6e)',
+  '--_l: var(--pele-line,#1f1f1f)',
+  '--_s: var(--pele-surface,#f3f3f3)',
+  '--_a: var(--pele-surface-alt,#e6e6e6)',
+  '--_b: var(--pele-border,#8a8a8a)',
+  '--_c: var(--pele-accent,#5b7bd5)',
+  'color: var(--_fg)',
+  '--_r: var(--pele-radius,4px)',
+  '--_tw: var(--pele-title-weight,bold)',
+  '--_hw: var(--pele-heading-weight,bold)',
+  '--_w: var(--pele-bold-weight,bold)',
+  '--_fm: var(--pele-font-mono,monospace)',
+  'font: 16px sans-serif',
+  'letter-spacing: normal',
+  'word-spacing: normal',
+  'text-transform: none',
+  'direction: ltr',
+  'font-family: var(--pele-font,sans-serif)',
+];
+
+/**
+ * Every whole declaration Pele 1.13.0 was measured to write into a non-root
+ * `style` attribute of a directive-free source: the rounding reference,
+ * prepended to the element's own style, and the underline of a static class
+ * member. Measured the same way as {@link ROOT_STYLE_DECLARATIONS}, over the
+ * same sources — re-measured 2026-11-16 over the fixed-set row's 30 sources
+ * (which now include the branch-only fixtures): 57 of 535 non-root elements
+ * carried an element style, 54 the rounding, 1 the member underline, 2 a clamp,
+ * and no element carried anything else.
+ *
+ * The parametric clamp is deliberately **not** a member here: literal equality
+ * cannot spell `rx:min(var(--_r),0.5px)` without either leaving every other
+ * cell's value outside the guard or admitting spellings the renderer never
+ * writes. It is {@link elementStyleClamp}, an explicit narrow matcher beside
+ * this set.
+ *
+ * Membership is exact, down to the spelling of the value: `rx: var(--_r)` is
+ * stripped, and `rx: 4` or `rx: var(--_R)` beside it is an author declaration
+ * and is refused by the output check below. **That exactness is a spelling, not
+ * a provenance** — measured 2026-11-15 (r7): Pele's writer lower-cases the
+ * property and normalises `property: value`, so an authored `RX:var(--_r)`,
+ * `Rx:var(--_r)`, `rx : var(--_r)` or `rx: var(--_r)` reaches the element as
+ * this set's own text and was silently stripped. Provenance is decided before
+ * the output — {@link authorDirectives} reads the directive out of the parsed
+ * model, which still carries the author's spelling — so this set only ever
+ * decides whether a declaration read from the output is Pele's own, and the
+ * directive that would have made it the author's has already stopped the build.
+ */
+export const ELEMENT_STYLE_DECLARATIONS: readonly string[] = ['rx: var(--_r)', 'text-decoration: underline'];
+
+/**
+ * The clamp Pele substitutes for its rounding on a treemap cell narrower than
+ * four of its radii, returned as the attribute value the declaration is carried
+ * as (`min(var(--_r),0.5px)`), or `undefined` when the declaration is not that
+ * family.
+ *
+ * Read from Pele's own bundle (measured 2026-11-16): its treemap renderer
+ * replaces `rx:var(--_r)` with `rx:min(var(--_r),Npx)` whenever
+ * `Math.min(cell.w, cell.h) / 4 < 4`, `N` being that quarter as the renderer's
+ * own number formatter prints it. Two measured facts decide the spellings that
+ * substitution can produce, and the matcher accepts exactly them. The treemap
+ * layout rounds every cell edge before the renderer reads it
+ * (`g.x = Math.round(…)`, `g.w = Math.round(…) - g.x` in the treemap chunk), so
+ * both dimensions are integers and `N` is a quarter — `k/4` for an integer `k`;
+ * and the number formatter prints hundredths with trailing zeros stripped, so
+ * the quarters print `0`, `0.25`, `0.5`, `0.75`, `1`, … and never `0.50`,
+ * `0.00` or `0.2`. Measured over an instrumented sweep of 4812 treemap sources
+ * (2026-11-16: both clamp fixtures, 4500 single-value geometries, 300
+ * multi-cell sources, nested layouts — 3646 substitutions over 10084 cell
+ * reads): every printed value was one of the sixteen canonically printed
+ * quarters, the largest cell that clamps had min-dimension 15 and printed
+ * `3.75`, min-dimension 16 and up was substituted not at all, and no dimension
+ * was ever fractional. The substitution's own gate makes `3.75` the largest
+ * value it can carry — the threshold `4` is printable by the formatter but
+ * never reaches it — so the bound below refuses `4` with everything above it.
+ *
+ * The matcher reads the *normalised* spelling {@link styleDeclarations} hands
+ * the output branch: the exact property, the exact `var(--_r)` argument, and
+ * exactly that grammar — no leading zero, no trailing zero, and nothing at or
+ * above the strict gate's four. A declaration outside it is still an error, so
+ * widening the element set to this second form does not widen it to anything
+ * else.
+ *
+ * Exported so the fixed-set row can hold the census to the same matcher instead
+ * of restating the pattern, exactly as the two sets are exported for the same
+ * reason.
+ */
+export function elementStyleClamp(declaration: string): string | undefined {
+  const match = /^rx: min\(var\(--_r\),((?:0|[1-9]\d*)(?:\.25|\.5|\.75)?)px\)$/.exec(declaration);
+  if (match === null || Number(match[1]) >= 4) return undefined;
+  return `min(var(--_r),${match[1]}px)`;
+}
+
+const ROOT_STYLE_SET: ReadonlySet<string> = new Set(ROOT_STYLE_DECLARATIONS);
+const ELEMENT_STYLE_SET: ReadonlySet<string> = new Set(ELEMENT_STYLE_DECLARATIONS);
+
+/**
+ * A `style` attribute's declarations, in the order they were written.
+ *
+ * The value is read as source, from the position the parser reports, rather
+ * than rebuilt from the AST: the refusal quotes the author's own spelling
+ * (`#fff`, `Georgia`, `0.5`) character for character, and `css-tree`'s declared
+ * slice here — `src/types/css-tree.d.ts` — deliberately has no generator.
+ *
+ * A node the parser cannot read as a declaration is an error, not a skip: this
+ * input reaches the build from a renderer, and a half-parsed declaration list
+ * is how a dropped value hides.
+ */
+function styleDeclarations(style: string): { property: string; value: string }[] {
+  const declarations: { property: string; value: string }[] = [];
+  const list = parse(style, { context: 'declarationList', positions: true });
+  for (const node of list.children?.toArray() ?? []) {
+    if (node.type !== 'Declaration') {
+      throw new Error(`the renderer emitted an unreadable style attribute: ${style.slice(0, 80)}`);
+    }
+    const property = node['property'];
+    if (typeof property !== 'string' || property === '') {
+      throw new Error(`the renderer emitted a style declaration with no property: ${style.slice(0, 80)}`);
+    }
+    if (node['important'] === true) {
+      throw new Error(`the renderer emitted !important in a style attribute: ${property}`);
+    }
+    declarations.push({ property, value: sourceRangeOf(node['value'], style) });
+  }
+  return declarations;
+}
+
+/** One node's own text, from the offsets the parser reported for it. */
+function sourceRangeOf(node: unknown, source: string): string {
+  const loc = typeof node === 'object' && node !== null ? (node as Record<string, unknown>)['loc'] : undefined;
+  if (typeof loc !== 'object' || loc === null) throw new Error('the parser reported no source position');
+  const offsets = loc as Record<string, unknown>;
+  const start = offsets['start'];
+  const end = offsets['end'];
+  const from = typeof start === 'object' && start !== null ? (start as Record<string, unknown>)['offset'] : undefined;
+  const to = typeof end === 'object' && end !== null ? (end as Record<string, unknown>)['offset'] : undefined;
+  if (typeof from !== 'number' || typeof to !== 'number') throw new Error('the parser reported no source offset');
+  return source.slice(from, to).trim();
+}
+
+/**
+ * One author styling directive a parsed model retained, as the model keeps it.
+ */
+interface AuthorDirective {
+  origin: 'style' | 'classDef' | 'linkStyle';
+  /** The declaration text the model kept: `property:value` as the author wrote it, or the parser's own spelling. */
+  declared: readonly string[];
+}
+
+/**
+ * The fields every flowchart-shaped model keeps its author declarations in.
+ *
+ * `flowchart`, `flowchart-v2` and `swimlane` all parse to `type: 'flowchart'`
+ * and `agentflow` to its own member (measured 2026-11-15), but the four fields
+ * below are the same object shape in both, so one scan reads both.
+ */
+interface FlowchartShapedModel {
+  readonly nodes: ReadonlyMap<string, { readonly styles: readonly string[] }>;
+  readonly classes: ReadonlyMap<
+    string,
+    { readonly styles: readonly string[]; readonly textStyles?: readonly string[] }
+  >;
+  readonly edges: readonly { readonly style?: readonly string[] }[];
+  readonly defaultEdgeStyle?: readonly string[];
+}
+
+/**
+ * One quadrant `classDef` as `pele.parse` keeps it: the four properties the
+ * quadrant parser accepts, validated and typed, never the author's text. That
+ * case is the one that rebuilds `property:value` from the model instead of
+ * quoting it.
+ */
+interface QuadrantPointStyle {
+  readonly radius?: number;
+  readonly color?: string;
+  readonly strokeColor?: string;
+  readonly strokeWidth?: string;
+}
+
+/**
+ * The author styling directives `pele.parse` retained from the source, in a
+ * deterministic order, as the model spells them.
+ *
+ * This is the provenance half of decision C, and it exists because the
+ * output-level half cannot have one: measured 2026-11-15, Pele's writer
+ * normalises what it writes — an authored `RX:var(--_r)`, `Rx:var(--_r)` or
+ * `rx : var(--_r)` lands in an element's `style` attribute as `rx:var(--_r)`,
+ * the exact text of Pele's own rounding — so a declaration read back from the
+ * output can be spelled like the fixed set without being Pele's. The parsed
+ * model still carries the author's own text, and quoting it is what lets the
+ * refusal name the declaration *and* the directive that carried it.
+ *
+ * Two rules keep the origin it reports true, both from the r8 review:
+ *
+ * 1. **Definition containers before the copies Pele compiles into nodes.** A
+ *    `classDef` is kept in the model's definition map *and* compiled into the
+ *    style array of every node it applies to, so a node-first scan recorded
+ *    the copy as an authored `style` directive — `classDiagram`'s
+ *    `classDef default fill:#ff0000` was refused as `style`. The cases below
+ *    read the definition containers first, so a declaration that exists in one
+ *    is reported with the directive that really carried it.
+ * 2. **The whole node inventory, not the top-level list.** Block's
+ *    `setHierarchy()` ends with `blocks = root.children`, so the top-level list
+ *    contains no nested node and no pending styled target, while `byId`
+ *    contains all of them. r8: a nested `style A rx:var(--_r)` reached the
+ *    output, matched the fixed set by spelling and was converted — the round-7
+ *    defect, on a node the scan never visited.
+ *
+ * Measured 2026-11-16, pele 1.13.0, one probe per registered type (33: the
+ * `detectType` names, each given its own minimal source) × four directive forms
+ * (`style`, `classDef` applied, `classDef` unused, `linkStyle`), with the model
+ * walked for the declaration's own text and every hit classified as a
+ * declaration container or as content. Every accepted probe either retains the
+ * declaration in a field a case below reads — quadrant's parsed `PointStyle` is
+ * why that case rebuilds text — reaches the output backstop, or is swallowed as
+ * content; and a swallowed line is not a directive, because the declaration its
+ * text resembles never exists in the model (kanban keeps it as a section id,
+ * treeView and ishikawa as a label, journey and gantt as a task, state and
+ * class as elements named after the words). The sweep splits by *value* as well
+ * as by type — a function value is refused at the parse in er, requirement and
+ * flowchart where a hex colour is accepted — so it is the sweep that classifies
+ * a line, never a list in this comment; re-measure it when `pele` in
+ * `package.json` moves, exactly as the fixed sets above are re-measured. The
+ * refusal is by name, never a silent drop.
+ */
+function authorDirectives(model: ParsedDiagramModel): AuthorDirective[] {
+  const directives: AuthorDirective[] = [];
+  const record = (origin: AuthorDirective['origin'], declared: readonly string[] | undefined): void => {
+    const kept = (declared ?? []).filter((declaration) => declaration.trim() !== '');
+    if (kept.length > 0) directives.push({ origin, declared: kept });
+  };
+  const recordStyles = (
+    origin: AuthorDirective['origin'],
+    holder: { readonly styles: readonly string[]; readonly textStyles?: readonly string[] },
+  ): void => {
+    record(origin, holder.styles);
+    record(origin, holder.textStyles);
+  };
+  switch (model.type) {
+    case 'flowchart':
+    case 'agentflow': {
+      // Rule 1: the definition containers first, so a declaration a node
+      // carries from a definition is reported as the `classDef` that carried
+      // it; then the edge directives.
+      const shaped: FlowchartShapedModel = model;
+      for (const definition of shaped.classes.values()) recordStyles('classDef', definition);
+      for (const node of shaped.nodes.values()) record('style', node.styles);
+      for (const edge of shaped.edges) record('linkStyle', edge.style);
+      record('linkStyle', shaped.defaultEdgeStyle);
+      break;
+    }
+    case 'state': {
+      // `rootDoc`, not the compiled `states` map: the statement is the directive
+      // as parsed, it survives inside a composite state's own `doc`, and the
+      // node's compiled styles would have to be told apart from a classDef's by
+      // field name alone (`cssStyles` vs `cssCompiledStyles`).
+      const visit = (statements: readonly StateModel['rootDoc'][number][]): void => {
+        for (const statement of statements) {
+          if (typeof statement !== 'object' || statement === null) continue;
+          if (statement.stmt === 'style') record('style', [statement.styleClass]);
+          else if (statement.stmt === 'classDef') record('classDef', [statement.classes]);
+          else if (statement.stmt === 'state' && statement.doc) visit(statement.doc);
+        }
+      };
+      visit(model.rootDoc);
+      break;
+    }
+    case 'class': {
+      // Definitions first: Pele tags every new class `default` and copies a
+      // matching definition into that node's `styles` at creation (rule 1).
+      for (const definition of model.styleClasses.values()) recordStyles('classDef', definition);
+      for (const node of model.classes.values()) record('style', node.styles);
+      break;
+    }
+    case 'er': {
+      for (const definition of model.classes.values()) recordStyles('classDef', definition);
+      for (const entity of model.entities.values()) record('style', entity.cssStyles);
+      for (const subgraph of model.subgraphs) record('style', subgraph.cssStyles);
+      break;
+    }
+    case 'requirement': {
+      // Definitions first: applying a class compiles its declarations into the
+      // requirement's own `cssStyles`, and a node-first scan reported that copy
+      // as an authored `style` (r8).
+      for (const definition of model.classes.values()) recordStyles('classDef', definition);
+      for (const requirement of model.requirements.values()) record('style', requirement.cssStyles);
+      for (const element of model.elements.values()) record('style', element.cssStyles);
+      break;
+    }
+    case 'block': {
+      // `byId`, not the top-level `blocks` list (rule 2): it holds every node —
+      // a `block:` composite's children, and the target of a style that named
+      // something no block defined.
+      for (const definition of model.classes.values()) recordStyles('classDef', definition);
+      for (const block of model.byId.values()) record('style', block.styles);
+      break;
+    }
+    case 'usecase': {
+      for (const definition of model.classDefs.values()) record('classDef', definition.styles);
+      for (const actor of model.actors.values()) record('style', actor.styles);
+      for (const useCase of model.useCases.values()) record('style', useCase.styles);
+      for (const boundary of model.systemBoundaries.values()) record('style', boundary.styles);
+      for (const relationship of model.relationships) record('style', relationship.styles);
+      for (const jsonNode of model.jsonNodes.values()) record('style', jsonNode.styles);
+      break;
+    }
+    case 'venn': {
+      // The one model that keeps a declaration as a parsed pair rather than as
+      // the author's text; the pair is re-joined into `property:value` and read
+      // by the same reader as every other spelling.
+      for (const styled of model.styles) {
+        record('style', [...styled.styles].map(([property, value]) => `${property}:${value}`));
+      }
+      break;
+    }
+    case 'treemap': {
+      for (const declared of model.classes.values()) record('classDef', declared);
+      break;
+    }
+    case 'quadrantChart': {
+      // The definition map, because that is what the output backstop cannot
+      // see: this parser refuses the `style`, `class` and `linkStyle` forms, an
+      // applied definition (`A:::red: [0.3, 0.6]`) compiles from the same map
+      // and is refused here too, and an *unused* one writes nothing to the
+      // output at all — the r8 finding was exactly that accepted source. A
+      // point's own style list keeps to the output backstop: its typed fields
+      // forward `fill`/`stroke`/`stroke-width` values, none of which can spell
+      // a fixed-set member, and it is not one of the three directives this
+      // function reads.
+      const shaped: { readonly classes: ReadonlyMap<string, QuadrantPointStyle> } = model;
+      for (const definition of shaped.classes.values()) record('classDef', quadrantDeclarations(definition));
+      break;
+    }
+    default:
+      break;
+  }
+  return directives;
+}
+
+/** One quadrant definition rebuilt as the declarations the model kept, one per property it validated. */
+function quadrantDeclarations(style: QuadrantPointStyle): string[] {
+  const declarations: string[] = [];
+  if (style.radius !== undefined) declarations.push(`radius:${style.radius}`);
+  if (style.color !== undefined) declarations.push(`color:${style.color}`);
+  if (style.strokeColor !== undefined) declarations.push(`stroke-color:${style.strokeColor}`);
+  if (style.strokeWidth !== undefined) declarations.push(`stroke-width:${style.strokeWidth}`);
+  return declarations;
+}
+
+/**
+ * The declarations of one directive as the refusal quotes them: read with the
+ * same `css-tree` reader the output branch uses, so the value keeps the
+ * author's spelling (`#fff`, `Georgia`, `0.5`) under one `property: value`
+ * join, and the two halves of the file cannot disagree about a declaration's
+ * text. Text the reader cannot read as a declaration is quoted as the model
+ * kept it rather than dropped.
+ */
+function declarationTexts(declared: readonly string[]): string {
+  const texts: string[] = [];
+  for (const declaration of declared) {
+    let read: { property: string; value: string }[] = [];
+    try {
+      read = styleDeclarations(declaration);
+    } catch {
+      read = [];
+    }
+    if (read.length === 0) texts.push(declaration.trim());
+    else for (const { property, value } of read) texts.push(`${property}: ${value}`);
+  }
+  return texts.join(', ');
+}
+
+/**
+ * The refusal for a directive the parsed model reports, in the shape decision C
+ * requires of every refusal: the declaration as written, the directive that
+ * carried it, and the remedy. The output-level branch below carries the same
+ * three, one distinction apart: it can name the directive family only, because
+ * a declaration read back from the output no longer says which directive wrote
+ * it.
+ */
+function authorRefusal(directive: AuthorDirective): string {
+  return 'the pele engine does not support author declarations, but the source carries one: '
+    + declarationTexts(directive.declared)
+    + ` (an author '${directive.origin}' directive; this engine refuses every author 'style', 'classDef' or`
+    + " 'linkStyle' declaration) — remove it, rewrite it with pele's native syntax, or set"
+    + " DIAGRAM_ENGINE = 'mermaid'";
+}
+
+function escapeXml(value: string): string {
+  return value.replace(/[&<>"\t\n\r]/g, (character) => XML_ENTITIES[character]!);
+}
+
+/**
+ * One walk over a value, with `css-tree`'s own parse: the AST for everything it
+ * parses, plus the `Raw` nodes it keeps for text it cannot parse — a CSS
+ * variable's fallback arrives that way, and a resource can hide inside it.
+ */
+function visitValue(value: string, visit: (node: CssNode) => void): void {
+  walk(parse(value, { context: 'value' }), (node) => {
+    visit(node);
+    if (node.type === 'Raw') visitValue(node.value ?? '', visit);
+  });
+}
+
+/**
+ * An external resource anywhere in a value is refused, a paint property or not:
+ * `url(#fragment)` is the renderer's own namespace and passes, anything else is
+ * a fetch the page would make — including through an escape or a `var()`
+ * fallback, which is why the walk parses rather than matches text.
+ *
+ * Pele's own value filter drops an author value carrying `url(`, so this guards
+ * the attribute path — the renderer's direct output — rather than a declaration
+ * the adapter would have converted; measured 2026-11-15, and the reason the
+ * scope is {@link RESOURCE_ATTRIBUTES}.
+ */
+function inspectResources(value: string): void {
+  visitValue(value, (node) => {
+    if (node.type === 'Url' && !/^#[A-Za-z0-9_.:-]+$/.test(node.value ?? '')) {
+      throw new Error(`the renderer emitted an external paint reference: url(${node.value ?? ''})`);
+    }
+  });
+}
+
+function sanitizeSvg(svg: string, accessibleName: string): string {
+  const markup = svg.trim();
+  if (markup === '') throw new Error('the renderer produced empty output');
+  const output: string[] = [];
+  let rootSeen = false;
+  let hasGraphics = false;
+  const parser = new SaxesParser({ xmlns: true });
+  parser.on('doctype', () => { throw new Error('the renderer emitted a DOCTYPE'); });
+  parser.on('processinginstruction', () => { throw new Error('the renderer emitted a processing instruction'); });
+  parser.on('opentag', (tag) => {
+    const isRoot = !rootSeen;
+    if (tag.uri !== SVG_NAMESPACE || tag.prefix !== '' || ELEMENTS[tag.local] !== true) {
+      throw new Error(`the renderer emitted an unsafe element: ${tag.name}`);
+    }
+    if (isRoot) {
+      if (tag.local !== 'svg' || !tag.attributes['viewBox']) {
+        throw new Error('the renderer produced no scalable <svg> element');
+      }
+      rootSeen = true;
+    }
+    if (GRAPHICS[tag.local] === true) hasGraphics = true;
+    // Decision C, exactly: a declaration from the fixed set is stripped, and
+    // anything else stops the build naming the property and the value. No
+    // element ever keeps the attribute — `style-src 'self'` does not permit one
+    // — and the two kinds are carried instead: the root block whole by
+    // `diagram.css`, the element forms by `pele-rounded` for the rounding
+    // token and by the element's own `rx` / `text-decoration` attribute for the
+    // clamp and the static-member underline. The last rounding declaration
+    // wins, exactly as the cascade would resolve the style attribute it came
+    // from, so `rounded` and `clamp` are one carrier slot rather than two.
+    let rounded = false;
+    let clamp: string | undefined;
+    let underlined = false;
+    const style = tag.attributes['style']?.value ?? '';
+    if (style !== '') {
+      for (const { property, value } of styleDeclarations(style)) {
+        const declaration = `${property}: ${value}`;
+        if (isRoot) {
+          if (ROOT_STYLE_SET.has(declaration)) continue;
+          throw new Error(
+            'the renderer emitted a root style declaration this build does not recognise: ' + declaration
+            + ' (the fixed set is measured from pele 1.13.0 without author directives — re-measure it in this file'
+            + ' after a pele upgrade; an author %%{init}%% theme adds --pele-series-* declarations here)'
+            + " — remove the theme directive or set DIAGRAM_ENGINE = 'mermaid'",
+          );
+        }
+        const family = elementStyleClamp(declaration);
+        if (!ELEMENT_STYLE_SET.has(declaration) && family === undefined) {
+          throw new Error(
+            'the pele engine does not support author declarations, but one reached the output: ' + declaration
+            + " (an author 'style', 'classDef' or 'linkStyle' directive; this engine strips only pele's own fixed"
+            + " inline set) — remove it, rewrite it with pele's native syntax, or set DIAGRAM_ENGINE = 'mermaid'",
+          );
+        }
+        if (declaration === 'rx: var(--_r)') {
+          rounded = true;
+          clamp = undefined;
+        } else if (family !== undefined) {
+          clamp = family;
+          rounded = false;
+        } else {
+          underlined = true;
+        }
+      }
+    }
+    let hasClass = false;
+    output.push(`<${tag.local}`);
+    for (const name in tag.attributes) {
+      const attribute = tag.attributes[name]!;
+      if (/^on/i.test(attribute.local) || /^(?:href|src)$/i.test(attribute.local)) {
+        throw new Error(`the renderer emitted an unsafe attribute: ${name}`);
+      }
+      if (attribute.local.toLowerCase() === 'style') continue;
+      if (name === 'xmlns' && attribute.value === SVG_NAMESPACE) {
+        output.push(` xmlns="${SVG_NAMESPACE}"`);
+        continue;
+      }
+      if (attribute.uri === XML_NAMESPACE && attribute.local === 'space') {
+        output.push(` xml:space="${escapeXml(attribute.value)}"`);
+        continue;
+      }
+      if (attribute.prefix !== '' || SAFE_ATTRIBUTES[name] !== true) continue;
+      // Pele's root role and accessible-name attributes are replaced by the site's caption.
+      if (isRoot && ['role', 'aria-label', 'aria-labelledby'].includes(name)) continue;
+      // A declaration carried as an attribute replaces the renderer's attribute
+      // of that name: the style declaration outranked it in the cascade the
+      // renderer wrote, so the carrier must too. (Measured for pele 1.13.0:
+      // neither a clamped treemap rect nor a static member ever carries one.)
+      if ((name === 'rx' && clamp !== undefined) || (name === 'text-decoration' && underlined)) continue;
+      if (RESOURCE_ATTRIBUTES[name] === true) inspectResources(attribute.value);
+      const value = name === 'class' && rounded ? `${attribute.value} pele-rounded` : attribute.value;
+      if (name === 'class') hasClass = true;
+      output.push(` ${name}="${escapeXml(value)}"`);
+    }
+    if (rounded && !hasClass) output.push(' class="pele-rounded"');
+    if (clamp !== undefined) output.push(` rx="${clamp}"`);
+    if (underlined) output.push(' text-decoration="underline"');
+    if (isRoot) {
+      output.push(` role="graphics-document" aria-label="${escapeXml(accessibleName)}" focusable="false"`);
+    }
+    output.push('>');
+  });
+  parser.on('closetag', (tag) => { output.push(`</${tag.local}>`); });
+  const text = (value: string): void => { output.push(escapeXml(value)); };
+  parser.on('text', text);
+  parser.on('cdata', text);
+  parser.write(markup).close();
+  if (!rootSeen || !hasGraphics) throw new Error('the renderer produced an empty SVG');
+  return output.join('');
+}
+
+export async function renderDiagram(source: string, diagramId: string, accessibleName: string): Promise<string> {
+  try {
+    // The model is built once and used twice: the provenance check reads it, and
+    // the same model renders, so what the check quoted is what the renderer saw.
+    // `render(model, options)` is byte-identical to `render(source, options)`
+    // (measured 2026-11-15); the row named "Pele renders a parsed model to the
+    // same bytes as its own source" in `tests/diagram-engine.test.ts` holds both
+    // to those bytes over every census source on every run.
+    const model = parseDiagram(source);
+    const [directive] = authorDirectives(model);
+    if (directive !== undefined) throw new Error(authorRefusal(directive));
+    const { svg } = render(model, { idPrefix: diagramId, links: false, images: false, now: 0 });
+    return sanitizeSvg(svg, accessibleName);
+  } catch (error) {
+    throw new DiagramError(source, error instanceof Error ? error.message.split('\n')[0]! : String(error));
+  }
+}

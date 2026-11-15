@@ -38,6 +38,7 @@
  * this pass is defence in depth rather than the only boundary.
  */
 
+import { DiagramError } from './diagram-mode.ts';
 import { createMermaidEnvironment, resetSeededRandom } from './mermaid-environment.ts';
 
 /**
@@ -136,16 +137,13 @@ const URL_ATTRIBUTES: readonly string[] = ['href', 'xlink:href', 'src'];
 /** Presentation attributes only apply to elements in this namespace. */
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
-/** Thrown when a diagram cannot be rendered safely. The build stops. */
-export class DiagramError extends Error {
-  readonly source: string;
-
-  constructor(source: string, message: string) {
-    super(`${message}\n  in diagram: ${source.trim().slice(0, 200)}`);
-    this.name = 'DiagramError';
-    this.source = source;
-  }
-}
+/**
+ * Re-exported, not defined here: the class belongs to neither adapter.
+ *
+ * Its importers keep this path, and defining it here would put a DOM-free class
+ * behind the DOM shim this module loads.
+ */
+export { DiagramError };
 
 /** Split a declaration list, respecting quotes and parentheses. */
 function declarationsOf(css: string): { property: string; value: string; isImportant: boolean }[] {
