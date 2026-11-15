@@ -14,10 +14,6 @@
  * 86% of its rules (1,279 of 1,495) match no element in any rendered diagram,
  * because Mermaid emits the union of every shape it could draw.
  *
- * Colour is likewise absent here. Each diagram carries its own
- * `light-dark(light, dark)` values, paired at build time from two renders, so
- * one SVG follows the system preference and the site's own theme toggle with no
- * second file and no script.
  */
 
 .diagram {
@@ -38,6 +34,57 @@
 .diagram svg {
   max-width: 100%;
   height: auto;
+}
+
+/*
+ * Pele's root style block, moved here because CSP never permits `style=` in a
+ * build-time diagram. The public variables map to the site's `light-dark()`
+ * palettes in tokens.css; the private aliases are what Pele's SVG attributes
+ * consume. Series colours must be mapped too, or charts use Pele's own palette.
+ */
+.diagram svg.pele {
+  --pele-bg: var(--color-bg);
+  --pele-fg: var(--color-text);
+  --pele-muted: var(--color-muted);
+  --pele-line: var(--color-text);
+  --pele-surface: var(--color-surface);
+  --pele-surface-alt: var(--color-surface-alt);
+  --pele-border: var(--color-line-strong);
+  --pele-accent: var(--color-accent);
+  --pele-series-1: var(--color-accent);
+  --pele-series-2: var(--color-link);
+  --pele-series-3: var(--color-syntax-keyword);
+  --pele-series-4: var(--color-syntax-literal);
+  --pele-series-5: var(--color-muted);
+  --pele-series-6: var(--color-line-strong);
+  --pele-series-7: var(--color-text);
+  --pele-series-8: var(--color-surface-alt);
+  --pele-font: var(--font-sans);
+  --pele-font-mono: var(--font-mono);
+  --pele-radius: var(--radius-sm);
+  --_bg: var(--pele-bg);
+  --_fg: var(--pele-fg);
+  --_m: var(--pele-muted);
+  --_l: var(--pele-line);
+  --_s: var(--pele-surface);
+  --_a: var(--pele-surface-alt);
+  --_b: var(--pele-border);
+  --_c: var(--pele-accent);
+  --_r: var(--pele-radius);
+  --_tw: var(--pele-title-weight, bold);
+  --_hw: var(--pele-heading-weight, bold);
+  --_w: var(--pele-bold-weight, bold);
+  --_fm: var(--pele-font-mono);
+  color: var(--_fg);
+  font: 16px var(--pele-font);
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-transform: none;
+  direction: ltr;
+}
+
+.diagram svg.pele .pele-rounded {
+  rx: var(--_r);
 }
 
 /*

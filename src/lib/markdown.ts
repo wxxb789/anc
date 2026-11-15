@@ -1973,7 +1973,7 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
             : // Imported only on this branch: `mermaid-render.ts` loads a DOM
               // shim that costs about a second, and `client` mode — the one that
               // ships — never reaches here, so it never pays for it.
-              await (await import('./mermaid-render.ts')).renderDiagram(
+              await (await import('./diagram-engine.ts')).renderDiagram(
                 request.source,
                 `diagram-${index}`,
                 diagramCaption(request.source, chrome.diagramCaption),

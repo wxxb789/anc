@@ -112,6 +112,7 @@
     "happy-dom": "21.0.4",
     "mermaid": "12.2.0",
     "pagefind": "^1.6.0",
+    "pele": "1.13.0",
     "prismjs": "^1.30.0",
     "sanitize-html": "^2.18.1",
     "satteri": "^0.11.7",

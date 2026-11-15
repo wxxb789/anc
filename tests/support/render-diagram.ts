@@ -14,7 +14,7 @@
  * harness becomes a junk drawer.
  */
 
-import { renderDiagram } from '../../src/lib/mermaid-render.ts';
+import { renderDiagram } from '../../src/lib/diagram-engine.ts';
 
 const source = process.argv[2];
 if (source === undefined) {
