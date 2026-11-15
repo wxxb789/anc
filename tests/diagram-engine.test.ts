@@ -54,6 +54,31 @@ const DIAGRAMS: Readonly<Record<string, string>> = {
   info: 'info',
 };
 
+/**
+ * Directive-free sources that reach a renderer branch no type fixture reaches,
+ * one per form Pele writes into an element's `style` outside its plain rounding
+ * (r8). Both of the first two were review findings: a legal, directive-free
+ * source that failed to build.
+ *
+ * `classStaticMember` is the `$` classifier Pele's class renderer underlines
+ * without any author declaration; `treemapClampZero` is the geometry that
+ * crosses Pele's clamp threshold (`Math.min(cell.w, cell.h) / 4 < 4`), where it
+ * substitutes its parametric `rx:min(var(--_r),Npx)` for the rounding. The
+ * third is the same branch with a *nonzero* clamp: the zero case alone would
+ * leave the matcher's number unexercised, and the carrier row measures this one
+ * against `--_r` in a browser.
+ */
+const BRANCH_FIXTURES: Readonly<Record<string, string>> = {
+  classStaticMember: 'classDiagram\n  class A {\n    +count$\n  }\n',
+  treemapClampZero: 'treemap-beta\n  "A": 1\n  "B": 100000\n',
+  treemapClampVisible: 'treemap-beta\n  "A": 1000\n  "B": 100000\n',
+};
+
+/** The type fixtures and the branch-only fixtures, in one list for the rows that read both. */
+const DIRECTIVE_FREE_FIXTURES: ReadonlyArray<readonly [name: string, source: string]> = [
+  ...Object.entries(DIAGRAMS), ...Object.entries(BRANCH_FIXTURES),
+];
+
 function inspect(svg: string) {
   const elements: { name: string; attributes: Record<string, string> }[] = [];
   let text = '';
@@ -91,9 +116,10 @@ afterEach(() => {
  * clean of inline execution, the same root geometry, the adapter's own
  * accessible name, and the same visible text.
  *
- * Shared by the 23-type matrix row and the real-corpus rows below, because the
- * corpus needs the *same* disposition — the r4 finding was that the corpus was
- * read only through the bare renderer, so the trust boundary never touched it.
+ * Shared by the type-matrix row, the branch-only fixtures and the real-corpus
+ * rows below, because the corpus needs the *same* disposition — the r4 finding
+ * was that the corpus was read only through the bare renderer, so the trust
+ * boundary never touched it.
  */
 async function expectAdapterParity(source: string, name: string, id: string): Promise<string> {
   const { renderDiagram } = await import('../src/lib/pele-render.ts');
@@ -113,7 +139,7 @@ async function expectAdapterParity(source: string, name: string, id: string): Pr
   return svg;
 }
 
-test.each(Object.entries(DIAGRAMS))('Pele preserves %s geometry and accessible content without inline execution', async (_name, source) => {
+test.each(DIRECTIVE_FREE_FIXTURES)('Pele preserves %s geometry and accessible content without inline execution', async (_name, source) => {
   const svg = await expectAdapterParity(source, 'Reader’s diagram <with markup> & "quotes"', 'geometry-probe');
   assert.match(svg, /^<svg\b/, 'the adapter returned no root element to compare');
 });
@@ -224,9 +250,9 @@ function corpusDiagrams(): { path: string; source: string }[] {
 }
 
 /**
- * Every source the census rows below read: the 23-type matrix, the three real
- * corpus diagrams, and the probes that make an authored paint or a critical
- * task observable.
+ * Every source the census rows below read: the 23-type matrix, the three
+ * branch-only fixtures, the three real corpus diagrams, and the probes that
+ * make an authored paint or a critical task observable.
  *
  * The two authored-paint probes are load-bearing, not decorative:
  * `AUTHORED_PAINT` is the only source here that produces `--_w`, which the
@@ -236,7 +262,8 @@ function corpusDiagrams(): { path: string; source: string }[] {
  */
 function censusSources(): string[] {
   return [
-    ...Object.values(DIAGRAMS), ...corpusDiagrams().map(({ source }) => source),
+    ...Object.values(DIAGRAMS), ...Object.values(BRANCH_FIXTURES),
+    ...corpusDiagrams().map(({ source }) => source),
     AUTHORED_PAINT, CRIT_GANTT,
     'flowchart TD\n A[Reader] --> B[Site]\n style A fill:#111111',
   ];
@@ -402,17 +429,23 @@ test.each(corpusDiagrams())('the real corpus diagram $path survives the adapter 
  * to be exactly what these renders produce — no member Pele stopped writing, no
  * declaration the set fails to name.
  *
- * The sources are the 23-type matrix and the three real corpus diagrams, which
- * is what decision C names; the bold-run probe is added because neither of
- * those produces a bold run, so `--_w` — the one member Pele appends only for a
- * body that consumes it — would have no producer here while the rich-label row
+ * The sources are the 23-type matrix, the three branch-only fixtures and the
+ * three real corpus diagrams; the bold-run probe is added because none of those
+ * produces a bold run, so `--_w` — the one member Pele appends only for a body
+ * that consumes it — would have no producer here while the rich-label row
  * further down still renders one through the adapter.
  *
+ * The element half is a literal set plus one matcher since r8: literal equality
+ * cannot spell the treemap clamp, so a produced declaration is accepted when it
+ * is a literal member or when `elementStyleClamp` recognises it; the literals
+ * produced must equal the literal set, and at least one clamp must be produced
+ * or the matcher would sit there dead.
+ *
  * The instruments are read at both ends: the raw render (what arrives) and the
- * adapter's own output (what survives). Measured 2026-11-15 over these 27
- * sources: 22 root members, 1 element member, 0 residual declarations. The
- * set's own measurement and its re-measurement trigger are documented at
- * `ROOT_STYLE_DECLARATIONS` in `pele-render.ts`.
+ * adapter's own output (what survives). Measured 2026-11-16 over these 30
+ * sources: 22 root members, 2 element literals plus the clamp family, 0
+ * residual declarations. The set's own measurement and its re-measurement
+ * trigger are documented at `ROOT_STYLE_DECLARATIONS` in `pele-render.ts`.
  */
 const FIXED_SET_PROBE = 'flowchart TD\n A["run <b>Bold</b> now"] --> B[Site]';
 
@@ -429,24 +462,25 @@ function declarationsOf(style: string): string[] {
 }
 
 test('Pele strips its own fixed inline declarations and leaves no residual style', async () => {
-  const { renderDiagram, ROOT_STYLE_DECLARATIONS, ELEMENT_STYLE_DECLARATIONS } = await import('../src/lib/pele-render.ts');
+  const { renderDiagram, ROOT_STYLE_DECLARATIONS, ELEMENT_STYLE_DECLARATIONS, elementStyleClamp } =
+    await import('../src/lib/pele-render.ts');
   const accepted = { root: new Set(ROOT_STYLE_DECLARATIONS), element: new Set(ELEMENT_STYLE_DECLARATIONS) };
   const produced = { root: new Set<string>(), element: new Set<string>() };
   const sources: ReadonlyArray<readonly [name: string, source: string]> = [
-    ...Object.entries(DIAGRAMS),
+    ...DIRECTIVE_FREE_FIXTURES,
     ...corpusDiagrams().map(({ path, source }) => [path, source] as const),
     ['bold-run probe', FIXED_SET_PROBE],
   ];
   for (const [name, source] of sources) {
     // What arrives: every declaration the raw renderer wrote, held to the fixed
-    // set of the element kind it was written on — the root block and the
-    // element set are separate whitelists on purpose.
+    // set of the element kind it was written on — the root block, the element
+    // literals and the clamp family are separate whitelists on purpose.
     const rawParser = new SaxesParser({ xmlns: true });
     let isRoot = true;
     rawParser.on('opentag', (tag) => {
       const kind = isRoot ? 'root' : 'element';
       for (const declaration of declarationsOf(tag.attributes['style']?.value ?? '')) {
-        assert.ok(accepted[kind].has(declaration),
+        assert.ok(accepted[kind].has(declaration) || (kind === 'element' && elementStyleClamp(declaration) !== undefined),
           `${name}: Pele emitted an inline declaration outside its fixed ${kind} set: ${declaration}`);
         produced[kind].add(declaration);
       }
@@ -460,13 +494,91 @@ test('Pele strips its own fixed inline declarations and leaves no residual style
     const residual = inspect(svg).elements.flatMap(({ attributes }) => declarationsOf(attributes['style'] ?? ''));
     assert.equal(residual.length, 0, `${name}: declarations survived sanitization: ${residual.join(', ')}`);
   }
-  assert.ok(produced.root.size >= 20 && produced.element.size >= 1,
+  assert.ok(produced.root.size >= 20 && produced.element.size >= 3,
     'the probe corpus stopped exercising the fixed sets, so the equality below would pass vacuously');
-  // The set is exactly what these sources produce: a member Pele stopped
-  // writing — or one the corpus can no longer reach — fails here rather than
-  // sitting in the strip set as a hole a stray declaration could hide in.
+  // The literal members are exactly what these sources produce: a member Pele
+  // stopped writing — or one the corpus can no longer reach — fails here rather
+  // than sitting in the strip set as a hole a stray declaration could hide in.
+  // The clamp is a family, so what is pinned is that at least one cell crossed
+  // the threshold and that nothing outside the literal set fails the matcher.
+  const producedLiterals = [...produced.element].filter((declaration) => accepted.element.has(declaration));
+  const producedClamps = [...produced.element].filter((declaration) => !accepted.element.has(declaration));
+  assert.ok(producedClamps.length > 0, 'no census source crossed the treemap clamp, so the matcher would be dead');
+  assert.ok(producedClamps.every((declaration) => elementStyleClamp(declaration) !== undefined),
+    `a produced element declaration is neither a literal member nor the clamp family: ${producedClamps.join(', ')}`);
   assert.deepEqual([...produced.root].sort(), [...ROOT_STYLE_DECLARATIONS].sort());
-  assert.deepEqual([...produced.element].sort(), [...ELEMENT_STYLE_DECLARATIONS].sort());
+  assert.deepEqual(producedLiterals.sort(), [...ELEMENT_STYLE_DECLARATIONS].sort());
+});
+
+/**
+ * Where the strip hands its two r8 forms to: stripping can only stay honest
+ * while the declaration still reaches the page, and these rows bind the carrier
+ * each one gets. The rounding keeps its `pele-rounded` class, which the
+ * `diagram.css` row below measures in a browser; the clamp and the member
+ * underline are carried as the element's own attributes — Pele's own carrier
+ * for `text-decoration` elsewhere in its output, and the only carrier a
+ * per-element clamp value can have — so each row reads the raw declaration
+ * (what has to be carried), the adapter's output (that it was), and the absence
+ * of a `style` attribute in between.
+ */
+test('the adapter carries the static member’s underline as a text-decoration attribute', async () => {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const source = BRANCH_FIXTURES['classStaticMember']!;
+  assert.ok(elementDeclarations(source).includes('text-decoration: underline'),
+    'the raw render no longer writes the declaration this carrier replaces');
+  const svg = await renderDiagram(source, 'carrier', 'Carrier');
+  assertClean(svg);
+  const carried = inspect(svg).elements.filter(({ attributes }) => attributes['text-decoration'] === 'underline');
+  assert.equal(carried.length, 1, 'the adapter did not carry the underline as a presentation attribute');
+  assert.match(carried[0]!.attributes['class'] ?? '', /(?:^|\s)pele-static(?:\s|$)/,
+    'the carried underline no longer sits on the member Pele marks static');
+});
+
+test.each(['treemapClampZero', 'treemapClampVisible'] as const)(
+  'the adapter carries every treemap clamp as an rx attribute: %s', async (fixture) => {
+    const { renderDiagram } = await import('../src/lib/pele-render.ts');
+    const source = BRANCH_FIXTURES[fixture]!;
+    const declared = elementDeclarations(source).filter((declaration) => declaration.startsWith('rx: min(var(--_r),'));
+    assert.ok(declared.length > 0, 'the raw render no longer writes the clamp this carrier replaces');
+    const svg = await renderDiagram(source, 'carrier', 'Carrier');
+    assertClean(svg);
+    const carried = inspect(svg).elements
+      .map(({ attributes }) => attributes['rx'])
+      .filter((value): value is string => value !== undefined && value.startsWith('min(var(--_r),'));
+    assert.deepEqual(carried.sort(), declared.map((declaration) => declaration.slice('rx: '.length)).sort(),
+      'the adapter did not carry every clamp as the attribute value it strips');
+  });
+
+/**
+ * The clamp matcher is a second acceptance rule beside the literal set, so its
+ * edges are pinned the way the set's are: each measured renderer output is
+ * accepted and returned as the attribute value it is carried as, and each near
+ * spelling an author could aim at it — a step away from a real one — is
+ * refused, including the unnormalised spelling the output branch never even
+ * hands it and the value the formatter may round up to the threshold.
+ */
+test('the clamp matcher accepts only the spelling pele writes', async () => {
+  const { elementStyleClamp } = await import('../src/lib/pele-render.ts');
+  for (const written of [
+    'rx: min(var(--_r),0px)', 'rx: min(var(--_r),0.5px)', 'rx: min(var(--_r),3.99px)', 'rx: min(var(--_r),4px)',
+  ]) {
+    assert.equal(elementStyleClamp(written), written.slice('rx: '.length), `${written} is a spelling pele writes`);
+  }
+  for (const foreign of [
+    'rx: min(var(--_r),5px)', // beyond the threshold the formatter can round to
+    'rx: min(var(--_r),0.125px)', // more decimals than the formatter prints
+    'rx: min(var(--_r),04px)', // a leading zero the formatter never prints
+    'rx: min(var(--_R),0.5px)', // the argument's spelling
+    'rx:min(var(--_r),0.5px)', // the unnormalised spelling the output branch never hands it
+    'rx: min(var(--_r),0.5em)', // the unit
+    'rx: min(var(--_r),0.5px) ', // trailing space
+    'rx: min(var(--_r))', // no clamp value
+    'min(var(--_r),0.5px)', // no property
+    'text-decoration: underline', // a member of the set, but not of the family
+  ]) {
+    assert.equal(elementStyleClamp(foreign), undefined,
+      `${foreign} is not a spelling pele writes, but the matcher accepted it`);
+  }
 });
 
 /**
@@ -504,14 +616,23 @@ async function refuse(source: string): Promise<DiagramError> {
 
 /**
  * The refusal, held to the three things decision C requires its message to name:
- * the declaration exactly as written, how it got in, and what to do instead.
+ * the declaration exactly as written, the directive that carried it, and what
+ * to do instead.
+ *
+ * The origin is asserted as the *specific* clause, not as the generic
+ * enumeration every refusal carries: the r8 finding was a copied `classDef`
+ * reported as an authored `style`, and a check that only required the three
+ * names to appear somewhere in the message could not tell the difference.
  */
-async function expectAuthorRefused(source: string, declaration: string): Promise<void> {
+async function expectAuthorRefused(
+  source: string,
+  declaration: string,
+  origin: 'style' | 'classDef' | 'linkStyle',
+): Promise<void> {
   const failure = await refuse(source);
   assert.ok(failure.message.includes(declaration), `the refusal does not name ${declaration}: ${failure.message}`);
-  for (const origin of ["'style'", "'classDef'", "'linkStyle'"]) {
-    assert.ok(failure.message.includes(origin), `the refusal does not name ${origin} as the origin: ${failure.message}`);
-  }
+  assert.ok(failure.message.includes(`an author '${origin}' directive`),
+    `the refusal does not name '${origin}' as the directive that carried the declaration: ${failure.message}`);
   assert.ok(failure.message.includes("DIAGRAM_ENGINE = 'mermaid'"), `the refusal names no remedy: ${failure.message}`);
 }
 
@@ -550,7 +671,7 @@ test('Pele refuses an authored font-size instead of converting it to an attribut
     original.elements.some(({ attributes }) => attributes['style']?.includes('font-size:40px')),
     'the fixture no longer emits the declaration this row refuses',
   );
-  await expectAuthorRefused(AUTHORED_SIZE, 'font-size: 40px');
+  await expectAuthorRefused(AUTHORED_SIZE, 'font-size: 40px', 'style');
 });
 
 test('Pele refuses an authored paint declaration, naming the declaration it meets', async () => {
@@ -558,14 +679,14 @@ test('Pele refuses an authored paint declaration, naming the declaration it meet
   const rawStyles = original.elements.flatMap(({ attributes }) => attributes['style'] ?? []).join(' ');
   assert.match(rawStyles, /fill:#ff0000/, 'the fixture no longer emits the authored paint declaration');
   assert.match(rawStyles, /font-weight:600/, 'the fixture no longer emits the authored weight declaration');
-  await expectAuthorRefused(AUTHORED_PAINT, 'fill: #ff0000');
+  await expectAuthorRefused(AUTHORED_PAINT, 'fill: #ff0000', 'style');
 });
 
 test('Pele refuses an authored literal radius rather than choose between it and the rounding class', async () => {
   const source = faceSource('rx', '8px');
   const { svg } = renderPele(source, { idPrefix: 'literal-radius', links: false, images: false });
   assert.match(svg, /style="rx:var\(--_r\);rx:8px;"/, 'the raw render no longer carries the declarations this row reads');
-  await expectAuthorRefused(source, 'rx: 8px');
+  await expectAuthorRefused(source, 'rx: 8px', 'style');
 });
 
 test('Pele refuses an authored declaration the renderer itself would have dropped', async () => {
@@ -574,28 +695,28 @@ test('Pele refuses an authored declaration the renderer itself would have droppe
   const node = original.elements.find(({ attributes }) => attributes['style']?.includes('fill:not-a-color'));
   assert.ok(node, 'the fixture no longer emits the declaration this row refuses');
   assert.equal(node.attributes['fill'], 'var(--_s)', 'the fixture no longer carries the attribute the declaration displaces');
-  await expectAuthorRefused(source, 'fill: not-a-color');
+  await expectAuthorRefused(source, 'fill: not-a-color', 'style');
 });
 
 test('Pele refuses a negative declaration even where the renderer keeps the value', async () => {
   const source = faceSource('letter-spacing', '-2px');
   const { svg } = renderPele(source, { idPrefix: 'negative-kept', links: false, images: false });
   assert.match(svg, /style="letter-spacing:-2px;"/, 'the raw render no longer carries the declaration this row refuses');
-  await expectAuthorRefused(source, 'letter-spacing: -2px');
+  await expectAuthorRefused(source, 'letter-spacing: -2px', 'style');
 });
 
 test('Pele refuses the authored unitless radius the r3 sweep projected', async () => {
   const source = faceSource('rx', '4');
   const { svg } = renderPele(source, { idPrefix: 'unitless-radius', links: false, images: false });
   assert.match(svg, /style="rx:var\(--_r\);rx:4;"/, 'the raw render no longer carries the declaration this row refuses');
-  await expectAuthorRefused(source, 'rx: 4');
+  await expectAuthorRefused(source, 'rx: 4', 'style');
 });
 
 test('Pele refuses an authored word-spacing declaration the emit allowlist used to reject by name', async () => {
   const source = faceSource('word-spacing', '-2px');
   const { svg } = renderPele(source, { idPrefix: 'word-spacing', links: false, images: false });
   assert.match(svg, /style="word-spacing:-2px;"/, 'the raw render no longer carries the declaration this row refuses');
-  await expectAuthorRefused(source, 'word-spacing: -2px');
+  await expectAuthorRefused(source, 'word-spacing: -2px', 'style');
 });
 
 /**
@@ -627,7 +748,7 @@ test.each(REFUSED_DECLARATIONS)(
       inspect(svg).elements.some(({ attributes }) => attributes['style']?.includes(`${property}:${value}`)),
       `the raw render no longer carries ${property}:${value}`,
     );
-    await expectAuthorRefused(source, `${property}: ${value}`);
+    await expectAuthorRefused(source, `${property}: ${value}`, 'style');
   },
 );
 
@@ -638,13 +759,13 @@ test.each([
   ['linkStyle',
     'flowchart TD\n A[Reader] --> B[Site]\n linkStyle 0 stroke:#5b7bd5,stroke-width:4px',
     'stroke:#5b7bd5', 'stroke: #5b7bd5'],
-])('Pele refuses a %s declaration the same way as an authored style', async (_directive, source, written, named) => {
+] as const)('Pele refuses a %s declaration the same way as an authored style', async (origin, source, written, named) => {
   const { svg } = renderPele(source, { idPrefix: 'refused-directive', links: false, images: false });
   assert.ok(
     inspect(svg).elements.some(({ attributes }) => attributes['style']?.includes(written)),
     `the raw render no longer carries ${written}`,
   );
-  await expectAuthorRefused(source, named);
+  await expectAuthorRefused(source, named, origin);
 });
 
 /**
@@ -660,74 +781,104 @@ test.each([
  * (the sweep behind `authorDirectives` reads every registered type); each
  * control is the same source with its directive lines removed, so the raw
  * render must carry one more `rx: var(--_r)` declaration than the control
- * before the row can pass — a control that is not vacuous.
+ * before the row can pass — a control that is not vacuous. The r8 nested-block
+ * row is the same defect on a node the scan never visited; the two forms the
+ * element set accepts besides the rounding get their own rows below, because
+ * neither forwards the rounding this control counts.
  */
-const COLLIDING_DECLARATIONS: ReadonlyArray<{ name: string; source: string; control: string; refused: string }> = [
+const COLLIDING_DECLARATIONS: ReadonlyArray<{
+  name: string;
+  origin: 'style' | 'classDef';
+  source: string;
+  control: string;
+  refused: string;
+}> = [
   {
     name: 'stateDiagram-v2 style',
+    origin: 'style',
     source: 'stateDiagram-v2\n  A --> B\n  style A rx:var(--_r)',
     control: 'stateDiagram-v2\n  A --> B',
     refused: 'rx: var(--_r)',
   },
   {
     name: 'stateDiagram-v2 style, the property laundered by pele’s writer',
+    origin: 'style',
     source: 'stateDiagram-v2\n  A --> B\n  style A RX:var(--_r)',
     control: 'stateDiagram-v2\n  A --> B',
     refused: 'RX: var(--_r)',
   },
   {
     name: 'stateDiagram-v2 style, whitespace laundered by pele’s writer',
+    origin: 'style',
     source: 'stateDiagram-v2\n  A --> B\n  style A rx : var(--_r)',
     control: 'stateDiagram-v2\n  A --> B',
     refused: 'rx: var(--_r)',
   },
   {
     name: 'stateDiagram-v2 classDef',
+    origin: 'classDef',
     source: 'stateDiagram-v2\n  A --> B\n  classDef red rx:var(--_r)\n  class A red',
     control: 'stateDiagram-v2\n  A --> B',
     refused: 'rx: var(--_r)',
   },
   {
     name: 'classDiagram style',
+    origin: 'style',
     source: 'classDiagram\n  class Artifact { +slug }\n  Artifact <|-- Note\n  style Artifact rx:var(--_r)',
     control: 'classDiagram\n  class Artifact { +slug }\n  Artifact <|-- Note',
     refused: 'rx: var(--_r)',
   },
   {
     name: 'block style',
+    origin: 'style',
     source: 'block-beta\n  columns 2\n  A B\n  style A rx:var(--_r)',
     control: 'block-beta\n  columns 2\n  A B',
     refused: 'rx: var(--_r)',
   },
   {
     name: 'block classDef',
+    origin: 'classDef',
     source: 'block-beta\n  columns 2\n  A B\n  classDef red rx:var(--_r)\n  class A red',
     control: 'block-beta\n  columns 2\n  A B',
     refused: 'rx: var(--_r)',
   },
   {
+    name: 'block style on a nested composite’s child (r8)',
+    origin: 'style',
+    source: 'block-beta\n  columns 1\n  block:outer\n    A\n  end\n  style A rx:var(--_r)',
+    control: 'block-beta\n  columns 1\n  block:outer\n    A\n  end',
+    refused: 'rx: var(--_r)',
+  },
+  {
     name: 'usecase style',
+    origin: 'style',
     source: 'usecase-beta\na\n  style a rx:var(--_r)',
     control: 'usecase-beta\na',
     refused: 'rx: var(--_r)',
   },
   {
     name: 'usecase classDef',
+    origin: 'classDef',
     source: 'usecase-beta\na\n  classDef red rx:var(--_r)\n  class a red',
     control: 'usecase-beta\na',
     refused: 'rx: var(--_r)',
   },
 ];
 
-/** Every declaration the raw renderer wrote into an element’s `style`, in document order. */
+/**
+ * Every declaration the raw renderer wrote into a *non-root* element’s `style`,
+ * in document order — the root block is whole-attribute evidence and belongs to
+ * the fixed-set row, which distinguishes the two kinds by position.
+ */
 function elementDeclarations(source: string): string[] {
   return inspect(renderPele(source, { idPrefix: 'collision', links: false, images: false }).svg)
-    .elements.flatMap(({ attributes }) => (attributes['style'] === undefined ? [] : declarationsOf(attributes['style'])));
+    .elements.slice(1)
+    .flatMap(({ attributes }) => (attributes['style'] === undefined ? [] : declarationsOf(attributes['style'])));
 }
 
 test.each(COLLIDING_DECLARATIONS)(
   'Pele refuses the authored fixed-set collision: $name',
-  async ({ source, control, refused }) => {
+  async ({ origin, source, control, refused }) => {
     const member = 'rx: var(--_r)';
     const arrived = elementDeclarations(source).filter((declaration) => declaration === member);
     const own = elementDeclarations(control).filter((declaration) => declaration === member);
@@ -735,9 +886,115 @@ test.each(COLLIDING_DECLARATIONS)(
       arrived.length > own.length,
       'the raw render no longer forwards the authored rounding declaration, so the row would pass vacuously',
     );
-    await expectAuthorRefused(source, refused);
+    await expectAuthorRefused(source, refused, origin);
   },
 );
+
+/**
+ * The two forms the element set accepts besides the rounding, each with the
+ * same authored-collision row: widening the strip set cannot be what makes an
+ * author declaration render, because the model check refuses it first.
+ *
+ * The underline arrives intact through a flowchart `style` directive (measured
+ * 2026-11-16; the fixed-set row's member). The clamp's spelling carries a comma
+ * and every directive parser Pele ships splits its value list on commas, so no
+ * face forwards it intact — the block and state faces forward the truncated
+ * `rx:min(var(--_r)`, which the output branch refuses by name — and the row
+ * that matters is the one the output never sees at all: an *unused* `classDef`,
+ * retained in the model and written nowhere (r8's accepted-source finding).
+ */
+test('Pele refuses an authored underline the element set now accepts as pele’s static member', async () => {
+  const source = 'flowchart TD\n  A[Reader] --> B[Site]\n  style A text-decoration:underline';
+  const control = 'flowchart TD\n  A[Reader] --> B[Site]';
+  const member = 'text-decoration: underline';
+  const arrived = elementDeclarations(source).filter((declaration) => declaration === member);
+  const own = elementDeclarations(control).filter((declaration) => declaration === member);
+  assert.equal(own.length, 0, 'the directive-free control carries the declaration this row refuses');
+  assert.ok(arrived.length > 0, 'the raw render no longer forwards the authored underline, so the row would pass vacuously');
+  await expectAuthorRefused(source, 'text-decoration: underline', 'style');
+});
+
+test('Pele refuses an authored clamp an unused classDef retains, which the output never carries', async () => {
+  // The visible-clamp geometry is the control: its own cell is small enough that
+  // the *renderer* writes `min(var(--_r),0.5px)`, so one number is all that
+  // separates a real renderer output from the authored spelling — which the
+  // output must not contain, because the definition is never applied.
+  const source = BRANCH_FIXTURES['treemapClampVisible']! + '  classDef red rx:min(var(--_r),0px)';
+  const model = parsePele(source);
+  if (model.type !== 'treemap') throw new Error('the fixture is no longer a treemap source');
+  // The parser splits a treemap definition on commas — which is why no face
+  // forwards this spelling intact — and the model keeps the two fragments.
+  assert.deepEqual([...model.classes], [['red', ['rx:min(var(--_r)', '0px)']]],
+    'the model no longer retains the definition this row refuses');
+  const declarations = elementDeclarations(source);
+  assert.ok(declarations.includes('rx: min(var(--_r),0.5px)'),
+    'the fixture no longer renders the cell whose own clamp this row controls against');
+  assert.ok(!declarations.includes('rx: min(var(--_r),0px)'),
+    'the fixture started forwarding the authored definition, so it no longer measures the case the output cannot see');
+  await expectAuthorRefused(source, 'rx: min(var(--_r), 0px)', 'classDef');
+});
+
+/**
+ * Quadrant definitions: the r8 gap was that `authorDirectives` had no
+ * `quadrantChart` case at all, so a definition the *renderer never writes*
+ * passed. This parser refuses `style`, `class` and `linkStyle`, so the two
+ * faces an author really has are the unused definition and the point class
+ * — and a point's styles are parsed into typed fields, so the definition's
+ * `color:` reaches the output as a circle's `fill:`.
+ */
+test('Pele refuses an unused quadrant classDef, which the output never carries', async () => {
+  const source = 'quadrantChart\n  A: [0.3, 0.6]\n  classDef red color:#ff0000';
+  const model = parsePele(source);
+  if (model.type !== 'quadrantChart') throw new Error('the fixture is no longer a quadrant source');
+  assert.deepEqual([...model.classes], [['red', { color: '#ff0000' }]],
+    'the model no longer retains the definition this row refuses');
+  assert.deepEqual(
+    elementDeclarations(source).filter((declaration) => declaration !== 'rx: var(--_r)'), [],
+    'the fixture started forwarding the declaration, so it no longer measures the case the output cannot see',
+  );
+  await expectAuthorRefused(source, 'color: #ff0000', 'classDef');
+});
+
+test('Pele refuses a quadrant classDef applied to a point, naming the definition it compiled from', async () => {
+  const source = 'quadrantChart\n  A:::red: [0.3, 0.6]\n  classDef red color:#ff0000';
+  assert.ok(
+    elementDeclarations(source).includes('fill: #ff0000'),
+    'the raw render no longer compiles the definition onto the point, so the row would pass vacuously',
+  );
+  await expectAuthorRefused(source, 'color: #ff0000', 'classDef');
+});
+
+test('Pele refuses the quadrant properties its parser validates one by one', async () => {
+  const source = 'quadrantChart\n  A: [0.3, 0.6]\n  classDef red radius:5,stroke-color:#00ff00,stroke-width:2px';
+  const model = parsePele(source);
+  if (model.type !== 'quadrantChart') throw new Error('the fixture is no longer a quadrant source');
+  assert.deepEqual([...model.classes], [['red', { radius: 5, strokeColor: '#00ff00', strokeWidth: '2px' }]],
+    'the model no longer retains the properties this row refuses, so the row would pass vacuously');
+  await expectAuthorRefused(source, 'radius: 5, stroke-color: #00ff00, stroke-width: 2px', 'classDef');
+});
+
+/**
+ * Provenance on a declaration Pele *copies*: a `classDef` is kept in the
+ * definition map and compiled into a node's own style array, and the r8
+ * finding was that the copy was read first and reported as an authored
+ * `style` — the directive that actually carried it is `classDef`. Both models
+ * with a compiled copy are pinned here; `classDiagram` tags every new class
+ * `default` at creation, and the requirement parser compiles an applied class
+ * into `cssStyles`.
+ */
+test.each([
+  ['a class tagged default at creation',
+    'classDiagram\n  class A\n  classDef default fill:#ff0000'],
+  ['a requirement’s applied class',
+    'requirementDiagram\n  requirement test_req {\n  id: 1\n  text: privacy\n  risk: high\n  verifymethod: test\n  }\n'
+    + '  classDef red fill:#ff0000\n  class test_req red'],
+])('Pele reports the copied classDef as the classDef directive that carried it: %s', async (_name, source) => {
+  assert.ok(
+    elementDeclarations(source).includes('fill: #ff0000'),
+    'the raw render no longer compiles the definition into the node, so the row would pass vacuously',
+  );
+  await expectAuthorRefused(source, 'fill: #ff0000', 'classDef');
+});
 
 test('Pele refuses an author theme, which writes --pele-series-* into the root block', async () => {
   const source = '%%{init: {"themeVariables": {"pie1": "#ff0000"}}}%%\npie title Sources\n  "Notes" : 45';
@@ -799,7 +1056,7 @@ test('Pele treats hostile label text and accessible names as text, not markup', 
  * `playwright` is imported here rather than at the top of the file: every other
  * row is a build-time assertion, and a static import turns an absent browser
  * package into a collection error for all of them instead of a named failure
- * for the three rows that need a browser.
+ * for the four rows that need a browser.
  *
  * `style-src 'self'` is the policy the build-time row ships, so anything
  * measuring that row's cascade has to measure it under that policy — see the
@@ -933,6 +1190,67 @@ test('diagram.css resolves Pele’s title weight, rounding, paint and mono label
     assert.equal(measured.nodeFill, measured.surface, 'a node’s fill no longer resolves to --color-surface');
     assert.equal(measured.rootFont, measured.sans, 'the diagram root no longer uses --pele-font');
     assert.equal(measured.codeFont, measured.mono, 'the code label run no longer consumes --_fm');
+  } finally {
+    await browser.close();
+  }
+});
+
+/**
+ * The r8 carriers under the shipped policy, because neither can be observed by
+ * a build-time assertion: the strip removed declarations the build-time CSP
+ * never permits, and what replaces them has to resolve to what it replaced.
+ * Each measurement is against a `setProperty` probe of the declaration form
+ * itself — the same instrument the rounding row above uses, and for the same
+ * reason — and the clamp is compared against `--_r` as well, so a carrier that
+ * dropped the clamp and fell back to the token cannot pass.
+ */
+test('the clamp and member-underline carriers resolve under the build-time policy', async () => {
+  selection.engine = 'pele';
+  const { html } = await renderMarkdown(
+    '```mermaid\n' + BRANCH_FIXTURES['classStaticMember']! + '\n```\n\n' +
+    '```mermaid\n' + BRANCH_FIXTURES['treemapClampVisible']! + '\n```\n',
+  );
+  const { browser, page } = await openDiagramPage(html);
+  try {
+    const measured = await page.evaluate(() => {
+      const svg = document.querySelector('svg.pele');
+      const member = document.querySelector('svg.pele .pele-static');
+      const clamped = [...document.querySelectorAll('svg.pele rect[rx]')]
+        .find((rect) => rect.getAttribute('rx')?.startsWith('min(var(--_r),'));
+      const rounded = document.querySelector('svg.pele rect.pele-rounded');
+      if (svg === null || member === null || clamped === undefined || rounded === null) {
+        throw new Error('the fixtures no longer render the elements this row measures');
+      }
+      const probeRx = (value: string): string => {
+        const probe = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        probe.style.setProperty('rx', value);
+        svg.append(probe);
+        const computed = getComputedStyle(probe).rx;
+        probe.remove();
+        return computed;
+      };
+      const underlineProbe = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      underlineProbe.style.setProperty('text-decoration', 'underline');
+      svg.append(underlineProbe);
+      const probeUnderline = getComputedStyle(underlineProbe).textDecorationLine;
+      underlineProbe.remove();
+      const clamp = clamped.getAttribute('rx')!;
+      return {
+        memberUnderline: getComputedStyle(member).textDecorationLine,
+        probeUnderline,
+        clamp,
+        clampedRx: getComputedStyle(clamped).rx,
+        clampProbe: probeRx(clamp),
+        roundedRx: getComputedStyle(rounded).rx,
+        roundProbe: probeRx('var(--_r)'),
+      };
+    });
+    assert.equal(measured.memberUnderline, measured.probeUnderline, 'the member underline no longer resolves under the policy');
+    assert.equal(measured.memberUnderline, 'underline', 'the member underline is not the decoration it carries');
+    assert.equal(measured.roundedRx, measured.roundProbe, 'the rounding class the clamp is compared against no longer resolves');
+    assert.equal(measured.clampedRx, measured.clampProbe, `the carried clamp ${measured.clamp} differs from its declaration form`);
+    assert.notEqual(measured.clampedRx, measured.roundedRx,
+      'the fixture no longer clamps below --_r, so the row would pass with the clamp lost');
   } finally {
     await browser.close();
   }
