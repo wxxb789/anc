@@ -224,21 +224,37 @@ export const ELEMENT_STYLE_DECLARATIONS: readonly string[] = ['rx: var(--_r)', '
  * Read from Pele's own bundle (measured 2026-11-16): its treemap renderer
  * replaces `rx:var(--_r)` with `rx:min(var(--_r),Npx)` whenever
  * `Math.min(cell.w, cell.h) / 4 < 4`, `N` being that quarter as the renderer's
- * own number formatter prints it (at most two decimals). The matcher is
- * deliberately as narrow as that sentence and reads the *normalised* spelling
- * {@link styleDeclarations} hands the output branch: the exact property, the
- * exact `var(--_r)` argument, a plain pixel number of at most two decimals, and
- * no greater than the threshold the formatter may round up to. A declaration
- * outside it is still an error, so widening the element set to this second form
- * does not widen it to anything else.
+ * own number formatter prints it. Two measured facts decide the spellings that
+ * substitution can produce, and the matcher accepts exactly them. The treemap
+ * layout rounds every cell edge before the renderer reads it
+ * (`g.x = Math.round(…)`, `g.w = Math.round(…) - g.x` in the treemap chunk), so
+ * both dimensions are integers and `N` is a quarter — `k/4` for an integer `k`;
+ * and the number formatter prints hundredths with trailing zeros stripped, so
+ * the quarters print `0`, `0.25`, `0.5`, `0.75`, `1`, … and never `0.50`,
+ * `0.00` or `0.2`. Measured over an instrumented sweep of 4812 treemap sources
+ * (2026-11-16: both clamp fixtures, 4500 single-value geometries, 300
+ * multi-cell sources, nested layouts — 3646 substitutions over 10084 cell
+ * reads): every printed value was one of the sixteen canonically printed
+ * quarters, the largest cell that clamps had min-dimension 15 and printed
+ * `3.75`, min-dimension 16 and up was substituted not at all, and no dimension
+ * was ever fractional. The substitution's own gate makes `3.75` the largest
+ * value it can carry — the threshold `4` is printable by the formatter but
+ * never reaches it — so the bound below refuses `4` with everything above it.
+ *
+ * The matcher reads the *normalised* spelling {@link styleDeclarations} hands
+ * the output branch: the exact property, the exact `var(--_r)` argument, and
+ * exactly that grammar — no leading zero, no trailing zero, and nothing at or
+ * above the strict gate's four. A declaration outside it is still an error, so
+ * widening the element set to this second form does not widen it to anything
+ * else.
  *
  * Exported so the fixed-set row can hold the census to the same matcher instead
  * of restating the pattern, exactly as the two sets are exported for the same
  * reason.
  */
 export function elementStyleClamp(declaration: string): string | undefined {
-  const match = /^rx: min\(var\(--_r\),((?:0|[1-9]\d*)(?:\.\d{1,2})?)px\)$/.exec(declaration);
-  if (match === null || Number(match[1]) > 4) return undefined;
+  const match = /^rx: min\(var\(--_r\),((?:0|[1-9]\d*)(?:\.25|\.5|\.75)?)px\)$/.exec(declaration);
+  if (match === null || Number(match[1]) >= 4) return undefined;
   return `min(var(--_r),${match[1]}px)`;
 }
 

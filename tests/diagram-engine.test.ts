@@ -552,20 +552,34 @@ test.each(['treemapClampZero', 'treemapClampVisible'] as const)(
 /**
  * The clamp matcher is a second acceptance rule beside the literal set, so its
  * edges are pinned the way the set's are: each measured renderer output is
- * accepted and returned as the attribute value it is carried as, and each near
- * spelling an author could aim at it — a step away from a real one — is
- * refused, including the unnormalised spelling the output branch never even
- * hands it and the value the formatter may round up to the threshold.
+ * accepted and returned as the attribute value it is carried as, and every
+ * spelling an author could aim at it — a trailing zero the formatter never
+ * prints, a canonical hundredth its quarter steps never take, the strict
+ * gate's own threshold, or the unnormalised spelling the output branch never
+ * hands it — is refused.
+ *
+ * The accepted rows are the canonically printed quarters the instrumented
+ * sweep measured at the substitution site (2026-11-16; `elementStyleClamp` in
+ * `pele-render.ts` carries the readings), including both ends — the bare `0`
+ * and the largest quarter any cell produced, `3.75`.
  */
 test('the clamp matcher accepts only the spelling pele writes', async () => {
   const { elementStyleClamp } = await import('../src/lib/pele-render.ts');
   for (const written of [
-    'rx: min(var(--_r),0px)', 'rx: min(var(--_r),0.5px)', 'rx: min(var(--_r),3.99px)', 'rx: min(var(--_r),4px)',
+    'rx: min(var(--_r),0px)', 'rx: min(var(--_r),0.25px)', 'rx: min(var(--_r),0.5px)',
+    'rx: min(var(--_r),0.75px)', 'rx: min(var(--_r),1px)', 'rx: min(var(--_r),1.25px)',
+    'rx: min(var(--_r),3.75px)',
   ]) {
     assert.equal(elementStyleClamp(written), written.slice('rx: '.length), `${written} is a spelling pele writes`);
   }
   for (const foreign of [
-    'rx: min(var(--_r),5px)', // beyond the threshold the formatter can round to
+    'rx: min(var(--_r),0.50px)', // a trailing zero the formatter never prints
+    'rx: min(var(--_r),0.00px)', // the zero the formatter prints bare, dressed with one
+    'rx: min(var(--_r),4.00px)', // a trailing zero on a value the gate refuses anyway
+    'rx: min(var(--_r),0.2px)', // a canonical hundredth the quarter steps never take
+    'rx: min(var(--_r),3.99px)', // the same class, at the top of the range
+    'rx: min(var(--_r),4px)', // the strict gate's threshold: the writer clamps only below it
+    'rx: min(var(--_r),5px)', // beyond the gate the writer substitutes in
     'rx: min(var(--_r),0.125px)', // more decimals than the formatter prints
     'rx: min(var(--_r),04px)', // a leading zero the formatter never prints
     'rx: min(var(--_R),0.5px)', // the argument's spelling
@@ -897,11 +911,18 @@ test.each(COLLIDING_DECLARATIONS)(
  *
  * The underline arrives intact through a flowchart `style` directive (measured
  * 2026-11-16; the fixed-set row's member). The clamp's spelling carries a comma
- * and every directive parser Pele ships splits its value list on commas, so no
- * face forwards it intact — the block and state faces forward the truncated
- * `rx:min(var(--_r)`, which the output branch refuses by name — and the row
- * that matters is the one the output never sees at all: an *unused* `classDef`,
- * retained in the model and written nowhere (r8's accepted-source finding).
+ * and the faces handle it differently, measured one by one (2026-11-16, r9):
+ * a `state` or `block` `style` face forwards the truncated `rx:min(var(--_r)`
+ * into the raw render; a flowchart `style` never carries it — Pele's parser
+ * rejects the function value at its own parse; a treemap `classDef` splits at
+ * an unescaped comma (applied, the element receives the truncated fragment;
+ * unused, nothing), while an escaped `\,` is restored by its parser — the
+ * applied escaped form forwards the clamp intact into the raw render (the
+ * applied `classDef` row below), the unused one writes nothing (the unused
+ * `classDef` row below, r8's accepted-source finding). Both rows pin the same
+ * line: the model check is what refuses an author clamp the element set grew
+ * its second acceptance rule for — the applied one reaches the output, and the
+ * unused one cannot.
  */
 test('Pele refuses an authored underline the element set now accepts as pele’s static member', async () => {
   const source = 'flowchart TD\n  A[Reader] --> B[Site]\n  style A text-decoration:underline';
@@ -922,8 +943,9 @@ test('Pele refuses an authored clamp an unused classDef retains, which the outpu
   const source = BRANCH_FIXTURES['treemapClampVisible']! + '  classDef red rx:min(var(--_r),0px)';
   const model = parsePele(source);
   if (model.type !== 'treemap') throw new Error('the fixture is no longer a treemap source');
-  // The parser splits a treemap definition on commas — which is why no face
-  // forwards this spelling intact — and the model keeps the two fragments.
+  // The unescaped comma splits this treemap definition — the escaped `\,` the
+  // applied row below measures is the spelling the parser restores — and the
+  // model keeps the two fragments.
   assert.deepEqual([...model.classes], [['red', ['rx:min(var(--_r)', '0px)']]],
     'the model no longer retains the definition this row refuses');
   const declarations = elementDeclarations(source);
@@ -932,6 +954,31 @@ test('Pele refuses an authored clamp an unused classDef retains, which the outpu
   assert.ok(!declarations.includes('rx: min(var(--_r),0px)'),
     'the fixture started forwarding the authored definition, so it no longer measures the case the output cannot see');
   await expectAuthorRefused(source, 'rx: min(var(--_r), 0px)', 'classDef');
+});
+
+test('Pele refuses an authored clamp an applied treemap classDef forwards intact', async () => {
+  // The escaped comma is the treemap face the parser restores, and with the
+  // definition applied the authored clamp reaches the raw render whole
+  // (measured 2026-11-16: the cell carries its own renderer clamp and the
+  // authored declaration behind it). `3.99` is a canonical hundredth the
+  // renderer's quarter-step clamp cannot print — the same source without `:::`
+  // prints `0px` for this cell — so the declaration read below can only be the
+  // author's.
+  const source = 'treemap-beta\n  "A": 1:::red\n  "B": 100000\n  classDef red rx:min(var(--_r)\\,3.99px)';
+  const model = parsePele(source);
+  if (model.type !== 'treemap') throw new Error('the fixture is no longer a treemap source');
+  assert.deepEqual([...model.classes], [['red', ['rx:min(var(--_r),3.99px)']]],
+    'the parser no longer restores the escaped comma this row measures');
+  assert.ok(
+    elementDeclarations(source).includes('rx: min(var(--_r),3.99px)'),
+    'the raw render no longer forwards the authored clamp intact, so the row would pass vacuously',
+  );
+  const unapplied = elementDeclarations(source.replace(':::red', ''));
+  assert.ok(unapplied.includes('rx: min(var(--_r),0px)'),
+    'the fixture no longer renders the cell clamp the authored spelling is told apart from');
+  assert.ok(!unapplied.includes('rx: min(var(--_r),3.99px)'),
+    'the definition reaches the raw render without being applied, so the row would measure the wrong face');
+  await expectAuthorRefused(source, 'rx: min(var(--_r),3.99px)', 'classDef');
 });
 
 /**
