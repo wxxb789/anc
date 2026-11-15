@@ -739,8 +739,10 @@ test('a build-time mode ships no chunk carrying its own runtime', (t: TestContex
   // `dist/wasm/*.js` is out of scope by name: it is the SQLite read model's
   // loader, copied from the wasm package and shipped independently of either
   // mode. It is not a client runtime of this file's two subjects, and nothing
-  // bounds its bytes: `tests/output-inventory.test.ts` binds its membership and
-  // digest, `tests/graph-runtime.test.ts` counts its requests.
+  // bounds its bytes: `tests/output-inventory.test.ts` binds the loaders'
+  // membership and verifies only the `.wasm` binary's digest, while
+  // `tests/graph-runtime.test.ts` counts its requests. Neither gate imposes a
+  // byte-size ceiling on the loaders.
   const scripts = walk(DIST, '.js').filter(
     (file) => !file.includes('pagefind') && !/[/\\]wasm[/\\]/.test(file),
   );
