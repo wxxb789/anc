@@ -90,9 +90,10 @@ It does forbid a second corpus index with the same lookup or adjacency facts.
 - Ship required JS/WASM within the package and generated site. A built site needs
   same-origin HTTP asset requests, not a CDN library import or runtime data service.
 
-Math and Mermaid retain their existing lazy modes and source fallback. Their CSP
-requirements remain separate from SQLite. SQLite must not be used as a reason to
-broaden script execution permissions or replace the article renderer.
+Math keeps its client mode with a source fallback and Mermaid fences render to
+SVG at build time; their CSP requirements remain separate from SQLite. SQLite
+must not be used as a reason to broaden script execution permissions or replace
+the article renderer.
 
 ## Why page bodies stay out of SQLite
 

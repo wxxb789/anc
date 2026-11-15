@@ -138,9 +138,9 @@ const metaPolicy = (() => {
     <SiteMetadata title={title} description={description} lang={lang} />
     {/* The one seam a page has into the document head.
         TK-15 fills it with the math stylesheet and font, gated on
-        `RenderedNote.hasMath`, and the Mermaid assets gated on `.hasMermaid`.
-        `src/pages/notes/[slug].astro` already uses it for the `hasCode` case,
-        so the mechanism is exercised rather than speculative.
+        `RenderedNote.hasMath`, and the diagram stylesheet gated on
+        `.hasMermaid`. `src/pages/notes/[slug].astro` already uses it for the
+        `hasCode` case, so the mechanism is exercised rather than speculative.
 
         A named slot rather than a widening `Props` interface: a per-ticket prop
         would make this file the contended one every time a ticket needs a tag

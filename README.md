@@ -78,7 +78,7 @@ promise.
 | Relationships | Backlinks, outgoing links, and a link graph, rendered to static HTML |
 | Navigation | Tags, collections, breadcrumbs, table of contents, and recent changes |
 | Search | Pagefind full-text search, with a per-document language |
-| Rich content | Client-rendered math and Mermaid diagrams, each with a source fallback |
+| Rich content | Client-rendered math with a source fallback; Mermaid fences rendered to SVG at build time |
 | Discovery | Atom feed, sitemap, `robots.txt`, canonical URLs, and Open Graph metadata |
 | Languages | Per-document chrome in English and Simplified Chinese (`zh-CN`) |
 | Privacy | Default-publish with explicit withholding; released names stay out of logs |
@@ -234,8 +234,9 @@ private, static HTML delivers pages, and Pagefind owns full-text search.
   `nodes`, `edges`, `aliases`, `tags`, and `node_tags`. It contains no page body and no
   SQLite FTS; the browser fetches it lazily in a read-only Worker for hover previews,
   tag browsing, and graph exploration.
-- Base interactive surfaces are a few KB gzip of vanilla script. Pages containing math
-  or diagrams lazy-load the accepted client renderers; both have source fallbacks.
+- Base interactive surfaces are a few KB gzip of vanilla script. A page containing math
+  lazy-loads the accepted client renderer; diagrams are rendered to SVG at build time
+  and ship as markup.
 - No D1, R2, Functions, analytics, comments, or build-time data service. A runtime
   application server is not required.
 
@@ -297,7 +298,7 @@ Add `publish: false` to its frontmatter, or match its path with an `exclude:` gl
 
 **Does the site work without JavaScript?**
 Reading, navigation, backlinks, and the link graph's table fallback are plain HTML.
-Search, hover previews, math, and diagrams need JavaScript.
+Search, hover previews, and math need JavaScript.
 
 **Where can I host it?**
 Any static host at the root of a domain: GitHub Pages, Cloudflare Pages, Netlify, or
