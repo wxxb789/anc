@@ -684,7 +684,7 @@ test('Pele treats hostile label text and accessible names as text, not markup', 
  * `playwright` is imported here rather than at the top of the file: every other
  * row is a build-time assertion, and a static import turns an absent browser
  * package into a collection error for all of them instead of a named failure
- * for the two rows that need a browser.
+ * for the three rows that need a browser.
  *
  * `style-src 'self'` is the policy the build-time row ships, so anything
  * measuring that row's cascade has to measure it under that policy — see the
