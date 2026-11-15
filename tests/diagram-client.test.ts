@@ -7,10 +7,10 @@
  * outside a browser: one is an XML namespace error that only a real DOMParser
  * raises, the other is a DOM event nothing else fires.
  *
- * It runs whatever `DIAGRAM_MODE` says, deliberately. The subject is
- * `src/scripts/diagram.ts` — the runtime the later flip will turn on — not the
- * build's output, so skipping in build-time mode would leave the flip depending
- * on a file no gate had executed since the day it was written.
+ * It drives the client runtime directly, whatever the selected mode is. The
+ * subject is `src/scripts/diagram.ts` — retained and executable although the
+ * selected `build-time` mode never ships it — not the build's output, so the
+ * mode the tree carries cannot make this file's guarantees unmeasured.
  *
  * The corpus is bundled and served here rather than read from `dist/`, for the
  * same reason `tests/backlink-surfaces.test.ts` builds its own: build-time mode
@@ -25,6 +25,7 @@ import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { afterAll, beforeAll, test, type TestContext } from 'vitest';
+import { STYLE_SRC_BY_MODE } from '../src/lib/diagram-mode.ts';
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 
@@ -134,7 +135,8 @@ beforeAll(async () => {
     // first attempt and is inert here: a map is an *inline* script, which the
     // served CSP's `script-src 'self'` blocks outright — measured, the browser
     // reported `Executing inline script violates ...` and nothing rendered.
-    // Same trap as the inline `<style>` above, one element along.
+    // The substitution below relaxes `style-src` for this fixture, not
+    // `script-src`: the shipped inline-script rule stays in force here.
     stripTypeScriptTypes(readFileSync(join(ROOT, 'src', 'scripts', 'diagram.ts'), 'utf8'), {
       mode: 'strip',
     })
@@ -146,12 +148,15 @@ beforeAll(async () => {
   );
   mermaidDir = dirname(createRequire(join(ROOT, 'package.json')).resolve('mermaid'));
 
-  // **A linked stylesheet, not an inline `<style>`.** The page is served under
-  // the site's own CSP, whose `style-src` is `'self'` — an inline block is
-  // blocked, every custom property is unset, and `currentThemeVariables()`
-  // resolves the whole palette to `rgb(0, 0, 0)` in both themes. Measured: the
-  // first version of this fixture did exactly that and reported the theme gate
-  // red against a runtime that was working.
+  // **A linked stylesheet, not an inline `<style>`.** The shipped header is
+  // build-time, and an inline block is what its `style-src 'self'` blocks:
+  // every custom property unset, `currentThemeVariables()` resolving the whole
+  // palette to `rgb(0, 0, 0)` in both themes. Measured at the head this
+  // fixture was first written against, its first version inlined the palette
+  // and reported the theme gate red against a runtime that was working. The
+  // probe stylesheet stays linked so the fixture's own palette never depends
+  // on the `style-src` this file serves — and the fixture serves the *client*
+  // `style-src`, substituted below, because its subject is the client runtime.
   writeFileSync(
     join(site, 'probe.css'),
     `:root { color-scheme: light dark;
@@ -203,6 +208,23 @@ beforeAll(async () => {
   const csp = /Content-Security-Policy:\s*(.+)/.exec(headers)?.[1]?.trim();
   assert.ok(csp, 'public/_headers declares no CSP, so this gate would test no policy');
 
+  // **The served policy swaps one directive for the client value.** This
+  // file's subject is the client runtime, which needs the client `style-src`:
+  // Mermaid writes an inline `<style>` into the SVG it returns, and
+  // `renderInto` imports that SVG into the live document (`DOMParser`
+  // `image/svg+xml` parse, then `document.importNode`), which `'self'`
+  // refuses. Substituting through `STYLE_SRC_BY_MODE` rather than retyping the
+  // value keeps the served policy bound to the same table the runtime depends
+  // on; every other directive is served byte-identical to `public/_headers`.
+  const servedCsp = csp.replace(/style-src [^;]*/, `style-src ${STYLE_SRC_BY_MODE.client}`);
+  assert.equal(
+    /style-src ([^;]*)/.exec(servedCsp)?.[1],
+    STYLE_SRC_BY_MODE.client,
+    'this fixture must serve the client `style-src`: its subject is the client runtime, which ' +
+      'is only supported under the client policy — the shipped build-time value blocks the ' +
+      'inline `<style>` the runtime injects',
+  );
+
   const types: Record<string, string> = {
     '.js': 'text/javascript',
     '.mjs': 'text/javascript',
@@ -221,7 +243,7 @@ beforeAll(async () => {
     }
     response.writeHead(200, {
       'content-type': types[extname(file)] ?? 'application/octet-stream',
-      'content-security-policy': csp,
+      'content-security-policy': servedCsp,
     });
     response.end(readFileSync(file));
   });
