@@ -17,6 +17,7 @@ import {
   writeVendorProvenance,
 } from '../scripts/vendor-provenance.ts';
 import { scanResidue } from '../scripts/scan-residue.ts';
+import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 
 function scratch<T>(body: (directory: string) => T): T {
   const directory = mkdtempSync(join(tmpdir(), 'vendor-provenance-'));
@@ -25,6 +26,13 @@ function scratch<T>(body: (directory: string) => T): T {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+/** `.js` chunks under `_astro/` whose bytes carry the runtime's escaped raster spelling. */
+function rasterCarriers(directory: string): string[] {
+  return readdirSync(join(directory, '_astro'))
+    .filter((name) => name.endsWith('.js'))
+    .filter((name) => readFileSync(join(directory, '_astro', name), 'utf8').includes('data:image\\/'));
 }
 
 test('only nonempty chunks inside exact resolved runtime roots are vendored', () => {
@@ -185,32 +193,85 @@ test('the scanner skips only exact listed chunks and still reads first-party loo
   });
 });
 
-test('the real client build proves vendor and first-party chunks took opposite paths', () => {
+test('the real build and the real runtime prove vendor and first-party chunks took opposite paths', () => {
   const root = fileURLToPath(new URL('../dist/', import.meta.url));
   const provenance = readVendorProvenance(root, { required: true });
-  assert.ok(provenance.size > 0, 'the client build granted no exact vendor chunks');
-  assert.equal(existsSync(vendorProvenancePath(root)), true, 'the client build wrote no private sidecar');
+  assert.ok(provenance.size > 0, 'the build granted no exact vendor chunks');
+  assert.equal(existsSync(vendorProvenancePath(root)), true, 'the build wrote no private sidecar');
   assert.equal(existsSync(join(root, 'vendored-chunks.json')), false, 'the private sidecar entered the public artifact');
 
-  // Positive control for the exemption: at least one exact listed dependency
-  // chunk carries the bracket coincidence that made client Mermaid fail before.
+  // Positive control for the exemption, and it holds in both modes: at least one
+  // exact listed dependency chunk carries the bracket coincidence that made
+  // client Mermaid fail before.
   const coincident = [...provenance].find((file) => readFileSync(join(root, ...file.split('/')), 'utf8').includes('[['));
   assert.ok(coincident !== undefined, 'no listed chunk carries the coincidence the exemption exists for');
 
   // Negative control: the first-party client runtime contains the escaped raster
   // regex that caused the other blocker. It must remain unlisted and pass only
-  // because the scanner understands that exact safe source spelling.
-  const scripts = readdirSync(join(root, '_astro')).filter((name) => name.endsWith('.js'));
-  const firstPartyRaster = scripts
-    .map((name) => ({ name, text: readFileSync(join(root, '_astro', name), 'utf8') }))
-    .find(({ text }) => text.includes('data:image\\/'));
-  assert.ok(firstPartyRaster !== undefined, 'no first-party raster guard reached the built JavaScript');
-  assert.ok(!provenance.has('_astro/' + firstPartyRaster.name), 'the first-party raster runtime was marked vendored');
+  // because the scanner understands that exact safe source spelling. Its
+  // carrier is mode-dependent: `client` ships the runtime, while `build-time`
+  // replaces the whole module with `src/scripts/diagram-disabled.ts`, and then
+  // the chunk's absence from the build is the mode's headline property.
+  const carriers = rasterCarriers(root);
+  if (DIAGRAM_MODE === 'client') {
+    const firstPartyRaster = carriers[0];
+    assert.ok(firstPartyRaster !== undefined, 'no first-party raster guard reached the built JavaScript');
+    assert.ok(!provenance.has('_astro/' + firstPartyRaster), 'the first-party raster runtime was marked vendored');
+  } else {
+    assert.deepEqual(
+      carriers,
+      [],
+      'the build-time build shipped a chunk carrying the client runtime’s escaped raster spelling',
+    );
+  }
   assert.deepEqual(
     scanResidue(root, { requireVendorProvenance: true }).findings,
     [],
-    'the client build is not clean through the production provenance requirement',
+    'the built site is not clean through the production provenance requirement',
   );
+
+  // The mode-independent half, driven by the runtime's own bytes rather than a
+  // fixture that can drift: whatever mode ships, `src/scripts/diagram.ts` is the
+  // source of the escaped spelling, read the same way `tests/verify.test.ts`
+  // reads the same guard.
+  const runtime = readFileSync(new URL('../src/scripts/diagram.ts', import.meta.url), 'utf8');
+  const rasterGuard = runtime.split('\n').find((line) => line.includes('const isInlineRaster'));
+  assert.ok(rasterGuard !== undefined, 'the runtime no longer carries the raster guard under test');
+  assert.ok(rasterGuard.includes('data:image\\/'), 'the runtime raster guard no longer escapes its slash');
+
+  scratch((directory) => {
+    const dist = join(directory, 'dist');
+    mkdirSync(join(dist, '_astro'), { recursive: true });
+    writeFileSync(join(dist, 'index.html'), '<!doctype html><p>home</p>', 'utf8');
+    writeFileSync(join(dist, '_astro', 'vendor.Hash.js'), 'const points=[[1,2],[3,4]];', 'utf8');
+    writeFileSync(join(dist, '_astro', 'first.Hash.js'), rasterGuard, 'utf8');
+    writeVendorProvenance(dist, ['_astro/vendor.Hash.js']);
+
+    // Vacuity companion for the build-time absence above: the same search finds
+    // a carrier that is there, so an empty result over the built site is the
+    // absence of the chunk rather than a search that cannot match.
+    assert.deepEqual(rasterCarriers(dist), ['first.Hash.js'], 'the raster-carrier search missed a planted carrier');
+
+    // The unlisted chunk is read and passes; the listed chunk is skipped whole.
+    // Two scannable files: index.html and the unlisted chunk.
+    const clean = scanResidue(dist, { requireVendorProvenance: true });
+    assert.deepEqual(
+      clean.findings,
+      [],
+      `the escaped runtime spelling or the vendor grant stopped working: ${clean.findings.join('; ')}`,
+    );
+    assert.equal(clean.scannedCount, 2, 'the exact vendor grant skipped too much or too little');
+
+    // And the direction that keeps that clean reading from being the zero of a
+    // rule that no longer fires: the same bytes with the slash unescaped are the
+    // coincidence the non-image data: rule exists for.
+    writeFileSync(join(dist, '_astro', 'first.Hash.js'), rasterGuard.replaceAll('\\/', '/'), 'utf8');
+    const broken = scanResidue(dist, { requireVendorProvenance: true });
+    assert.ok(
+      broken.findings.some((finding) => finding.includes('non-image data: URL')),
+      `unescaping the slash did not fire the non-image data: rule: ${broken.findings.join('; ')}`,
+    );
+  });
 });
 
 test('missing provenance grants nothing; malformed and stale grants fail', () => {
