@@ -619,8 +619,10 @@ test('hostile content inside math or a diagram cannot reach the page as markup',
     try {
       ({ html } = await renderMarkdown(markdown));
     } catch {
-      // Failing the build is the other acceptable outcome, and is what a
-      // `click` directive naming an external URL does in build-time mode.
+      // Failing the build is the other acceptable outcome: the retained Mermaid
+      // adapter fails the build on a `click` directive naming an external URL in
+      // build-time mode, while the selected pele engine renders the diagram with
+      // the link suppressed — no anchor and no URL in the markup.
       continue;
     }
     assert.doesNotMatch(html, /<script/i, `a script survived: ${markdown.slice(0, 50)}`);

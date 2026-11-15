@@ -193,8 +193,11 @@ test('Pele namespaces gradients and accessible titles without render-order state
 
 test('Pele is byte-deterministic across fresh Node processes', () => {
   // The child script is inlined rather than taken from `tests/support/render-diagram.ts`
-  // because a fresh child cannot see this file's `vi.mock` of `diagram-mode.ts` and there
-  // is no runtime override, so the harness would render the configured `mermaid` engine.
+  // so the test exercises `pele-render.ts` itself, independent of the constant's current
+  // value: a fresh child cannot see this file's `vi.mock` of `diagram-mode.ts`, so a bare
+  // harness run follows the real configured engine through the dispatcher — currently
+  // `pele` (`tests/support/render-diagram.ts:75`, where an absent `--adapter` imports
+  // `src/lib/diagram-engine.ts`).
   const adapter = new URL('../src/lib/pele-render.ts', import.meta.url).href;
   const source = DIAGRAMS['sankey']!;
   const script = `import { createHash } from 'node:crypto';
