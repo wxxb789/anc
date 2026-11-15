@@ -201,8 +201,8 @@ test('the real build and the real runtime prove vendor and first-party chunks to
   assert.equal(existsSync(join(root, 'vendored-chunks.json')), false, 'the private sidecar entered the public artifact');
 
   // Positive control for the exemption, and it holds in both modes: at least one
-  // exact listed dependency chunk carries the bracket coincidence that made
-  // client Mermaid fail before.
+  // exact listed dependency chunk carries the bracket coincidence the exemption
+  // exists for — in this build, one `[[` inside the granted math runtime.
   const coincident = [...provenance].find((file) => readFileSync(join(root, ...file.split('/')), 'utf8').includes('[['));
   assert.ok(coincident !== undefined, 'no listed chunk carries the coincidence the exemption exists for');
 
@@ -221,7 +221,7 @@ test('the real build and the real runtime prove vendor and first-party chunks to
     assert.deepEqual(
       carriers,
       [],
-      'the build-time build shipped a chunk carrying the client runtime’s escaped raster spelling',
+      'the build-time build shipped a chunk carrying the escaped raster spelling (the retained client runtime is its only current source; measure before assuming it)',
     );
   }
   assert.deepEqual(

@@ -9,7 +9,8 @@
  *    inline style, no `<style>` element, and no script; client mode needs a
  *    relaxed `style-src` and must say so in `public/_headers`.
  *    `tests/built-output.test.ts` owns the mode-aware `dist/` assertions; this
- *    file owns the renderer's own guarantees.
+ *    file owns the *Mermaid* renderer's own guarantees; the selected engine's
+ *    live in `tests/diagram-engine.test.ts`.
  * 2. **Nothing reaches a page that does not need it.** A note with no math
  *    links no math stylesheet; a note with no diagram links no diagram
  *    stylesheet and requests no diagram script. Both directions are asserted,
@@ -357,7 +358,8 @@ test('flattening preserves the appearance the stylesheet described', async () =>
 
 test('a diagram follows the theme with no second file and no script', async () => {
   // The pairing: two renders, one per palette, collapsed into `light-dark()`
-  // values on one SVG. Without it a build-time diagram is stuck in one theme.
+  // values on one SVG. Without it a *Mermaid*-rendered build-time diagram is
+  // stuck in one theme.
   const svg = await renderDiagram(DIAGRAM_TYPES['flowchart']!, 'theme-probe', 'Flowchart diagram');
   const paired = svg.match(/light-dark\([^)]*\)/g) ?? [];
   assert.ok(paired.length > 0, 'no colour was paired, so the diagram cannot follow the theme');
@@ -533,14 +535,20 @@ test('two diagrams on one page do not collide on element ids', async (t: TestCon
       '```mermaid\nsankey-beta\nA,B,10\nB,C,5\nC,D,3\nD,E,7\nE,F,2\n```\n',
   );
   const ids = [...rendered.html.matchAll(/\sid="([^"]*)"/g)].map(([, id]) => id!);
-  assert.ok(ids.length >= 2, `only ${ids.length} ids, too few for this gate to mean anything`);
+  assert.ok(
+    ids.length >= 8,
+    `only ${ids.length} ids; the measured pair mints 10 (5 per diagram), so a one-diagram render must not pass this row`,
+  );
   assert.equal(new Set(ids).size, ids.length, 'two diagrams on one page share an element id');
 
   // Every internal reference resolves. A unique-id check alone would pass a
   // renaming that changed the definitions and left `url(#…)` pointing at the
   // old names — which renders as a diagram with no arrowheads.
   const references = [...rendered.html.matchAll(/url\(#([^)]*)\)/g)].map(([, id]) => id!);
-  assert.ok(references.length >= 2, 'no internal references, so this half checks nothing');
+  assert.ok(
+    references.length >= 8,
+    `only ${references.length} references; the measured pair mints 10 (5 per diagram), so a one-diagram render must not pass this row`,
+  );
   const defined = new Set(ids);
   for (const reference of references) {
     assert.ok(defined.has(reference), `url(#${reference}) points at no element on the page`);
@@ -725,8 +733,9 @@ test('a build-time mode ships no chunk carrying its own runtime', (t: TestContex
   //
   // `dist/wasm/*.js` is out of scope by name: it is the SQLite read model's
   // loader, copied from the wasm package and shipped independently of either
-  // mode. It is not a client runtime of this file's two subjects, and the graph
-  // gates own its size.
+  // mode. It is not a client runtime of this file's two subjects, and nothing
+  // bounds its bytes: `tests/output-inventory.test.ts` binds its membership and
+  // digest, `tests/graph-runtime.test.ts` counts its requests.
   const scripts = walk(DIST, '.js').filter(
     (file) => !file.includes('pagefind') && !/[/\\]wasm[/\\]/.test(file),
   );
@@ -915,22 +924,24 @@ test('a diagram with a declared accessible title keeps a resolvable name', async
 });
 
 test('the diagram stylesheet pins the size the renderer measured at', () => {
-  // The geometry of a build-time diagram is baked into the SVG, computed from
-  // Mermaid's own measurement of the label text at 16 px. This site's body text
-  // is `--text-base`, 17 px, and HTML labels inherit it — so without a pin every
-  // multi-word label rendered ~6% wider than the box built for it and was
-  // visibly clipped ("Private vault" showed as "Private vaul"). Measured in
-  // Chromium, and the reason this is a gate rather than a comment: the coupling
-  // is invisible in both files on their own.
+  // The geometry of a *Mermaid*-rendered build-time diagram is baked into the
+  // SVG, computed from Mermaid's own measurement of the label text at 16 px.
+  // This site's body text is `--text-base`, 17 px, and HTML labels inherit it —
+  // so without a pin every multi-word label rendered ~6% wider than the box
+  // built for it and was visibly clipped ("Private vault" showed as "Private
+  // vaul"). Measured in Chromium, and the reason this is a gate rather than a
+  // comment: the coupling is invisible in both files on their own.
   const stylesheet = readFileSync(new URL('src/styles/diagram.css', ROOT), 'utf8');
   assert.match(
     stylesheet,
     /\.diagram foreignObject[^{]*\{[^}]*font-size:\s*16px/,
-    'diagram.css must pin the label font size to the 16px the renderer measured at',
+    'diagram.css must pin the label font size to the 16px Mermaid measured at',
   );
   // In `px`, not `rem`: a reader who scales the root font size scales the whole
   // SVG, which keeps each label inside its box. Scaling only the text would
-  // reintroduce exactly the clipping this pin removes.
+  // reintroduce exactly the clipping this pin removes. The refusal is scoped by
+  // selector rather than by engine: it binds every `.diagram`-prefixed block,
+  // Pele's root style included.
   assert.doesNotMatch(
     stylesheet,
     /\.diagram[^{]*\{[^}]*font-size:\s*[\d.]+rem/,

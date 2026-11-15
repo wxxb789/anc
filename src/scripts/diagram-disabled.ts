@@ -6,7 +6,7 @@
  * (`src/lib/diagram-mode.ts`), so this stub is what the bundle carries and the
  * client runtime reaches `dist/` only when that constant selects it. The page's
  * `<script>` is bundled eagerly by Astro regardless of any condition around it,
- * so the only way to keep Mermaid's 119 chunks out of `dist/` is to make the
+ * so the only way to keep Mermaid's ~100 chunks out of `dist/` is to make the
  * module they hang from import nothing.
  *
  * An empty module rather than a deleted `<script>`: the tag still exists, so
