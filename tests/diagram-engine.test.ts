@@ -453,19 +453,21 @@ test('a literal radius becomes the attribute, not the class that would outrank i
 
 /**
  * The displacement rule's other half, and the half it did not hold: a
- * declaration the property's grammar rejects is one the browser drops at parse
- * time, so it is not a declaration at all — the attribute it was meant to
- * outrank still applies. Projecting it *deletes* that attribute instead, because
- * the `fill="not-a-color"` emitted in its place is dropped by the same parse:
- * the box that paints from `var(--_s)` in the raw render loses its fill and
- * inherits the root's paint. A rendering change with no error anywhere is
- * exactly what the build refuses here, naming the declaration.
+ * declaration the renderer drops is not a declaration at all — the attribute it
+ * was meant to outrank still applies. Projecting it *deletes* that attribute
+ * instead, because the `fill="not-a-color"` emitted in its place is dropped by
+ * the same parse: the box that paints from `var(--_s)` in the raw render loses
+ * its fill and inherits the root's paint. A rendering change with no error
+ * anywhere is exactly what the build refuses here, naming the declaration.
+ * `fill:not-a-color` is a cell of the measured face whose verdict the property
+ * grammar and the renderer agree on; the cells they disagree on are the two
+ * tables in `pele-render.ts`, and each has its own row below.
  *
  * The control is the raw render: it must carry both the declaration and the
  * `var()` attribute it displaces, or the row would pass by having nothing to
  * project.
  */
-test('Pele refuses an authored declaration the property’s grammar rejects', async () => {
+test('Pele refuses an authored declaration with no measured projection', async () => {
   const { renderDiagram } = await import('../src/lib/pele-render.ts');
   const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A fill:not-a-color';
   const original = inspect(renderPele(source, { idPrefix: 'declared-invalid', links: false, images: false }).svg);
@@ -522,6 +524,263 @@ test('Pele keeps a negative declaration where the renderer keeps the value', asy
   assert.equal(shape?.attributes['stroke-dashoffset'], '-2', 'a negative the renderer keeps did not reach the shape');
 });
 
+/**
+ * The measured face, one row per `RENDERER_KEPT_NUMBER` row in
+ * `pele-render.ts` (r3): every spelling below is a real `style A` directive,
+ * rendered through the raw renderer and the adapter and read back side by side
+ * in the browser. The reading is pinned to the value the r3 measurements (the
+ * 380-cell sweep and its boundary probe) read for *both* forms, so a browser
+ * that starts dropping a spelling — or an adapter that starts normalising one —
+ * fails here instead of passing a drop-versus-drop comparison. `specified` is
+ * asserted non-empty on the raw element: the declaration survived the renderer's
+ * parse, which is the half of the row the property grammar gets wrong.
+ */
+const UNITLESS_FACE: ReadonlyArray<readonly [
+  property: string,
+  values: ReadonlyArray<readonly [value: string, reading: string]>,
+]> = [
+  ['rx', [['4', '4px'], ['0.5', '0.5px'], ['1e2', '100px'], ['1500', '1500px'], ['+4', '4px'], ['4.0', '4px']]],
+  ['ry', [['4', '4px'], ['0.5', '0.5px'], ['1e2', '100px'], ['1500', '1500px']]],
+  ['fill-opacity', [['4', '1'], ['-2', '0'], ['1e2', '1'], ['1500', '1']]],
+  ['font-size', [['4', '4px'], ['0.5', '0.5px'], ['1e2', '100px'], ['1500', '1500px']]],
+  ['letter-spacing', [['4', '4px'], ['-2', '-2px'], ['1e2', '100px'], ['1500', '1500px']]],
+  ['word-spacing', [['4', '4px'], ['-2', '-2px'], ['1e2', '100px'], ['1500', '1500px']]],
+];
+
+/** The `RENDERER_KEPT_PERCENTAGE` row — `word-spacing`'s percentage, both signs. */
+const PERCENTAGE_FACE: ReadonlyArray<readonly [value: string, reading: string]> = [
+  ['50%', '50%'],
+  ['-50%', '-50%'],
+];
+
+/** The source shape every face row reads: `style A` lands on the first node's box or its label. */
+function faceSource(property: string, value: string): string {
+  return `flowchart TD\n A[Reader] --> B[Site]\n style A ${property}:${value}`;
+}
+
+/**
+ * Render each cell's source through the raw renderer and the adapter, serve
+ * every pair side by side without a policy (`openDiagramPage` above), and read
+ * each pair back: the raw element carrying the author's declaration, the
+ * adapter element carrying the property, and the computed value of both.
+ *
+ * The element controls are the point of the helper. `localName` and the `x`/`y`
+ * geometry have to match between the two — the adapter must not be compared
+ * across elements — and the adapter's attribute has to carry the author's own
+ * spelling, which is what projection as-is means.
+ */
+async function measureCells(cells: ReadonlyArray<{ property: string; value: string; source: string }>) {
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const blocks: string[] = [];
+  for (const [index, cell] of cells.entries()) {
+    const { svg } = renderPele(cell.source, { idPrefix: `face-${index}`, links: false, images: false });
+    const adapter = await renderDiagram(cell.source, `face-${index}`, 'Face probe');
+    assertClean(adapter);
+    blocks.push(`<figure class="diagram" data-role="raw-${index}">${svg}</figure>`);
+    blocks.push(`<figure class="diagram" data-role="adapter-${index}">${adapter}</figure>`);
+  }
+  const { browser, page } = await openDiagramPage(blocks.join(''), { policy: null });
+  try {
+    return await page.evaluate((probes) => probes.map(({ property, value, index }) => {
+      const elements = (role: string): Element[] => {
+        const figure = document.querySelector(`figure[data-role="${role}"]`);
+        if (figure === null) throw new Error(`the page lost the ${role} block`);
+        return [...figure.querySelectorAll('*')];
+      };
+      const raw = elements(`raw-${index}`).filter((element) =>
+        element.localName !== 'svg' && (element.getAttribute('style') ?? '').includes(`${property}:${value}`));
+      const adapter = elements(`adapter-${index}`).filter((element) => element.hasAttribute(property));
+      if (raw.length !== 1) throw new Error(`${property}:${value} is on ${raw.length} raw elements, not one`);
+      if (adapter.length !== 1) throw new Error(`${property} is on ${adapter.length} adapter elements, not one`);
+      const geometry = (element: Element): string => `${element.getAttribute('x')}/${element.getAttribute('y')}`;
+      const reading = (element: Element): string => getComputedStyle(element).getPropertyValue(property);
+      return {
+        rawTag: raw[0]!.localName,
+        adapterTag: adapter[0]!.localName,
+        rawGeometry: geometry(raw[0]!),
+        adapterGeometry: geometry(adapter[0]!),
+        specified: (raw[0] as SVGElement).style.getPropertyValue(property),
+        emitted: adapter[0]!.getAttribute(property),
+        raw: reading(raw[0]!),
+        adapter: reading(adapter[0]!),
+      };
+    }), cells.map((cell, index) => ({ property: cell.property, value: cell.value, index })));
+  } finally {
+    await browser.close();
+  }
+}
+
+test.each(UNITLESS_FACE)(
+  'a unitless %s declaration is projected as the renderer keeps it', async (property, values) => {
+    const cells = values.map(([value]) => ({ property, value, source: faceSource(property, value) }));
+    const measured = await measureCells(cells);
+    for (const [index, [value, reading]] of values.entries()) {
+      const cell = measured[index]!;
+      const label = `${property}:${value}`;
+      assert.equal(cell.rawTag, cell.adapterTag, `${label}: the two forms are not the same kind of element`);
+      assert.equal(cell.rawGeometry, cell.adapterGeometry, `${label}: the two forms are not the same element`);
+      assert.notEqual(cell.specified, '', `${label}: the browser no longer keeps the declaration — the row's premise is gone`);
+      assert.equal(cell.emitted, value, `${label}: the projection did not carry the author's spelling`);
+      assert.equal(cell.raw, reading, `${label}: the raw render no longer computes ${reading}`);
+      assert.equal(cell.adapter, reading, `${label}: the projection computes ${cell.adapter}, not ${reading}`);
+    }
+  },
+);
+
+test.each(PERCENTAGE_FACE)(
+  'a %s word-spacing declaration is projected as the renderer keeps it', async (value, reading) => {
+    const source = faceSource('word-spacing', value);
+    const [cell] = await measureCells([{ property: 'word-spacing', value, source }]);
+    assert.notEqual(cell!.specified, '', `word-spacing:${value}: the browser no longer keeps the declaration`);
+    assert.equal(cell!.emitted, value, `word-spacing:${value}: the projection did not carry the author's spelling`);
+    assert.equal(cell!.raw, reading, `word-spacing:${value}: the raw render no longer computes ${reading}`);
+    assert.equal(cell!.adapter, reading, `word-spacing:${value}: the projection computes ${cell!.adapter}, not ${reading}`);
+  },
+);
+
+/**
+ * The r3 finding, source-level: `style A rx:4`. The raw render carries
+ * `style="rx:var(--_r);rx:4"` — the browser keeps the declaration, the last one
+ * wins, and the box rounds at 4 user units — while the adapter used to fail the
+ * whole build on the property grammar's verdict, refusing a value the browser
+ * keeps. The class mechanism has to stay off this element: a `.pele-rounded`
+ * class rule would outrank the projected attribute and render `var(--_r)`,
+ * which is a different radius, while the other node keeps its class.
+ */
+test('the authored unitless radius is projected, and the class that would outrank it stays off', async () => {
+  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A rx:4';
+  const { svg: raw } = renderPele(source, { idPrefix: 'unitless-radius', links: false, images: false });
+  assert.match(raw, /style="rx:var\(--_r\);rx:4;"/, 'the raw render no longer carries the declaration this row projects');
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const svg = await renderDiagram(source, 'unitless-radius', 'Unitless radius');
+  const { elements } = inspect(svg);
+  assertClean(svg);
+  const sized = elements.find(({ attributes }) => attributes['rx'] !== undefined);
+  assert.equal(sized?.attributes['rx'], '4', 'the authored radius is not on the element');
+  assert.ok(
+    !sized?.attributes['class']?.includes('pele-rounded'),
+    'the class that carries var(--_r) was added beside the projected radius',
+  );
+  assert.ok(
+    elements.some(({ attributes }) => attributes['class']?.includes('pele-rounded')),
+    'the unstyled node lost the class that carries var(--_r)',
+  );
+  const [cell] = await measureCells([{ property: 'rx', value: '4', source }]);
+  assert.equal(cell!.raw, '4px', 'the raw render no longer rounds the box at the authored unit');
+  assert.equal(cell!.adapter, '4px', 'the projected radius does not compute the raw render’s radius');
+});
+
+/**
+ * The r3 finding, source-level: `word-spacing` is a legal SVG presentation
+ * attribute and the renderer keeps `-2px`, but it was missing from the emit
+ * allowlist, so every authored `word-spacing` was refused as having “no safe
+ * equivalent” — measured false. It is projected like the `letter-spacing`
+ * beside it, onto the label the declaration reached.
+ */
+test('an authored word-spacing reaches the label as its presentation attribute', async () => {
+  const source = 'flowchart TD\n A[Reader] --> B[Site]\n style A word-spacing:-2px';
+  const { svg: raw } = renderPele(source, { idPrefix: 'word-spacing', links: false, images: false });
+  assert.match(raw, /style="word-spacing:-2px;"/, 'the raw render no longer carries the declaration this row projects');
+  const { renderDiagram } = await import('../src/lib/pele-render.ts');
+  const svg = await renderDiagram(source, 'word-spacing', 'Word spacing');
+  const { elements } = inspect(svg);
+  assertClean(svg);
+  const label = elements.find(({ attributes }) => attributes['word-spacing'] !== undefined);
+  assert.equal(label?.attributes['word-spacing'], '-2px', 'the authored spacing is not on the label');
+  const [cell] = await measureCells([{ property: 'word-spacing', value: '-2px', source }]);
+  assert.equal(cell!.raw, '-2px', 'the raw render no longer spaces the words at the authored value');
+  assert.equal(cell!.adapter, '-2px', 'the projected spacing does not compute the raw render’s value');
+});
+
+/**
+ * The refused half of the face, one spelling per measured reason: the sign
+ * boundary of a `'positive'` row (`rx:-2`, `ry:-2`, `font-size:-2`), the shape
+ * boundary that keeps the number and drops the dimension
+ * (`fill-opacity:-4px`), a list that must not be read as its first number
+ * (`rx:4 -2`), and a value the renderer drops outright (`rx:not-a-color`,
+ * `word-spacing:bold`).
+ *
+ * Each row has the adapter fail loudly on the real source, then shows *why*
+ * refusal is the direction that preserves the rendering, in the same browser:
+ * the declaration is dropped on an element that carries nothing else
+ * (`specified` is empty — the value that would render comes from what the
+ * declaration displaces), and on a pele-shaped element that carries a value of
+ * its own, the projection's attribute form computes something else than the
+ * dropped declaration left behind. The last assertion is the ablatable half:
+ * it is what makes each refusal necessary rather than merely safe.
+ */
+const REFUSED_FACE: ReadonlyArray<{
+  property: string;
+  value: string;
+  element: 'rect' | 'text';
+  displaced: string;
+  displacedReading: string;
+  projectedReading: string;
+}> = [
+  { property: 'rx', value: '-2', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
+  { property: 'ry', value: '-2', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '-2px' },
+  { property: 'font-size', value: '-2', element: 'text', displaced: '33px', displacedReading: '33px', projectedReading: '16px' },
+  { property: 'fill-opacity', value: '-4px', element: 'rect', displaced: '0.25', displacedReading: '0.25', projectedReading: '1' },
+  { property: 'rx', value: 'not-a-color', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
+  { property: 'rx', value: '4 -2', element: 'rect', displaced: '9px', displacedReading: '9px', projectedReading: '0px' },
+  { property: 'word-spacing', value: 'bold', element: 'text', displaced: '5px', displacedReading: '5px', projectedReading: '0px' },
+];
+
+test.each(REFUSED_FACE)(
+  'Pele refuses $property:$value, and the projection would move the rendering',
+  async (row) => {
+    const { property, value, element, displaced, displacedReading, projectedReading } = row;
+    const source = faceSource(property, value);
+    const { renderDiagram } = await import('../src/lib/pele-render.ts');
+    await assert.rejects(() => renderDiagram(source, 'refused-face', 'Refused face'), (error: unknown) =>
+      error instanceof DiagramError && error.source === source && error.message.includes(`${property}: ${value}`));
+    const { svg: raw } = renderPele(source, { idPrefix: 'refused-face', links: false, images: false });
+    const box = element === 'rect' ? 'x="5" y="5" width="50" height="20"' : 'x="5" y="20"';
+    const probe = (role: string, attributes: string): string =>
+      `<figure class="diagram" data-role="${role}"><svg xmlns="http://www.w3.org/2000/svg" class="pele" ` +
+      `viewBox="0 0 100 100" width="100" height="100"><${element} ${attributes}/></svg></figure>`;
+    const { browser, page } = await openDiagramPage(
+      `<figure class="diagram" data-role="raw">${raw}</figure>` +
+      probe('clean', `style="${property}:${value}"`) +
+      probe('displaced', `${box} ${property}="${displaced}" style="${property}:${value}"`) +
+      probe('projected', `${box} ${property}="${value}"`),
+      { policy: null },
+    );
+    try {
+      const measured = await page.evaluate(({ property, value }) => {
+        const one = (role: string): Element => {
+          const figure = document.querySelector(`figure[data-role="${role}"]`);
+          if (figure === null) throw new Error(`the page lost the ${role} block`);
+          const found = [...figure.querySelectorAll('*')].filter((element) =>
+            role === 'raw'
+              ? element.localName !== 'svg' && (element.getAttribute('style') ?? '').includes(`${property}:${value}`)
+              : element.hasAttribute('style') || element.hasAttribute(property));
+          if (found.length !== 1) throw new Error(`${role}: ${property} is on ${found.length} elements, not one`);
+          return found[0]!;
+        };
+        const reading = (role: string): string => getComputedStyle(one(role)).getPropertyValue(property);
+        return {
+          specified: (one('clean') as SVGElement).style.getPropertyValue(property),
+          displaced: reading('displaced'),
+          projected: reading('projected'),
+        };
+      }, { property, value });
+      assert.equal(measured.specified, '', `${property}:${value}: the browser no longer drops this declaration`);
+      assert.equal(
+        measured.displaced, displacedReading,
+        `${property}:${value}: the element's own value no longer survives the dropped declaration`,
+      );
+      assert.equal(measured.projected, projectedReading, `${property}:${value}: the projection no longer computes what it used to`);
+      assert.notEqual(
+        measured.displaced, measured.projected,
+        `${property}:${value}: the projection no longer moves the rendering, so the refusal is no longer measured as necessary`,
+      );
+    } finally {
+      await browser.close();
+    }
+  },
+);
+
 
 const SVG_OPEN = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 10 10">';
 test.each([
@@ -568,9 +827,16 @@ test('Pele treats hostile label text and accessible names as text, not markup', 
  *
  * `style-src 'self'` is the policy the build-time row ships, so anything
  * measuring that row's cascade has to measure it under that policy — see the
- * token row below for what it blocks.
+ * token row below for what it blocks. `policy: null` serves the same document
+ * with no policy at all, which is the only way to measure the *raw* render
+ * beside the adapter: the raw render carries its presentation in `style=`
+ * attributes and this policy blocks exactly those, so a policy-bearing page
+ * would measure the blocked declaration rather than the rendering the adapter
+ * has to reproduce. The adapter's own output never carries `style=`
+ * (`assertClean` gates that), so nothing that the policy could block reaches
+ * its elements, and the two blocks below are measured under one cascade.
  */
-async function openDiagramPage(markup: string) {
+async function openDiagramPage(markup: string, options: { policy?: string | null } = {}) {
   const { chromium } = await import('playwright');
   const styles: Readonly<Record<string, string>> = {
     '/tokens.css': readFileSync(new URL('../src/styles/tokens.css', import.meta.url), 'utf8'),
@@ -581,9 +847,10 @@ async function openDiagramPage(markup: string) {
   await page.route('https://diagram.test/**', async (route) => {
     const { pathname } = new URL(route.request().url());
     if (pathname === '/') {
+      const policy = options.policy === undefined ? "default-src 'none'; style-src 'self'" : options.policy;
       await route.fulfill({
         contentType: 'text/html',
-        headers: { 'content-security-policy': "default-src 'none'; style-src 'self'" },
+        headers: policy === null ? {} : { 'content-security-policy': policy },
         body: '<!doctype html><html><head><link rel="stylesheet" href="/tokens.css">' +
           `<link rel="stylesheet" href="/diagram.css"></head><body>${markup}</body></html>`,
       });

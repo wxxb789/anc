@@ -8,18 +8,20 @@
  * 1. **A `style` declaration on a non-root element** — an author's `style A
  *    font-size:40px`, or the `rx`/paint Pele derives from one. It becomes the
  *    presentation attribute of the same name, which carries the same value in
- *    the same cascade position — for a value the renderer's parser keeps, and
- *    only for one. A declaration the browser drops at parse time is not a
- *    declaration, so projecting it would not replace the attribute it displaces
- *    but delete it: the emitted attribute carries the same rejected value and is
- *    dropped too, while the raw render still has the attribute the declaration
- *    never won. Two checks stand in for the browser where the declaration is
- *    projected — the parser's own grammar for the property, and
- *    {@link NON_NEGATIVE} for the properties whose grammar is sign-agnostic —
- *    and both refuse rather than guess. Where the element already has that
- *    attribute, the declaration wins and the attribute is replaced: a `style`
- *    attribute outranks a presentation attribute in CSS, so that is the
- *    rendering Pele produced, not a preference.
+ *    the same cascade position — for a value the renderer keeps, which is the
+ *    whole of the rule below. A declaration the browser drops at parse time is
+ *    not a declaration, so projecting it would not replace the attribute it
+ *    displaces but delete it: the emitted attribute carries the same rejected
+ *    value and is dropped too, while the raw render still has the attribute the
+ *    declaration never won. The verdict is therefore measured rather than
+ *    grammatical: the parser's grammar decides the values that need no further
+ *    reading, {@link NON_NEGATIVE} and {@link RENDERER_KEPT_NUMBER} record the
+ *    cells where a measurement showed the grammar's verdict is not the
+ *    renderer's, and a value outside both is refused loudly rather than
+ *    guessed. Where the element already has that attribute, the declaration
+ *    wins and the attribute is replaced: a `style` attribute outranks a
+ *    presentation attribute in CSS, so that is the rendering Pele produced, not
+ *    a preference.
  * 2. **`rx: var(--_r)`** — the one declaration a presentation attribute cannot
  *    take, because `var()` does not resolve there. It stays a class, with the
  *    value supplied by `.diagram svg.pele .pele-rounded` in `diagram.css`.
@@ -56,7 +58,7 @@ const ATTRIBUTES: Readonly<Record<string, true>> = {
   'stroke-linecap': true, 'stroke-linejoin': true, opacity: true, 'font-size': true,
   'font-family': true, 'font-weight': true, 'font-style': true, 'text-anchor': true,
   'text-decoration': true, 'dominant-baseline': true, 'clip-path': true, 'clip-rule': true,
-  'baseline-shift': true, 'letter-spacing': true,
+  'baseline-shift': true, 'letter-spacing': true, 'word-spacing': true,
   gradientUnits: true, gradientTransform: true, offset: true, 'stop-color': true,
   'stop-opacity': true, 'marker-start': true, 'marker-mid': true, 'marker-end': true,
   markerWidth: true, markerHeight: true, markerUnits: true, refX: true, refY: true, orient: true,
@@ -82,17 +84,78 @@ const COLOUR_FUNCTIONS: Readonly<Record<string, true>> = {
  *
  * The properties that are absent are measured too, and for two different
  * reasons: the grammar already carries the constraint for `width`, `height` and
- * `font-size`, so their negatives never reach this table; and the renderer keeps
- * a negative for `x`, `y`, `cx`, `cy`, `stroke-dashoffset`, `letter-spacing`,
- * `word-spacing` and the opacity family, so refusing one there would be a
- * refusal of a value the browser honours. `r` has no producer here yet — Pele
- * filters it out of an author's `style` and `classDef` — and it is a row
- * anyway, because a row is a fact about the renderer's parser rather than about
- * what Pele currently forwards.
+ * `font-size`, so their negatives never reach this table (the unitless
+ * `font-size:-2` spelling reaches {@link RENDERER_KEPT_NUMBER} instead, which
+ * refuses it there); and the renderer keeps a negative for `x`, `y`, `cx`,
+ * `cy`, `stroke-dashoffset`, `letter-spacing`, `word-spacing` and the opacity
+ * family, so refusing one there would be a refusal of a value the browser
+ * honours. `r` has no producer here yet — Pele filters it out of an author's
+ * `style` and `classDef` — and it is a row anyway, because a row is a fact
+ * about the renderer's parser rather than about what Pele currently forwards.
  */
 const NON_NEGATIVE: Readonly<Record<string, true>> = {
   'stroke-width': true, 'stroke-dasharray': true, rx: true, ry: true, r: true,
 };
+
+/**
+ * The measured acceptance table for values `css-tree`'s grammar rejects — one
+ * row per (property, value shape) the renderer keeps anyway, with the
+ * presentation attribute measured to compute what the declaration computes.
+ *
+ * Measured 2026-11-15 in Chromium 158.0.8127.18 with the r3 sweep harness
+ * (380 cells; declaration form `style="P:V"`, attribute form `P="V"` and a
+ * control element without either, compared by `getComputedStyle`): a row is
+ * admitted only where both halves hold — the declaration survives the parse
+ * (its specified value is not empty, so the browser did not drop it) *and* the
+ * attribute form computes the same value, so the projection is a move and not a
+ * guess. `rx:4` is the finding that produced this table: the grammar reads a
+ * unitless non-zero number as neither a length nor a percentage, while the
+ * renderer resolves it as a user unit in both forms (`4px` — the rounding
+ * Pele's own `rx:var(--_r)` gave the raw render would otherwise have been
+ * deleted along with the radius). Refusing it refused a value the browser
+ * keeps.
+ *
+ * `'positive'` rows are the measured sign boundary of that shape: the negative
+ * unitless spelling is dropped by the renderer (`rx:-2`, `ry:-2`,
+ * `font-size:-2`), and the `rx="-2px"` attribute form *is* taken — the same
+ * direction {@link NON_NEGATIVE} records for the spellings that carry a unit.
+ * `'any'` rows keep the negative too, measured in both forms:
+ * `fill-opacity:-2` computes `0` (and `4`/`1e2`/`1500` clamp to `1`),
+ * `letter-spacing:-2` computes `-2px`, `word-spacing:-2` computes `-2px`.
+ * Measured spellings of the shape: `4`, `+4`, `04`, `4.0`, `.5`, `0.5`,
+ * `1e2`, `1500`, `-1`, `-2`.
+ *
+ * Every value outside the rows is refused, and the measured reason divides in
+ * two. The first is the one an author directive reaches: the renderer drops the
+ * declaration (`font-size:normal`, `rx:not-a-color`, `fill-opacity:-4px`,
+ * `rx:4 -2` — the unit is a boundary of the shape: the `<number>` is kept and
+ * the `Dimension` is not). The second is a guard on the renderer's contract
+ * rather than a face cell: a parenthesised value cannot arrive through a
+ * directive at all — measured 2026-11-15, `style`/`classDef`/`linkStyle` with
+ * `var(--x)`, `url(#g)` or `calc(4px)` fails Pele's own directive parse and the
+ * adapter reports that as a `DiagramError` — so the branch exists for whatever a
+ * future renderer emits: a declaration whose value an attribute cannot carry is
+ * refused, never moved. Neither is silently dropped;
+ * `tests/diagram-engine.test.ts` gates the first with a source-level row per
+ * shape, and the refusal path names the property and the value.
+ */
+const RENDERER_KEPT_NUMBER: Readonly<Record<string, 'any' | 'positive'>> = {
+  'fill-opacity': 'any',
+  'font-size': 'positive',
+  'letter-spacing': 'any',
+  'word-spacing': 'any',
+  rx: 'positive',
+  ry: 'positive',
+};
+
+/**
+ * The one further shape a grammar-rejected value can have and the renderer keep:
+ * `word-spacing`'s percentage — this grammar wants a length, while the renderer
+ * keeps `50%` and `-50%` as declarations and computes both from the attribute
+ * form too (the computed value keeps the percentage itself).
+ */
+const RENDERER_KEPT_PERCENTAGE: Readonly<Record<string, true>> = { 'word-spacing': true };
+
 const XML_ENTITIES: Readonly<Record<string, string>> = {
   '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;',
 };
@@ -181,6 +244,35 @@ function hasNegativeComponent(value: string): boolean {
   return negative;
 }
 
+/**
+ * The value, when it is exactly one scalar of that type — a bare `<number>` or
+ * a bare `<percentage>`, the two shapes {@link RENDERER_KEPT_NUMBER} and
+ * {@link RENDERER_KEPT_PERCENTAGE} read. Every other shape is null rather than
+ * the number it contains: `4 -2` is a list (two components), `-4px` is a
+ * `Dimension`, `var(--x)` and `calc(4px)` are `Function`s.
+ */
+function singleComponent(value: string, type: 'Number' | 'Percentage'): number | null {
+  const children = parse(value, { context: 'value' }).children?.toArray() ?? [];
+  if (children.length !== 1 || children[0]?.type !== type) return null;
+  const scalar = Number.parseFloat(children[0]['value'] ?? '');
+  return Number.isFinite(scalar) ? scalar : null;
+}
+
+/**
+ * The measured tables' lookup for a value the property's grammar rejects: the
+ * projection — the author's own spelling, which each row measured the attribute
+ * form to carry — or null, which the caller refuses loudly.
+ */
+function measuredProjection(property: string, value: string): string | null {
+  const sign = RENDERER_KEPT_NUMBER[property];
+  if (sign !== undefined) {
+    const scalar = singleComponent(value, 'Number');
+    if (scalar !== null && (sign === 'any' || scalar > 0)) return value;
+  }
+  if (RENDERER_KEPT_PERCENTAGE[property] === true && singleComponent(value, 'Percentage') !== null) return value;
+  return null;
+}
+
 /** CSS variables can hide a resource in a fallback; css-tree keeps that fallback as Raw. */
 function inspectPaint(value: string): void {
   walk(parse(value, { context: 'value' }), (node) => {
@@ -237,15 +329,22 @@ function sanitizeSvg(svg: string, accessibleName: string): string {
         }
         inspectPaint(value);
         // `lexer.matchProperty` is the parser's own property grammar, the same
-        // oracle `svg-css.ts` resolves colours with. Its verdict is the loud
-        // side of its accuracy: it refuses a unitless user unit Chromium keeps
-        // (`rx:4`, which this grammar reads as neither a length nor a
-        // percentage) along with the values both sides drop.
+        // oracle `svg-css.ts` resolves colours with, and it decides the values
+        // that need no further reading. Where it rejects, the decision is the
+        // measured tables above rather than the grammar: a row admits the value
+        // as the author spelled it, and everything else is refused loudly —
+        // never dropped in silence, which is the rendering change item 1 of
+        // this file's header describes.
         if (lexer.matchProperty(property, value).matched === null) {
-          throw new Error(`the renderer emitted a style declaration the property's grammar rejects: ${property}: ${value}`);
+          const projection = measuredProjection(property, value);
+          if (projection === null) {
+            throw new Error(`the renderer emitted a style declaration with no measured projection: ${property}: ${value}`);
+          }
+          declared.set(property, projection);
+          continue;
         }
         // The grammar is sign-agnostic where the renderer is not; the table
-        // above records the five properties where that difference is measured.
+        // above records the properties where that difference is measured.
         if (NON_NEGATIVE[property] === true && hasNegativeComponent(value)) {
           throw new Error(`the renderer emitted a style declaration with a negative value for a non-negative property: ${property}: ${value}`);
         }
