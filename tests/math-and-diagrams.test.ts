@@ -50,6 +50,7 @@ import {
   STYLE_SRC_BY_MODE,
 } from '../src/lib/diagram-mode.ts';
 import { entries } from '../src/lib/content.ts';
+import { CLIENT_RUNTIME_FLOOR_BYTES } from './support/runtime-budget.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = new URL('dist/', ROOT);
@@ -511,30 +512,35 @@ test('two diagrams on one page do not collide on element ids', async (t: TestCon
   if (DIAGRAM_MODE !== 'build-time') {
     return t.skip('client mode mints ids in the browser, where this file cannot see them');
   }
-  // Mermaid's ids are unique within one diagram only. Two on a page would both
-  // define `#arrowhead`, and the second definition wins for both — silently, in
-  // both diagrams, with no error anywhere.
+  // An id is unique within one element's own render, so two diagrams on one
+  // page would both define the same id and the second definition would win for
+  // both — silently, in both diagrams, with no error anywhere.
   //
-  // **Two independent mechanisms hold this and either alone is sufficient**:
-  // the per-diagram `render()` id, which Mermaid prefixes onto every id it
-  // mints, and `renumberIds`, which rewrites them afterwards. Mutation testing
-  // confirmed that breaking *either* leaves this gate green and breaking *both*
-  // produces five duplicate ids — so this gate proves the property, not any one
-  // implementation of it. That is the right shape here: the property is what
-  // matters, and a gate pinned to one mechanism would fail on a refactor that
-  // kept the guarantee.
+  // **The source is chosen from a census, not from convenience.** Measured
+  // 2026-11-16 through the selected `pele` engine over the 23-type matrix and
+  // the branch fixtures, only the sankey renderer mints ids at all — two for a
+  // two-edge source, five for the five-edge pair below — and each is referenced
+  // exactly once through `url(#…)`. The flowchart pair this gate used before
+  // the engine switch carries **zero** ids under this renderer: uniqueness over
+  // an empty set is true and the gate would assert nothing.
+  //
+  // What makes the two diagrams' ids differ is the `idPrefix` that
+  // `diagram-engine.ts` passes as `diagram-<index>`. A renderer that dropped it
+  // would mint the same id for both identical sources, and the equality below
+  // is what fails.
   const rendered = await renderMarkdown(
-    '```mermaid\ngraph TD\n  A --> B\n```\n\n```mermaid\ngraph TD\n  C --> D\n```\n',
+    '```mermaid\nsankey-beta\nA,B,10\nB,C,5\nC,D,3\nD,E,7\nE,F,2\n```\n\n' +
+      '```mermaid\nsankey-beta\nA,B,10\nB,C,5\nC,D,3\nD,E,7\nE,F,2\n```\n',
   );
   const ids = [...rendered.html.matchAll(/\sid="([^"]*)"/g)].map(([, id]) => id!);
-  assert.ok(ids.length > 20, `only ${ids.length} ids, too few for this gate to mean anything`);
+  assert.ok(ids.length >= 2, `only ${ids.length} ids, too few for this gate to mean anything`);
   assert.equal(new Set(ids).size, ids.length, 'two diagrams on one page share an element id');
 
   // Every internal reference resolves. A unique-id check alone would pass a
-  // renumbering that renamed the definitions and left `url(#…)` pointing at the
+  // renaming that changed the definitions and left `url(#…)` pointing at the
   // old names — which renders as a diagram with no arrowheads.
   const references = [...rendered.html.matchAll(/url\(#([^)]*)\)/g)].map(([, id]) => id!);
-  assert.ok(references.length > 0, 'no internal references, so this half checks nothing');
+  assert.ok(references.length >= 2, 'no internal references, so this half checks nothing');
   const defined = new Set(ids);
   for (const reference of references) {
     assert.ok(defined.has(reference), `url(#${reference}) points at no element on the page`);
@@ -627,11 +633,16 @@ test('a diagram cannot emit a link the projection never approved', async (t: Tes
   // through the href allowlist that governs prose links.
   //
   // The two modes answer this differently, and both are checked. Build-time
-  // rejects every external reference and fails the build, because nothing is in
-  // front of a reader yet. Client mode cannot fail a build that already
-  // shipped, so `src/scripts/diagram.ts` strips the same attributes in the page
-  // — asserted there by reading the script, since the stripping happens in a
-  // browser this file does not run.
+  // mode is the one that ships, and its two engines answer differently again:
+  // the selected `pele` engine renders with `links: false` and drops the
+  // directive — measured 2026-11-16, the URL reaches no byte of the output and
+  // no anchor is minted — while the retained Mermaid adapter rejects the
+  // external reference and fails the build. Both answers are accepted here;
+  // what is asserted is the property they share, that no anchor and no URL
+  // reach the markup. Client mode cannot fail a build that already shipped, so
+  // `src/scripts/diagram.ts` strips the same attributes in the page — asserted
+  // there by reading the script, since the stripping happens in a browser this
+  // file does not run.
   const sources = [
     '```mermaid\ngraph TD\n  A --> B\n  click A "https://evil.example" _blank\n```\n',
     '```mermaid\ngraph TD\n  A --> B\n  click A href "javascript:alert(1)"\n```\n',
@@ -639,7 +650,24 @@ test('a diagram cannot emit a link the projection never approved', async (t: Tes
 
   if (DIAGRAM_MODE === 'build-time') {
     for (const source of sources) {
-      await assert.rejects(() => renderMarkdown(source), /external reference/i);
+      let html: string;
+      try {
+        ({ html } = await renderMarkdown(source));
+      } catch (error) {
+        // The refusing answer: the Mermaid adapter fails the build rather than
+        // dropping the directive.
+        assert.match(
+          String(error),
+          /external reference/i,
+          `${source}: an unexpected failure carries no refusal: ${String(error)}`,
+        );
+        continue;
+      }
+      assert.doesNotMatch(html, /<a\b/i, `${source}: a diagram emitted an anchor`);
+      assert.doesNotMatch(html, /(?:xlink:)?href\s*=/i, `${source}: a diagram emitted an href`);
+      assert.doesNotMatch(html, /javascript:/i, `${source}: a javascript: URL reached the markup`);
+      assert.ok(!html.includes('evil.example'), `${source}: the URL reached the markup`);
+      assert.match(html, /<svg\b/, `${source}: nothing rendered, so the absence proves nothing`);
     }
     return;
   }
@@ -673,14 +701,14 @@ test('the deployed CSP matches the diagram mode', () => {
   );
 });
 
-test('build-time mode ships no client runtime at all', (t: TestContext) => {
+test('a build-time mode ships no chunk carrying its own runtime', (t: TestContext) => {
   if (DIAGRAM_MODE !== 'build-time' && MATH_MODE !== 'build-time') {
     return t.skip('both modes are client, which ships both runtimes by design');
   }
-  // The mode's headline property: 0 B of JavaScript for a diagram or an
-  // expression. Measured over `dist/` because the failure — a runtime's chunks
-  // emitted but referenced by nothing — is invisible in the rendered page and
-  // was a real defect during TK-15, caught only by the residue scan.
+  // Each build-time mode's headline property: no byte of that construct's
+  // runtime in `dist/`. Measured over `dist/` because the failure — a runtime's
+  // chunks emitted but referenced by nothing — is invisible in the rendered page
+  // and was a real defect during TK-15, caught only by the residue scan.
   //
   // **Named per runtime rather than by one list of vendor strings.** The
   // previous version grepped `mermaid|cytoscape|dagre|katex`, which is Mermaid's
@@ -688,19 +716,49 @@ test('build-time mode ships no client runtime at all', (t: TestContext) => {
   // have noticed a `temml` chunk at all. A list of names is a list somebody has
   // to remember to extend; keying each mode to its own runtime's name is the
   // same check with nothing to forget.
-  const scripts = walk(DIST, '.js').filter((file) => !file.includes('pagefind'));
+  //
+  // **And read as bytes, not only as file names.** Chunk names carry the entry
+  // module's basename, so a vendor name appears in a path only by accident
+  // (measured 2026-11-16: nothing under `dist/_astro` is named after Mermaid even
+  // when Mermaid ships), while what matters is whether the runtime's code is in
+  // the output. Both checks run; the content one is the load-bearing half.
+  //
+  // `dist/wasm/*.js` is out of scope by name: it is the SQLite read model's
+  // loader, copied from the wasm package and shipped independently of either
+  // mode. It is not a client runtime of this file's two subjects, and the graph
+  // gates own its size.
+  const scripts = walk(DIST, '.js').filter(
+    (file) => !file.includes('pagefind') && !/[/\\]wasm[/\\]/.test(file),
+  );
   const forbidden: readonly [boolean, RegExp, string][] = [
     [DIAGRAM_MODE === 'build-time', /mermaid|cytoscape|dagre/i, 'a diagram runtime'],
     [MATH_MODE === 'build-time', /temml/i, 'the math runtime'],
   ];
+  let inspected = 0;
   for (const file of scripts) {
+    inspected += 1;
+    const code = readFileSync(file, 'utf8');
     for (const [applies, pattern, what] of forbidden) {
       if (!applies) continue;
       assert.ok(!pattern.test(file), `${file}: ${what} chunk shipped in build-time mode`);
+      assert.ok(!pattern.test(code), `${file}: ${what} code shipped in build-time mode`);
     }
   }
+  assert.ok(inspected > 0, 'no chunk was inspected, so the absence was never checked');
+
+  // The site-wide total is scoped to what the selected modes account for: this
+  // site's own scripts against the 100 KB this gate has always allowed them,
+  // plus the measured floor of each runtime a *selected client* mode ships (the
+  // same numbers `tests/support/runtime-budget.ts` grants per page). Measured
+  // 2026-11-16 on the fixture corpus: 257,647 B total, of which the selected
+  // client math runtime (`temml.<hash>.js`) is 203,577 B; the diagram chunk
+  // that would arrive with a client diagram mode is what the floor catches.
+  const ceiling =
+    100 * 1024 +
+    (MATH_MODE === 'client' ? CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_MATH] : 0) +
+    (DIAGRAM_MODE === 'client' ? CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_DIAGRAM] : 0);
   const bytes = scripts.reduce((total, file) => total + statSync(file).size, 0);
-  assert.ok(bytes < 100 * 1024, `client JavaScript totals ${bytes} B, far above what this site ships`);
+  assert.ok(bytes < ceiling, `client JavaScript totals ${bytes} B, over the ${ceiling} B the selected modes account for`);
 });
 
 test('a page with no diagram and no math requests neither asset', async (t: TestContext) => {

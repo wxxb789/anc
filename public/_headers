@@ -1,10 +1,13 @@
 # The `style-src` value is coupled to `DIAGRAM_MODE` in `src/lib/diagram-mode.ts`
-# and must be changed with it: `'self'` for build-time diagrams, which ship as
-# markup, and `'self' 'unsafe-inline'` for client mode, whose renderer writes
-# inline styles and an injected `<style>` element that this policy would
-# otherwise block — producing a solid black rectangle where the diagram should
-# be. `tests/math-and-diagrams.test.ts` and `tests/built-output.test.ts` both
-# fail if the two disagree.
+# and must be changed with it. The selected `build-time` mode ships diagrams as
+# markup containing no inline style at all, which is what `'self'` here permits.
+# Client mode's Mermaid renderer writes inline styles and injects a `<style>`
+# element while measuring and drawing, so selecting it would require
+# `'self' 'unsafe-inline'`; leaving the policy at `'self'` would block every
+# diagram on the site under its own headers, producing a solid black rectangle
+# where the diagram should be. `tests/math-and-diagrams.test.ts` and
+# `tests/built-output.test.ts` both fail if the two disagree, and
+# `tests/deployment.test.ts` asserts the match in both directions.
 #
 # Hash-pinning was measured and cannot replace the relaxation: a CSP hash never
 # covers a `style=` attribute, so `'unsafe-inline'` survives in `style-src-attr`
@@ -13,7 +16,7 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), microphone=(), geolocation=()
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'
 
 # Everything Astro content-hashes. The hash is derived from the file's own
 # bytes, so a changed file is a changed URL and a cached copy of the old one can

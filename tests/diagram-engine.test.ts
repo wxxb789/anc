@@ -1442,23 +1442,62 @@ test('a Pele failure loads neither Mermaid’s adapter nor its DOM shim', () => 
 });
 
 /**
- * P1 design §5(5): with `DIAGRAM_ENGINE = 'mermaid'` the seam is a pass-through,
- * byte for byte. The existing two-engine row compares the dispatcher against
- * itself, so it cannot see a dispatcher that post-processes Mermaid's output —
- * which is exactly what this pair binds.
+ * P1 design §5(5): with the selected engine the seam is a pass-through, byte
+ * for byte. The existing two-engine row compares the dispatcher against itself,
+ * so it cannot see a dispatcher that post-processes its engine's output — which
+ * is exactly what this pair binds.
+ *
+ * **The pair is bound against the engine the tree selects** (`pele` since the
+ * engine switch). A fresh child cannot see this file's `vi.mock` of
+ * `diagram-mode.ts` and there is no runtime override, so the child renders the
+ * configured engine, whatever that is; the pair follows the constant instead of
+ * naming it. The Mermaid half of §5(5) is bound separately by the row below,
+ * in-process.
  *
  * Two fresh processes, not one, for the reason `tests/support/render-diagram.ts`
  * gives: Mermaid seeds gitgraph's hashes from `Math.random` and keeps
  * module-level counters, so a same-process pair shares state the design's claim
  * is not about. It is also the evidence that moving `DiagramError` out of
- * `mermaid-render.ts` did not touch what Mermaid's row renders.
+ * `mermaid-render.ts` did not touch what the selected engine’s row renders.
  */
-test('the mermaid engine reaches the same bytes through the dispatcher and its adapter', () => {
+test('the selected engine reaches the same bytes through the dispatcher and its adapter', async () => {
+  const realEngine = (await vi.importActual<typeof DiagramConfiguration>('../src/lib/diagram-mode.ts')).DIAGRAM_ENGINE;
+  const adapter = { mermaid: 'src/lib/mermaid-render.ts', pele: 'src/lib/pele-render.ts' }[realEngine];
   const source = DIAGRAMS['flowchart']!;
   const dispatched = runInChild(undefined, source, { hash: true });
-  const direct = runInChild('src/lib/mermaid-render.ts', source, { hash: true });
+  const direct = runInChild(adapter, source, { hash: true });
   assert.equal(dispatched.status, 0, dispatched.stderr);
   assert.equal(direct.status, 0, direct.stderr);
   assert.match(dispatched.stdout, /^[a-f0-9]{64}$/, 'the child no longer prints a digest');
-  assert.equal(dispatched.stdout, direct.stdout, 'the dispatcher no longer passes Mermaid’s output through unchanged');
+  assert.equal(
+    dispatched.stdout,
+    direct.stdout,
+    `the dispatcher no longer passes ${realEngine}’s output through unchanged`,
+  );
+});
+
+/**
+ * The same pass-through, for the engine this tree does not select, in-process.
+ *
+ * No fresh child can run the dispatcher with Mermaid while `pele` is the
+ * constant, so the two paths are called back to back on the same source with
+ * the same id — measured stable for these two sources (2026-11-16; gitgraph's
+ * `Math.random`-seeded hashes are the reason the fresh-process pair above uses
+ * a fresh process, and this row deliberately uses sources Mermaid renders
+ * deterministically for shared state). A dispatcher that post-processes
+ * Mermaid's bytes fails it: both sides start from the same state, and the only
+ * difference between them is which module did the rendering.
+ */
+test('with the Mermaid engine selected the dispatcher passes its adapter through unchanged', async () => {
+  // Deferred like every adapter and dispatcher import in this file (see the
+  // module header): the mock's `DIAGRAM_ENGINE` getter is read at call time, and
+  // `vi.importActual` is the only way to read the real constant beside it.
+  selection.engine = 'mermaid';
+  const { renderDiagram: direct } = await import('../src/lib/mermaid-render.ts');
+  const { renderDiagram: dispatched } = await import('../src/lib/diagram-engine.ts');
+  for (const source of [DIAGRAMS['flowchart']!, DIAGRAMS['sequence']!]) {
+    const directBytes = await direct(source, 'pass-through', 'Pass-through diagram');
+    const dispatchedBytes = await dispatched(source, 'pass-through', 'Pass-through diagram');
+    assert.equal(dispatchedBytes, directBytes, `${source.split('\n')[0]}: the dispatcher changed Mermaid's output`);
+  }
 });

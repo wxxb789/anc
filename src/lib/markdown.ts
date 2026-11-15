@@ -238,8 +238,8 @@ const MERMAID_LANGUAGE = 'mermaid';
  * Both are rendered rather than highlighted. Math becomes native MathML via
  * Temml (`src/lib/math.ts`), and a Mermaid fence becomes either a build-time
  * SVG or a client-rendered diagram depending on `DIAGRAM_MODE` — in the client
- * case its source ships as escaped text for the runtime to read, which is also
- * what a reader without JavaScript is left with.
+ * case its source is emitted as escaped text for the runtime to read, which is
+ * also what a reader without JavaScript is left with.
  */
 const UNHIGHLIGHTED_LANGUAGES: ReadonlySet<string> = new Set([MATH_LANGUAGE, MERMAID_LANGUAGE]);
 
@@ -790,7 +790,7 @@ function codePlugin(
  * external references, and fails the build rather than passing one through) and
  * is spliced in afterwards, at a marker the sanitizer itself produced.
  *
- * **Client mode** ships the diagram source as escaped text inside a `<pre>`,
+ * **Client mode** emits the diagram source as escaped text inside a `<pre>`,
  * which `src/scripts/diagram.ts` reads and replaces. That is also the
  * no-JavaScript rendering: a reader without scripting sees the diagram's source,
  * which is legible and honest, rather than an empty box.
@@ -1948,7 +1948,7 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
   const replacements = [
     ...maths.map((request) => ({
       token: request.token,
-      // Client mode ships the source for the browser to render; build-time mode
+      // Client mode emits the source for the browser to render; build-time mode
       // ships the MathML. Both are marked here, which is the whole point of
       // routing both through this one post-sanitization step.
       markup: withRenderedMarker(
@@ -1963,8 +1963,8 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
     ...(await Promise.all(
       diagrams.map(async (request, index) => ({
         token: request.token,
-        // Client mode ships the source fence for the browser to render;
-        // build-time mode ships the SVG. Both are marked here, which is the
+        // Client mode emits the source fence for the browser to render;
+        // build-time mode emits the SVG. Both are marked here, which is the
         // whole point of routing both through this one post-sanitization step.
         markup: withRenderedMarker(
           request.sourceOnly === true
@@ -1973,8 +1973,9 @@ export async function renderMarkdown(markdown: string, options: RenderOptions = 
             : // Imported only on this branch: `diagram-engine.ts` picks one
               // adapter from `DIAGRAM_ENGINE` and loads only that one, and the
               // only adapter that loads a DOM shim is `mermaid-render.ts` —
-              // reached when the constant selects it. `client` mode, the one
-              // that ships, never reaches here, so it never pays for it.
+              // reached when the constant selects it. The selected `pele`
+              // engine never reaches this import, and neither does `client`
+              // mode, so neither pays for the shim.
               await (await import('./diagram-engine.ts')).renderDiagram(
                 request.source,
                 `diagram-${index}`,

@@ -15,12 +15,15 @@
  * | Readable with JS disabled | yes, it is markup | no |
  * | Inline styles in `dist/` | zero, asserted | present by construction |
  *
- * **`client` is what ships.** The owner selected it after accepting the runtime
- * cost, the no-JavaScript source fallback, and the whole-site CSP relaxation.
- * Mermaid's `render()` writes inline styles while measuring and drawing, before
- * page code can clean them up, so client mode and `'unsafe-inline'` move
- * together. Both modes remain implemented and tested; changing this constant
- * changes emitted markup, runtime, provenance requirement, and deployed policy.
+ * **`build-time` is what ships**, with the `pele` engine selected below. The
+ * owner chose it after the pele adapter was measured CSP-clean: no `<style>`
+ * element and no surviving `style=` attribute reaches `dist/`, so the deployed
+ * policy needs no relaxation. `client` mode remains implemented and tested but
+ * unselected; Mermaid's `render()` writes inline styles while measuring and
+ * drawing, before page code can clean them up, so client mode and
+ * `'unsafe-inline'` move together — selecting `client` re-acquires that
+ * whole-site relaxation. Changing this constant changes emitted markup,
+ * runtime, provenance requirement, and deployed policy.
  *
  * `'unsafe-inline'` is not scoped to diagrams. It re-permits inline styles on
  * every page served the policy, which is why selecting `client` is a whole-site
@@ -28,7 +31,7 @@
  */
 export type DiagramMode = 'build-time' | 'client';
 
-export const DIAGRAM_MODE: DiagramMode = 'client';
+export const DIAGRAM_MODE: DiagramMode = 'build-time';
 
 /**
  * The build-time engine is independent of when diagrams render. Client mode
@@ -38,15 +41,17 @@ export const DIAGRAM_MODE: DiagramMode = 'client';
  *
  * | Engine | Build-time SVG | Browser/DOM dependency on success | Styles |
  * | --- | --- | --- | --- |
- * | `mermaid` (default) | Existing two-palette projection, byte-for-byte unchanged | Headless DOM | Flattened presentation attributes |
- * | `pele` | Deterministic, namespaced SVG with text positioning preserved | None | Static token variables, rich-label weights and rounded geometry in `diagram.css` |
+ * | `mermaid` | Existing two-palette projection, byte-for-byte unchanged | Headless DOM | Flattened presentation attributes |
+ * | `pele` (selected) | Deterministic, namespaced SVG with text positioning preserved | None | Static token variables, rich-label weights and rounded geometry in `diagram.css` |
  *
- * Both adapters fail with `DiagramError` rather than publishing unsafe or blank
- * output. Selecting an engine does not change DIAGRAM_MODE or its CSP policy.
+ * **`pele` is selected**, so a build-time render loads no headless DOM; the
+ * `mermaid` adapter remains implemented and tested. Both adapters fail with
+ * `DiagramError` rather than publishing unsafe or blank output. Selecting an
+ * engine does not change DIAGRAM_MODE or its CSP policy.
  */
 export type DiagramEngine = 'mermaid' | 'pele';
 
-export const DIAGRAM_ENGINE: DiagramEngine = 'mermaid';
+export const DIAGRAM_ENGINE: DiagramEngine = 'pele';
 
 /**
  * Thrown when a diagram cannot be rendered safely. The build stops.

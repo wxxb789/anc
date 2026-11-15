@@ -31,10 +31,24 @@ interface RuntimeAllowance {
  * Temml's chunk and a client diagram page Mermaid's grammar set. In build-time
  * mode Astro aliases both runtimes to empty stubs, so no page earns either
  * allowance.
+ *
+ * Exported because `tests/math-and-diagrams.test.ts`'s site-wide total adds the
+ * floor of each *selected* client mode to its own allowance, and two tables of
+ * the same measured number is one table that forgets to move.
  */
+export const CLIENT_RUNTIME_FLOOR_BYTES: Readonly<Record<RenderedKind, number>> = {
+  [RENDERED_MATH]: 220_000,
+  [RENDERED_DIAGRAM]: 900_000,
+};
+
 const RUNTIME_ALLOWANCES: readonly RuntimeAllowance[] = [
-  { kind: RENDERED_MATH, mode: MATH_MODE, bytes: 220_000, what: 'math' },
-  { kind: RENDERED_DIAGRAM, mode: DIAGRAM_MODE, bytes: 900_000, what: 'a diagram' },
+  { kind: RENDERED_MATH, mode: MATH_MODE, bytes: CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_MATH], what: 'math' },
+  {
+    kind: RENDERED_DIAGRAM,
+    mode: DIAGRAM_MODE,
+    bytes: CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_DIAGRAM],
+    what: 'a diagram',
+  },
 ];
 
 export interface ScriptBudget {

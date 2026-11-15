@@ -194,9 +194,11 @@ test('no directive relaxes beyond the selected diagram policy', () => {
     }
   }
 
-  // Client Mermaid needs inline style elements and attributes while measuring
-  // and drawing. The accepted cost is confined to style-src; every other
-  // directive must remain unable to execute inline content.
+  // When the selected mode needs the relaxation — client Mermaid writes inline
+  // style elements and attributes while measuring and drawing — the accepted
+  // cost stays confined to style-src; every other directive must remain unable
+  // to execute inline content. The selected `build-time` mode needs no
+  // relaxation at all, so the expected list is empty.
   const owners = [...POLICY]
     .filter(([, value]) => value.split(/\s+/).includes("'unsafe-inline'"))
     .map(([directive]) => directive);

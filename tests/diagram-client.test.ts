@@ -7,10 +7,10 @@
  * outside a browser: one is an XML namespace error that only a real DOMParser
  * raises, the other is a DOM event nothing else fires.
  *
- * It runs whatever `DIAGRAM_MODE` says, deliberately. The subject is
- * `src/scripts/diagram.ts` — the runtime the later flip will turn on — not the
- * build's output, so skipping in build-time mode would leave the flip depending
- * on a file no gate had executed since the day it was written.
+ * It drives the client runtime directly, whatever the selected mode is. The
+ * subject is `src/scripts/diagram.ts` — retained and executable although the
+ * selected `build-time` mode never ships it — not the build's output, so the
+ * mode the tree carries cannot make this file's guarantees unmeasured.
  *
  * The corpus is bundled and served here rather than read from `dist/`, for the
  * same reason `tests/backlink-surfaces.test.ts` builds its own: build-time mode

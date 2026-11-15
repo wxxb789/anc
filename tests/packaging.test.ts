@@ -62,11 +62,12 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
  * `src/scripts/diagram-disabled.ts` is the third case: it is reached by neither
  * convention nor import, but by `astro.config.mjs`'s `resolveId` plugin, which
  * names it as a `fileURLToPath(new URL(…))` string and substitutes it for
- * `diagram.ts` whenever `DIAGRAM_MODE` is `build-time`. The mode that ships is
- * `client` (`src/lib/diagram-mode.ts`), but flipping that one constant puts this
- * module in the bundle — and a parser cannot see a path built out of a string. Verified by planting an unresolvable import in
- * it: `astro build` died and this gate stayed green until the file was listed
- * here.
+ * `diagram.ts` whenever `DIAGRAM_MODE` is `build-time`. The selected mode is
+ * `build-time` (`src/lib/diagram-mode.ts`), so this module is in the bundle
+ * now — and a parser cannot see a path built out of a string, which is why it
+ * is listed here rather than traced. Verified by planting an unresolvable
+ * import in it: `astro build` died and this gate stayed green until the file
+ * was listed here.
  */
 const ENTRY_POINTS: readonly string[] = [
   'bin/anc.mjs',
