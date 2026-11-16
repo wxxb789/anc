@@ -9,7 +9,7 @@
  * the defect.
  *
  * The entry point is `src/lib/pele-render.ts`, the one build-time renderer this
- * tree has, and the SVG goes to stdout unadorned: the suite's only spawn site
+ * tree has, and the SVG goes to stdout unadorned: this script's only spawn site
  * (`tests/math-and-diagrams.test.ts:281`, the determinism gate) compares the
  * full bytes of two runs, so there is nothing a flag could usefully switch.
  *

@@ -18,8 +18,8 @@ export default getViteConfig({
     include: ['tests/**/*.test.ts'],
     /**
      * Redirect the report's state directory into a scratch path for the whole
-     * run. Test files spawn the binary and one remembered to do this per
-     * spawn; the file itself explains why that is the wrong place for it.
+     * run. Test files spawn the binary and each spawn needed the redirect;
+     * the file itself explains why that is the wrong place for it.
      */
     setupFiles: ['./tests/setup-state-directory.ts'],
     /**

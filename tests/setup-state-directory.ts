@@ -18,7 +18,7 @@
  * **Here rather than in each gate**, because "every test that spawns the binary
  * remembers to redirect two environment variables" is the shape this project
  * has been bitten by repeatedly: it is green until somebody writes the next gate
- * and forgets. Test files spawn the binary today and one redirected.
+ * and forgets. Test files spawn the binary and each spawn needed the redirect.
  *
  * Both spellings are set because `write-report.ts` reads `XDG_STATE_HOME` first
  * and falls back to `LOCALAPPDATA`, so setting one leaves the other live on the
