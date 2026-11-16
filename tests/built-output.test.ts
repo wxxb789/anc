@@ -296,9 +296,9 @@ test('every class in the rendered article is styled or deliberately not', () => 
     // class inside the `<svg>` would demand rules for renderer-internal names
     // this project does not author and cannot enumerate. The two classes inside
     // the `<svg>` that *do* depend on `src/styles/diagram.css` are `pele` on the
-    // root `<svg>` (`.diagram svg.pele`, `:46-97`) and `pele-rounded`, which
+    // root `<svg>` (`.diagram svg.pele`, `:50-101`) and `pele-rounded`, which
     // the adapter writes inside the `<svg>` (`src/lib/pele-render.ts:680-684`;
-    // `.diagram svg.pele .pele-rounded`, `:99-101`); the browser computed-style
+    // `.diagram svg.pele .pele-rounded`, `:103-105`); the browser computed-style
     // ablation rows in `tests/diagram-engine.test.ts` (`:1157-1285`) hold both
     // of those, and the class the *pipeline* writes into a diagram —
     // `diagram-canvas` on the wrapper — sits outside the SVG, where this gate

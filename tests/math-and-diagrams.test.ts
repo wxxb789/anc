@@ -647,8 +647,8 @@ $$
       // The TeX source, HTML-escaped by `escapeHtml` and substituted after
       // sanitization: `renderMarkdown` splices a `<code
       // class="language-math">` carrying the escaped source
-      // (`src/lib/markdown.ts:1919`) into the sanitized `span.math-inline` /
-      // `span.math-display` carrier through `substituteRendered` (`:1817`). A
+      // (`src/lib/markdown.ts:1923`) into the sanitized `span.math-inline` /
+      // `span.math-display` carrier through `substituteRendered` (`:1821`). A
       // `pre` cannot be used: measured, a `<pre>` inside a `<p>` is torn out of
       // the paragraph by the parser, which would break every paragraph carrying
       // inline math.

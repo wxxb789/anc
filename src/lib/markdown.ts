@@ -942,9 +942,9 @@ function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefin
           // a JS-disabled reader sees and what the runtime reads back — and it
           // reaches the page the way the MathML does: this node carries only
           // {@link clientToken}, and `renderMarkdown` splices the source in
-          // after the sanitizer has run (`substituteRendered`, `:1946`),
-          // escaped by `escapeHtml` (`:403`, called at `:1919`). Routing it
-          // post-sanitization is what lets {@link withRenderedMarker} (`:1917`)
+          // after the sanitizer has run (`substituteRendered`, `:1950`),
+          // escaped by `escapeHtml` (`:403`, called at `:1923`). Routing it
+          // post-sanitization is what lets {@link withRenderedMarker} (`:1921`)
           // stamp the unforgeable `RENDERED_MARKER` on that `<code>` element:
           // written into this hast node, the attribute would reach the
           // sanitizer, which strips it (measured).
