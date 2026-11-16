@@ -7,6 +7,42 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+### Changed
+
+- A `mermaid` fence is rendered to SVG at build time by `pele` 1.13.0 instead of in the reader's
+  browser at page load by Mermaid, and the diagram is now part of the delivered markup: it needs
+  no script to appear, and no diagram runtime ships with the site. The rendered appearance of the
+  same source can change, because the layout engine is now `pele`'s rather than Mermaid's. The
+  syntax keeps its name — the fence keyword stays `mermaid`, the emitted `figure` keeps
+  `data-diagram="mermaid"`, and an unnamed diagram keeps the same kind-based caption fallback —
+  because that keyword names the diagram syntax, not the renderer. The generated SVG carries its
+  theme-dependent paint as custom properties that `diagram.css` defines from the site's tokens, so
+  a diagram follows the system preference and the theme toggle with no second stylesheet and no
+  script. A source `pele` cannot parse stops the build, and so does an author declaration the
+  adapter refuses to convert: `style`, `classDef`, `linkStyle`, and a `%%{init: …}%%` theme are
+  refused by name, with the declaration and the remedy in the message, rather than converted or
+  silently dropped.
+- The shipped Content-Security-Policy no longer relaxes `style-src`: the policy in
+  `public/_headers`, and the `<meta>` copy the site generates from it, now read
+  `style-src 'self'`, where `0.0.4` shipped `'self' 'unsafe-inline'`. The strict value is what the
+  build already emits: a build-time page carries no `style` attribute and no `<style>` element —
+  the diagram renderer's root block is re-created by `diagram.css` and its element-level
+  declarations ride classes and presentation attributes — and the client math runtime rewrites
+  Temml's inline declarations into classes before they reach the page. Hashing could not have
+  replaced the relaxation, because a CSP hash never covers a `style=` attribute.
+- The locked production tree moves forward inside the specifiers `package.json` already declares:
+  `astro` from 7.4.8 to 7.4.11, with its own sub-packages, and `sanitize-html` from 2.18.1 to
+  2.18.2, as routine minor-and-patch updates. No specifier moves and no configuration key changes
+  with them.
+
+### Removed
+
+- The Mermaid engine leaves the package. `mermaid` and the tree it carried — `cytoscape`,
+  `dagre-d3-es`, `dompurify`, `elkjs`, `katex`, `uuid` — are gone from the dependency graph, and
+  `pele` 1.13.0 is pinned in their place. `happy-dom` moves from `dependencies` to
+  `devDependencies`, since its only surviving consumer is a test, so an install of the published
+  package no longer carries a DOM shim either.
+
 ## [0.0.4] - 2026-11-14
 
 ### Added
