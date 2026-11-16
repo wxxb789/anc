@@ -12,9 +12,13 @@
  * — so the emitted SVG cannot theme itself; `.diagram svg.pele` below is that
  * root block, mapped onto the site's tokens.
  *
- * The SVG therefore carries no colour literal of its own, and one file follows
- * the system preference and the site's own theme toggle with no second file and
- * no script.
+ * The emitted SVG's theme-dependent paint is driven by a `--pele-*` / `--_*`
+ * custom property even where the attribute carries a literal fallback inside
+ * the `var(...)` — `var(--pele-critical,#e45756)` on a critical Gantt bar, the
+ * series colours on charts — and `.diagram svg.pele` below defines those
+ * custom properties from the site's `light-dark()` tokens, so the fallbacks
+ * never apply. One file therefore follows the system preference and the site's
+ * own theme toggle with no second file and no script.
  */
 
 .diagram {

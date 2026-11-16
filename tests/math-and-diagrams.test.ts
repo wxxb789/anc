@@ -7,7 +7,9 @@
  *
  * 1. **What ships is what the CSP permits.** A build-time diagram is markup —
  *    real SVG, no inline style, no `<style>` element, no script — and client
- *    math ships a sanitizer-escaped source. `tests/built-output.test.ts` owns
+ *    math ships its TeX source HTML-escaped inside a `<code>` carrying
+ *    `language-math`, substituted into the markup after sanitization.
+ *    `tests/built-output.test.ts` owns
  *    the `dist/` assertions; the renderer's own guarantees live in
  *    `tests/diagram-engine.test.ts` and the math rows below.
  * 2. **Nothing reaches a page that does not need it.** A note with no math
@@ -642,10 +644,14 @@ $$
     if (isDisplay) assert.match(html, /tabindex="0"/, `${what}: the display wrapper lost its keyboard stop`);
 
     if (MATH_MODE === 'client') {
-      // The TeX source, as a text node the serializer escapes for us, inside a
-      // `code` the sanitizer's `allowedClasses.code` admits. A `pre` cannot be
-      // used: measured, a `<pre>` inside a `<p>` is torn out of the paragraph by
-      // the parser, which would break every paragraph carrying inline math.
+      // The TeX source, HTML-escaped by `escapeHtml` and substituted after
+      // sanitization: `renderMarkdown` splices a `<code
+      // class="language-math">` carrying the escaped source
+      // (`src/lib/markdown.ts:1919`) into the sanitized `span.math-inline` /
+      // `span.math-display` carrier through `substituteRendered` (`:1817`). A
+      // `pre` cannot be used: measured, a `<pre>` inside a `<p>` is torn out of
+      // the paragraph by the parser, which would break every paragraph carrying
+      // inline math.
       assert.match(html, /<code\b[^>]*class="language-math"/, `${what}: the source element or its class was stripped`);
       assert.ok(!html.includes('<math'), `${what}: MathML shipped in client mode`);
     } else {

@@ -288,14 +288,21 @@ test('every class in the rendered article is styled or deliberately not', () => 
     // document rather than a name pattern, because the two vocabularies must not
     // be allowed to overlap in this gate's judgement.
     //
-    // Inside a rendered `<svg>`, `class` carries the renderer's structural names
-    // — `pele`, `pele-flowchart`, `pele-static` — which name what a shape *is*,
-    // not how it looks. The adapter carries the appearance in presentation
-    // attributes (`fill`, `stroke`, and the rest), so those classes are
-    // correctly styleless: requiring a CSS rule for each would demand rules for
-    // names this project does not author and cannot enumerate. The classes the
-    // *pipeline* writes into a diagram — `diagram-canvas` on the wrapper — sit
-    // outside the SVG, where this gate still reads them.
+    // Inside a rendered `<svg>`, most `class` values carry the renderer's
+    // structural names — `pele-flowchart`, `pele-node`, `pele-edge`,
+    // `pele-label`, `pele-static` — which name what a shape *is*, not how it
+    // looks: the appearance travels in presentation attributes (`fill`,
+    // `stroke`, `rx`, `text-decoration`), so requiring a CSS rule for every
+    // class inside the `<svg>` would demand rules for renderer-internal names
+    // this project does not author and cannot enumerate. The two classes inside
+    // the `<svg>` that *do* depend on `src/styles/diagram.css` are `pele` on the
+    // root `<svg>` (`.diagram svg.pele`, `:46-97`) and `pele-rounded`, which
+    // the adapter writes inside the `<svg>` (`src/lib/pele-render.ts:680-684`;
+    // `.diagram svg.pele .pele-rounded`, `:99-101`); the browser computed-style
+    // ablation rows in `tests/diagram-engine.test.ts` (`:1157-1285`) hold both
+    // of those, and the class the *pipeline* writes into a diagram —
+    // `diagram-canvas` on the wrapper — sits outside the SVG, where this gate
+    // still reads it.
     const outsideDiagrams = html.replace(/<svg\b[\s\S]*?<\/svg>/gi, '');
     for (const tag of rawStartTags(outsideDiagrams)) {
       for (const name of /\sclass="([^"]*)"/.exec(tag)?.[1]?.split(/\s+/) ?? []) {

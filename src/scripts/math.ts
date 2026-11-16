@@ -28,12 +28,15 @@
  *    `IntersectionObserver`, so a reader who never scrolls to an expression
  *    never fetches the ~59 KB gzip.
  * 2. **The source stays until the MathML replaces it.** The `<code>` the
- *    renderer emitted is removed only after a successful render, so a failure at
- *    any point leaves the reader with the TeX rather than an empty span. This is
- *    load-bearing: `src/lib/math.ts` sets `throwOnError: true` and a malformed
- *    expression aborts the *build*, so under client rendering there is no
- *    build-time gate at all and a throw would otherwise leave the element empty
- *    — measured.
+ *    renderer emitted is removed only after a successful render, so a failure
+ *    at any point leaves the reader with the TeX rather than an empty span.
+ *    This is load-bearing: in `'client'` mode `mathPlugin` still validates
+ *    every expression at build time through `renderMath` with
+ *    `throwOnError: true` (`src/lib/markdown.ts:939`), which aborts the build
+ *    on malformed TeX. The browser has no build to abort, so `renderInto`
+ *    runs with `throwOnError: false` and keeps the `<code>` source until a
+ *    `<math>` root is produced — which is what leaves the reader the TeX
+ *    rather than an empty span when browser rendering disagrees or throws.
  */
 
 import type { MathMode } from '../lib/math-mode.ts';

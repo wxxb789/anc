@@ -59,8 +59,10 @@ export default getViteConfig({
     /**
      * `hookTimeout` is left at Vitest's 10 s default, deliberately.
      *
-     * Seven top-level hooks exist across three files, and every one of them now
-     * declares its own budget:
+     * The hooks that do heavy server or browser work — the seven across
+     * `preview-server`, `search` and `rendered-page` below — declare their own
+     * per-hook budgets; the suite's fast top-level hooks stay on this 10 s
+     * default:
      *
      * | hook | cost | budget |
      * | --- | --- | --- |
@@ -75,8 +77,9 @@ export default getViteConfig({
      * keeping tight, and the sixth put it at 12.9 s — over, on a run that
      * otherwise passed. A margin argued from five samples was wrong at six.
      *
-     * Raising the global would relax all seven to accommodate the ones that
-     * genuinely need minutes, and the argument is the same one that keeps
+     * Raising the global would relax every fast top-level hook's 10 s bound
+     * just to accommodate the heavy browser/server hooks that genuinely need
+     * minutes, and the argument is the same one that keeps
      * `tests/math-and-diagrams.test.ts`'s across-processes gate on its own
      * budget rather than lifting `testTimeout`.
      *

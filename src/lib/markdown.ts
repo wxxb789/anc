@@ -938,12 +938,16 @@ function mathPlugin(collected: Collected, maths: MathRequest[]): HastPluginDefin
           // validate it, and again in each reader's browser to display it.
           renderMath(ctx.textContent(node), isDisplay);
 
-          // **The TeX source, as a hast text node**, which is what a JS-disabled
-          // reader sees and what the runtime reads back. Not a token: a token is
-          // needed only because MathML does not round-trip through the
-          // serializer and the sanitizer, and a text node does — the serializer
-          // escapes it, so `<` and `&` in an expression are safe with no work
-          // here.
+          // **The TeX source ships as `<code class="language-math">`** — what
+          // a JS-disabled reader sees and what the runtime reads back — and it
+          // reaches the page the way the MathML does: this node carries only
+          // {@link clientToken}, and `renderMarkdown` splices the source in
+          // after the sanitizer has run (`substituteRendered`, `:1946`),
+          // escaped by `escapeHtml` (`:403`, called at `:1919`). Routing it
+          // post-sanitization is what lets {@link withRenderedMarker} (`:1917`)
+          // stamp the unforgeable `RENDERED_MARKER` on that `<code>` element:
+          // written into this hast node, the attribute would reach the
+          // sanitizer, which strips it (measured).
           //
           // **The carrier is a `span`, not the `pre` a fence would suggest**,
           // and that is forced rather than chosen: a `<pre>` inside a `<p>` is
