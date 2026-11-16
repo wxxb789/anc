@@ -28,8 +28,8 @@ project makes no backward-compatibility promise.
   build already emits: a build-time page carries no `style` attribute and no `<style>` element —
   the diagram renderer's root block is re-created by `diagram.css` and its element-level
   declarations ride classes and presentation attributes — and the client math runtime rewrites
-  Temml's inline declarations into classes before they reach the page. Hashing could not have
-  replaced the relaxation, because a CSP hash never covers a `style=` attribute.
+  Temml's inline declarations into classes before they reach the page. Hashes alone cannot cover
+  a `style=` attribute: that needs `'unsafe-hashes'`, which this CSP forbids by name and by gate.
 - The locked production tree moves forward inside the specifiers `package.json` already declares:
   `astro` from 7.4.8 to 7.4.11, with its own sub-packages, and `sanitize-html` from 2.18.1 to
   2.18.2, as routine minor-and-patch updates. No specifier moves and no configuration key changes
