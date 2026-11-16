@@ -141,10 +141,10 @@ const statusOf = (response: string): string => response.split('\r\n')[0] ?? resp
  * than tidiness. Astro's cold start is 1.4 s to import plus 0.7 s for the first
  * `preview()`, and each later one is ~0.15 s *plus* a Vite server's worth of
  * work on a machine already running sixteen test workers. With one server per
- * test this file took 27 s alone and pushed an unrelated gate —
- * `tests/math-and-diagrams.test.ts`, which renders Mermaid — past its 30 s
- * timeout on the full run. Measured both ways: the suite is green without this
- * file and red with it, on a failure in a file this ticket never touched.
+ * test this file took 27 s alone and pushed an unrelated gate — one rendering
+ * the fixture corpus — past its budget on the full run. Measured both ways: the
+ * suite is green without this file and red with it, on a failure in a file this
+ * ticket never touched.
  *
  * Four gates share it. The three that do not are the ones whose stimulus *is*
  * the server: traversal needs a different directory served, the reported-port

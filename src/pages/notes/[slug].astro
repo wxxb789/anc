@@ -52,7 +52,6 @@ import codeStylesheet from '../../styles/code.css?url';
 import mathStylesheet from '../../styles/math.css?url';
 import diagramStylesheet from '../../styles/diagram.css?url';
 import graphStylesheet from '../../styles/graph.css?url';
-import { DIAGRAM_MODE } from '../../lib/diagram-mode.ts';
 import { MATH_MODE } from '../../lib/math-mode.ts';
 
 export function getStaticPaths() {
@@ -249,11 +248,10 @@ const graph = localGraph(entry, getEntry);
   {/*
     Owner decision 7, the live case. Each flag is true only when the body
     contains the construct, so each sheet reaches only the pages that render
-    one. Three conditional `<link>` elements rather than one merged sheet:
-    merging Mermaid's per-diagram-type stylesheets was measured at 6,354 B gzip
-    against a 972 B median for a single type, and the build-time renderer
-    removes the need for either — `diagram.css` is 14 rules because the theming
-    is flattened onto the SVG itself.
+    one — four conditional `<link>` elements rather than one merged sheet.
+    The diagram sheet is small on purpose: a build-time render carries its
+    theme as variables on the SVG, and `diagram.css` maps those to the site's
+    tokens rather than reproducing a renderer's stylesheet.
 
     `hasMath` also gates the ~9 KB Temml stylesheet and, through its
     `unicode-range`, the 9.4 KB `Temml.woff2` — which a browser fetches only for
@@ -269,33 +267,10 @@ const graph = localGraph(entry, getEntry);
       cannot disagree about whether there is a graph. */}
   {hasDrawableGraph(graph) && <link slot="head" rel="stylesheet" href={graphStylesheet} />}
   {/*
-    Client mode only, and only on a page that has a diagram.
-
-    Astro bundles a script tag **eagerly**: the `hasMermaid` condition decides
-    whether the tag is rendered, not whether the module is built. Keeping
-    Mermaid out of `dist/` in build-time mode is therefore done in
-    `astro.config.mjs`, which resolves `src/scripts/diagram.ts` to an empty stub
-    unless client mode is selected. Both halves are needed — this one so a
-    diagram-free page requests nothing, that one so a diagram-free *build*
-    contains nothing. `tests/math-and-diagrams.test.ts` asserts both over
-    `dist/`.
-
-    `DIAGRAM_MODE` is checked here as well, so build-time mode emits no tag at
-    all rather than one pointing at a 20-byte empty chunk. It is not what keeps
-    Mermaid out — the resolver is — but a request for nothing is still a
-    request.
-  */}
-  {hasMermaid && DIAGRAM_MODE === 'client' && (
-    <script>
-      import '../../scripts/diagram.ts';
-    </script>
-  )}
-  {/*
-    The same arrangement for math, and it needs both halves for the same reason
-    the diagram one does: this condition keeps a math-free page from requesting
-    anything, and `astro.config.mjs`'s resolver keeps a build-time *build* from
-    containing Temml at all. `clientRuntimePlugin` is parameterised over the two
-    runtimes rather than duplicated.
+    The math script, and it needs both halves: this condition keeps a math-free
+    page from requesting anything, and `astro.config.mjs`'s resolver keeps a
+    build-time *build* from containing Temml at all. `clientRuntimePlugin` is
+    what does the latter.
 
     `hasMath` needs no change to serve this: it is set in `mathPlugin` before the
     mode branch, so it means "this page has an expression" in either mode — which

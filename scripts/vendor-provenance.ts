@@ -2,7 +2,7 @@
  * Build-minted provenance for JavaScript chunks containing dependency code only.
  *
  * The final residue scan must keep reading every first-party chunk, while the
- * selected client runtimes emit dependency chunks containing byte sequences
+ * selected client runtime emits dependency chunks containing byte sequences
  * that resemble residue. A basename cannot prove which is which. The bundler can: its chunk
  * interface carries every resolved module id before the bytes are written.
  *
@@ -54,54 +54,9 @@ function canonical(path: string): string {
   return process.platform === 'win32' ? real.toLowerCase() : real;
 }
 
-/** Package owners measured in the selected Mermaid and Temml client bundles. */
+/** The one package owner measured in the selected client bundle. */
 export const CLIENT_RUNTIME_PACKAGES: ReadonlySet<string> = new Set([
-  '@braintree/sanitize-url',
-  '@iconify/utils',
-  '@mermaid-js/parser',
-  '@upsetjs/venn.js',
-  'cose-base',
-  'cytoscape',
-  'cytoscape-cose-bilkent',
-  'cytoscape-fcose',
-  'd3',
-  'd3-array',
-  'd3-axis',
-  'd3-brush',
-  'd3-color',
-  'd3-dispatch',
-  'd3-ease',
-  'd3-format',
-  'd3-hierarchy',
-  'd3-interpolate',
-  'd3-path',
-  'd3-sankey',
-  'd3-scale',
-  'd3-scale-chromatic',
-  'd3-selection',
-  'd3-shape',
-  'd3-time',
-  'd3-time-format',
-  'd3-timer',
-  'd3-transition',
-  'd3-zoom',
-  'dagre-d3-es',
-  'dayjs',
-  'dompurify',
-  'elkjs',
-  'es-toolkit',
-  'internmap',
-  'katex',
-  'khroma',
-  'layout-base',
-  'lodash-es',
-  'marked',
-  'mermaid',
-  'roughjs',
-  'stylis',
   'temml',
-  'ts-dedent',
-  'uuid',
 ]);
 
 /** The one generated module measured inside an otherwise-vendored Rolldown chunk. */
@@ -132,10 +87,10 @@ function packageAt(entry: string): { root: string; manifest: PackageManifest; ma
 }
 
 /**
- * Canonical roots in the installed Mermaid/Temml dependency closure that this
- * build is allowed to classify as vendored. Package names remain an explicit
- * review list; resolution supplies the stronger fact that a module came from
- * the exact package instance these runtimes load, not a same-named external tree.
+ * Canonical roots in the installed Temml dependency closure that this build is
+ * allowed to classify as vendored. Package names remain an explicit review
+ * list; resolution supplies the stronger fact that a module came from the
+ * exact package instance this runtime loads, not a same-named external tree.
  */
 export function clientRuntimePackageRoots(packageRoot: string): string[] {
   const roots = new Set<string>();
@@ -173,7 +128,6 @@ export function clientRuntimePackageRoots(packageRoot: string): string[] {
   };
 
   const importer = join(resolve(packageRoot), 'package.json');
-  visit('mermaid', importer, true);
   visit('temml', importer, true);
   return [...roots].sort();
 }
@@ -335,7 +289,7 @@ export function readVendorProvenance(
 ): ReadonlySet<string> {
   const path = options.path ?? vendorProvenancePath(root);
   if (!existsSync(path)) {
-    if (options.required === true) return refuse('the client build wrote no vendored chunk provenance');
+    if (options.required === true) return refuse('the client runtime build wrote no vendored chunk provenance');
     return new Set();
   }
 
@@ -361,7 +315,7 @@ export function readVendorProvenance(
     return refuse(path + ' chunk names are duplicated or not sorted');
   }
   if (options.required === true && grants.length === 0) {
-    return refuse(path + ' grants no chunks to a client diagram build');
+    return refuse(path + ' grants no chunks to a client runtime build');
   }
   for (const grant of grants) {
     const candidate = join(root, ...grant.file.split('/'));

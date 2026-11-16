@@ -4,8 +4,8 @@
  * A leaf module with no imports, and that is the whole reason it exists rather
  * than living beside the code that writes it. `scripts/scan-residue.ts` needs
  * this vocabulary and its predicates, and importing them from
- * `src/lib/markdown.ts` pulls in `mermaid-render.ts` and a top-level pass that
- * loads every Prism grammar:
+ * `src/lib/markdown.ts` pulls in a top-level pass that loads every Prism
+ * grammar:
  * measured, the residue scan went from **4.1 s to 25.5 s**, on a step that is a
  * link of `pnpm run build` and of the shipped binary's chain. Every user's build
  * would pay twenty seconds to read two literals.

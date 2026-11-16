@@ -524,15 +524,18 @@ test('the residue scan fails on each marker it exists to catch', () => {
       );
     }
 
-    // Raster data is the one allowed data: form. The second control is the
-    // first-party source line that client diagrams ship: a JavaScript regex
+    // Raster data is the one allowed data: form. The second control is a
+    // first-party source line carrying the same escaped-slash spelling a
+    // JavaScript regex writes: `SAFE_IMAGE_DATA_URI` in `src/lib/markdown.ts`
     // escapes its slash as `\/`, which must not turn the same allowlist into a
-    // false positive. Read the actual line so this cannot pass on a fixture that
-    // drifted away from the runtime.
-    const diagramRuntime = readFileSync(new URL('src/scripts/diagram.ts', ROOT), 'utf8');
-    const rasterGuard = diagramRuntime.split('\n').find((line) => line.includes('const isInlineRaster'));
-    assert.ok(rasterGuard !== undefined, 'the runtime no longer carries the raster guard under test');
-    assert.ok(rasterGuard.includes('data:image\\/'), 'the runtime raster guard no longer escapes its slash');
+    // false positive. (The line this control read before P3 —
+    // `src/scripts/diagram.ts`'s `isInlineRaster` — was deleted with the client
+    // diagram runtime.) Read the actual line so this cannot pass on a fixture
+    // that drifted away from the source.
+    const rasterSource = readFileSync(new URL('src/lib/markdown.ts', ROOT), 'utf8');
+    const rasterGuard = rasterSource.split('\n').find((line) => line.includes('SAFE_IMAGE_DATA_URI = '));
+    assert.ok(rasterGuard !== undefined, 'the source no longer carries the raster guard under test');
+    assert.ok(rasterGuard.includes('data:image\\/'), 'the raster guard no longer escapes its slash');
     for (const allowed of ['data:image/png;base64,AA==', rasterGuard]) {
       writeFileSync(join(scratch, 'index.html'), allowed, 'utf8');
       assert.deepEqual(
@@ -590,8 +593,8 @@ test('the residue scan fails on each marker it exists to catch', () => {
  * Three gates in this repository have shipped with an inner budget larger than
  * the outer one that contains it, and each was found the same way: as a red run
  * whose message named the wrong thing. `tests/math-and-diagrams.test.ts`'s
- * across-processes gate gave each of two children 120 s under a 90 s outer, so a
- * hung child reported as "the test was slow". `tests/preview-server.test.ts`'s
+ * across-processes gate once gave each of two children 120 s under a 90 s outer,
+ * so a hung child reported as "the test was slow". `tests/preview-server.test.ts`'s
  * announce gate waited 25 s under a 40 s outer, which left no room for the
  * command it spawns to be slow *and* fail with its own message.
  *

@@ -177,7 +177,7 @@ Serve Worker, WASM, DB, and scripts from the site origin, with correct MIME type
 and actual host CSP enforcement. SQLite adds no `unsafe-eval`, inline scripts, or
 cross-origin isolation requirement. Test the already-existing
 `script-src 'self' 'wasm-unsafe-eval'`, `worker-src 'self'`, and `connect-src 'self'`
-policy. Existing Mermaid style allowances do not authorize new script allowances.
+policy. The strict `style-src 'self'` does not authorize new script allowances.
 
 ## Deployment snapshots and withdrawal
 

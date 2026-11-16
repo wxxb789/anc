@@ -56,7 +56,7 @@
 | 关系 | 反向链接、出链与链接图谱，全部渲染为静态 HTML |
 | 导航 | 标签、合集、面包屑、目录与最近更新 |
 | 搜索 | Pagefind 全文搜索，支持按文档设定语言 |
-| 富内容 | 客户端渲染的数学公式与 Mermaid 图表，均带源码回退 |
+| 富内容 | 客户端渲染的数学公式（带源码回退）与构建时渲染为 SVG 的 Mermaid 图表 |
 | 发现 | Atom 订阅源、站点地图、`robots.txt`、规范链接与 Open Graph 元数据 |
 | 语言 | 按文档切换英文与简体中文（`zh-CN`）界面 |
 | 隐私 | 默认发布、显式撤回；撤回的文件名不进日志 |
@@ -169,7 +169,7 @@ exclude:
 - Astro `output: "static"`；构建产物是 `dist/`。
 - 内容由 `scripts/markdown-to-artifact.ts` 与 `scripts/resolve-links.ts` 生成，渲染前先经 `src/lib/schema.ts` 校验。
 - 唯一的公开关系与预览索引是 `data/site.<sha256>.sqlite`，包含 `nodes`、`edges`、`aliases`、`tags`、`node_tags` 五张表。它不含页面正文，也不含 SQLite FTS；浏览器以只读 Worker 懒加载它，用于悬停预览、标签浏览与图谱探索。
-- 基础交互脚本只有几 KB gzip。含数学公式或图表的页面会懒加载对应的客户端渲染器，两者都带源码回退。
+- 基础交互脚本只有几 KB gzip。含数学公式的页面会懒加载已采用的客户端渲染器；图表在构建时渲染为 SVG，并作为标记随页面交付。
 - 没有 D1、R2、Functions、分析、评论或构建时数据服务，也不需要运行时应用服务器。
 
 ## 参与开发
@@ -207,7 +207,7 @@ pnpm run smoke:tarball   # 在外部仓库中安装该 tarball 并读取结果
 在 frontmatter 中加上 `publish: false`，或在 `publish.config.yaml` 中用 `exclude:` glob 匹配它的路径。见[发布与否如何决定](#发布与否如何决定)。
 
 **不开 JavaScript 能用吗？**
-阅读、导航、反向链接以及链接图谱的表格回退都是纯 HTML。搜索、悬停预览、数学公式与图表需要 JavaScript。
+阅读、导航、反向链接以及链接图谱的表格回退都是纯 HTML。搜索、悬停预览与数学公式需要 JavaScript。
 
 **可以托管在哪里？**
 任意支持域名根路径的静态主机：GitHub Pages、Cloudflare Pages、Netlify 或你自己的 Web 服务器。见[接入与托管](#接入与托管)。

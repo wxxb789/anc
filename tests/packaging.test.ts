@@ -18,12 +18,11 @@
  *
  * **The closure is traced, not globbed.** An earlier shape of this gate scanned
  * every `.ts` file under `src/` and `scripts/`, which is both too wide and too
- * narrow: too wide because `src/scripts/diagram.ts` legitimately imports
- * `mermaid` for the *client* bundle and is not on the build's own import path,
- * and too narrow because it would miss a devDependency reached through a chain
- * of relative imports the glob happened to include for another reason. Following
- * the imports from the real entry points answers the question actually being
- * asked: what does the build load?
+ * narrow: too wide because a client-only runtime's module is not on the build's
+ * own import path, and too narrow because it would miss a devDependency reached
+ * through a chain of relative imports the glob happened to include for another
+ * reason. Following the imports from the real entry points answers the question
+ * actually being asked: what does the build load?
  */
 
 import { readFileSync, readdirSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
@@ -59,20 +58,15 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
  * directory convention; this gate has to be told, because a page is exactly
  * where an accidental devDependency import would be least visible.
  *
- * `src/scripts/diagram-disabled.ts` is the third case: it is reached by neither
- * convention nor import, but by `astro.config.mjs`'s `resolveId` plugin, which
- * names it as a `fileURLToPath(new URL(…))` string and substitutes it for
- * `diagram.ts` whenever `DIAGRAM_MODE` is `build-time`. The selected mode is
- * `build-time` (`src/lib/diagram-mode.ts`), so this module is in the bundle
- * now — and a parser cannot see a path built out of a string, which is why it
- * is listed here rather than traced. Verified by planting an unresolvable
- * import in it: `astro build` died and this gate stayed green until the file
- * was listed here.
+ * `astro.config.mjs`'s stub redirect is deliberately not an entry point: the
+ * stub is named by a template literal and substituted for `math.ts` only when
+ * `MATH_MODE` is `build-time`, and the selected mode is `client`
+ * (`src/lib/math-mode.ts`), so the build never loads it. Listing a module the
+ * build does not reach would let this gate claim coverage it does not have.
  */
 const ENTRY_POINTS: readonly string[] = [
   'bin/anc.mjs',
   'astro.config.mjs',
-  'src/scripts/diagram-disabled.ts',
 ];
 
 /**
@@ -86,8 +80,7 @@ const ENTRY_POINTS: readonly string[] = [
  * - It **missed** `import 'happy-dom';`. A side-effect import has no `from`, so
  *   a `from`-anchored pattern returns nothing for it. Measured: the exact form
  *   yielded `[]`. That is a false pass on the highest-risk shape in this
- *   repository — `mermaid-environment.ts` is precisely where a DOM polyfill
- *   would be imported for its effect.
+ *   repository: a package imported purely for its effect.
  * - It **invented** imports, reading `from 'x'` out of a template literal, and
  *   silently dropped any import list longer than the 200 characters its lazy
  *   quantifier allowed.
@@ -151,7 +144,7 @@ function specifiersIn(source: string, filename: string): string[] {
  * build-time dependency as an import in the frontmatter, and it is where a
  * devDependency import would be least visible. `src/layouts/Layout.astro:234-238`
  * imports three modules that way and `src/pages/notes/[slug].astro` imports
- * `src/scripts/diagram.ts`, which imports `mermaid`.
+ * `src/scripts/math.ts`, which imports `temml`.
  *
  * **Separately, not concatenated.** Joining them was tried and silently lost
  * imports: a `<script>` earlier in the file contains a prose comment with an
@@ -267,26 +260,24 @@ test('every package the build imports is declared as a dependency', () => {
 
 test('the trace reaches the modules whose devDependency imports broke the adoption path', () => {
   // Non-vacuity. Every assertion above passes trivially if the trace reaches
-  // nothing, and the three modules named in the plan's S1 finding are exactly
-  // the ones it must not miss: `math.ts` (temml), `mermaid-environment.ts`
-  // (happy-dom), and `markdown.ts`, which imports both.
+  // nothing, and the modules named in the plan's S1 finding are exactly the
+  // ones it must not miss: `math.ts` (temml) and `markdown.ts`, which imports
+  // it.
   const { files } = traceImports();
   const reached = new Set([...files].map((file) => relative(ROOT, file).replaceAll('\\', '/')));
 
   for (const module of [
     'src/lib/math.ts',
     'src/lib/markdown.ts',
-    'src/lib/mermaid-environment.ts',
-    'src/lib/mermaid-render.ts',
     'scripts/build-workspace.ts',
     'scripts/scan-residue.ts',
     'scripts/scan-secrets.ts',
     'scripts/validate-content.ts',
     // Reached only through an Astro `<script>` tag, which is the region an
-    // earlier version of this trace never read. `diagram.ts` imports `mermaid`,
-    // so had that package stayed a devDependency this file would have been the
+    // earlier version of this trace never read. `math.ts` imports `temml`, so
+    // had that package stayed a devDependency this file would have been the
     // one to prove it and did not.
-    'src/scripts/diagram.ts',
+    'src/scripts/math.ts',
     'src/scripts/search-dialog.ts',
     'src/scripts/link-preview.ts',
     'src/scripts/preferences.ts',
@@ -701,7 +692,8 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
         'package, so something was compiled and then lost',
     );
 
-    // And **no file in the tarball** may still name a `.ts` file. `tsc` rewrites
+    // And **no file in the tarball** may still name a `.ts` file in a quoted
+    // string. `tsc` rewrites
     // the specifiers in what it compiles; the `.astro` components and the two
     // `.mjs` files are rewritten by `compile-package.ts` because no compiler
     // sees them. Measured: with only a `.js` sibling present, Vite does *not*
@@ -716,11 +708,16 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
     // reads, invisible because of the filter. A gate that measures a subset of
     // its stated property is worse than none, because it reports success.
     //
-    // Two forms are excluded, because naming a `.ts` path is their job rather
-    // than a stale reference to one: an entry in `package.json`'s `files` that
-    // *excludes* a source (`"!scripts/build-fixture.ts"`), and a `.d.ts`
-    // declaration reference in `tsconfig.json`, which describes types and
-    // resolves nothing at run time.
+    // Three forms escape the scan's pattern, and all three are named because
+    // the exclusion set is part of what this gate measures. Two are deliberate,
+    // because naming a `.ts` path is their job rather than a stale reference to
+    // one: an entry in `package.json`'s `files` that *excludes* a source
+    // (`"!scripts/build-fixture.ts"`), and a `.d.ts` declaration reference in
+    // `tsconfig.json`, which describes types and resolves nothing at run time.
+    // The third is a limit of the pattern rather than a decision: it reads
+    // quoted strings only, so a `.ts` name inside a template literal is
+    // invisible — and one is live, `astro.config.mjs:87`'s client-runtime stub
+    // path; widening the pattern would fire on that file today.
     const stale: string[] = [];
     for (const file of sourceFilesUnder(staging, () => true)) {
       for (const [, specifier] of readFileSync(file, 'utf8').matchAll(/['"]([^'"`\n]*?\.ts)['"]/g)) {
@@ -732,12 +729,12 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
-  // A full type-checked compile of 29 files: ~13 s alone, and this suite runs a
-  // worker per file, so it competes with `math-and-diagrams.test.ts` laying out
-  // real Mermaid diagrams. Measured, both then exceeded `vitest.config.ts`'s
-  // 30 s default and failed as timeouts rather than on any assertion. The bound
-  // is generous rather than tight because what it must catch is a hang, not a
-  // slow machine.
+  // A full type-checked compile, in a suite that runs a worker per file, so it
+  // competes with the render-heavy gates for the same cores. Measured on the
+  // Mermaid-era tree, both this gate and
+  // `math-and-diagrams.test.ts` then exceeded `vitest.config.ts`'s 30 s default
+  // and failed as timeouts rather than on any assertion. The bound is generous
+  // rather than tight because what it must catch is a hang, not a slow machine.
 }, 120_000);
 
 test('the default origin a packaged build ships names nobody, and has one home', () => {

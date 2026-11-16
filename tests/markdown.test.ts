@@ -4,7 +4,6 @@ import { test } from 'vitest';
 
 import Slugger from 'github-slugger';
 import { TOC_MIN_HEADINGS, defaultRouteForSlug, renderMarkdown, type TocEntry } from '../src/lib/markdown.ts';
-import { DIAGRAM_MODE } from '../src/lib/diagram-mode.ts';
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { translate } from '../src/lib/translations.ts';
 
@@ -334,36 +333,22 @@ test('inline marks and external links survive', () => {
 // --- Rendered constructs (requirements 15.1) ---------------------------------
 //
 // Both of these were downgrades to escaped source until TK-15, recorded under
-// requirements 15.2. Owner decisions 2 and 5 superseded them: both constructs
-// render in the selected mode, with source fallbacks in client mode.
-// `tests/math-and-diagrams.test.ts` carries the full coverage; what
-// is pinned here is that the *pipeline* produces them, since this file owns the
-// renderer's contract.
+// requirements 15.2. Owner decisions 2 and 5 superseded them: math renders in
+// the selected mode with a source fallback, and a Mermaid fence renders to SVG
+// at build time. `tests/math-and-diagrams.test.ts` carries the full coverage;
+// what is pinned here is that the *pipeline* produces them, since this file
+// owns the renderer's contract.
 
-test('a Mermaid fence emits the shape selected by the diagram mode', () => {
+test('a Mermaid fence emits a build-time rendered figure', () => {
   assert.match(kitchenSink.html, /<figure class="diagram" data-diagram="mermaid">/);
   assert.equal(kitchenSink.hasMermaid, true);
-  // Neither mode may put a script or anything `style-src 'self'` blocks into
-  // the *markup*. That is the whole property in build-time mode, and still the
-  // property in client mode, where the runtime arrives as an external module
-  // and the diagram source ships escaped inside a `<pre>`.
+  // A rendered diagram is markup: real SVG, named for assistive technology,
+  // present with JavaScript disabled — and neither a script nor anything
+  // `style-src 'self'` blocks reaches the page.
+  assert.match(kitchenSink.html, /<svg\b[^>]*aria-label="Flowchart diagram"/);
   assert.doesNotMatch(kitchenSink.html, /<script/i);
   assert.doesNotMatch(kitchenSink.html, /<style/i);
   assert.doesNotMatch(kitchenSink.html, /\sstyle="/);
-
-  if (DIAGRAM_MODE === 'build-time') {
-    // The diagram is markup: real SVG, named for assistive technology, present
-    // with JavaScript disabled.
-    assert.match(kitchenSink.html, /<svg\b[^>]*aria-label="Flowchart diagram"/);
-  } else {
-    // The diagram is the source until the runtime replaces it, which is also
-    // what a reader without JavaScript is left with — the deliberate §5.2/§5.3
-    // carve-out that TK-10 records.
-    assert.match(
-      kitchenSink.html,
-      /<pre\b[^>]*class="diagram-source"[^>]*tabindex="0"[^>]*><code class="language-mermaid">/,
-    );
-  }
 });
 
 test('math emits the shape selected by the math mode and leaves single dollars literal', () => {
@@ -1071,7 +1056,6 @@ test('every fence in the shipped artifact resolves to a real grammar', async () 
     const { html } = await renderMarkdown(markdown, { routeForSlug, publishedAssets });
     const missed: string[] = [];
     for (const figure of html.match(/<figure class="code-block"[^>]*>[\s\S]*?<\/figure>/g) ?? []) {
-      if (/data-diagram="mermaid"/.test(figure)) continue;
       // `plaintext` is the one language with no grammar by design: it is
       // `codePlugin`'s fallback for an unlabelled fence. `text` is here too
       // because `LANGUAGE_ALIASES` maps it to `plaintext` inside `highlight()`

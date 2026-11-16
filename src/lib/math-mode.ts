@@ -1,21 +1,21 @@
 /**
  * The one place the math rendering mode is written down.
  *
- * The sibling of `src/lib/diagram-mode.ts`, and deliberately a *separate*
- * constant rather than a second reader of that one. The two constructs have
- * different costs and the evidence points different ways, so a single switch
- * would force one decision to carry the other's consequences:
+ * Deliberately its own constant rather than a reader of the diagram seam's
+ * switch. The diagram side has collapsed to a build-time renderer — the client
+ * diagram runtime was deleted along with the rest of the Mermaid code paths —
+ * while math still needs a decision whose costs move independently of anything
+ * a diagram does:
  *
- * | | math (`temml`) | diagrams (`mermaid`) |
+ * | | math (`temml`) | diagrams (`pele`) |
  * | --- | --- | --- |
- * | JS a page downloads, client mode | ~116 KB gzip | ~232 KB gzip |
- * | `style-src` required | `'self'`, measured at 0 violations | `'self' 'unsafe-inline'` |
- * | Readable with JS disabled | the TeX source | the Mermaid source |
- * | Render call | **synchronous** | asynchronous |
+ * | Where it renders | the reader's browser (`client`) | build time, to SVG |
+ * | JS a page downloads | ~116 KB gzip, on a page with an expression | none |
+ * | `style-src` required | `'self'`, measured at 0 violations | `'self'`, a rendered SVG carries no style |
  *
- * **Math needs no CSP relaxation, and diagrams do.** That asymmetry is the whole
- * reason for two constants: selecting client math does not itself widen
- * `style-src`, while selecting client diagrams does.
+ * **Math needs no CSP relaxation.** That is the property the separate constant
+ * keeps visible: selecting client math does not itself widen `style-src`, and
+ * no client mode that would remains.
  *
  * ## Zero CSP violations, and what it took to get there
  *
@@ -55,10 +55,9 @@ export const MATH_MODE: MathMode = 'client';
 /*
  * The costs carried by the selected client mode.
  *
- * Unlike Mermaid, temml needs no relaxation at all — measured at 0 CSP
- * violations across every expression tried — and its single chunk carries no
- * `[[`, no `data:` URL, and no drive-letter-shaped string, measured against the
- * residue scan.
+ * temml needs no relaxation at all — measured at 0 CSP violations across every
+ * expression tried — and its single chunk carries no `[[`, no `data:` URL, and
+ * no drive-letter-shaped string, measured against the residue scan.
  *
  * What remains is the cost this selected mode moves onto the reader, recorded so
  * the choice stays explicit rather than becoming an unexplained default:
@@ -79,6 +78,6 @@ export const MATH_MODE: MathMode = 'client';
  *    (`scripts/run-pagefind.ts`), so a reader cannot find a note by an
  *    expression in it. That is a real loss and it is stated where it is taken.
  * 3. **A reader with JavaScript disabled sees the TeX source**, not typeset
- *    mathematics — the same bargain client diagrams make with their Mermaid
- *    source, and what the owner chose.
+ *    mathematics — the bargain the owner chose for math when client rendering
+ *    was selected.
  */

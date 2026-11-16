@@ -5,12 +5,13 @@
  * Three properties are load-bearing and each is checked here rather than
  * inferred from the code that produces it:
  *
- * 1. **What ships is what the CSP permits.** Build-time mode must produce no
- *    inline style, no `<style>` element, and no script; client mode needs a
- *    relaxed `style-src` and must say so in `public/_headers`.
- *    `tests/built-output.test.ts` owns the mode-aware `dist/` assertions; this
- *    file owns the *Mermaid* renderer's own guarantees; the selected engine's
- *    live in `tests/diagram-engine.test.ts`.
+ * 1. **What ships is what the CSP permits.** A build-time diagram is markup —
+ *    real SVG, no inline style, no `<style>` element, no script — and client
+ *    math ships its TeX source HTML-escaped inside a `<code>` carrying
+ *    `language-math`, substituted into the markup after sanitization.
+ *    `tests/built-output.test.ts` owns
+ *    the `dist/` assertions; the renderer's own guarantees live in
+ *    `tests/diagram-engine.test.ts` and the math rows below.
  * 2. **Nothing reaches a page that does not need it.** A note with no math
  *    links no math stylesheet; a note with no diagram links no diagram
  *    stylesheet and requests no diagram script. Both directions are asserted,
@@ -26,6 +27,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gzipSync } from 'node:zlib';
 import assert from 'node:assert/strict';
@@ -33,56 +35,22 @@ import { test, type TestContext } from 'vitest';
 
 import { renderMarkdown } from '../src/lib/markdown.ts';
 import { renderMath, MathRejectedError, MATH_STYLE_CLASSES } from '../src/lib/math.ts';
-import {
-  renderDiagram,
-  DiagramError,
-  LAYOUT_CLASSES as DIAGRAM_LAYOUT_CLASSES,
-  THEME_VARIABLES,
-  UNPAIRED_DIAGRAMS,
-} from '../src/lib/mermaid-render.ts';
 import temml from 'temml';
 
 import { MATH_MODE } from '../src/lib/math-mode.ts';
 import { extractStyles } from '../src/lib/math-output.ts';
 import { MARKED_ROOT, RENDERED_DIAGRAM, RENDERED_MARKER, RENDERED_MATH } from '../src/lib/rendered-marker.ts';
-import {
-  DIAGRAM_MODE,
-  REQUIRED_STYLE_SRC,
-  STYLE_SRC_BY_MODE,
-} from '../src/lib/diagram-mode.ts';
 import { entries } from '../src/lib/content.ts';
 import { CLIENT_RUNTIME_FLOOR_BYTES } from './support/runtime-budget.ts';
 
 const ROOT = new URL('../', import.meta.url);
 const DIST = new URL('dist/', ROOT);
 
-/** Every diagram type the renderer claims to support, one minimal example each. */
-const DIAGRAM_TYPES: Readonly<Record<string, string>> = {
-  flowchart: 'graph TD\n  A[Vault] -->|allowlist| B[Exporter]\n  B --> C{Valid?}',
-  sequence: 'sequenceDiagram\n  Reader->>Site: request\n  Site-->>Reader: html',
-  class: 'classDiagram\n  class Artifact { +slug }\n  Artifact <|-- Note',
-  state: 'stateDiagram-v2\n  [*] --> Draft\n  Draft --> [*]',
-  entityRelationship: 'erDiagram\n  NOTE ||--o{ EDGE : has',
-  journey: 'journey\n  title Read\n  section Visit\n    Open: 5: Reader',
-  gantt: 'gantt\n  title Wave\n  dateFormat YYYY-MM-DD\n  section Build\n  Render :a1, 2026-01-01, 5d',
-  pie: 'pie title Sources\n  "Vault" : 45\n  "Manual" : 30',
-  quadrant: 'quadrantChart\n  title Reach\n  x-axis Low --> High\n  y-axis Low --> High\n  A: [0.3, 0.6]',
-  gitGraph: 'gitGraph\n  commit\n  branch dev\n  commit\n  checkout main\n  merge dev',
-  mindmap: 'mindmap\n  root((corpus))\n    notes\n    tags',
-  timeline: 'timeline\n  title History\n  2024 : Start\n  2025 : Ship',
-  sankey: 'sankey-beta\nA,B,10\nB,C,5',
-  xyChart: 'xychart-beta\n  title "Load"\n  x-axis [a, b, c]\n  bar [1, 2, 3]',
-  block: 'block-beta\n  columns 2\n  A B',
-  packet: 'packet-beta\n0-7: "Head"\n8-15: "Body"',
-  architecture: 'architecture-beta\n  group api(cloud)[API]\n  service db(database)[DB] in api',
-  treemap: 'treemap-beta\n"Root"\n  "A": 10\n  "B": 20',
-  radar: 'radar-beta\n  axis a["A"], b["B"], c["C"]\n  curve x["X"]{1, 2, 3}',
-  kanban: 'kanban\n  Todo\n    task1[Write]',
-  c4: 'C4Context\n  title Sys\n  Person(a, "Reader")\n  System(b, "Site")\n  Rel(a, b, "reads")',
-  requirement:
-    'requirementDiagram\n  requirement test_req {\n  id: 1\n  text: privacy\n  risk: high\n  verifymethod: test\n  }',
-  info: 'info',
-};
+/**
+ * The source the cross-process determinism row renders, unchanged from the
+ * earlier engine so the row's fresh-process readings stay comparable.
+ */
+const DETERMINISM_SOURCE = 'gitGraph\n  commit\n  branch dev\n  commit\n  checkout main\n  merge dev';
 
 function walk(directory: URL, extension: string): string[] {
   const found: string[] = [];
@@ -286,223 +254,42 @@ test('math rendering is deterministic', () => {
 
 // --- Diagrams ----------------------------------------------------------------
 
-test('every diagram type renders to CSP-clean SVG', async () => {
-  for (const [name, source] of Object.entries(DIAGRAM_TYPES)) {
-    const svg = await renderDiagram(source, `t-${name}`, `${name} diagram`);
-
-    assert.match(svg, /^<svg\b/, `${name}: the result is not an SVG element`);
-    assert.ok(svg.length > 100, `${name}: output is suspiciously short (${svg.length} bytes)`);
-    // The DOMPurify interaction returns an empty string *successfully*, so an
-    // adopting pipeline that does not assert here ships blank diagrams.
-    //
-    // These four are regression guards rather than the substance of the gate:
-    // the pipeline removes every `<style>` and every `style=` unconditionally,
-    // so they would also pass if the cascade resolver were deleted outright —
-    // deletion is what makes them true. The gate that binds is the next test.
-    assert.doesNotMatch(svg, /\sstyle="/, `${name}: an inline style survived, which style-src 'self' blocks`);
-    assert.doesNotMatch(svg, /<style/i, `${name}: a <style> element survived`);
-    assert.doesNotMatch(svg, /<script/i, `${name}: a script reached the output`);
-    assert.doesNotMatch(svg, /\son[a-z]+="/i, `${name}: an inline handler reached the output`);
-    // `info` is a version banner with no geometry and legitimately has none.
-    if (name !== 'info') assert.match(svg, /viewBox="/, `${name}: no viewBox, so the diagram cannot scale`);
-    assert.match(svg, /aria-label="/, `${name}: a diagram is content and needs an accessible name`);
-  }
-  // The most expensive gate in the tree: every diagram type, each rendered twice
-  // to pair the palettes. Measured at 160 s under `pnpm run verify` against the
-  // 90 s file default and 32 s alone — so it is not slow, it is *contended*, and
-  // a default sized on an idle machine is the wrong instrument for it. Its own
-  // budget rather than another rise in the global one, which would relax every
-  // gate to accommodate this one.
-}, 300_000);
-
-test('flattening preserves the appearance the stylesheet described', async () => {
-  // The assertion the CSP gate above cannot make. Deleting the stylesheet makes
-  // a diagram CSP-clean *and* blank; what has to hold is that the declarations
-  // survive as presentation attributes on the elements they selected.
-  //
-  // Each expectation below is a rule Mermaid's own stylesheet carries, and each
-  // was verified against a real browser's computed style on the unflattened
-  // SVG. Together they cover the three routes a declaration can take: a
-  // descendant selector (`.node rect`), the root-targeting rule that
-  // `querySelectorAll` alone would miss, and a rule whose winner is decided by
-  // specificity against a competing one.
-  const flowchart = await renderDiagram(DIAGRAM_TYPES['flowchart']!, 'flat-flow', 'Flowchart diagram');
-
-  // `#id .node rect { fill; stroke; stroke-width }` — the shapes are painted.
-  const nodeRect = /<rect[^>]*class="[^"]*label-container[^"]*"[^>]*>/.exec(flowchart)?.[0];
-  assert.ok(nodeRect, 'the flowchart has no node rectangle to check');
-  assert.match(nodeRect, /\sfill="light-dark\(/, 'the node fill was not flattened onto the element');
-  assert.match(nodeRect, /\sstroke="light-dark\(/, 'the node stroke was not flattened onto the element');
-
-  // `#id { fill }` targets the root, which `querySelectorAll` does not return.
-  // Without it every SVG `<text>` inherits the initial black.
-  assert.match(
-    flowchart.slice(0, flowchart.indexOf('>')),
-    /\sfill="light-dark\(/,
-    "the root rule was dropped, so text falls back to the initial black",
-  );
-
-  // A sequence diagram's message lines carry 1.5, while a broader rule in the
-  // same stylesheet sets 2px on `line`. Scoring a selector *list* as one string
-  // let the broader rule win — the shape that made per-selector specificity
-  // necessary.
-  const sequence = await renderDiagram(DIAGRAM_TYPES['sequence']!, 'flat-seq', 'Sequence diagram');
-  const messageLine = /<line[^>]*class="[^"]*messageLine0[^"]*"[^>]*>/.exec(sequence)?.[0];
-  assert.ok(messageLine, 'the sequence diagram has no message line to check');
-  assert.match(
-    messageLine,
-    /stroke-width="1\.5"/,
-    'a less specific rule won: specificity is being scored over the whole selector list',
-  );
-});
-
-test('a diagram follows the theme with no second file and no script', async () => {
-  // The pairing: two renders, one per palette, collapsed into `light-dark()`
-  // values on one SVG. Without it a *Mermaid*-rendered build-time diagram is
-  // stuck in one theme.
-  const svg = await renderDiagram(DIAGRAM_TYPES['flowchart']!, 'theme-probe', 'Flowchart diagram');
-  const paired = svg.match(/light-dark\([^)]*\)/g) ?? [];
-  assert.ok(paired.length > 0, 'no colour was paired, so the diagram cannot follow the theme');
-  for (const value of paired) {
-    assert.match(value, /^light-dark\(\s*[^,]+,\s*[^)]+\)$/, `malformed paired colour: ${value}`);
-  }
-});
-
-test('a diagram is rendered against the article column, not an arbitrary viewport', async () => {
-  // gantt and timeline take their total width from the container, so this is
-  // their rendered size rather than an internal detail.
-  const svg = await renderDiagram(DIAGRAM_TYPES['gantt']!, 'width-probe', 'Gantt diagram');
-  const width = Number(/viewBox="[^"]*?\s([\d.]+)\s[\d.]+"/.exec(svg)?.[1]);
-  assert.ok(Number.isFinite(width) && width > 0, 'the gantt chart has no measurable width');
-  assert.ok(width <= 800, `a gantt chart ${width}px wide overflows the article column`);
-});
-
-test('CJK labels are measured, not collapsed', async () => {
-  // The metric shim treats a full-width glyph as exactly 1 em, which is what
-  // every CJK font does. A collapse would show as a box narrower than its text.
-  const svg = await renderDiagram(
-    'graph LR\n  甲[开始] --> 乙[这是一个相当长的中文节点标签]',
-    'cjk-probe',
-    'Flowchart diagram',
-  );
-  const width = Number(/viewBox="[^"]*?\s([\d.]+)\s[\d.]+"/.exec(svg)?.[1]);
-  // 19 full-width glyphs at 16px is ~304px of text before padding and the
-  // second node; anything near zero means the labels measured empty.
-  assert.ok(width > 300, `CJK labels collapsed: the diagram is only ${width}px wide`);
-});
-
-test('a diagram that cannot be rendered fails the build', async () => {
-  await assert.rejects(
-    () => renderDiagram('graph TD\n  A --[[', 'bad-probe', 'Flowchart diagram'),
-    (error: unknown) => error instanceof DiagramError,
-  );
-});
-
-test('diagram rendering is deterministic within a process', async () => {
-  // Two passes over the *whole* corpus, not two renders of each type back to
-  // back. The difference is load-bearing: Mermaid's element counters and its
-  // `Math.random`-seeded gitgraph hashes are process-wide, so a diagram's output
-  // can depend on what was rendered before it. Rendering each type twice in
-  // sequence puts the same state in front of both calls and hides exactly that.
-  // Verified by mutation: removing the per-render PRNG reset leaves the paired
-  // form green and fails this one.
-  const first = new Map<string, string>();
-  for (const [name, source] of Object.entries(DIAGRAM_TYPES)) {
-    first.set(name, await renderDiagram(source, `d-${name}`, `${name} diagram`));
-  }
-  for (const [name, source] of Object.entries(DIAGRAM_TYPES)) {
-    const second = await renderDiagram(source, `d-${name}`, `${name} diagram`);
-    assert.equal(second, first.get(name), `${name}: the second pass produced different bytes`);
-  }
-});
-
-test('a build-time diagram carries no wall-clock output', async () => {
-  // Mermaid's gantt draws a "today" line at the current time, which is the one
-  // part of a render that changes while its source does not. It made the
-  // determinism gate above fail on a main build for a one-pixel difference, and
-  // it would freeze the build date into a published page. The build-time
-  // renderer turns the line off; the client renderer keeps it, because there
-  // "today" is the reader's today rather than the build's.
-  const gantt = await renderDiagram(DIAGRAM_TYPES['gantt']!, 't-gantt', 'gantt diagram');
-
-  assert.doesNotMatch(gantt, /class="today"/, 'the gantt renderer drew a today line from the wall clock');
-
-  // And the removal is scoped to the marker rather than to the class name. A
-  // flowchart node may carry an author's `:::today` class, which Mermaid
-  // renders as `<g class="node default today">`; an unscoped `g.today`
-  // selector deleted that node's shape and label and left its edge behind.
-  const classed = await renderDiagram('graph TD\n  A[Today]:::today --> B[Next]', 't-today-class', 'today class');
-
-  assert.match(classed, /class="node default today/, 'the wall-clock pass ate a flowchart node classed today');
-  assert.match(classed, /nodeLabel[^>]*>Today</, 'the classed node lost its label');
-});
-
 test('diagram rendering is deterministic across processes', () => {
   // The stronger property, and the one that matters for a content hash: a fresh
-  // process must produce the same bytes. Mermaid's module-level counters and its
-  // `Math.random`-seeded commit hashes both make this false without the seeding
-  // and id renumbering the renderer does.
+  // process must produce the same bytes. The row runs the shipped adapter —
+  // `tests/support/render-diagram.ts` imports `src/lib/pele-render.ts` — so what
+  // it compares is the bytes the build actually inserts.
   const script = fileURLToPath(new URL('tests/support/render-diagram.ts', ROOT));
-  const source = DIAGRAM_TYPES['gitGraph']!;
+  const source = DETERMINISM_SOURCE;
   // **The inner budget is smaller than the outer one, which is the point.**
-  // `vitest.config.ts` records this gate failing as a timeout while waiting on
-  // children it had itself budgeted 120 s each, under a 90 s outer bound — a
-  // gate whose inner budget exceeds its outer cannot fail the way it intends to,
-  // because the outer clock always wins and reports a hang as "the test was
-  // slow" rather than "a child never returned".
-  //
-  // Measured: one child costs p50 14.5 s, max 24.6 s over six idle rounds, so
-  // two is ~29 s idle. Under the full run this gate was observed at 39.0 s,
-  // 44.0 s, and 69.8 s — 78% of the 90 s it inherited from the global default.
-  //
-  // 90 s per child, under a 240 s outer, and both numbers are derived rather
-  // than picked. One child costs p50 14.5 s, max 24.6 s over six idle rounds;
-  // the contention factor measured on this host is 1.4-1.7x at the median and
-  // 2.5x in the tail, which puts one child at ~61 s worst. 90 s is ~3.7x the
-  // idle max and above that projection.
+  // `tests/verify.test.ts` records this gate failing once as a timeout while
+  // waiting on children it had itself budgeted 120 s each, under a 90 s outer
+  // bound — a gate whose inner budget exceeds its outer cannot fail the way it
+  // intends to, because the outer clock always wins and reports a hang as "the
+  // test was slow" rather than "a child never returned".
   //
   // The outer is 240 s so that **both** children can hit their own bound and
   // still fail inside it: 2 × 90 = 180 s. That ordering is the fix — a hung
   // child fails at its own timeout naming the child, rather than the outer clock
   // reporting "the test was slow".
   //
-  // A first draft set the inner to 45 s on the idle cost alone, and that was the
-  // same error this ticket diagnosed elsewhere: 45 s sits *inside* the 34-61 s
-  // range its own contention factor projects, exactly as `disclosure`'s 300 s
-  // sat inside 219-365 s. Measured — it failed as `spawnSync … ETIMEDOUT` on a
-  // loaded host. A budget inside its own projected range is not a budget.
+  // Measured 2026-11-16 through `pele-render.ts`: one child cost 0.25-0.5 s
+  // idle, so both budgets are loose upper bounds. They were left as they were
+  // rather than tightened — a timing change does not belong in the change that
+  // deleted an engine.
   const run = (): string =>
     execFileSync(process.execPath, [script, source], { encoding: 'utf8', timeout: 90_000 });
   assert.equal(run(), run(), 'two processes rendered the same diagram differently');
 }, 240_000);
-
-test('concurrent renders do not contaminate each other', async () => {
-  // Mermaid is a process-wide singleton in three ways — global config, module
-  // counters, and the seeded PRNG — and Astro renders pages concurrently. Two
-  // renders of one source interleaved with a third must still agree.
-  const source = DIAGRAM_TYPES['flowchart']!;
-  const [a, b, c] = await Promise.all([
-    renderDiagram(source, 'race-a', 'Flowchart diagram'),
-    renderDiagram(DIAGRAM_TYPES['pie']!, 'race-b', 'Pie diagram'),
-    renderDiagram(source, 'race-a', 'Flowchart diagram'),
-  ]);
-  assert.equal(c, a, 'an interleaved render changed the output');
-  assert.ok(b!.length > 0);
-});
 
 // --- The pipeline ------------------------------------------------------------
 
 test('a diagram figure carries a caption that names it', async () => {
   const declared = await renderMarkdown('```mermaid\npie title Publication Sources\n  "Vault" : 45\n```\n');
   assert.match(declared.html, /<figcaption>Publication Sources<\/figcaption>/);
-  // The caption is the figure's visible name in both modes. In build-time mode
-  // the SVG carries it as `aria-label` too, so a screen reader meeting the
-  // graphics role hears the same words; in client mode `src/scripts/diagram.ts`
-  // copies the caption onto the SVG it injects, which cannot be asserted here
-  // because no SVG exists until the runtime makes one.
-  if (DIAGRAM_MODE === 'build-time') {
-    assert.match(declared.html, /aria-label="Publication Sources"/);
-  }
+  // The SVG carries the caption as `aria-label` too, so a screen reader meeting
+  // the graphics role hears the same words as the sighted reader.
+  assert.match(declared.html, /aria-label="Publication Sources"/);
 
   // With no declared title the diagram's kind is the honest fallback: it says
   // what the reader is looking at without inventing a description.
@@ -510,26 +297,23 @@ test('a diagram figure carries a caption that names it', async () => {
   assert.match(undeclared.html, /<figcaption>Sequence diagram<\/figcaption>/);
 });
 
-test('two diagrams on one page do not collide on element ids', async (t: TestContext) => {
-  if (DIAGRAM_MODE !== 'build-time') {
-    return t.skip('client mode mints ids in the browser, where this file cannot see them');
-  }
+test('two diagrams on one page do not collide on element ids', async () => {
   // An id is unique within one element's own render, so two diagrams on one
   // page would both define the same id and the second definition would win for
   // both — silently, in both diagrams, with no error anywhere.
   //
   // **The source is chosen from a census, not from convenience.** Measured
-  // 2026-11-16 through the selected `pele` engine over the 23-type matrix and
-  // the branch fixtures, only the sankey renderer mints ids at all — two for a
+  // 2026-11-16 through the `pele` engine over the 23-type matrix and the
+  // branch fixtures, only the sankey renderer mints ids at all — two for a
   // two-edge source, five for the five-edge pair below — and each is referenced
   // exactly once through `url(#…)`. The flowchart pair this gate used before
   // the engine switch carries **zero** ids under this renderer: uniqueness over
   // an empty set is true and the gate would assert nothing.
   //
-  // What makes the two diagrams' ids differ is the `idPrefix` that
-  // `diagram-engine.ts` passes as `diagram-<index>`. A renderer that dropped it
-  // would mint the same id for both identical sources, and the equality below
-  // is what fails.
+  // What makes the two diagrams' ids differ is the `diagram-<index>` id prefix
+  // `markdown.ts` passes to the renderer. A renderer that dropped it would mint
+  // the same id for both identical sources, and the equality below is what
+  // fails.
   const rendered = await renderMarkdown(
     '```mermaid\nsankey-beta\nA,B,10\nB,C,5\nC,D,3\nD,E,7\nE,F,2\n```\n\n' +
       '```mermaid\nsankey-beta\nA,B,10\nB,C,5\nC,D,3\nD,E,7\nE,F,2\n```\n',
@@ -603,14 +387,12 @@ test('a note body cannot forge a rendering placeholder', async () => {
 test('hostile content inside math or a diagram cannot reach the page as markup', async () => {
   // Both renderers take author text and emit markup that bypasses the
   // sanitizer, so what an author writes *inside* an expression or a diagram
-  // label is the other half of the seam. Every case below either renders inert
-  // or fails the build; none may produce a script, a handler, or a live URL.
+  // label is the other half of the seam. Every case below must render inert:
+  // none may produce a script, a handler, or a live URL.
   //
-  // In client mode the diagram is not rendered at build time at all — its
-  // source ships escaped inside a `<pre>`, so the assertions are made against
-  // that escaped text. `\s` before the handler pattern is what distinguishes
-  // `onerror=` as an attribute from `onerror=` as escaped source: the escaped
-  // form is preceded by `&quot;` or a letter, never by whitespace inside a tag.
+  // `\s` before the handler pattern is what distinguishes `onerror=` as an
+  // attribute from `onerror=` as escaped text: the escaped form is preceded by
+  // `&quot;` or a letter, never by whitespace inside a tag.
   const hostile = [
     '$$\n\\text{</math><script>alert(1)</script>}\n$$\n',
     '```mermaid\ngraph TD\n  A["</svg><script>alert(1)</script>"] --> B\n```\n',
@@ -618,21 +400,11 @@ test('hostile content inside math or a diagram cannot reach the page as markup',
     '```mermaid\ngraph TD\n  A --> B\n  click A callback\n```\n',
   ];
   for (const markdown of hostile) {
-    let html: string;
-    try {
-      ({ html } = await renderMarkdown(markdown));
-    } catch {
-      // Failing the build is the other acceptable outcome: the retained Mermaid
-      // adapter fails the build on a `click` directive naming an external URL in
-      // build-time mode, while the selected pele engine renders the diagram with
-      // the link suppressed — no anchor and no URL in the markup.
-      continue;
-    }
+    const { html } = await renderMarkdown(markdown);
     assert.doesNotMatch(html, /<script/i, `a script survived: ${markdown.slice(0, 50)}`);
     assert.doesNotMatch(html, /<style/i, `a style element survived: ${markdown.slice(0, 50)}`);
     assert.doesNotMatch(html, /\sstyle="/, `an inline style survived: ${markdown.slice(0, 50)}`);
-    // Only real attributes count. Escaped source text is inert by construction
-    // and is what client mode deliberately ships.
+    // Only real attributes count. Escaped text is inert by construction.
     for (const tag of html.match(/<[a-zA-Z][^>]*>/g) ?? []) {
       assert.doesNotMatch(tag, /\son[a-z]+\s*=/i, `a handler attribute survived: ${tag.slice(0, 80)}`);
       assert.doesNotMatch(tag, /="javascript:/i, `a javascript: URL survived: ${tag.slice(0, 80)}`);
@@ -640,124 +412,79 @@ test('hostile content inside math or a diagram cannot reach the page as markup',
   }
 });
 
-test('a diagram cannot emit a link the projection never approved', async (t: TestContext) => {
+test('a diagram cannot emit a link the projection never approved', async () => {
   // Mermaid's `click` directive turns a node into an anchor pointing anywhere
   // the author wrote, including a `javascript:` URL — and the SVG never passes
   // through the href allowlist that governs prose links.
   //
-  // The two modes answer this differently, and both are checked. Build-time
-  // mode is the one that ships, and its two engines answer differently again:
-  // the selected `pele` engine renders with `links: false` and drops the
-  // directive — measured 2026-11-16, the URL reaches no byte of the output and
-  // no anchor is minted — while the retained Mermaid adapter rejects the
-  // external reference and fails the build. Both answers are accepted here;
-  // what is asserted is the property they share, that no anchor and no URL
-  // reach the markup. Client mode cannot fail a build that already shipped, so
-  // `src/scripts/diagram.ts` strips the same attributes in the page — asserted
-  // there by reading the script, since the stripping happens in a browser this
-  // file does not run.
+  // The renderer answers by construction: `pele-render.ts` renders with
+  // `links: false`, so the directive is dropped — measured 2026-11-16, the URL
+  // reaches no byte of the output and no anchor is minted. What is asserted
+  // here is that property rather than the mechanism: no anchor and no URL in
+  // the markup.
   const sources = [
     '```mermaid\ngraph TD\n  A --> B\n  click A "https://evil.example" _blank\n```\n',
     '```mermaid\ngraph TD\n  A --> B\n  click A href "javascript:alert(1)"\n```\n',
   ];
 
-  if (DIAGRAM_MODE === 'build-time') {
-    for (const source of sources) {
-      let html: string;
-      try {
-        ({ html } = await renderMarkdown(source));
-      } catch (error) {
-        // The refusing answer: the Mermaid adapter fails the build rather than
-        // dropping the directive.
-        assert.match(
-          String(error),
-          /external reference/i,
-          `${source}: an unexpected failure carries no refusal: ${String(error)}`,
-        );
-        continue;
-      }
-      assert.doesNotMatch(html, /<a\b/i, `${source}: a diagram emitted an anchor`);
-      assert.doesNotMatch(html, /(?:xlink:)?href\s*=/i, `${source}: a diagram emitted an href`);
-      assert.doesNotMatch(html, /javascript:/i, `${source}: a javascript: URL reached the markup`);
-      assert.ok(!html.includes('evil.example'), `${source}: the URL reached the markup`);
-      assert.match(html, /<svg\b/, `${source}: nothing rendered, so the absence proves nothing`);
-    }
-    return;
-  }
-
   for (const source of sources) {
     const { html } = await renderMarkdown(source);
-    for (const tag of html.match(/<[a-zA-Z][^>]*>/g) ?? []) {
-      assert.doesNotMatch(tag, /="javascript:/i, `a javascript: URL reached the markup: ${tag}`);
-    }
+    assert.doesNotMatch(html, /<a\b/i, `${source}: a diagram emitted an anchor`);
+    assert.doesNotMatch(html, /(?:xlink:)?href\s*=/i, `${source}: a diagram emitted an href`);
+    assert.doesNotMatch(html, /javascript:/i, `${source}: a javascript: URL reached the markup`);
+    assert.ok(!html.includes('evil.example'), `${source}: the URL reached the markup`);
+    assert.match(html, /<svg\b/, `${source}: nothing rendered, so the absence proves nothing`);
   }
-  const runtime = readFileSync(new URL('src/scripts/diagram.ts', ROOT), 'utf8');
-  assert.match(runtime, /URL_ATTRIBUTES/, 'the client runtime does not enforce the URL rule at all');
-  assert.match(
-    runtime,
-    /removeAttribute\(attribute\)/,
-    'the client runtime does not strip a disallowed URL from the rendered diagram',
-  );
-  void t;
 });
 
 // --- What reaches a page -----------------------------------------------------
 
-test('the deployed CSP matches the diagram mode', () => {
-  const headers = readFileSync(new URL('public/_headers', ROOT), 'utf8');
-  const styleSrc = /(?:^|;)\s*style-src\s+([^;]+)/.exec(headers)?.[1]?.trim();
-  assert.equal(styleSrc, REQUIRED_STYLE_SRC, `style-src must match DIAGRAM_MODE "${DIAGRAM_MODE}"`);
-  assert.notEqual(
-    STYLE_SRC_BY_MODE['build-time'],
-    STYLE_SRC_BY_MODE.client,
-    'the modes declare the same policy, so this gate cannot detect a mismatch',
-  );
-});
-
-test('a build-time mode ships no chunk carrying its own runtime', (t: TestContext) => {
-  if (DIAGRAM_MODE !== 'build-time' && MATH_MODE !== 'build-time') {
-    return t.skip('both modes are client, which ships both runtimes by design');
-  }
-  // Each build-time mode's headline property: no byte of that construct's
-  // runtime in `dist/`. Measured over `dist/` because the failure — a runtime's
-  // chunks emitted but referenced by nothing — is invisible in the rendered page
-  // and was a real defect during TK-15, caught only by the residue scan.
+test('no chunk carries a diagram runtime', () => {
+  // The diagram renderer is build-time only: `markdown.ts` imports
+  // `pele-render.ts` into the build, and no page ships a diagram script, so no
+  // byte of either the live renderer or the deleted one may appear under
+  // `dist/`. Measured over `dist/` because the failure — chunks emitted but
+  // referenced by nothing — is invisible in the rendered page and was a real
+  // defect during TK-15, caught only by the residue scan.
   //
-  // **Named per runtime rather than by one list of vendor strings.** The
-  // previous version grepped `mermaid|cytoscape|dagre|katex`, which is Mermaid's
-  // dependency set plus a library this project does not use — and it would not
-  // have noticed a `temml` chunk at all. A list of names is a list somebody has
-  // to remember to extend; keying each mode to its own runtime's name is the
-  // same check with nothing to forget.
+  // **Named per runtime rather than by one list of vendor strings**, so the
+  // check has nothing to forget: `pele` is the diagram runtime, and
+  // `mermaid|cytoscape|dagre` is a re-addition tripwire — the dependency graph
+  // already makes those bytes unreachable (pnpm's symlinked `node_modules`
+  // boundary, gated by `tests/packaging.test.ts`), so the scan only fails if
+  // someone deliberately puts one back.
   //
   // **And read as bytes, not only as file names.** Chunk names carry the entry
-  // module's basename, so a vendor name appears in a path only by accident
-  // (measured 2026-11-16: nothing under `dist/_astro` is named after Mermaid even
-  // when Mermaid ships), while what matters is whether the runtime's code is in
+  // module's basename, while what matters is whether the runtime's code is in
   // the output. Both checks run; the content one is the load-bearing half.
   //
   // `dist/wasm/*.js` is out of scope by name: it is the SQLite read model's
-  // loader, copied from the wasm package and shipped independently of either
-  // mode. It is not a client runtime of this file's two subjects, and nothing
-  // bounds its bytes: `tests/output-inventory.test.ts` binds the loaders'
-  // membership and verifies only the `.wasm` binary's digest, while
-  // `tests/graph-runtime.test.ts` counts its requests. Neither gate imposes a
-  // byte-size ceiling on the loaders.
+  // loader, copied from the wasm package and shipped independently of any
+  // renderer. Nothing bounds its bytes: `tests/output-inventory.test.ts` binds
+  // the loaders' membership and verifies only the `.wasm` binary's digest,
+  // while `tests/graph-runtime.test.ts` counts its requests. Neither gate
+  // imposes a byte-size ceiling on the loaders.
   const scripts = walk(DIST, '.js').filter(
     (file) => !file.includes('pagefind') && !/[/\\]wasm[/\\]/.test(file),
   );
   const forbidden: readonly [boolean, RegExp, string][] = [
-    [DIAGRAM_MODE === 'build-time', /mermaid|cytoscape|dagre/i, 'a diagram runtime'],
+    [true, /pele/i, 'the diagram runtime'],
+    [true, /mermaid|cytoscape|dagre/i, 'a deleted diagram runtime'],
     [MATH_MODE === 'build-time', /temml/i, 'the math runtime'],
   ];
+  const root = fileURLToPath(DIST);
   let inspected = 0;
   for (const file of scripts) {
     inspected += 1;
     const code = readFileSync(file, 'utf8');
+    // The *published* name, not the host path: a checkout directory is allowed
+    // to be named after anything (this one contains the string being checked),
+    // and what matters is the name a reader's request carries.
+    const name = relative(root, file);
     for (const [applies, pattern, what] of forbidden) {
       if (!applies) continue;
-      assert.ok(!pattern.test(file), `${file}: ${what} chunk shipped in build-time mode`);
-      assert.ok(!pattern.test(code), `${file}: ${what} code shipped in build-time mode`);
+      assert.ok(!pattern.test(name), `${name}: ${what} chunk shipped`);
+      assert.ok(!pattern.test(code), `${file}: ${what} code shipped`);
     }
   }
   assert.ok(inspected > 0, 'no chunk was inspected, so the absence was never checked');
@@ -767,12 +494,10 @@ test('a build-time mode ships no chunk carrying its own runtime', (t: TestContex
   // plus the measured floor of each runtime a *selected client* mode ships (the
   // same numbers `tests/support/runtime-budget.ts` grants per page). Measured
   // 2026-11-16 on the fixture corpus: 257,647 B total, of which the selected
-  // client math runtime (`temml.<hash>.js`) is 203,577 B; the diagram chunk
-  // that would arrive with a client diagram mode is what the floor catches.
+  // client math runtime (`temml.<hash>.js`) is 203,577 B.
   const ceiling =
     100 * 1024 +
-    (MATH_MODE === 'client' ? CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_MATH] : 0) +
-    (DIAGRAM_MODE === 'client' ? CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_DIAGRAM] : 0);
+    (MATH_MODE === 'client' ? CLIENT_RUNTIME_FLOOR_BYTES[RENDERED_MATH] : 0);
   const bytes = scripts.reduce((total, file) => total + statSync(file).size, 0);
   assert.ok(bytes < ceiling, `client JavaScript totals ${bytes} B, over the ${ceiling} B the selected modes account for`);
 });
@@ -802,11 +527,11 @@ test('a page with no diagram and no math requests neither asset', async (t: Test
     } else {
       assert.ok(!linksDiagram, `${file}: links the diagram stylesheet without containing a diagram`);
       // The `<script>` half, which the ticket names alongside the `<link>` half
-      // and which matters more: in client mode the diagram runtime is the 201 KB
-      // floor, so a page without a diagram requesting it is the expensive
-      // failure. Checked mode-independently — build-time mode must request no
-      // diagram script anywhere, and client mode must request one only where a
-      // diagram exists.
+      // and which matters more: in the client diagram mode that once existed
+      // the runtime was the 201 KB floor, so a page without a diagram
+      // requesting one was the expensive failure. No diagram script ships at
+      // all now, so this scan is the request-level absence — a re-added chunk
+      // named after one fails here.
       for (const [, source] of html.matchAll(/<script\b[^>]*\ssrc="([^"]*)"/g)) {
         assert.doesNotMatch(
           source!,
@@ -820,8 +545,7 @@ test('a page with no diagram and no math requests neither asset', async (t: Test
   assert.ok(checkedBare > 0, 'no page without math was inspected, so the negative was never checked');
 });
 
-test('the built diagram markup is CSP-clean in build-time mode', async (t: TestContext) => {
-  if (DIAGRAM_MODE !== 'build-time') return t.skip('client mode writes inline styles by design');
+test('the built diagram markup is CSP-clean', async (t: TestContext) => {
   const pages = builtPages().filter(({ html }) => html.includes('data-diagram="mermaid"'));
   if (pages.length === 0) {
     return t.skip('no built page carries a diagram — run `pnpm run build:fixture`');
@@ -838,148 +562,38 @@ test('the built diagram markup is CSP-clean in build-time mode', async (t: TestC
   }
 });
 
-test('the diagram palette is the site palette', () => {
-  // `THEME_VARIABLES` duplicates 22 hex literals from `tokens.css`, and it has
-  // to: Mermaid runs every theme value through `khroma`, which parses colours
-  // to compute derived shades and throws `Unsupported color format` on
-  // `var(--color-bg)`. A duplicate with no gate silently desynchronises the
-  // diagrams from the site the first time a token changes, and the symptom —
-  // a diagram in nearly-but-not-quite the right colour — is one nobody reports.
-  const tokens = readFileSync(new URL('src/styles/tokens.css', ROOT), 'utf8');
-
-  /** The light and dark halves of a `light-dark()` token declaration. */
-  const pair = (name: string): { light: string; dark: string } => {
-    const declaration = new RegExp(`--${name}:\\s*light-dark\\(([^,]+),\\s*([^)]+)\\)`).exec(tokens);
-    assert.ok(declaration, `tokens.css declares no light-dark() value for --${name}`);
-    return { light: declaration[1]!.trim(), dark: declaration[2]!.trim() };
-  };
-
-  // Each Mermaid theme key, and the token it must mirror.
-  const MIRRORS: Readonly<Record<string, string>> = {
-    background: 'color-bg',
-    primaryColor: 'color-surface-alt',
-    primaryTextColor: 'color-text',
-    primaryBorderColor: 'color-line-strong',
-    lineColor: 'color-line-strong',
-    secondaryColor: 'color-surface',
-    tertiaryColor: 'color-surface',
-    textColor: 'color-text',
-    mainBkg: 'color-surface-alt',
-    nodeBorder: 'color-line-strong',
-    nodeTextColor: 'color-text',
-  };
-
-  for (const [key, token] of Object.entries(MIRRORS)) {
-    const expected = pair(token);
-    for (const theme of ['light', 'dark'] as const) {
-      assert.equal(
-        THEME_VARIABLES[theme][key as keyof (typeof THEME_VARIABLES)['light']].toLowerCase(),
-        expected[theme].toLowerCase(),
-        `THEME_VARIABLES.${theme}.${key} has drifted from --${token}`,
-      );
-    }
-  }
-
-  // Every key is mirrored: a new theme variable with no token behind it is a
-  // colour chosen here rather than in the design system.
-  assert.deepEqual(
-    Object.keys(THEME_VARIABLES.light).sort(),
-    Object.keys(MIRRORS).sort(),
-    'a theme variable has no token it mirrors',
-  );
-});
-
-test('a diagram that cannot be theme-paired is a known one', async () => {
-  // Pairing needs the light and dark renders to be structurally identical. When
-  // they are not, the diagram ships in the light palette in both themes — which
-  // looks exactly like a correct diagram until a reader opens it in dark mode.
-  // An `accTitle` used to cause it, silently, for every diagram that had one.
-  //
-  // The set is asserted empty rather than allowed to hold known exceptions: on
-  // this corpus every type pairs, so anything appearing is a regression.
-  UNPAIRED_DIAGRAMS.clear();
-  for (const [name, source] of Object.entries(DIAGRAM_TYPES)) {
-    await renderDiagram(source, `pair-${name}`, `${name} diagram`);
-  }
-  // A declared accessible title is the shape that broke it, so it is checked by
-  // name rather than left to the type list.
-  await renderDiagram(
-    'graph TD\n  accTitle: Publication pipeline\n  A[Vault] --> B[Exporter]',
-    'pair-acctitle',
-    'Flowchart diagram',
-  );
-  assert.deepEqual([...UNPAIRED_DIAGRAMS], [], 'these diagrams ship stuck in the light palette');
-});
-
-test('a diagram with a declared accessible title keeps a resolvable name', async () => {
-  // Mermaid points `aria-labelledby` at a `<title>` it mints, using a bare
-  // IDREF rather than a `#fragment`. Renumbering the ids without rewriting that
-  // reference leaves the accessible name pointing at nothing — an axe failure,
-  // and a silent one, because the `aria-label` set alongside it still reads.
-  for (const [source, attribute] of [
-    ['graph TD\n  accTitle: Publication pipeline\n  A --> B', 'aria-labelledby'],
-    ['graph TD\n  accDescr: How the pipeline flows\n  A --> B', 'aria-describedby'],
-  ] as const) {
-    const svg = await renderDiagram(source, `a11y-${attribute}`, 'Flowchart diagram');
-    const reference = new RegExp(`${attribute}="([^"]*)"`).exec(svg)?.[1];
-    assert.ok(reference, `the diagram declares one but emitted no ${attribute}`);
-    const ids = new Set([...svg.matchAll(/\sid="([^"]*)"/g)].map(([, id]) => id!));
-    for (const token of reference.split(/\s+/).filter(Boolean)) {
-      assert.ok(ids.has(token), `${attribute}="${reference}" points at no element in the diagram`);
-    }
-  }
-});
-
-test('the diagram stylesheet pins the size the renderer measured at', () => {
-  // The geometry of a *Mermaid*-rendered build-time diagram is baked into the
-  // SVG, computed from Mermaid's own measurement of the label text at 16 px.
-  // This site's body text is `--text-base`, 17 px, and HTML labels inherit it —
-  // so without a pin every multi-word label rendered ~6% wider than the box
-  // built for it and was visibly clipped ("Private vault" showed as "Private
-  // vaul"). Measured in Chromium, and the reason this is a gate rather than a
-  // comment: the coupling is invisible in both files on their own.
+test('the diagram stylesheet pins the root font at the size the renderer laid out with', () => {
+  // Pele's root block — stripped by the adapter and re-created by
+  // `.diagram svg.pele` — declares `font: 16px` as one of its measured members
+  // (`ROOT_STYLE_DECLARATIONS` in `pele-render.ts`). The geometry is baked into
+  // the SVG at build time, so the number the renderer laid out with is the only
+  // number that can be correct; this site's body text is `--text-base`,
+  // 1.0625rem — **17 px** — and an unpinned diagram would inherit it.
   const stylesheet = readFileSync(new URL('src/styles/diagram.css', ROOT), 'utf8');
   assert.match(
     stylesheet,
-    /\.diagram foreignObject[^{]*\{[^}]*font-size:\s*16px/,
-    'diagram.css must pin the label font size to the 16px Mermaid measured at',
+    /\.diagram svg\.pele[^{]*\{[^}]*font:\s*16px/,
+    'diagram.css must keep the 16px root font the renderer laid out with',
   );
   // In `px`, not `rem`: a reader who scales the root font size scales the whole
-  // SVG, which keeps each label inside its box. Scaling only the text would
-  // reintroduce exactly the clipping this pin removes. The refusal is scoped by
-  // selector rather than by engine: it binds every `.diagram`-prefixed block,
-  // Pele's root style included.
+  // SVG, which keeps each label inside its box, whereas scaling only the text
+  // would reintroduce exactly the mismatch this pin removes. The refusal is
+  // scoped by selector rather than by block: it binds every `.diagram`-prefixed
+  // rule.
   assert.doesNotMatch(
     stylesheet,
     /\.diagram[^{]*\{[^}]*font-size:\s*[\d.]+rem/,
     'a rem font size re-couples the label to the root size and reintroduces clipping',
   );
-  // Scoped to `foreignObject` content. An SVG `<text>` carries its own
-  // `font-size` presentation attribute — 12 px on a radar axis label, 38 px on a
-  // treemap label — and a class rule beats an attribute, so including `text`
-  // here silently resized 139 elements across seven diagram types.
+  // The renderer carries per-element `font-size` presentation attributes —
+  // `font-size` is in the adapter's emission allowlist — and a class rule beats
+  // an attribute, so a `.diagram text` size rule would override the renderer's
+  // own sizing.
   assert.doesNotMatch(
     stylesheet,
     /\.diagram text[^{]*\{[^}]*font-size/,
-    'pinning SVG text overrides the per-element sizes the flattening pass wrote',
+    'pinning SVG text overrides the per-element sizes the renderer wrote',
   );
-});
-
-test('every class the flattening pass can write has a rule', () => {
-  // `LAYOUT_CLASSES` is the closed set of non-presentational declarations the
-  // pass converts to classes. A class with no rule is a silently dropped
-  // declaration — which is how the journey diagram lost its `display: table`
-  // and rendered its sections as blocks.
-  const stylesheet = readFileSync(new URL('src/styles/diagram.css', ROOT), 'utf8');
-  const names = new Set(Object.values(DIAGRAM_LAYOUT_CLASSES));
-  assert.ok(names.size > 0, 'the pass declares no classes, so this gate checks nothing');
-  for (const name of names) {
-    assert.match(
-      stylesheet,
-      new RegExp(`\\.${name}(?![\\w-])`),
-      `diagram.css has no rule for "${name}", which the flattening pass writes onto elements`,
-    );
-  }
 });
 
 test('the per-page cost of math and diagrams is recorded', async (t: TestContext) => {
@@ -993,7 +607,7 @@ test('the per-page cost of math and diagrams is recorded', async (t: TestContext
   for (const { file, html } of pages) {
     for (const figure of html.match(/<svg\b[\s\S]*?<\/svg>/g) ?? []) {
       const gzip = gzipSync(figure).length;
-      assert.ok(gzip < 12 * 1024, `${file}: one diagram costs ${gzip} B gzip, far above the ~2 KB measured`);
+      assert.ok(gzip < 12 * 1024, `${file}: one diagram costs ${gzip} B gzip, far above the 486-801 B measured across six types`);
     }
   }
 
@@ -1030,10 +644,14 @@ $$
     if (isDisplay) assert.match(html, /tabindex="0"/, `${what}: the display wrapper lost its keyboard stop`);
 
     if (MATH_MODE === 'client') {
-      // The TeX source, as a text node the serializer escapes for us, inside a
-      // `code` the sanitizer's `allowedClasses.code` admits. A `pre` cannot be
-      // used: measured, a `<pre>` inside a `<p>` is torn out of the paragraph by
-      // the parser, which would break every paragraph carrying inline math.
+      // The TeX source, HTML-escaped by `escapeHtml` and substituted after
+      // sanitization: `renderMarkdown` splices a `<code
+      // class="language-math">` carrying the escaped source
+      // (`src/lib/markdown.ts:1923`) into the sanitized `span.math-inline` /
+      // `span.math-display` carrier through `substituteRendered` (`:1821`). A
+      // `pre` cannot be used: measured, a `<pre>` inside a `<p>` is torn out of
+      // the paragraph by the parser, which would break every paragraph carrying
+      // inline math.
       assert.match(html, /<code\b[^>]*class="language-math"/, `${what}: the source element or its class was stripped`);
       assert.ok(!html.includes('<math'), `${what}: MathML shipped in client mode`);
     } else {
@@ -1042,11 +660,17 @@ $$
     }
   }
 
-  // Escaping is the serializer's, not this pipeline's — asserted rather than
-  // assumed, because a text node that reached the page raw would be an injection
-  // point rather than a cosmetic defect. `a < b > c` is valid TeX in both modes;
-  // an earlier version of this row wrote `\&`, which is not, so it failed at the
-  // *renderer* and measured nothing about escaping at all.
+  // In the shipped mode the escaping is this pipeline's own: the client-math
+  // replacement writes the source through `escapeHtml`
+  // (`src/lib/markdown.ts:1923`, the function at `:403`) and is spliced into
+  // already-serialized HTML by `substituteRendered` (`:1821`), so no serializer
+  // runs over the substituted markup. Build-time mode escapes its MathML inside
+  // Temml (`src/lib/math.ts:153`), measured: `a < b > c` comes out with `&lt;`
+  // and no `<b`. Asserted rather than assumed, because a text node that reached
+  // the page raw would be an injection point rather than a cosmetic defect.
+  // `a < b > c` is valid TeX in both modes; an earlier version of this row
+  // wrote `\&`, which is not, so it failed at the *renderer* and measured
+  // nothing about escaping at all.
   const { html } = await renderMarkdown('See $$a < b > c$$ inline.\n', { pageTitle: 'x' });
   assert.ok(!/<b\b/.test(html), `an unescaped angle bracket reached the page: ${html}`);
   assert.match(html, /&lt;/, `the comparison operator vanished entirely: ${html}`);

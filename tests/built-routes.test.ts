@@ -1573,10 +1573,10 @@ test('no script is loaded for the explorer', () => {
    *
    * A single global number cannot express the property this is reaching for. It
    * has to hold for a plain note, which ships almost nothing, *and* for a page
-   * whose author wrote an expression or a diagram, which in client mode pulls a
-   * whole renderer — 115,541 B gzip for temml unminified, ~232 KB for mermaid. Set low it fails
-   * on a legitimate math page; set high it stops noticing a rail script on the
-   * pages that were supposed to have none. The comment this replaces already
+   * whose author wrote an expression, which in the selected client math mode
+   * downloads temml — 115,541 B gzip for the unminified entry point. Set low it
+   * fails on a legitimate math page; set high it stops noticing a rail script on
+   * the pages that were supposed to have none. The comment this replaces already
    * conceded the point — "the byte ceiling is deliberately loose" — which is the
    * shape of a measurement that has stopped measuring.
    *
@@ -1584,13 +1584,12 @@ test('no script is loaded for the explorer', () => {
    * on the marker the *renderer* writes for that construct, so a page cannot
    * claim an allowance without carrying the thing that earns it, and a runtime
    * arriving on a page that carries neither is over budget by the whole of its
-   * own size.
+   * own size. There is one opt-in: diagrams are rendered to SVG at build time
+   * and earn nothing.
    *
-   * The allowances are the measured floors, not aspirations: a client-mode math
-   * page downloads temml's single chunk and a diagram page mermaid's grammar
-   * set. In build-time mode — what ships — every page's allowance is the base,
-   * because `astro.config.mjs` resolves both runtimes to empty stubs, so this
-   * gate is *tighter* today than the flat 40 KB it replaces.
+   * The allowance is the measured floor, not an aspiration: a client math page
+   * downloads temml's single chunk. A page with no expression pays the base,
+   * which is *tighter* today than the flat 40 KB this gate replaced.
    */
   let inspected = 0;
   for (const route of ROUTES) {

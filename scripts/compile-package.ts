@@ -55,10 +55,11 @@
  *   sibling present, Vite does *not* fall back — a probe page importing a
  *   `.ts` specifier whose file was `.js` failed the build outright. So these
  *   must be rewritten, and unrewritten they would break every packaged build.
- * - **`astro.config.mjs`'s diagram stub**, which names
- *   `src/scripts/diagram-disabled.ts` inside `new URL(...)`. A path built out of
- *   a string is invisible to any compiler, which is the same reason
- *   `tests/packaging.test.ts` has to be told about that module by hand.
+ * - **`astro.config.mjs`'s runtime stub**, whose path is assembled from a
+ *   template literal rather than written as a specifier. A path built out of a
+ *   string is invisible to any compiler — and to this rewrite — which is why
+ *   the stub's own matcher in that file is extension-agnostic
+ *   (`\.(?:ts|js)$`) instead of assuming the rewritten name.
  * - **A compiled `.js` that names a module in a string**, such as
  *   `snapshot-client.js`'s `new URL('./snapshot-worker.ts', import.meta.url)`.
  *   `rewriteRelativeImportExtensions` rewrites import specifiers only, so the
@@ -120,28 +121,29 @@ function filesUnder(directory: string, predicate: (path: string) => boolean): st
  *
  * Two forms occur and both must be caught, which is why the pattern is not
  * anchored on a leading `./`. Most are ordinary relative specifiers —
- * `'../lib/routes.ts'`. One is not: `astro.config.mjs` names the diagram stub as
- * `new URL('src/scripts/diagram-disabled.ts', import.meta.url)`, a package-root
- * path with no leading `./` and not a specifier at all.
+ * `'../lib/routes.ts'`. The others are package-root paths with no leading `./`,
+ * which a carrier's own string may spell; the disk check below is what decides
+ * whether a match is one of ours.
  *
  * What keeps the loose pattern from eating prose is the **disk check**, not the
  * shape of the path: a match is rewritten only if it resolves to a real `.ts`
  * file of ours, first relative to the importing file and then from the package
- * root. `src/pages/notes/[slug].astro` discusses `src/scripts/diagram.ts` in a
- * comment three lines above importing it, and a mention that happens to name a
- * real file is rewritten harmlessly — it is a comment either way.
+ * root. A component that discusses a real module in a comment is rewritten
+ * harmlessly — it is a comment either way.
  *
  * Backticks are excluded from the character class because a template literal is
  * not a specifier here.
  *
  * **This cannot see a path it does not recognise as a string.** A `.ts` path
  * built by concatenation, or embedded in a regex literal, is invisible to it —
- * measured, and not hypothetically: `astro.config.mjs` matched the diagram
+ * measured, and not hypothetically: `astro.config.mjs` once matched the diagram
  * module with `/…diagram\.ts$/`, which survived this rewrite untouched and
- * silently stopped matching once the file shipped as `.js`, bundling Mermaid's
- * whole runtime into a `build-time` site. That regex is now extension-agnostic.
+ * silently stopped matching once the file shipped as `.js`, bundling the whole
+ * runtime into a `build-time` site. That regex is now extension-agnostic.
  * The gate in `tests/packaging.test.ts` scans *every* staged file for a
- * surviving `.ts` string, which is what catches the next one.
+ * surviving `.ts` name in a quoted string, which is what catches the next one.
+ * Quoted forms only: a name a template literal builds is outside both this
+ * rewrite and that scan.
  */
 function rewriteSpecifiers(source: string, file: string): string {
   return source.replaceAll(/(['"])([^'"`\n]*?)\.ts\1/g, (match, quote: string, path: string) => {
@@ -379,10 +381,10 @@ export function compilePackage(destination: string): { compiled: number; rewritt
   // compiled — the `.astro` components, `bin/anc.mjs`, and
   // `astro.config.mjs`. All three reference `.ts` paths that no longer exist in
   // the tarball: the CLI loads each build step with `await
-  // import('../scripts/x.ts')`, and the config both imports
-  // `./src/lib/diagram-mode.ts` and names the diagram stub inside a
-  // `new URL(...)`. Walking the staged tree rather than naming the files means
-  // a component or script added later is covered with nothing to remember.
+  // import('../scripts/x.ts')`, and the config imports `./src/lib/math-mode.ts`
+  // and names its runtime stub inside a `new URL(...)`. Walking the staged
+  // tree rather than naming the files means a component or script added later
+  // is covered with nothing to remember.
   const carriers = filesUnder(
     destination,
     (path) => path.endsWith('.astro') || path.endsWith('.mjs') || path.endsWith('.js'),

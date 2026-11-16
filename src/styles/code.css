@@ -9,10 +9,10 @@
  * the `<link>` only when it is true. TK-15 adds the math and Mermaid sheets
  * behind `hasMath` and `hasMermaid` through the same mechanism.
  *
- * Only the `token-*` map moved. `.code-block` stays in `global.css`: a Mermaid
- * fence also renders as `figure.code-block` while setting `hasMermaid` rather
- * than `hasCode`, so gating the figure's own rules on `hasCode` would ship an
- * unstyled block on a diagram-only page. Nothing emits a `token-*` span except
+ * Only the `token-*` map moved. `.code-block` stays in `global.css`, where it
+ * has always been: this sheet exists for the map — the largest single block of
+ * rendered-Markdown CSS — and the fence's own shell is a few rules that cost
+ * every page almost nothing. Nothing emits a `token-*` span except
  * the highlighter, which never runs for Mermaid or math, so this file's gate is
  * exact.
  *

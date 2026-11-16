@@ -24,7 +24,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
-import { REQUIRED_STYLE_SRC } from '../src/lib/diagram-mode.ts';
 
 const SOURCE = new URL('../public/_headers', import.meta.url);
 const BUILT = new URL('../dist/_headers', import.meta.url);
@@ -163,7 +162,7 @@ test('the CSP declares every directive the requirements baseline names', () => {
   // documented deviation, asserted separately below.
   for (const [directive, expected] of [
     ['default-src', "'self'"],
-    ['style-src', REQUIRED_STYLE_SRC],
+    ['style-src', "'self'"],
     ['img-src', "'self' data: https:"],
     ['font-src', "'self'"],
     ['connect-src', "'self'"],
@@ -184,7 +183,7 @@ test('script-src permits WebAssembly compilation and nothing more', () => {
   assert.equal(POLICY.get('script-src'), "'self' 'wasm-unsafe-eval'");
 });
 
-test('no directive relaxes beyond the selected diagram policy', () => {
+test('no directive relaxes beyond the strict policy', () => {
   for (const [directive, value] of POLICY) {
     for (const forbidden of ["'unsafe-eval'", "'unsafe-hashes'", '*']) {
       assert.ok(
@@ -194,18 +193,18 @@ test('no directive relaxes beyond the selected diagram policy', () => {
     }
   }
 
-  // When the selected mode needs the relaxation — client Mermaid writes inline
-  // style elements and attributes while measuring and drawing — the accepted
-  // cost stays confined to style-src; every other directive must remain unable
-  // to execute inline content. The selected `build-time` mode needs no
-  // relaxation at all, so the expected list is empty.
+  // The shipped policy is the strict one: the diagram renderer writes no inline
+  // style at all, so no directive carries `'unsafe-inline'` — not even
+  // `style-src`, and not `script-src` under a different spelling. Anything
+  // reappearing here is a relaxation that arrived without the reasoning that
+  // once justified it, and this is where it stops.
   const owners = [...POLICY]
     .filter(([, value]) => value.split(/\s+/).includes("'unsafe-inline'"))
     .map(([directive]) => directive);
   assert.deepEqual(
     owners,
-    REQUIRED_STYLE_SRC.includes("'unsafe-inline'") ? ['style-src'] : [],
-    `unsafe-inline does not match the selected style policy ${REQUIRED_STYLE_SRC}`,
+    [],
+    `unsafe-inline appears in ${owners.join(', ')}, but the strict policy permits none`,
   );
 });
 
