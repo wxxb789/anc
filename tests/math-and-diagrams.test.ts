@@ -662,8 +662,8 @@ $$
 
   // In the shipped mode the escaping is this pipeline's own: the client-math
   // replacement writes the source through `escapeHtml`
-  // (`src/lib/markdown.ts:1919`, the function at `:403`) and is spliced into
-  // already-serialized HTML by `substituteRendered` (`:1817`), so no serializer
+  // (`src/lib/markdown.ts:1923`, the function at `:403`) and is spliced into
+  // already-serialized HTML by `substituteRendered` (`:1821`), so no serializer
   // runs over the substituted markup. Build-time mode escapes its MathML inside
   // Temml (`src/lib/math.ts:153`), measured: `a < b > c` comes out with `&lt;`
   // and no `<b`. Asserted rather than assumed, because a text node that reached
