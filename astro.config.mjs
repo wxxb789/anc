@@ -84,20 +84,35 @@ function readStaged(name) {
  * }}
  */
 function clientRuntimePlugin(runtime, mode) {
-  const stub = fileURLToPath(new URL(`src/scripts/${runtime}-disabled.ts`, import.meta.url));
   // The extension is matched loosely because it is not the same in both trees:
   // this repository runs `math.ts` directly, while the packaged tarball ships
-  // it compiled to `math.js` (`scripts/compile-package.ts`). Pinning `.ts` here
-  // meant the redirect silently stopped firing once installed — the diagram
-  // runtime this was first built for was then bundled whole into a `build-time`
-  // site, which the residue scan caught on `[[` byte sequences inside the
-  // parser. Matching either extension keeps one rule true of both trees.
+  // it compiled to `math.js` (`scripts/compile-package.ts`). Pinning `.ts` in
+  // the pattern meant the redirect silently stopped firing once installed — the
+  // diagram runtime this was first built for was then bundled whole into a
+  // `build-time` site, which the residue scan caught on `[[` byte sequences
+  // inside the parser. Matching either extension keeps one rule true of both
+  // trees.
+  //
+  // **The stub's own path is derived from the resolved module, never spelled
+  // here.** The extension the pattern captures is the extension of the module
+  // the build actually resolved, and the stub is looked for under that same
+  // extension: `.ts` in this repository, `.js` in the packaged tarball, whose
+  // `scripts/compile-package.ts:108` compiles this stub to
+  // `src/scripts/math-disabled.js` and carries no `.ts`. Spelling `.ts` here
+  // was a latent defect the extension-agnostic pattern only kept unreachable
+  // rather than absent — `MATH_MODE` selects `client` today, so `resolveId`
+  // returns before the stub is consulted — and it stayed invisible because
+  // `astro check` and `verify` both run in the repository tree, where the
+  // `.ts` stub does exist. Deriving the path from the capture keeps the match
+  // and the path one rule for both trees, and the gate at
+  // `tests/packaging.test.ts:814` reads the staged tree for a `.ts` name a
+  // template literal builds, which is what would catch a return of the form.
   //
   // **Parameterised over the runtime rather than inlined**, because the stub
-  // path and the matching pattern are both derived from one name: a second
+  // name and the matching pattern are both derived from one name: a second
   // client runtime is a call, not a new copy where the `.ts`/`.js` lesson above
   // would have to be relearned. `math` is the only caller today.
-  const target = new RegExp(String.raw`[\\/]src[\\/]scripts[\\/]${runtime}\.(?:ts|js)$`);
+  const target = new RegExp(String.raw`[\\/]src[\\/]scripts[\\/]${runtime}\.(ts|js)$`);
   return {
     name: `anc:${runtime}-mode`,
     // Ahead of Vite's own resolver, so the redirect happens before the module
@@ -106,7 +121,10 @@ function clientRuntimePlugin(runtime, mode) {
     async resolveId(source, importer, options) {
       if (mode === 'client') return null;
       const resolved = await this.resolve(source, importer, { ...options, skipSelf: true });
-      return resolved !== null && target.test(resolved.id) ? stub : null;
+      if (resolved === null) return null;
+      const matched = target.exec(resolved.id);
+      if (matched === null) return null;
+      return fileURLToPath(new URL(`src/scripts/${runtime}-disabled.${matched[1]}`, import.meta.url));
     },
   };
 }

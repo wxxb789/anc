@@ -58,11 +58,11 @@ const MANIFEST = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as
  * directory convention; this gate has to be told, because a page is exactly
  * where an accidental devDependency import would be least visible.
  *
- * `astro.config.mjs`'s stub redirect is deliberately not an entry point: the
- * stub is named by a template literal and substituted for `math.ts` only when
- * `MATH_MODE` is `build-time`, and the selected mode is `client`
- * (`src/lib/math-mode.ts`), so the build never loads it. Listing a module the
- * build does not reach would let this gate claim coverage it does not have.
+ * `astro.config.mjs`'s stub redirect is deliberately not an entry point: it
+ * substitutes a stub for `math.ts` only when `MATH_MODE` is `build-time`, and
+ * the selected mode is `client` (`src/lib/math-mode.ts:53`), so the build never
+ * loads it. Listing a module the build does not reach would let this gate claim
+ * coverage it does not have.
  */
 const ENTRY_POINTS: readonly string[] = [
   'bin/anc.mjs',
@@ -142,7 +142,7 @@ function specifiersIn(source: string, filename: string): string[] {
  * is bundled and shipped, and `astro.config.mjs` documents at length that Astro
  * bundles such a script *eagerly* — so an import inside one is as much a
  * build-time dependency as an import in the frontmatter, and it is where a
- * devDependency import would be least visible. `src/layouts/Layout.astro:234-238`
+ * devDependency import would be least visible. `src/layouts/Layout.astro:288-290`
  * imports three modules that way and `src/pages/notes/[slug].astro` imports
  * `src/scripts/math.ts`, which imports `temml`.
  *
@@ -157,6 +157,53 @@ function specifiersIn(source: string, filename: string): string[] {
 function astroRegions(source: string): string[] {
   const frontmatter = /^---\n([\s\S]*?)\n---/.exec(source)?.[1] ?? '';
   return [frontmatter, ...[...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map((match) => match[1]!)];
+}
+
+/**
+ * The names a code file's template literals carry, read out of the parse.
+ *
+ * **Parsed rather than matched, for the reason {@link specifiersIn} states: a
+ * regex has edges the language does not.** Widening the survivor scan's
+ * character class to backticks was measured over the staged tree first, and it
+ * reports 339 hits there — 309 of them the new backtick form, and 307 of those
+ * comment prose naming a module between backticks: 282 in code and `.astro`
+ * files (113 distinct literals) plus 25 in stylesheets, `README.md`,
+ * `public/_headers` and `tsconfig.json`, which this helper never parses — 115
+ * distinct literals over all 307.
+ * The remaining 2 are template literals in code, one of which was the live
+ * defect. An exemption table for the 307 is a taxonomy rather than an
+ * instrument: every doc mention written afterwards would fail this gate until
+ * it was added, and the failure would name a comment rather than a defect.
+ *
+ * A comment is not a node, so a name mentioned in prose is invisible here by
+ * construction, and the only names that arrive are ones a template literal
+ * would carry. A `TemplateExpression`'s holes are rendered `${…}`, so the
+ * text of `` `src/scripts/${runtime}-disabled.ts` `` arrives as
+ * `src/scripts/${…}-disabled.ts` — the form `astro.config.mjs` built its stub
+ * path from before this gate was widened.
+ *
+ * **Only the carriers whose syntax has a template literal are read**, which is
+ * the three extensions `compile-package.ts` rewrites over — measured on the
+ * staged tree: 82 `.js`, 21 `.astro`, 2 `.mjs`, and no other file there is
+ * code. The `.astro` regions are split by {@link astroRegions} for the
+ * measured reason documented there.
+ */
+function templateLiteralsIn(source: string, filename: string): string[] {
+  if (!/\.(?:js|mjs|astro)$/.test(filename)) return [];
+  const found: string[] = [];
+  for (const region of filename.endsWith('.astro') ? astroRegions(source) : [source]) {
+    const parsed = ts.createSourceFile(filename, region, ts.ScriptTarget.ESNext, true, ts.ScriptKind.TS);
+    const visit = (node: ts.Node): void => {
+      if (ts.isNoSubstitutionTemplateLiteral(node)) {
+        found.push(node.text);
+      } else if (ts.isTemplateExpression(node)) {
+        found.push(node.head.text + node.templateSpans.map((span) => `\${…}${span.literal.text}`).join(''));
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(parsed);
+  }
+  return found;
 }
 
 /** Resolve a relative specifier to a file on disk, trying Astro's extensions. */
@@ -571,13 +618,13 @@ test('Astro still redirects prerender staging for an outDir outside cwd', async 
   // reproduced as a check so an Astro upgrade that changes it is a red test
   // rather than a mysterious EXDEV in a user's build.
   //
-  // `getOutDirWithinCwd` (astro 7.1.6, `dist/core/build/common.js:76-82`) is
-  // four lines: if `outDir` is not under `process.cwd()`, prerender output is
-  // staged at `<cwd>/.astro/` instead. That directory reaches the build through
-  // `getServerOutputDirectory` (`dist/prerender/utils.js:10`) →
-  // `getPrerenderOutputDirectory` → `static-build.js:114`, and `ssrMoveAssets`
-  // (`static-build.js:249-285`) then `fs.promises.rename`s assets from there to
-  // the real `outDir` — a rename that cannot cross a device.
+  // `getOutDirWithinCwd` (`dist/core/build/common.js`) is the decision: if
+  // `outDir` is not under `process.cwd()`, prerender output is staged at
+  // `<cwd>/.astro/` instead — the directory `getServerOutputDirectory`
+  // (`dist/prerender/utils.js`) returns, with `getPrerenderOutputDirectory`
+  // nesting `./.prerender/` under it. `ssrMoveAssets`
+  // (`dist/core/build/static-build.js`) then `fs.promises.rename`s assets from
+  // there into the real `outDir` — a rename that cannot cross a device.
   //
   // What this gate asserts is the *redirect*, which is the reason the rename
   // exists at all. It deliberately does not assert that an out-of-cwd `outDir`
@@ -629,6 +676,29 @@ test('Astro still redirects prerender staging for an outDir outside cwd', async 
     );
   }
 });
+
+/**
+ * The template literals {@link templateLiteralsIn} reads out of the staged tree
+ * that are not stale references, each with the reason it is not one.
+ *
+ * One member, measured over the staged tree at `25c95dc`: the body of a thrown
+ * message in `scripts/scan-residue.ts:893` that names the module its reader
+ * should edit. It is a sentence handed to a person, never resolved or loaded,
+ * and it is the only template literal in the tree besides the stub path that
+ * was `astro.config.mjs`'s latent defect (`astro.config.mjs:87` at `25c95dc`).
+ *
+ * **The set is asserted live rather than trusted.** Every entry has to match a
+ * literal the staged tree still carries, so an exemption whose subject is
+ * renamed or deleted fails this gate instead of lingering as a claim about a
+ * file that has changed. The two structural exemptions beside it — a
+ * `!`-prefixed `files` entry and a `.d.ts` reference — are deliberate *by
+ * shape* and cannot decay; a literal-keyed entry can, which is why this one is
+ * checked rather than declared.
+ */
+const TEMPLATE_LITERAL_EXEMPT: Readonly<Record<string, string>> = {
+  'add its extension to TEXT_EXTENSIONS or BINARY_EXTENSIONS in scripts/scan-residue.ts':
+    'the body of an error message, naming the module its reader should edit',
+};
 
 test('the tarball ships compiled JavaScript and no TypeScript, source maps, or declarations', () => {
   // The property TK-24a exists for. Node **refuses** to strip types from any
@@ -693,7 +763,7 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
     );
 
     // And **no file in the tarball** may still name a `.ts` file in a quoted
-    // string. `tsc` rewrites
+    // string or in a template literal. `tsc` rewrites
     // the specifiers in what it compiles; the `.astro` components and the two
     // `.mjs` files are rewritten by `compile-package.ts` because no compiler
     // sees them. Measured: with only a `.js` sibling present, Vite does *not*
@@ -708,23 +778,55 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
     // reads, invisible because of the filter. A gate that measures a subset of
     // its stated property is worse than none, because it reports success.
     //
-    // Three forms escape the scan's pattern, and all three are named because
-    // the exclusion set is part of what this gate measures. Two are deliberate,
-    // because naming a `.ts` path is their job rather than a stale reference to
-    // one: an entry in `package.json`'s `files` that *excludes* a source
-    // (`"!scripts/build-fixture.ts"`), and a `.d.ts` declaration reference in
-    // `tsconfig.json`, which describes types and resolves nothing at run time.
-    // The third is a limit of the pattern rather than a decision: it reads
-    // quoted strings only, so a `.ts` name inside a template literal is
-    // invisible — and one is live, `astro.config.mjs:87`'s client-runtime stub
-    // path; widening the pattern would fire on that file today.
+    // The quoted half is a raw pattern over every file, as it was. The template
+    // half is read from the parse by {@link templateLiteralsIn}, and the reason
+    // is that measurement rather than taste: over the staged tree at `25c95dc`
+    // the raw widened pattern reports 339 hits, 309 of them backticked, 307 of
+    // those comments — 115 distinct literals (113 in code and `.astro` files)
+    // needed exemption entries, and the one that mattered was the stub path
+    // (`astro.config.mjs:87` at `25c95dc`), the `TemplateExpression` case the
+    // helper's doc names. Parsing removes the taxonomy and keeps the
+    // subject: what can hide a path is a template literal, and only a file
+    // whose syntax has one can carry it.
+    //
+    // Five forms stay outside both this gate and `compile-package.ts`'s rewrite,
+    // named rather than implied. Two are deliberate — naming a `.ts` path is
+    // their job: a `package.json` `files` entry that *excludes* a source
+    // (`"!scripts/build-fixture.ts"`), and a `.d.ts` reference in `tsconfig.json`,
+    // which resolves nothing at run time. The third is a `.ts` path no single
+    // literal carries: concatenated pieces (`'src/x.' + 'ts'`) or a regex literal
+    // — the historical defect `compile-package.ts` names (`/…diagram\.ts$/`).
+    // The fourth is a template expression in an `.astro` *markup* body, which
+    // the region split above leaves out — `src/pages/notes/[slug].astro`'s markup
+    // carries one. The fifth is a backticked name in a file the template half
+    // never parses (the 25 prose hits the helper's doc counts). One template
+    // literal is exempt on top of those, in {@link TEMPLATE_LITERAL_EXEMPT},
+    // asserted live — decayed entries fail this gate.
     const stale: string[] = [];
+    const exemptedTemplateLiterals = new Set<string>();
     for (const file of sourceFilesUnder(staging, () => true)) {
-      for (const [, specifier] of readFileSync(file, 'utf8').matchAll(/['"]([^'"`\n]*?\.ts)['"]/g)) {
+      const path = relative(staging, file).replaceAll('\\', '/');
+      const text = readFileSync(file, 'utf8');
+      for (const [, specifier] of text.matchAll(/['"]([^'"`\n]*?\.ts)['"]/g)) {
         if (specifier.startsWith('!') || specifier.endsWith('.d.ts')) continue;
-        stale.push(`${relative(staging, file).replaceAll('\\', '/')} → ${specifier}`);
+        stale.push(`${path} → ${specifier}`);
+      }
+      for (const literal of templateLiteralsIn(text, path)) {
+        if (!literal.endsWith('.ts')) continue;
+        if (Object.hasOwn(TEMPLATE_LITERAL_EXEMPT, literal)) {
+          exemptedTemplateLiterals.add(literal);
+          continue;
+        }
+        stale.push(`${path} → ${literal} (a template literal)`);
       }
     }
+    const decayed = Object.entries(TEMPLATE_LITERAL_EXEMPT).filter(([literal]) => !exemptedTemplateLiterals.has(literal));
+    assert.deepEqual(
+      decayed,
+      [],
+      'these template-literal exemptions match nothing in the staged tree any more, so each is a claim ' +
+        `about a file that has changed:\n  ${decayed.map(([literal, reason]) => `${literal} — ${reason}`).join('\n  ')}`,
+    );
     assert.deepEqual(stale, [], `these specifiers still name a .ts file the tarball does not carry:\n  ${stale.join('\n  ')}`);
   } finally {
     rmSync(staging, { recursive: true, force: true });

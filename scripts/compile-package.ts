@@ -46,20 +46,24 @@
  *
  * ## What `tsc` cannot do, and this file does
  *
- * `tsc` only rewrites specifiers in files it compiles, and three kinds of file
- * reference `.ts` paths without being rewritten by it:
+ * `tsc` only rewrites specifiers in files it compiles. Three file kinds matter
+ * here, and the second is the one this file deliberately does nothing about:
  *
- * - **The 19 `.astro` files.** Astro components are not TypeScript modules and
+ * - **The 21 `.astro` files.** Astro components are not TypeScript modules and
  *   `tsc` does not emit them, but their frontmatter and `<script>` bodies import
  *   `'../lib/routes.ts'` and friends. Measured, not assumed: with only a `.js`
  *   sibling present, Vite does *not* fall back — a probe page importing a
  *   `.ts` specifier whose file was `.js` failed the build outright. So these
  *   must be rewritten, and unrewritten they would break every packaged build.
- * - **`astro.config.mjs`'s runtime stub**, whose path is assembled from a
- *   template literal rather than written as a specifier. A path built out of a
- *   string is invisible to any compiler — and to this rewrite — which is why
- *   the stub's own matcher in that file is extension-agnostic
- *   (`\.(?:ts|js)$`) instead of assuming the rewritten name.
+ * - **`astro.config.mjs`'s runtime stub.** Its path is assembled at run time
+ *   rather than written as a specifier: the stub's name comes from the
+ *   configured runtime and its extension from the module the build resolved
+ *   (`astro.config.mjs:127`), so there is no `.ts` literal in it for `tsc` or
+ *   for this rewrite to reach. That derivation is what the stub wants in both
+ *   trees, and it is why the matcher beside it is extension-agnostic
+ *   (`astro.config.mjs:115`) instead of assuming a rewritten name; while the
+ *   extension was spelled `.ts`, only the repository tree carried the file that
+ *   path named.
  * - **A compiled `.js` that names a module in a string**, such as
  *   `snapshot-client.js`'s `new URL('./snapshot-worker.ts', import.meta.url)`.
  *   `rewriteRelativeImportExtensions` rewrites import specifiers only, so the
@@ -141,9 +145,15 @@ function filesUnder(directory: string, predicate: (path: string) => boolean): st
  * silently stopped matching once the file shipped as `.js`, bundling the whole
  * runtime into a `build-time` site. That regex is now extension-agnostic.
  * The gate in `tests/packaging.test.ts` scans *every* staged file for a
- * surviving `.ts` name in a quoted string, which is what catches the next one.
- * Quoted forms only: a name a template literal builds is outside both this
- * rewrite and that scan.
+ * surviving `.ts` name in a quoted string, which is what catches the next one,
+ * and reads the template literals of the same three extensions this rewrite
+ * walks out of the parse (`templateLiteralsIn` there) — the form a string-side
+ * rewrite cannot see, because a template literal is built at run time and is not
+ * a specifier. Excluding backticks here is therefore permanent rather than a
+ * limit: this rewrite has nothing to do with such a name, and the gate is the
+ * half that covers it. A name assembled by concatenation, or one inside a
+ * regex literal, remains outside both — and the regex shape is the historical
+ * defect the opening sentence of this paragraph already names.
  */
 function rewriteSpecifiers(source: string, file: string): string {
   return source.replaceAll(/(['"])([^'"`\n]*?)\.ts\1/g, (match, quote: string, path: string) => {
