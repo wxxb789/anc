@@ -142,7 +142,7 @@ function specifiersIn(source: string, filename: string): string[] {
  * is bundled and shipped, and `astro.config.mjs` documents at length that Astro
  * bundles such a script *eagerly* — so an import inside one is as much a
  * build-time dependency as an import in the frontmatter, and it is where a
- * devDependency import would be least visible. `src/layouts/Layout.astro:234-238`
+ * devDependency import would be least visible. `src/layouts/Layout.astro:288-290`
  * imports three modules that way and `src/pages/notes/[slug].astro` imports
  * `src/scripts/math.ts`, which imports `temml`.
  *
@@ -166,10 +166,10 @@ function astroRegions(source: string): string[] {
  * regex has edges the language does not.** Widening the survivor scan's
  * character class to backticks was measured over the staged tree first, and it
  * reports 339 hits there — 309 of them the new backtick form, and 307 of those
- * the comment prose of code and `.astro` files naming a module between
- * backticks, in 113 distinct literals (`README.md` on
- * `scripts/markdown-to-artifact.ts`, `src/styles/code.css` on
- * `tests/design-tokens.test.ts`, `astro.config.mjs`'s own doc comments, …).
+ * comment prose naming a module between backticks: 282 in code and `.astro`
+ * files (113 distinct literals) plus 25 in stylesheets, `README.md`,
+ * `public/_headers` and `tsconfig.json`, which this helper never parses — 115
+ * distinct literals over all 307.
  * The remaining 2 are template literals in code, one of which was the live
  * defect. An exemption table for the 307 is a taxonomy rather than an
  * instrument: every doc mention written afterwards would fail this gate until
@@ -618,13 +618,13 @@ test('Astro still redirects prerender staging for an outDir outside cwd', async 
   // reproduced as a check so an Astro upgrade that changes it is a red test
   // rather than a mysterious EXDEV in a user's build.
   //
-  // `getOutDirWithinCwd` (astro 7.1.6, `dist/core/build/common.js:76-82`) is
-  // four lines: if `outDir` is not under `process.cwd()`, prerender output is
-  // staged at `<cwd>/.astro/` instead. That directory reaches the build through
-  // `getServerOutputDirectory` (`dist/prerender/utils.js:10`) →
-  // `getPrerenderOutputDirectory` → `static-build.js:114`, and `ssrMoveAssets`
-  // (`static-build.js:249-285`) then `fs.promises.rename`s assets from there to
-  // the real `outDir` — a rename that cannot cross a device.
+  // `getOutDirWithinCwd` (`dist/core/build/common.js`) is the decision: if
+  // `outDir` is not under `process.cwd()`, prerender output is staged at
+  // `<cwd>/.astro/` instead — the directory `getServerOutputDirectory`
+  // (`dist/prerender/utils.js`) returns, with `getPrerenderOutputDirectory`
+  // nesting `./.prerender/` under it. `ssrMoveAssets`
+  // (`dist/core/build/static-build.js`) then `fs.promises.rename`s assets from
+  // there into the real `outDir` — a rename that cannot cross a device.
   //
   // What this gate asserts is the *redirect*, which is the reason the rename
   // exists at all. It deliberately does not assert that an out-of-cwd `outDir`
@@ -781,27 +781,27 @@ test('the tarball ships compiled JavaScript and no TypeScript, source maps, or d
     // The quoted half is a raw pattern over every file, as it was. The template
     // half is read from the parse by {@link templateLiteralsIn}, and the reason
     // is that measurement rather than taste: over the staged tree at `25c95dc`
-    // the raw widened pattern reports 339 hits, 309 of them the backtick form,
-    // and 307 of those are comments — 113 distinct literals would have needed
-    // exemption entries, and the one that mattered was the stub path
+    // the raw widened pattern reports 339 hits, 309 of them backticked, 307 of
+    // those comments — 115 distinct literals (113 in code and `.astro` files)
+    // needed exemption entries, and the one that mattered was the stub path
     // (`astro.config.mjs:87` at `25c95dc`), the `TemplateExpression` case the
     // helper's doc names. Parsing removes the taxonomy and keeps the
     // subject: what can hide a path is a template literal, and only a file
     // whose syntax has one can carry it.
     //
-    // Three forms stay outside both this gate and `compile-package.ts`'s
-    // rewrite, named rather than implied. Two are deliberate, because naming a
-    // `.ts` path is their job rather than a stale reference to one: an entry in
-    // `package.json`'s `files` that *excludes* a source
-    // (`"!scripts/build-fixture.ts"`), and a `.d.ts` declaration reference in
-    // `tsconfig.json`, which describes types and resolves nothing at run time.
-    // The third is a limit of reading literals at all: a `.ts` path whose
-    // pieces are concatenated so that no single literal ends in `.ts`
-    // (`'src/x.' + 'ts'`), or one embedded in a regex literal — the shape of
-    // the historical defect `compile-package.ts` names
-    // (`/…diagram\.ts$/`). One template literal is exempt on top of those, in
-    // {@link TEMPLATE_LITERAL_EXEMPT}, and the set is asserted live: an entry
-    // the staged tree no longer carries fails this gate like a stale specifier.
+    // Five forms stay outside both this gate and `compile-package.ts`'s rewrite,
+    // named rather than implied. Two are deliberate — naming a `.ts` path is
+    // their job: a `package.json` `files` entry that *excludes* a source
+    // (`"!scripts/build-fixture.ts"`), and a `.d.ts` reference in `tsconfig.json`,
+    // which resolves nothing at run time. The third is a `.ts` path no single
+    // literal carries: concatenated pieces (`'src/x.' + 'ts'`) or a regex literal
+    // — the historical defect `compile-package.ts` names (`/…diagram\.ts$/`).
+    // The fourth is a template expression in an `.astro` *markup* body, which
+    // the region split above leaves out — `src/pages/notes/[slug].astro`'s markup
+    // carries one. The fifth is a backticked name in a file the template half
+    // never parses (the 25 prose hits the helper's doc counts). One template
+    // literal is exempt on top of those, in {@link TEMPLATE_LITERAL_EXEMPT},
+    // asserted live — decayed entries fail this gate.
     const stale: string[] = [];
     const exemptedTemplateLiterals = new Set<string>();
     for (const file of sourceFilesUnder(staging, () => true)) {
