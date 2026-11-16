@@ -18,21 +18,21 @@ export default getViteConfig({
     include: ['tests/**/*.test.ts'],
     /**
      * Redirect the report's state directory into a scratch path for the whole
-     * run. Seven test files spawn the binary and one remembered to do this per
+     * run. Test files spawn the binary and one remembered to do this per
      * spawn; the file itself explains why that is the wrong place for it.
      */
     setupFiles: ['./tests/setup-state-directory.ts'],
     /**
      * Hold a lock over `dist/` for the whole run.
      *
-     * Seven test files read the published `dist/`, and `pnpm run build:fixture`
+     * Test files read the published `dist/`, and `pnpm run build:fixture`
      * empties and rewrites it — `astro/dist/core/build/static-build.js:64` calls
      * `emptyDir(outDir)` before writing. Run concurrently, the gates read a
      * directory that is empty at that instant.
      *
      * `globalSetup`, not `setupFiles`: setup files run once per *worker*, and
-     * `isolate: true` gives each of the thirty-one test files its own — so the
-     * lock would be taken thirty-one times and released when the first finished.
+     * `isolate: true` gives each test file its own — the lock would be taken
+     * once per file and released when the first finished.
      */
     globalSetup: ['./tests/lock-dist.ts'],
     /**
@@ -59,9 +59,10 @@ export default getViteConfig({
     /**
      * `hookTimeout` is left at Vitest's 10 s default, deliberately.
      *
-     * The hooks that do heavy server or browser work — the seven across
-     * `preview-server`, `search` and `rendered-page` below — declare their own
-     * per-hook budgets; the suite's fast top-level hooks stay on this 10 s
+     * The hooks of the three suites tabled below — `preview-server`, `search`
+     * and `rendered-page` — are the ones this table records; all seven declare
+     * their budgets there. Other heavy suites declare their own where they need
+     * them; a hook with no `timeout:` option is the only one left on this 10 s
      * default:
      *
      * | hook | cost | budget |

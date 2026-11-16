@@ -1285,6 +1285,61 @@ test('the clamp and member-underline carriers resolve under the build-time polic
 });
 
 /**
+ * A rendered diagram follows the theme. `diagram.css` binds its paint to the
+ * site's `light-dark()` tokens — `.diagram svg.pele`, mapped from the `--pele-*`
+ * set (`src/styles/diagram.css:50-101`) — and the flip below is the site's own
+ * mechanism: `root.dataset.theme` from the stored preference
+ * (`src/scripts/theme-init.js:28`, `src/scripts/preferences.ts:96`) selects the
+ * `color-scheme` that `light-dark()` resolves against
+ * (`src/styles/tokens.css:73,114`).
+ *
+ * The behavioural half of the two theme rows P3 deleted with the Mermaid
+ * engine. `1fc305b:tests/math-and-diagrams.test.ts:359-369` read the markup for
+ * flattened `light-dark()` pairs — a structural check, no flip — and
+ * `1fc305b:tests/diagram-client.test.ts:358-422` set `dataset.theme = 'dark'`
+ * and waited on an asynchronous Mermaid re-render. With a build-time render
+ * there is no re-render to wait for: the same SVG must change when the
+ * attribute does.
+ *
+ * Three parts, and the third keeps this from restating the token-resolution row
+ * above (`:1168`): the paint equals the token's light value, the paint equals
+ * its dark value after the flip, and the two values differ.
+ */
+test('a rendered diagram follows the theme change', async () => {
+  const { html } = await renderMarkdown('```mermaid\n' + DIAGRAMS['flowchart']! + '\n```\n');
+  const { browser, page } = await openDiagramPage(html);
+  try {
+    await page.emulateMedia({ colorScheme: 'light' });
+    const measure = () =>
+      page.evaluate(() => {
+        const node = [...document.querySelectorAll('svg.pele rect')]
+          .find((rect) => rect.getAttribute('fill') === 'var(--_s)');
+        if (node === undefined) throw new Error('the fixture no longer renders a node painted from var(--_s)');
+        // `setProperty`, not an inline `style` attribute: this document's
+        // build-time `style-src 'self'` blocks the attribute and lets
+        // `setProperty` through — the same probe the rows above measure with.
+        const probe = document.createElement('span');
+        probe.style.setProperty('color', 'var(--color-surface)');
+        document.body.append(probe);
+        const token = getComputedStyle(probe).color;
+        probe.remove();
+        return { paint: getComputedStyle(node).fill, token };
+      });
+    const light = await measure();
+    await page.evaluate(() => {
+      document.documentElement.dataset.theme = 'dark';
+    });
+    const dark = await measure();
+    assert.equal(light.paint, light.token, 'a node painted from var(--_s) is not --color-surface in the light scheme');
+    assert.equal(dark.paint, dark.token, 'a node painted from var(--_s) is not --color-surface in the dark scheme');
+    assert.notEqual(light.token, dark.token, 'the token no longer differs between schemes, so the flip proves nothing');
+    assert.notEqual(light.paint, dark.paint, 'the diagram did not follow the theme flip');
+  } finally {
+    await browser.close();
+  }
+});
+
+/**
  * Pele paints a Gantt critical task from `var(--pele-critical, #e45756)` and the
  * variable block never defined it, so the site's own pages carried Pele's red.
  * Resolved in the browser rather than compared as text: the binding is only

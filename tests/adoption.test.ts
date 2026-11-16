@@ -916,8 +916,9 @@ test('action.yml is in no tarball this package produces', () => {
  * **Sequential with the rendered gate below, and that is a measurement rather
  * than tidiness.** Each of the two runs a whole Astro build, and run
  * concurrently they took enough CPU to push `tests/math-and-diagrams.test.ts`
- * past the 30 s `testTimeout` — on a file that finishes in 17 s alone — and to
- * redden `tests/backlink-surfaces.test.ts`, which builds its own fixture. Both
+ * past the `testTimeout` as it then stood — 30 s; `vitest.config.ts:58` carries
+ * the current 90 s — on a file that finishes in 17 s alone, and to redden
+ * `tests/backlink-surfaces.test.ts`, which builds its own fixture. Both
  * were flakes in neighbours rather than defects in either file, and both
  * disappeared under `--no-file-parallelism`. `concurrent: false` buys the same
  * result for these two without slackening the global timeout, which would

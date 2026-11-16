@@ -249,9 +249,9 @@ const graph = localGraph(entry, getEntry);
     Owner decision 7, the live case. Each flag is true only when the body
     contains the construct, so each sheet reaches only the pages that render
     one — four conditional `<link>` elements rather than one merged sheet.
-    The diagram sheet is small on purpose: a build-time render carries its
-    theme as variables on the SVG, and `diagram.css` maps those to the site's
-    tokens rather than reproducing a renderer's stylesheet.
+    The diagram sheet is small on purpose: a build-time render carries no
+    `style` attribute and cannot theme itself; `diagram.css` is that renderer's
+    stripped root block, mapped onto the site's tokens (`diagram.css:10-13`).
 
     `hasMath` also gates the ~9 KB Temml stylesheet and, through its
     `unicode-range`, the 9.4 KB `Temml.woff2` — which a browser fetches only for

@@ -71,8 +71,10 @@ const BINARY = join(ROOT, 'bin', 'anc.mjs');
 
 /**
  * A full CLI build is 15-20 s on this host — the astro build dominates, and
- * Pagefind and the residue scan follow it. Vitest's file default is 30 s, which
- * a gate that builds *and* asserts can exceed on a cold process.
+ * Pagefind and the residue scan follow it. `testTimeout` is a per-*test* budget
+ * — `vitest.config.ts:58` sets 90 s, and there is no per-file default — so a
+ * gate that builds *and* asserts can exceed it on a cold process, which is what
+ * this bound is for.
  */
 const BUILD_TIMEOUT = 180_000;
 
