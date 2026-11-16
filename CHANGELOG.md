@@ -7,6 +7,8 @@ project makes no backward-compatibility promise.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-11-16
+
 ### Changed
 
 - A `mermaid` fence is rendered to SVG at build time by `pele` 1.13.0 instead of in the reader's
@@ -250,6 +252,7 @@ project makes no backward-compatibility promise.
   not been published to npm.
 
 [Unreleased]: https://github.com/wxxb789/anc/commits/main
+[0.0.5]: https://github.com/wxxb789/anc/compare/v0.0.4...v0.0.5
 [0.0.4]: https://github.com/wxxb789/anc/compare/v0.0.3...v0.0.4
 [0.0.3]: https://github.com/wxxb789/anc/compare/v0.0.2...v0.0.3
 [0.0.2]: https://github.com/wxxb789/anc/compare/v0.0.1...v0.0.2
