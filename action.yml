@@ -21,8 +21,8 @@
 # The package name in `package.json` is final, and registry publication runs in
 # CI from the tag workflow (`CONTRIBUTING.md`, "Releasing"). This action does
 # not depend on the registry either way, **and that is the design rather than a
-# stopgap**: it installs the generator from its own checkout, and it keeps
-# doing so after publication.
+# stopgap**: it installs the generator from its own checkout, and publication
+# does not change that.
 #
 # **What makes that work is a property of `uses:` rather than a workaround.**
 # When a workflow names an action by repository, the runner checks that whole
