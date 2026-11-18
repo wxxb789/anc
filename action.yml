@@ -12,9 +12,13 @@
 # "Releasing"); `@main` also resolves but is unpinned — every push here changes
 # what a user's next build runs. A SHA remains the strongest pin.
 #
-# It builds the site and stops. It does not deploy, does not push, and does not
-# write anything into the user's repository — the deploy step belongs to the
-# user's own workflow, where they can see it, and `docs/adoption.md` shows it.
+# It builds the site and stops. It does not deploy and it does not push: what it
+# writes is the site itself, into the output directory it is given (`out-dir`,
+# which defaults to `dist` inside the runner's workspace), plus its content
+# report under the repository's git directory — or a state directory when there
+# is none — which no `git add` reaches. Nothing enters the user's history or
+# their origin, and the deploy step belongs to the user's own workflow, where
+# they can see it, as `docs/adoption.md` shows.
 #
 # ## How the generator gets here, and where its name lives
 #
@@ -164,20 +168,21 @@ runs:
     # for a repository that installs with pnpm, which is a second lockfile and its
     # own drift", and left a P0 open on that cost. There was no such cost. The
     # runner checks out the generator's *whole repository* at
-    # `$GITHUB_ACTION_PATH`, so `pnpm-lock.yaml` — every one of its 553 resolved
-    # entries, each with an integrity hash — was already on disk beside this file,
-    # at the exact commit the user's ref names. The complete pin was being shipped
-    # to the runner and thrown away by the installer. Nothing had to be committed
-    # and no second lockfile had to be invented; the paragraph reasoned about what
-    # would have to be *added* and never checked what was already there.
+    # `$GITHUB_ACTION_PATH`, so `pnpm-lock.yaml` — every resolved entry of the
+    # dependency tree, each with an integrity hash — was already on disk beside
+    # this file, at the exact commit the user's ref names. The complete pin was
+    # being shipped to the runner and thrown away by the installer. Nothing had to
+    # be committed and no second lockfile had to be invented; the paragraph
+    # reasoned about what would have to be *added* and never checked what was
+    # already there.
     #
     # `--frozen-lockfile` is what stops it being thrown away, and it *refuses*
     # rather than resolving if the lockfile and `package.json` have drifted apart
     # — so a stale lockfile is a loud failure rather than a silent fresh
     # resolution. It is also a strictly stronger pin than rewriting the direct
     # dependencies, which is what the publish path has to settle for: the lockfile
-    # covers the transitive tree, all 553 entries, and not merely the 11 this
-    # manifest names.
+    # covers the transitive tree, every resolved entry, and not merely the direct
+    # dependencies this manifest names.
     #
     # `pnpm/action-setup` is still not available — not for the `package-json-file`
     # reason the old comment gave, but because a composite action calling another
