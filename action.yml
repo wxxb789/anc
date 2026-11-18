@@ -7,11 +7,10 @@
 #
 #     - uses: <owner>/<repo>@<commit-sha>
 #
-# with a full 40-character commit SHA. This repository has no release tag yet,
-# so a SHA is the only immutable pin that exists today; `@main` also resolves
-# but is unpinned — every push here changes what a user's next build runs.
-# Once tags are cut (`CONTRIBUTING.md`, "Releasing"), `@v0` follows the latest
-# 0.x release and `@vX.Y.Z` names one exactly; a SHA remains the strongest pin.
+# with a full 40-character commit SHA. Release tags exist: `@vX.Y.Z` names one
+# exact version and `@v0` follows the latest 0.x release (`CONTRIBUTING.md`,
+# "Releasing"); `@main` also resolves but is unpinned — every push here changes
+# what a user's next build runs. A SHA remains the strongest pin.
 #
 # It builds the site and stops. It does not deploy, does not push, and does not
 # write anything into the user's repository — the deploy step belongs to the
@@ -19,11 +18,11 @@
 #
 # ## How the generator gets here, and where its name lives
 #
-# The package name in `package.json` is final and registry publication is
-# enabled, but nothing has been published yet. This action does not depend on
-# the registry either way, **and that is the design rather than a stopgap**: it
-# installs the generator from its own checkout, and it keeps doing so after
-# publication.
+# The package name in `package.json` is final, and registry publication runs in
+# CI from the tag workflow (`CONTRIBUTING.md`, "Releasing"). This action does
+# not depend on the registry either way, **and that is the design rather than a
+# stopgap**: it installs the generator from its own checkout, and it keeps
+# doing so after publication.
 #
 # **What makes that work is a property of `uses:` rather than a workaround.**
 # When a workflow names an action by repository, the runner checks that whole
