@@ -757,10 +757,10 @@ test('the action prints nothing derived from the user\'s repository', () => {
 });
 
 test('the action resolves the generator from its own checkout', () => {
-  // The property that makes this work while the package is unpublished:
-  // `$GITHUB_ACTION_PATH` is where the runner checks out the action's own
-  // repository, which *is* the generator. A hardcoded relative path would
-  // resolve against the user's workspace instead and find nothing.
+  // The property that makes this work: `$GITHUB_ACTION_PATH` is where the runner
+  // checks out the action's own repository, which *is* the generator. A hardcoded
+  // relative path would resolve against the user's workspace instead and find
+  // nothing.
   const build = runBodies().find((body) => body.includes('build --content'));
   assert.ok(build, 'no step runs the build');
   assert.match(
@@ -786,8 +786,7 @@ test('the action resolves the generator from its own checkout', () => {
 });
 
 test('the action names the package nowhere, so a rename is one edit', () => {
-  // The package will be published under a different name than it now has, and
-  // the rename must not be a search. Today this file needs the name nowhere: the
+  // A rename must not be a search. This file needs the package name nowhere: the
   // binary is reached as a path inside the action's own checkout, and
   // `package.json`'s `bin` key is the single place a filename and a package
   // identifier are tied together.
@@ -822,7 +821,8 @@ test('nothing init writes into a user\'s repository names this project', () => {
   // The standing constraint: this tool is nobody's in particular. A stranger's
   // `.gitignore` and configuration file are files they will read, edit, and
   // commit, and a project's name in either is residue they did not ask for —
-  // and, after the rename, residue naming something that no longer exists.
+  // and a name that changes later leaves residue naming something that no longer
+  // exists.
   //
   // The subject is what reaches *their disk*, which is the seeded header and the
   // config template. Doc comments in this repository's own sources are not that.
